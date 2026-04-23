@@ -5,6 +5,35 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "sqlx + Timescale queries."
+description = "sqlx + Timescale pool, migration bundle, and query helpers."
 
 [dependencies]
+au-kpis-config = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-error = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "uuid",
+    "json",
+    "macros",
+    "migrate",
+] }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+testcontainers = "0.23"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "uuid",
+    "json",
+    "macros",
+    "migrate",
+] }
