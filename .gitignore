@@ -1,0 +1,65 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+
+# sccache
+.cache/sccache/
+
+# Node / TS
+node_modules/
+.turbo/
+dist/
+build/
+.next/
+.nuxt/
+.output/
+.vite/
+coverage/
+
+# pnpm
+.pnpm-store/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+**/__snapshots__/
+.insta-rejected
+tarpaulin-report.html
+lcov.info
+
+# Benches
+benches/baselines/*/estimates.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local data
+/data/
+/fixtures/large/
+
+# Claude Code local state
+.claude/

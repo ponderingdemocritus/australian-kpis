@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Spec.md
+    url: https://github.com/ponderingdemocritus/australian-kpis/blob/main/Spec.md
+    about: Read the full technical specification before filing work items.
