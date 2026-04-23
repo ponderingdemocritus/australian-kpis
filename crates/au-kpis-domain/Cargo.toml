@@ -1,0 +1,10 @@
+[package]
+name = "au-kpis-domain"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure domain types for australian-kpis (no async/tokio)."
+
+[dependencies]

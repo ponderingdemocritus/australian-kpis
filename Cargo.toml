@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/au-kpis-domain",
+    "crates/au-kpis-error",
+    "crates/au-kpis-config",
+    "crates/au-kpis-telemetry",
+    "crates/au-kpis-schema",
+    "crates/au-kpis-db",
+    "crates/au-kpis-storage",
+    "crates/au-kpis-cache",
+    "crates/au-kpis-queue",
+    "crates/au-kpis-auth",
+    "crates/au-kpis-pdf-client",
+    "crates/au-kpis-adapter",
+    "crates/au-kpis-loader",
+    "crates/au-kpis-ingestion-core",
+    "crates/au-kpis-api-http",
+    "crates/au-kpis-openapi",
+    "crates/adapters/abs",
+    "crates/adapters/rba",
+    "crates/adapters/apra",
+    "crates/adapters/asx",
+    "crates/adapters/treasury",
+    "crates/adapters/aemo",
+    "crates/adapters/state-budgets",
+    "crates/bins/au-kpis-api",
+    "crates/bins/au-kpis-ingestion",
+    "crates/bins/au-kpis-scheduler",
+    "crates/bins/au-kpis-cli",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/ponderingdemocritus/australian-kpis"
+
+[workspace.dependencies]
+au-kpis-domain = { path = "crates/au-kpis-domain" }
+au-kpis-error = { path = "crates/au-kpis-error" }
+au-kpis-config = { path = "crates/au-kpis-config" }
+au-kpis-telemetry = { path = "crates/au-kpis-telemetry" }
+au-kpis-schema = { path = "crates/au-kpis-schema" }
+au-kpis-db = { path = "crates/au-kpis-db" }
+au-kpis-storage = { path = "crates/au-kpis-storage" }
+au-kpis-cache = { path = "crates/au-kpis-cache" }
+au-kpis-queue = { path = "crates/au-kpis-queue" }
+au-kpis-auth = { path = "crates/au-kpis-auth" }
+au-kpis-pdf-client = { path = "crates/au-kpis-pdf-client" }
+au-kpis-adapter = { path = "crates/au-kpis-adapter" }
+au-kpis-loader = { path = "crates/au-kpis-loader" }
+au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
+au-kpis-api-http = { path = "crates/au-kpis-api-http" }
+au-kpis-openapi = { path = "crates/au-kpis-openapi" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+
+[profile.bench]
+lto = "thin"

@@ -1,0 +1,10 @@
+[package]
+name = "au-kpis-adapter-apra"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "APRA adapter (quarterly XLS)."
+
+[dependencies]
