@@ -136,6 +136,13 @@ oasdiff breaking openapi-main.json openapi.json    # must be empty
 - No lock held across `.await` (clippy catches it; don't silence the lint)
 - No secrets or real production data in fixtures
 
+### Automated review guidance
+
+- Prioritise correctness, security, data integrity, CI regressions, and spec drift over style commentary
+- Flag missing tests for behaviour changes, migrations, API changes, or workflow logic as at least P1
+- Flag missing `Spec.md` updates when a PR changes the CI contract or other architecture-level behaviour
+- Ignore formatting-only nits unless they block understanding of the diff
+
 ## 8. CI rules (what must pass)
 
 Full details in `Spec.md § CI/CD pipeline`. Summary:

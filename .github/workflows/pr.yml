@@ -1,0 +1,395 @@
+name: PR Review
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+concurrency:
+  group: codex-structured-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    name: Codex Structured Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.5' }}
+      CODEX_REVIEW_EFFORT: ${{ vars.CODEX_REVIEW_EFFORT || 'high' }}
+      CODEX_REVIEW_BLOCK_ON_INCORRECT: ${{ vars.CODEX_REVIEW_BLOCK_ON_INCORRECT || 'false' }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+    steps:
+      - name: Check review preconditions
+        id: preflight
+        env:
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' && 'true' || 'false' }}
+          IS_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          should_run=true
+          reason="ready"
+
+          if [ "$HAS_OPENAI_KEY" != "true" ]; then
+            should_run=false
+            reason="OPENAI_API_KEY is not configured"
+          elif [ "$IS_DRAFT" = "true" ]; then
+            should_run=false
+            reason="draft pull requests are skipped"
+          elif [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            should_run=false
+            reason="fork pull requests do not receive repository secrets"
+          fi
+
+          echo "should_run=$should_run" >>"$GITHUB_OUTPUT"
+          echo "reason=$reason" >>"$GITHUB_OUTPUT"
+          printf 'Codex review %s: %s\n' "$([ "$should_run" = true ] && echo enabled || echo skipped)" "$reason" >>"$GITHUB_STEP_SUMMARY"
+        shell: bash
+
+      - name: Checkout pull request merge commit
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+      - name: Fetch base and head refs
+        if: steps.preflight.outputs.should_run == 'true'
+        run: |
+          set -euxo pipefail
+          git fetch --no-tags origin \
+            "$BASE_REF" \
+            "+refs/pull/$PR_NUMBER/head"
+        shell: bash
+
+      - name: Build Codex review prompt
+        if: steps.preflight.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          cp .github/codex/review_prompt.md codex-prompt.md
+
+          changed_files="$(git --no-pager diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          guide_list_file="$(mktemp)"
+
+          review_lenses=""
+          case "$changed_files" in
+            *crates/au-kpis-db/*|*infra/migrations/*)
+              review_lenses="${review_lenses}\n- Database lens: protect hypertable correctness, query safety, reversibility, revision semantics, and observations_latest behavior."
+              echo ".github/codex/guides/db.md" >>"$guide_list_file"
+              ;;
+          esac
+          case "$changed_files" in
+            *crates/au-kpis-loader/*|*crates/au-kpis-ingestion-core/*|*crates/au-kpis-queue/*|*crates/bins/au-kpis-ingestion/*|*crates/bins/au-kpis-scheduler/*)
+              review_lenses="${review_lenses}\n- Ingestion lens: protect streaming, idempotency, raw artifact provenance, adapter/DB separation, retry behavior, and revision ordering."
+              echo ".github/codex/guides/ingestion.md" >>"$guide_list_file"
+              ;;
+          esac
+          case "$changed_files" in
+            *crates/au-kpis-adapter/*|*crates/adapters/*|*crates/au-kpis-pdf-client/*)
+              review_lenses="${review_lenses}\n- Adapter lens: protect parser correctness, source artifact linkage, format-drift safety, and adapter abstraction boundaries."
+              echo ".github/codex/guides/adapters.md" >>"$guide_list_file"
+              ;;
+          esac
+          case "$changed_files" in
+            *crates/au-kpis-domain/*)
+              review_lenses="${review_lenses}\n- Domain lens: protect typed boundaries, schema stability, and the canonical series/observation model."
+              echo ".github/codex/guides/domain.md" >>"$guide_list_file"
+              ;;
+          esac
+          case "$changed_files" in
+            *crates/au-kpis-api-http/*|*crates/au-kpis-openapi/*|*packages/sdk/*|*packages/sdk-generated/*)
+              review_lenses="${review_lenses}\n- API lens: protect OpenAPI parity, response compatibility, SDK regeneration expectations, and attribution in outward-facing payloads."
+              echo ".github/codex/guides/api-sdk.md" >>"$guide_list_file"
+              ;;
+          esac
+          case "$changed_files" in
+            *apps/web/*)
+              review_lenses="${review_lenses}\n- Frontend lens: protect explorer/client correctness and required E2E plus accessibility coverage."
+              echo ".github/codex/guides/frontend.md" >>"$guide_list_file"
+              ;;
+          esac
+          case "$changed_files" in
+            *.github/workflows/*|*AGENTS.md|*Spec.md)
+              review_lenses="${review_lenses}\n- CI/spec lens: verify that repo policy and documented CI behavior stay aligned."
+              echo ".github/codex/guides/ci-spec.md" >>"$guide_list_file"
+              ;;
+          esac
+
+          sort -u "$guide_list_file" -o "$guide_list_file"
+
+          {
+            echo ""
+            echo "Repository: ${REPOSITORY}"
+            echo "Pull Request #: ${PR_NUMBER}"
+            echo "Base ref: ${BASE_REF}"
+            echo "Head ref: ${HEAD_REF}"
+            echo "Base SHA: ${BASE_SHA}"
+            echo "Head SHA: ${HEAD_SHA}"
+            echo ""
+            echo "Pull request title:"
+            printf '%s\n' "${PR_TITLE}"
+            echo ""
+            echo "Pull request body:"
+            printf '%s\n' "${PR_BODY}"
+            echo ""
+            echo "Detected review lenses:"
+            if [ -n "$review_lenses" ]; then
+              printf '%b\n' "$review_lenses"
+            else
+              echo "- General lens: infer subsystem-specific risks from the changed files."
+            fi
+            echo ""
+            echo "Included path-specific guides:"
+            if [ -s "$guide_list_file" ]; then
+              while IFS= read -r guide_path; do
+                echo "- ${guide_path}"
+              done <"$guide_list_file"
+            else
+              echo "- none"
+            fi
+            echo ""
+            echo "Changed files:"
+            git --no-pager diff --name-status "${BASE_SHA}" "${HEAD_SHA}"
+            echo ""
+            if [ -s "$guide_list_file" ]; then
+              while IFS= read -r guide_path; do
+                echo ""
+                echo "--- BEGIN GUIDE: ${guide_path} ---"
+                cat "$guide_path"
+                echo "--- END GUIDE: ${guide_path} ---"
+              done <"$guide_list_file"
+              echo ""
+            fi
+            echo "Unified diff (context=5):"
+            git --no-pager diff --unified=5 --stat=200 "${BASE_SHA}" "${HEAD_SHA}" > /tmp/diffstat.txt
+            git --no-pager diff --unified=5 "${BASE_SHA}" "${HEAD_SHA}" > /tmp/full.diff
+            cat /tmp/diffstat.txt
+            echo ""
+            cat /tmp/full.diff
+          } >>codex-prompt.md
+
+          rm -f "$guide_list_file"
+        shell: bash
+
+      - name: Run Codex structured review
+        if: steps.preflight.outputs.should_run == 'true'
+        id: run-codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: codex-prompt.md
+          output-schema-file: .github/codex/output-schema.json
+          output-file: codex-output.json
+          model: ${{ env.CODEX_MODEL }}
+          effort: ${{ env.CODEX_REVIEW_EFFORT }}
+          sandbox: read-only
+          safety-strategy: drop-sudo
+
+      - name: Inspect structured Codex output
+        if: steps.preflight.outputs.should_run == 'true' && always()
+        run: |
+          set -euo pipefail
+
+          if [ -s codex-output.json ]; then
+            jq '.' codex-output.json
+          else
+            echo "Codex output file missing"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Remove prior Codex review comments
+        if: steps.preflight.outputs.should_run == 'true' && always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          inline_comments_url="https://api.github.com/repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
+          issue_comments_url="https://api.github.com/repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
+
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$inline_comments_url" |
+            jq -r '.[] | select(.body | contains("<!-- codex-review-inline -->")) | .id' |
+            while IFS= read -r comment_id; do
+              curl -fsSL \
+                -X DELETE \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${REPOSITORY}/pulls/comments/${comment_id}"
+            done
+
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$issue_comments_url" |
+            jq -r '.[] | select(.body | contains("<!-- codex-review-summary -->")) | .id' |
+            while IFS= read -r comment_id; do
+              curl -fsSL \
+                -X DELETE \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${REPOSITORY}/issues/comments/${comment_id}"
+            done
+        shell: bash
+
+      - name: Publish inline review comments
+        if: steps.preflight.outputs.should_run == 'true' && always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REVIEW_JSON: codex-output.json
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "$REVIEW_JSON" ]; then
+            echo "No Codex output file present; skipping comment publishing."
+            exit 0
+          fi
+
+          findings_count=$(jq '.findings | length' "$REVIEW_JSON")
+          if [ "$findings_count" -eq 0 ]; then
+            echo "Codex returned no findings; skipping inline comments."
+            exit 0
+          fi
+
+          jq -c \
+            --arg commit "$HEAD_SHA" \
+            --arg workspace "${GITHUB_WORKSPACE%/}/" '
+            .findings[] | {
+              body: ("<!-- codex-review-inline -->\n**[" + .category + "][" + .subsystem + "] " + .title + "**\n\n" + .body + "\n\nInvariant: `" + .invariant + "`\nSuggested test layer: `" + .suggested_test_layer + "`\nConfidence: " + (.confidence_score | tostring) + "\nPriority: P" + (.priority | tostring)),
+              commit_id: $commit,
+              path: (.code_location.absolute_file_path | sub("^" + $workspace; "")),
+              line: .code_location.line_range.end,
+              side: "RIGHT",
+              start_line: (if .code_location.line_range.start != .code_location.line_range.end then .code_location.line_range.start else null end),
+              start_side: (if .code_location.line_range.start != .code_location.line_range.end then "RIGHT" else null end)
+            } | with_entries(select(.value != null))' "$REVIEW_JSON" > findings.jsonl
+
+          while IFS= read -r payload; do
+            response_file="$(mktemp)"
+            status_code=$(curl -sS \
+              -o "$response_file" \
+              -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" \
+              -d "$payload")
+
+            if [ "${status_code}" -lt 200 ] || [ "${status_code}" -ge 300 ]; then
+              echo "::warning::Failed to publish an inline Codex review comment."
+              cat "$response_file"
+            fi
+
+            rm -f "$response_file"
+          done < findings.jsonl
+        shell: bash
+
+      - name: Publish overall summary comment
+        if: steps.preflight.outputs.should_run == 'true' && always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REVIEW_JSON: codex-output.json
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "$REVIEW_JSON" ]; then
+            echo "Codex output missing; skipping summary."
+            exit 0
+          fi
+
+          overall_state=$(jq -r '.overall_correctness' "$REVIEW_JSON")
+          overall_body=$(jq -r '.overall_explanation' "$REVIEW_JSON")
+          confidence=$(jq -r '.overall_confidence_score' "$REVIEW_JSON")
+          findings_count=$(jq '.findings | length' "$REVIEW_JSON")
+          primary_risk_areas=$(jq -r '.primary_risk_areas | map("`" + . + "`") | join(", ")' "$REVIEW_JSON")
+          spec_update_required=$(jq -r '.spec_update_required' "$REVIEW_JSON")
+          spec_update_reason=$(jq -r '.spec_update_reason' "$REVIEW_JSON")
+          category_breakdown=$(jq -r '
+            .findings
+            | group_by(.category)
+            | map("- `" + .[0].category + "`: " + (length | tostring))
+            | join("\n")
+          ' "$REVIEW_JSON")
+          subsystem_breakdown=$(jq -r '
+            .findings
+            | group_by(.subsystem)
+            | map("- `" + .[0].subsystem + "`: " + (length | tostring))
+            | join("\n")
+          ' "$REVIEW_JSON")
+
+          comment_body=$(
+            jq -n \
+              --arg verdict "$overall_state" \
+              --arg confidence "$confidence" \
+              --arg explanation "$overall_body" \
+              --arg findings "$findings_count" \
+              --arg risks "$primary_risk_areas" \
+              --arg spec_required "$spec_update_required" \
+              --arg spec_reason "$spec_update_reason" \
+              --arg categories "$category_breakdown" \
+              --arg subsystems "$subsystem_breakdown" \
+              '{
+                body:
+                  "<!-- codex-review-summary -->\n**Codex automated review**\n\n" +
+                  "Verdict: " + $verdict + "\n" +
+                  "Confidence: " + $confidence + "\n" +
+                  "Findings: " + $findings + "\n" +
+                  "Primary risk areas: " + (if $risks != "" then $risks else "none" end) + "\n" +
+                  "Spec update required: " + $spec_required + (if $spec_required == "true" and $spec_reason != "" then " (" + $spec_reason + ")" else "" end) + "\n\n" +
+                  (if $categories != "" then "**Category Breakdown**\n" + $categories + "\n\n" else "" end) +
+                  (if $subsystems != "" then "**Subsystem Breakdown**\n" + $subsystems + "\n\n" else "" end) +
+                  $explanation
+              }'
+          )
+
+          curl -fsSL \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -d "$comment_body"
+        shell: bash
+
+      - name: Enforce Codex verdict
+        if: steps.preflight.outputs.should_run == 'true' && always()
+        env:
+          REVIEW_JSON: codex-output.json
+        run: |
+          set -euo pipefail
+
+          if [ "${CODEX_REVIEW_BLOCK_ON_INCORRECT}" != "true" ]; then
+            echo "Blocking mode disabled; leaving Codex review advisory."
+            exit 0
+          fi
+
+          verdict=$(jq -r '.overall_correctness' "$REVIEW_JSON")
+          if [ "$verdict" = "patch is incorrect" ]; then
+            echo "Codex marked this patch incorrect and blocking mode is enabled."
+            exit 1
+          fi
+        shell: bash
