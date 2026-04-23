@@ -1,0 +1,21 @@
+# Default owner
+* @ponderingdemocritus
+
+# Spec changes require explicit review
+/Spec.md @ponderingdemocritus
+
+# Workflows
+/.github/ @ponderingdemocritus
+
+# Infra
+/infra/ @ponderingdemocritus
+
+# TS packages
+/packages/ @ponderingdemocritus
+/apps/web/ @ponderingdemocritus
+
+# Python sidecar
+/apps/pdf-extractor/ @ponderingdemocritus
+
+# Rust crates (add per-area owners as team grows)
+/crates/ @ponderingdemocritus
