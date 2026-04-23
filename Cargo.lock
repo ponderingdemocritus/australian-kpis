@@ -87,6 +87,10 @@ dependencies = [
 [[package]]
 name = "au-kpis-error"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "au-kpis-ingestion"
@@ -123,6 +127,10 @@ version = "0.1.0"
 [[package]]
 name = "au-kpis-storage"
 version = "0.1.0"
+dependencies = [
+ "au-kpis-error",
+ "thiserror",
+]
 
 [[package]]
 name = "au-kpis-telemetry"
