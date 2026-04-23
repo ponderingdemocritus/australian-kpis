@@ -8,3 +8,10 @@ repository.workspace = true
 description = "Pure domain types for australian-kpis (no async/tokio)."
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+utoipa = { version = "5", features = ["chrono"] }
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
