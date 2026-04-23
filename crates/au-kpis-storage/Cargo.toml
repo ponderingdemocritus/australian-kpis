@@ -8,3 +8,5 @@ repository.workspace = true
 description = "object_store wrapper for S3/R2."
 
 [dependencies]
+au-kpis-error = { workspace = true }
+thiserror = "2"

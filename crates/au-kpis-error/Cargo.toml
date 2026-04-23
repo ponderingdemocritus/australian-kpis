@@ -8,3 +8,5 @@ repository.workspace = true
 description = "Shared error types for australian-kpis."
 
 [dependencies]
+thiserror = "2"
+serde_json = "1"
