@@ -1,0 +1,189 @@
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "data_integrity",
+              "api_contract",
+              "migration",
+              "ingestion",
+              "performance",
+              "security",
+              "testing",
+              "ci",
+              "architecture"
+            ]
+          },
+          "subsystem": {
+            "type": "string",
+            "enum": [
+              "domain",
+              "db",
+              "loader",
+              "ingestion_core",
+              "adapter",
+              "api_http",
+              "openapi_sdk",
+              "infra",
+              "ci",
+              "frontend",
+              "python_pdf",
+              "bin",
+              "cross_cutting"
+            ]
+          },
+          "invariant": {
+            "type": "string",
+            "enum": [
+              "series_observation_split",
+              "revision_chain",
+              "observations_latest",
+              "series_key_boundary",
+              "adapter_db_boundary",
+              "attribution_required",
+              "streaming_preferred",
+              "queue_trait_boundary",
+              "openapi_contract",
+              "migration_reversibility",
+              "ci_contract",
+              "none"
+            ]
+          },
+          "suggested_test_layer": {
+            "type": "string",
+            "enum": [
+              "unit",
+              "snapshot",
+              "property",
+              "integration",
+              "contract",
+              "sdk_integration",
+              "e2e_a11y",
+              "benchmark",
+              "none"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "confidence_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "code_location": {
+            "type": "object",
+            "properties": {
+              "absolute_file_path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line_range": {
+                "type": "object",
+                "properties": {
+                  "start": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "absolute_file_path",
+              "line_range"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "category",
+          "subsystem",
+          "invariant",
+          "suggested_test_layer",
+          "title",
+          "body",
+          "confidence_score",
+          "priority",
+          "code_location"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "overall_correctness": {
+      "type": "string",
+      "enum": [
+        "patch is correct",
+        "patch is incorrect"
+      ]
+    },
+    "overall_explanation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "primary_risk_areas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "data_integrity",
+          "api_contract",
+          "migration",
+          "ingestion",
+          "performance",
+          "security",
+          "testing",
+          "ci",
+          "architecture"
+        ]
+      },
+      "maxItems": 3,
+      "uniqueItems": true
+    },
+    "spec_update_required": {
+      "type": "boolean"
+    },
+    "spec_update_reason": {
+      "type": "string"
+    },
+    "overall_confidence_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "findings",
+    "overall_correctness",
+    "overall_explanation",
+    "primary_risk_areas",
+    "spec_update_required",
+    "spec_update_reason",
+    "overall_confidence_score"
+  ],
+  "additionalProperties": false
+}

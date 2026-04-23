@@ -895,6 +895,7 @@ Triggered on PR open/update. All jobs in parallel where possible; total target <
 
 ```
 parallel:
+  - review          (Codex structured PR review → inline findings + summary; advisory unless repo vars enable blocking)
   - typecheck       (cargo check + tsc)
   - lint            (clippy, biome, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
@@ -908,6 +909,8 @@ parallel:
 ```
 
 All gates from the table above run here. Blocking for merge.
+
+Codex review is an additional review signal, not part of the 14 blocking gates by default. It runs only when `OPENAI_API_KEY` is configured for the repository and the PR originates from the same repository (not a fork). Default model: `gpt-5.5`; allow `CODEX_MODEL`, `CODEX_REVIEW_EFFORT`, and `CODEX_REVIEW_BLOCK_ON_INCORRECT` as repository variables for tuning.
 
 ### 2. Merge-queue flow (`.github/workflows/merge.yml`)
 
