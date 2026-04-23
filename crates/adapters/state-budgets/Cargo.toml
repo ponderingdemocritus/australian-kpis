@@ -1,0 +1,10 @@
+[package]
+name = "au-kpis-adapter-state-budgets"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "State budget adapters (per-state PDF)."
+
+[dependencies]

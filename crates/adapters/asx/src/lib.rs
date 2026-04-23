@@ -1,0 +1,1 @@
+//! ASX adapter (announcements + EOD).

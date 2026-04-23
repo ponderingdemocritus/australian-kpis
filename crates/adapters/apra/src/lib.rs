@@ -1,0 +1,1 @@
+//! APRA adapter (quarterly XLS).
