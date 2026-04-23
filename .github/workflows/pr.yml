@@ -21,7 +21,7 @@ jobs:
       issues: write
       pull-requests: write
     env:
-      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.5' }}
+      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.4' }}
       CODEX_REVIEW_EFFORT: ${{ vars.CODEX_REVIEW_EFFORT || 'high' }}
       CODEX_REVIEW_BLOCK_ON_INCORRECT: ${{ vars.CODEX_REVIEW_BLOCK_ON_INCORRECT || 'false' }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
