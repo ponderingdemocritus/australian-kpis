@@ -39,7 +39,10 @@ pnpm --filter web dev
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Pre-commit hooks via `lefthook`.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — human-oriented workflow guide
+- [`AGENTS.md`](./AGENTS.md) — operating manual for AI coding agents (PR rules, CI gates, pre-flight checks)
+
+Pre-commit hooks via `lefthook`.
 
 ## License
 

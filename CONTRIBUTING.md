@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for contributing to australian-kpis. This guide covers the workflow; see [`Spec.md`](./Spec.md) for the architecture.
+Thank you for contributing to australian-kpis. This guide covers the workflow for humans; see [`Spec.md`](./Spec.md) for the architecture and [`AGENTS.md`](./AGENTS.md) for the condensed operating manual used by AI coding agents (PR rules, CI gates, pre-flight checks — applies to humans too).
 
 ## Development setup
 
