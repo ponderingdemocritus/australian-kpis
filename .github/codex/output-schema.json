@@ -161,8 +161,7 @@
           "architecture"
         ]
       },
-      "maxItems": 3,
-      "uniqueItems": true
+      "maxItems": 3
     },
     "spec_update_required": {
       "type": "boolean"
