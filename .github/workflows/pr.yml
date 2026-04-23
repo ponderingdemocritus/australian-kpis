@@ -407,16 +407,17 @@ jobs:
               --arg categories "$category_breakdown" \
               --arg subsystems "$subsystem_breakdown" \
               '{
-                body:
-                  "<!-- codex-review-summary -->\n**Codex automated review**\n\n" +
-                  "Verdict: " + $verdict + "\n" +
-                  "Confidence: " + $confidence + "\n" +
-                  "Findings: " + $findings + "\n" +
-                  "Primary risk areas: " + (if $risks != "" then $risks else "none" end) + "\n" +
-                  "Spec update required: " + $spec_required + (if $spec_required == "true" and $spec_reason != "" then " (" + $spec_reason + ")" else "" end) + "\n\n" +
-                  (if $categories != "" then "**Category Breakdown**\n" + $categories + "\n\n" else "" end) +
-                  (if $subsystems != "" then "**Subsystem Breakdown**\n" + $subsystems + "\n\n" else "" end) +
-                  $explanation
+                body: (
+                  "<!-- codex-review-summary -->\n**Codex automated review**\n\n"
+                  + "Verdict: " + $verdict + "\n"
+                  + "Confidence: " + $confidence + "\n"
+                  + "Findings: " + $findings + "\n"
+                  + "Primary risk areas: " + (if $risks != "" then $risks else "none" end) + "\n"
+                  + "Spec update required: " + $spec_required + (if $spec_required == "true" and $spec_reason != "" then " (" + $spec_reason + ")" else "" end) + "\n\n"
+                  + (if $categories != "" then "**Category Breakdown**\n" + $categories + "\n\n" else "" end)
+                  + (if $subsystems != "" then "**Subsystem Breakdown**\n" + $subsystems + "\n\n" else "" end)
+                  + $explanation
+                )
               }'
           )
 
