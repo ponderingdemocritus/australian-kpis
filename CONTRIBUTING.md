@@ -30,6 +30,11 @@ sqlx migrate run
 cargo nextest run --workspace
 ```
 
+`lefthook install` wires a `pre-commit` hook that runs `cargo fmt --check`,
+`biome format --check`, `gitleaks protect --staged`, and a staged-file size
+guard that rejects blobs over 5 MB. The hook body is shell/Python only, so it
+works the same way on macOS and Linux.
+
 ## Workflow
 
 1. Pick an issue from the [milestone board](https://github.com/ponderingdemocritus/australian-kpis/milestones). Respect `Depends on:` — don't start a blocked issue.

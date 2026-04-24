@@ -1,0 +1,41 @@
+pre-commit:
+  parallel: true
+  commands:
+    cargo-fmt:
+      run: cargo fmt --all --check
+    biome-format:
+      run: pnpm exec biome format --check .
+    gitleaks:
+      run: gitleaks protect --staged
+    large-files:
+      run: |
+        python3 - <<'PY'
+        import subprocess
+        import sys
+
+        limit_bytes = 5 * 1024 * 1024
+        output = subprocess.check_output(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=AM", "-z"],
+        )
+        paths = [path for path in output.decode().split("\0") if path]
+
+        oversized = []
+        for path in paths:
+            try:
+                size = int(
+                    subprocess.check_output(["git", "cat-file", "-s", f":{path}"]).decode().strip()
+                )
+            except subprocess.CalledProcessError:
+                continue
+
+            if size > limit_bytes:
+                oversized.append((path, size))
+
+        if oversized:
+            for path, size in oversized:
+                print(
+                    f"staged file exceeds 5 MB: {path} ({size} bytes)",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+        PY
