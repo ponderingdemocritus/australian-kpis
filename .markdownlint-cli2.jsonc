@@ -1,20 +1,18 @@
 {
   "gitignore": true,
-  "globs": [
-    "**/*.md"
-  ],
-  "ignores": [
-    ".context/**",
-    "target/**"
-  ],
+  "globs": ["**/*.md"],
+  "ignores": [".context/**", "target/**"],
   "config": {
-    "MD013": false,
-    "MD022": false,
-    "MD031": false,
-    "MD032": false,
-    "MD036": false,
-    "MD040": false,
-    "MD041": false,
-    "MD060": false
+    "default": true,
+    "line-length": false,
+    "blanks-around-headings": false,
+    "blanks-around-fences": false,
+    "blanks-around-lists": false,
+    "fenced-code-language": false,
+    "first-line-heading": false,
+    "no-emphasis-as-heading": false,
+    "no-duplicate-heading": {
+      "siblings_only": true
+    }
   }
 }

@@ -21,6 +21,10 @@ See [`Spec.md`](./Spec.md) for the full architecture, data model, testing strate
 
 ## Getting started
 
+This workspace targets Rust 2024 on the pinned Rust 1.85 toolchain in
+[`rust-toolchain.toml`](./rust-toolchain.toml). Earlier compilers such as 1.83
+are not supported.
+
 Once [scaffolding is in place](https://github.com/ponderingdemocritus/australian-kpis/issues?q=is%3Aissue+label%3Atype%3Ascaffold):
 
 ```bash

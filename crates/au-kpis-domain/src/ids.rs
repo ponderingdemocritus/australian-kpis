@@ -380,7 +380,7 @@ impl ObservationId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utoipa::ToSchema;
+    use utoipa::{PartialSchema, ToSchema};
 
     #[test]
     fn slug_id_rejects_empty() {
@@ -440,6 +440,20 @@ mod tests {
         let b = ArtifactId::of_content(b"payload");
         assert_eq!(a, b);
         assert_ne!(a, ArtifactId::of_content(b"other"));
+    }
+
+    #[test]
+    fn artifact_id_roundtrips_and_has_sha256_openapi_shape() {
+        let id = ArtifactId::of_content(b"payload");
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, format!("\"{}\"", id.to_hex()));
+        let back: ArtifactId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+
+        let schema = serde_json::to_value(ArtifactId::schema()).unwrap();
+        assert_eq!(schema["type"], "string");
+        assert_eq!(schema["minLength"], 64);
+        assert_eq!(schema["maxLength"], 64);
     }
 
     #[test]

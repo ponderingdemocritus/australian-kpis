@@ -6,7 +6,8 @@ Thank you for contributing to australian-kpis. This guide covers the workflow fo
 
 Prerequisites:
 
-- Rust 1.85+ (see `rust-toolchain.toml`)
+- Rust 1.85+ (Rust 2024 edition support starts at 1.85; see
+  `rust-toolchain.toml`)
 - Bun 1.1+ or Node 20+ with pnpm 9
 - Docker (for local infra)
 - `sqlx-cli`, `cargo-nextest`, `cargo-deny`, `cargo-audit`, `cargo-llvm-cov`, `lefthook`
@@ -55,6 +56,7 @@ cargo nextest run --workspace
 See `Spec.md § Testing strategy`. Minimum:
 
 - Every public fn has at least one test
+- `pnpm run lint` passes locally
 - `cargo nextest run --workspace` passes locally
 - Coverage ≥80% line / ≥70% branch (PR bot comments with diff)
 - For adapter changes: add/update `insta` snapshots with real fixtures
