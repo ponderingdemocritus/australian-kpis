@@ -27,17 +27,20 @@ use tracing::instrument;
 const RATE_LIMIT_LUA: &str = r#"
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
-local refill_per_second = tonumber(ARGV[2])
-local requested = tonumber(ARGV[3])
-local now_ms = tonumber(ARGV[4])
+local refill_tokens = tonumber(ARGV[2])
+local refill_interval_ms = tonumber(ARGV[3])
+local requested = tonumber(ARGV[4])
+local now_ms = tonumber(ARGV[5])
 
-local state = redis.call('HMGET', key, 'tokens_ms', 'last_ms')
-local capacity_ms = capacity * 1000
-local requested_ms = requested * 1000
+local state = redis.call('HMGET', key, 'tokens_scaled', 'last_ms')
+local scale = 1000
+local capacity_scaled = capacity * scale
+local refill_scaled = refill_tokens * scale
+local requested_scaled = requested * scale
 
-local tokens_ms = tonumber(state[1])
-if tokens_ms == nil then
-  tokens_ms = capacity_ms
+local tokens_scaled = tonumber(state[1])
+if tokens_scaled == nil then
+  tokens_scaled = capacity_scaled
 end
 
 local last_ms = tonumber(state[2])
@@ -50,24 +53,63 @@ if elapsed_ms < 0 then
   elapsed_ms = 0
 end
 
-local refill_ms = elapsed_ms * refill_per_second
-tokens_ms = math.min(capacity_ms, tokens_ms + refill_ms)
+local refill_delta = math.floor((elapsed_ms * refill_scaled) / refill_interval_ms)
+tokens_scaled = math.min(capacity_scaled, tokens_scaled + refill_delta)
 
 local allowed = 0
 local retry_after_ms = 0
-if tokens_ms >= requested_ms then
+if tokens_scaled >= requested_scaled then
   allowed = 1
-  tokens_ms = tokens_ms - requested_ms
+  tokens_scaled = tokens_scaled - requested_scaled
 else
-  retry_after_ms = math.ceil((requested_ms - tokens_ms) / refill_per_second)
+  retry_after_ms = math.ceil(((requested_scaled - tokens_scaled) * refill_interval_ms) / refill_scaled)
 end
 
-redis.call('HSET', key, 'tokens_ms', tokens_ms, 'last_ms', now_ms)
-local ttl_ms = math.max(1000, math.ceil(capacity_ms / refill_per_second))
+redis.call('HSET', key, 'tokens_scaled', tokens_scaled, 'last_ms', now_ms)
+local ttl_ms = math.max(refill_interval_ms, math.ceil((capacity_scaled * refill_interval_ms) / refill_scaled))
 redis.call('PEXPIRE', key, ttl_ms)
 
-return {allowed, math.floor(tokens_ms / 1000), retry_after_ms}
+return {allowed, math.floor(tokens_scaled / scale), retry_after_ms}
 "#;
+
+/// Token-bucket refill parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenBucketConfig {
+    capacity: u32,
+    refill_tokens: u32,
+    refill_interval: Duration,
+}
+
+impl TokenBucketConfig {
+    /// Create a token-bucket configuration.
+    ///
+    /// This model supports quotas below one token per second by describing
+    /// refill as `N tokens per interval` rather than `tokens/second`.
+    pub fn new(
+        capacity: u32,
+        refill_tokens: u32,
+        refill_interval: Duration,
+    ) -> Result<Self, CacheError> {
+        validate_bucket_args(capacity, refill_tokens, refill_interval)?;
+        Ok(Self {
+            capacity,
+            refill_tokens,
+            refill_interval,
+        })
+    }
+
+    fn capacity(self) -> u32 {
+        self.capacity
+    }
+
+    fn refill_tokens(self) -> u32 {
+        self.refill_tokens
+    }
+
+    fn refill_interval(self) -> Duration {
+        self.refill_interval
+    }
+}
 
 /// Result of a token-bucket rate-limit check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,8 +164,7 @@ pub trait CacheBackend: Debug + Send + Sync {
     async fn take_token_bucket(
         &self,
         key: &str,
-        capacity: u32,
-        refill_per_second: u32,
+        config: TokenBucketConfig,
         requested: u32,
         now_ms: u64,
     ) -> Result<RateLimitDecision, CacheError>;
@@ -157,19 +198,20 @@ impl CacheBackend for FredBackend {
     async fn take_token_bucket(
         &self,
         key: &str,
-        capacity: u32,
-        refill_per_second: u32,
+        config: TokenBucketConfig,
         requested: u32,
         now_ms: u64,
     ) -> Result<RateLimitDecision, CacheError> {
+        let refill_interval_ms = duration_millis_i64(config.refill_interval())?;
         let result: Vec<i64> = self
             .pool
             .eval(
                 RATE_LIMIT_LUA,
                 vec![key],
                 vec![
-                    i64::from(capacity),
-                    i64::from(refill_per_second),
+                    i64::from(config.capacity()),
+                    i64::from(config.refill_tokens()),
+                    refill_interval_ms,
                     i64::from(requested),
                     i64::try_from(now_ms).map_err(|_| {
                         CacheError::Validation("current time exceeds Redis script range".into())
@@ -273,38 +315,40 @@ impl CacheClient {
     pub async fn take_token_bucket(
         &self,
         key: &str,
-        capacity: u32,
-        refill_per_second: u32,
+        config: TokenBucketConfig,
         requested: u32,
     ) -> Result<RateLimitDecision, CacheError> {
-        validate_bucket_args(capacity, refill_per_second, requested)?;
+        validate_request_size(config.capacity(), requested)?;
         self.backend
-            .take_token_bucket(
-                key,
-                capacity,
-                refill_per_second,
-                requested,
-                unix_time_millis()?,
-            )
+            .take_token_bucket(key, config, requested, unix_time_millis()?)
             .await
     }
 }
 
 fn validate_bucket_args(
     capacity: u32,
-    refill_per_second: u32,
-    requested: u32,
+    refill_tokens: u32,
+    refill_interval: Duration,
 ) -> Result<(), CacheError> {
     if capacity == 0 {
         return Err(CacheError::Validation(
             "token bucket capacity must be greater than zero".into(),
         ));
     }
-    if refill_per_second == 0 {
+    if refill_tokens == 0 {
         return Err(CacheError::Validation(
             "token bucket refill rate must be greater than zero".into(),
         ));
     }
+    if refill_interval.is_zero() {
+        return Err(CacheError::Validation(
+            "token bucket refill interval must be greater than zero".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_request_size(capacity: u32, requested: u32) -> Result<(), CacheError> {
     if requested == 0 {
         return Err(CacheError::Validation(
             "token bucket request size must be greater than zero".into(),
@@ -342,7 +386,7 @@ mod tests {
     use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
 
-    use crate::{CacheBackend, CacheClient, CacheError, RateLimitDecision};
+    use crate::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Widget {
@@ -387,8 +431,7 @@ mod tests {
         async fn take_token_bucket(
             &self,
             _key: &str,
-            _capacity: u32,
-            _refill_per_second: u32,
+            _config: TokenBucketConfig,
             _requested: u32,
             _now_ms: u64,
         ) -> Result<RateLimitDecision, CacheError> {
@@ -444,7 +487,11 @@ mod tests {
         let client = CacheClient::from_backend(backend);
 
         let decision = client
-            .take_token_bucket("ratelimit:key", 3, 2, 1)
+            .take_token_bucket(
+                "ratelimit:key",
+                TokenBucketConfig::new(3, 2, Duration::from_secs(1)).expect("bucket config"),
+                1,
+            )
             .await
             .expect("rate limit");
 
@@ -458,16 +505,28 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn invalid_rate_limit_arguments_are_rejected() {
-        let client = CacheClient::from_backend(MockBackend::default());
-        let err = client
-            .take_token_bucket("ratelimit:key", 0, 1, 1)
-            .await
+    #[test]
+    fn invalid_rate_limit_arguments_are_rejected() {
+        let err = TokenBucketConfig::new(0, 1, Duration::from_secs(1))
             .expect_err("zero capacity should fail");
 
         assert!(
             err.to_string().contains("capacity"),
+            "expected validation message, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_larger_than_capacity_is_rejected() {
+        let client = CacheClient::from_backend(MockBackend::default());
+        let config = TokenBucketConfig::new(2, 1, Duration::from_secs(1)).expect("bucket config");
+        let err = client
+            .take_token_bucket("ratelimit:key", config, 3)
+            .await
+            .expect_err("oversized request should fail");
+
+        assert!(
+            err.to_string().contains("cannot exceed capacity"),
             "expected validation message, got {err}"
         );
     }

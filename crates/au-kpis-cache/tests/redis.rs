@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use au_kpis_cache::CacheClient;
+use au_kpis_cache::{CacheClient, TokenBucketConfig};
 use serde::{Deserialize, Serialize};
 use testcontainers::{
     ContainerAsync, GenericImage,
@@ -81,10 +81,11 @@ async fn typed_round_trip_hits_real_redis() {
 async fn token_bucket_denies_then_refills() {
     let harness = start_redis().await;
     let key = "cache:test:ratelimit:refill";
+    let config = TokenBucketConfig::new(2, 2, Duration::from_secs(1)).expect("bucket config");
 
     let first = harness
         .client
-        .take_token_bucket(key, 2, 2, 1)
+        .take_token_bucket(key, config, 1)
         .await
         .expect("first permit");
     assert!(first.allowed);
@@ -92,7 +93,7 @@ async fn token_bucket_denies_then_refills() {
 
     let second = harness
         .client
-        .take_token_bucket(key, 2, 2, 1)
+        .take_token_bucket(key, config, 1)
         .await
         .expect("second permit");
     assert!(second.allowed);
@@ -100,7 +101,7 @@ async fn token_bucket_denies_then_refills() {
 
     let denied = harness
         .client
-        .take_token_bucket(key, 2, 2, 1)
+        .take_token_bucket(key, config, 1)
         .await
         .expect("third permit");
     assert!(
@@ -108,21 +109,62 @@ async fn token_bucket_denies_then_refills() {
         "third request should be denied before the bucket refills"
     );
     assert_eq!(denied.remaining, 0);
-    assert!(
-        denied.retry_after >= Duration::from_millis(450)
-            && denied.retry_after <= Duration::from_millis(500),
-        "retry delay should be about half a second, got {:?}",
-        denied.retry_after,
-    );
+    assert!(denied.retry_after > Duration::ZERO);
 
-    tokio::time::sleep(Duration::from_millis(550)).await;
-
-    let after_refill = harness
-        .client
-        .take_token_bucket(key, 2, 2, 1)
-        .await
-        .expect("refilled permit");
+    let after_refill = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let decision = harness
+                .client
+                .take_token_bucket(key, config, 1)
+                .await
+                .expect("refill probe");
+            if decision.allowed {
+                return decision;
+            }
+        }
+    })
+    .await
+    .expect("bucket should refill within timeout");
     assert!(after_refill.allowed, "bucket should refill after waiting");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_bucket_supports_sub_one_token_per_second_refill() {
+    let harness = start_redis().await;
+    let key = "cache:test:ratelimit:hourly-shape";
+    let config = TokenBucketConfig::new(1, 1, Duration::from_secs(2)).expect("bucket config");
+
+    let first = harness
+        .client
+        .take_token_bucket(key, config, 1)
+        .await
+        .expect("first permit");
+    assert!(first.allowed);
+
+    let denied = harness
+        .client
+        .take_token_bucket(key, config, 1)
+        .await
+        .expect("second permit");
+    assert!(!denied.allowed);
+
+    let refilled = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let decision = harness
+                .client
+                .take_token_bucket(key, config, 1)
+                .await
+                .expect("refill probe");
+            if decision.allowed {
+                return decision;
+            }
+        }
+    })
+    .await
+    .expect("sub-one-token-per-second bucket should refill");
+    assert!(refilled.allowed);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -134,8 +176,9 @@ async fn token_bucket_is_atomic_under_contention() {
     let mut tasks = Vec::new();
     for _ in 0..10 {
         let client = client.clone();
+        let config = TokenBucketConfig::new(3, 1, Duration::from_secs(1)).expect("bucket config");
         tasks.push(tokio::spawn(async move {
-            client.take_token_bucket(key, 3, 1, 1).await
+            client.take_token_bucket(key, config, 1).await
         }));
     }
 

@@ -7,7 +7,7 @@ use serde_json::Value;
 use utoipa::OpenApi;
 
 fn emitted_spec() -> Value {
-    serde_json::from_str(&emit()).expect("emitted spec should be JSON")
+    serde_json::from_str(&emit().expect("emitted spec should be JSON")).expect("valid json")
 }
 
 #[test]
@@ -43,5 +43,5 @@ fn cli_prints_same_document_as_emit() {
     );
 
     let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
-    assert_eq!(stdout, emit());
+    assert_eq!(stdout, emit().expect("emit should succeed"));
 }

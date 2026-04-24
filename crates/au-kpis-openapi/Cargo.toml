@@ -8,8 +8,9 @@ repository.workspace = true
 description = "OpenAPI spec emitter."
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+au-kpis-api-http = { workspace = true }
 serde_json = "1"
+thiserror = "2"
 utoipa = { version = "5", features = ["axum_extras"] }
 
 [dev-dependencies]

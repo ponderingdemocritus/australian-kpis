@@ -1,3 +1,9 @@
 fn main() {
-    print!("{}", au_kpis_openapi::emit());
+    match au_kpis_openapi::emit() {
+        Ok(doc) => print!("{doc}"),
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    }
 }
