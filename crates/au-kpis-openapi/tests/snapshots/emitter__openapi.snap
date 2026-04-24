@@ -1,0 +1,54 @@
+---
+source: crates/au-kpis-openapi/tests/emitter.rs
+expression: emitted_spec()
+---
+{
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "description": "Health endpoint response.",
+        "properties": {
+          "status": {
+            "description": "Current service health.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Unified API for Australian public economic data.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "Australian KPIs API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "API is healthy."
+          }
+        },
+        "summary": "`GET /v1/health`.",
+        "tags": []
+      }
+    }
+  }
+}

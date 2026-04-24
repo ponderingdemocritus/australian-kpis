@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/testing",
     "crates/au-kpis-domain",
     "crates/au-kpis-error",
     "crates/au-kpis-config",
@@ -37,6 +38,7 @@ license = "Apache-2.0"
 repository = "https://github.com/ponderingdemocritus/australian-kpis"
 
 [workspace.dependencies]
+au-kpis-testing = { path = "crates/testing" }
 au-kpis-domain = { path = "crates/au-kpis-domain" }
 au-kpis-error = { path = "crates/au-kpis-error" }
 au-kpis-config = { path = "crates/au-kpis-config" }

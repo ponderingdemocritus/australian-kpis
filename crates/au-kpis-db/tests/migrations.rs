@@ -16,52 +16,8 @@ use std::time::Duration;
 
 use au_kpis_config::DatabaseConfig;
 use au_kpis_db::{connect, ensure_timescale, migrate, revert_latest, timescale_version};
+use au_kpis_testing::timescale::start_timescale;
 use sqlx::{PgPool, Row};
-use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
-    core::{ContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
-
-const IMAGE_NAME: &str = "timescale/timescaledb";
-const IMAGE_TAG: &str = "latest-pg16";
-const POSTGRES_PORT: u16 = 5432;
-
-struct Harness {
-    // Holds the container alive for the lifetime of the test.
-    _container: ContainerAsync<GenericImage>,
-    pool: PgPool,
-}
-
-async fn start_timescale() -> Harness {
-    let container = GenericImage::new(IMAGE_NAME, IMAGE_TAG)
-        .with_exposed_port(ContainerPort::Tcp(POSTGRES_PORT))
-        .with_wait_for(WaitFor::message_on_stderr(
-            "database system is ready to accept connections",
-        ))
-        .with_env_var("POSTGRES_PASSWORD", "postgres")
-        .with_env_var("POSTGRES_DB", "au_kpis_test")
-        .start()
-        .await
-        .expect("start timescaledb container");
-
-    let host = container.get_host().await.expect("container host");
-    let port = container
-        .get_host_port_ipv4(POSTGRES_PORT)
-        .await
-        .expect("host port");
-    let url = format!("postgres://postgres:postgres@{host}:{port}/au_kpis_test");
-    let cfg = DatabaseConfig { url };
-
-    // Some images take a beat between "ready" log line and accepting
-    // TCP connections under load. Small retry loop avoids flakes.
-    let pool = connect_with_retry(&cfg).await;
-
-    Harness {
-        _container: container,
-        pool,
-    }
-}
 
 async fn connect_with_retry(cfg: &DatabaseConfig) -> PgPool {
     let mut last_err = None;
@@ -135,11 +91,17 @@ async fn schema_fingerprint(pool: &PgPool) -> Vec<(String, String)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn migration_creates_hypertable_and_compression_policy() {
-    let harness = start_timescale().await;
+    let timescale = start_timescale("au_kpis_test")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
 
     // `connect` already enables the extension; prove that the
     // compile-checked query resolves the version.
-    let version = timescale_version(&harness.pool)
+    let version = timescale_version(&pool)
         .await
         .expect("timescale version query")
         .expect("timescale extension should be installed after connect");
@@ -148,14 +110,14 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "timescale extension version should be non-empty"
     );
 
-    migrate(&harness.pool).await.expect("apply migrations");
+    migrate(&pool).await.expect("apply migrations");
 
     assert!(
-        hypertable_exists(&harness.pool, "observations").await,
+        hypertable_exists(&pool, "observations").await,
         "observations should be registered as a hypertable"
     );
     assert!(
-        has_compression_policy(&harness.pool, "observations").await,
+        has_compression_policy(&pool, "observations").await,
         "observations should have a compression policy installed"
     );
 
@@ -164,7 +126,7 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "SELECT table_name FROM information_schema.tables
          WHERE table_schema = 'public' ORDER BY table_name",
     )
-    .fetch_all(&harness.pool)
+    .fetch_all(&pool)
     .await
     .expect("list tables");
     let table_names: Vec<&str> = tables.iter().map(|t| t.0.as_str()).collect();
@@ -191,14 +153,20 @@ async fn migration_creates_hypertable_and_compression_policy() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn revert_then_run_is_idempotent() {
-    let harness = start_timescale().await;
+    let timescale = start_timescale("au_kpis_test")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
 
-    migrate(&harness.pool).await.expect("initial migrate");
-    let first = schema_fingerprint(&harness.pool).await;
+    migrate(&pool).await.expect("initial migrate");
+    let first = schema_fingerprint(&pool).await;
     assert!(!first.is_empty(), "migration produced no tables");
 
-    revert_latest(&harness.pool).await.expect("revert");
-    let after_revert = schema_fingerprint(&harness.pool).await;
+    revert_latest(&pool).await.expect("revert");
+    let after_revert = schema_fingerprint(&pool).await;
     assert!(
         after_revert.is_empty(),
         "revert should leave no public tables behind; found {after_revert:?}"
@@ -207,12 +175,10 @@ async fn revert_then_run_is_idempotent() {
     // Extension is instance-level; down migration does not drop it.
     // Re-assert it so the second `run` works even if a stray pool
     // session landed on a different connection.
-    ensure_timescale(&harness.pool)
-        .await
-        .expect("re-ensure timescale");
+    ensure_timescale(&pool).await.expect("re-ensure timescale");
 
-    migrate(&harness.pool).await.expect("re-run migrate");
-    let second = schema_fingerprint(&harness.pool).await;
+    migrate(&pool).await.expect("re-run migrate");
+    let second = schema_fingerprint(&pool).await;
     assert_eq!(
         first, second,
         "schema after revert→run must match initial run"

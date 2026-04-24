@@ -1,16 +1,8 @@
 use std::time::Duration;
 
 use au_kpis_cache::{CacheClient, TokenBucketConfig};
+use au_kpis_testing::redis::start_redis;
 use serde::{Deserialize, Serialize};
-use testcontainers::{
-    ContainerAsync, GenericImage,
-    core::{ContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
-
-const REDIS_IMAGE: &str = "redis";
-const REDIS_TAG: &str = "7.2-alpine";
-const REDIS_PORT: u16 = 6379;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Session {
@@ -18,57 +10,30 @@ struct Session {
     scopes: Vec<String>,
 }
 
-struct Harness {
-    _container: ContainerAsync<GenericImage>,
-    client: CacheClient,
-}
-
-async fn start_redis() -> Harness {
-    let container = GenericImage::new(REDIS_IMAGE, REDIS_TAG)
-        .with_exposed_port(ContainerPort::Tcp(REDIS_PORT))
-        .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
-        .start()
-        .await
-        .expect("start redis container");
-
-    let host = container.get_host().await.expect("container host");
-    let port = container
-        .get_host_port_ipv4(REDIS_PORT)
-        .await
-        .expect("host port");
-    let url = format!("redis://{host}:{port}");
-
-    let client = CacheClient::connect(&url).await.expect("connect cache");
-
-    Harness {
-        _container: container,
-        client,
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn typed_round_trip_hits_real_redis() {
-    let harness = start_redis().await;
+    let redis = start_redis().await.expect("start redis container");
+    let client = CacheClient::connect(redis.url())
+        .await
+        .expect("connect cache");
     let key = "cache:test:session";
     let value = Session {
         user_id: 7,
         scopes: vec!["read".into(), "write".into()],
     };
 
-    harness
-        .client
+    client
         .set_json(key, &value, Duration::from_secs(30))
         .await
         .expect("set session");
 
-    let got: Option<Session> = harness.client.get_json(key).await.expect("get session");
+    let got: Option<Session> = client.get_json(key).await.expect("get session");
     assert_eq!(got, Some(value));
 
-    let deleted = harness.client.delete(key).await.expect("delete session");
+    let deleted = client.delete(key).await.expect("delete session");
     assert!(deleted, "delete should report an existing key");
     assert!(
-        harness
-            .client
+        client
             .get_json::<Session>(key)
             .await
             .expect("get deleted")
@@ -79,28 +44,28 @@ async fn typed_round_trip_hits_real_redis() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_bucket_denies_then_refills() {
-    let harness = start_redis().await;
+    let redis = start_redis().await.expect("start redis container");
+    let client = CacheClient::connect(redis.url())
+        .await
+        .expect("connect cache");
     let key = "cache:test:ratelimit:refill";
     let config = TokenBucketConfig::new(2, 2, Duration::from_secs(1)).expect("bucket config");
 
-    let first = harness
-        .client
+    let first = client
         .take_token_bucket(key, config, 1)
         .await
         .expect("first permit");
     assert!(first.allowed);
     assert_eq!(first.remaining, 1);
 
-    let second = harness
-        .client
+    let second = client
         .take_token_bucket(key, config, 1)
         .await
         .expect("second permit");
     assert!(second.allowed);
     assert_eq!(second.remaining, 0);
 
-    let denied = harness
-        .client
+    let denied = client
         .take_token_bucket(key, config, 1)
         .await
         .expect("third permit");
@@ -114,8 +79,7 @@ async fn token_bucket_denies_then_refills() {
     let after_refill = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let decision = harness
-                .client
+            let decision = client
                 .take_token_bucket(key, config, 1)
                 .await
                 .expect("refill probe");
@@ -131,19 +95,20 @@ async fn token_bucket_denies_then_refills() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_bucket_supports_sub_one_token_per_second_refill() {
-    let harness = start_redis().await;
+    let redis = start_redis().await.expect("start redis container");
+    let client = CacheClient::connect(redis.url())
+        .await
+        .expect("connect cache");
     let key = "cache:test:ratelimit:hourly-shape";
     let config = TokenBucketConfig::new(1, 1, Duration::from_secs(2)).expect("bucket config");
 
-    let first = harness
-        .client
+    let first = client
         .take_token_bucket(key, config, 1)
         .await
         .expect("first permit");
     assert!(first.allowed);
 
-    let denied = harness
-        .client
+    let denied = client
         .take_token_bucket(key, config, 1)
         .await
         .expect("second permit");
@@ -152,8 +117,7 @@ async fn token_bucket_supports_sub_one_token_per_second_refill() {
     let refilled = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            let decision = harness
-                .client
+            let decision = client
                 .take_token_bucket(key, config, 1)
                 .await
                 .expect("refill probe");
@@ -169,9 +133,12 @@ async fn token_bucket_supports_sub_one_token_per_second_refill() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_bucket_is_atomic_under_contention() {
-    let harness = start_redis().await;
+    let redis = start_redis().await.expect("start redis container");
+    let client = CacheClient::connect(redis.url())
+        .await
+        .expect("connect cache");
     let key = "cache:test:ratelimit:atomic";
-    let client = harness.client.clone();
+    let client = client.clone();
 
     let mut tasks = Vec::new();
     for _ in 0..10 {

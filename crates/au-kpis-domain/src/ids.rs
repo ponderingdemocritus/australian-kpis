@@ -379,6 +379,10 @@ impl ObservationId {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use proptest::prelude::*;
+
     use super::*;
     use utoipa::{PartialSchema, ToSchema};
 
@@ -508,5 +512,30 @@ mod tests {
         let back: IdError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
         assert_eq!(IdError::name(), "IdError");
+    }
+
+    proptest! {
+        #[test]
+        fn series_key_derivation_is_order_independent(
+            dataflow in "[a-z0-9.]{1,16}",
+            region in "[A-Z]{3}",
+            measure in "[a-z]{1,12}",
+        ) {
+            let dataflow = DataflowId::new(dataflow).unwrap();
+            let mut reversed = BTreeMap::new();
+            reversed.insert("measure", measure.as_str());
+            reversed.insert("region", region.as_str());
+
+            let forward = SeriesKey::derive(
+                &dataflow,
+                [("region", region.as_str()), ("measure", measure.as_str())],
+            );
+            let backward = SeriesKey::derive(
+                &dataflow,
+                reversed.iter().map(|(key, value)| (*key, *value)),
+            );
+
+            prop_assert_eq!(forward, backward);
+        }
     }
 }

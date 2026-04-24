@@ -1,0 +1,10 @@
+base-url = "http://127.0.0.1:3000"
+generation.max-examples = 64
+request-timeout = 5.0
+
+[phases]
+stateful.enabled = false
+
+[[operations]]
+include-path = "/v1/health"
+generation.max-examples = 16

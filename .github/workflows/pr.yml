@@ -1,4 +1,4 @@
-name: PR Review
+name: Pull Request
 
 on:
   pull_request:
@@ -13,6 +13,93 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  nextest:
+    name: Rust Tests (nextest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+
+      - name: Run workspace tests with CI profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/nextest
+          cargo nextest run --workspace --profile ci 2>&1 | tee target/nextest/ci-run.log
+          if grep -n "FLAKY" target/nextest/ci-run.log; then
+            echo "Flaky retries are not allowed in CI." >&2
+            exit 1
+          fi
+
+  coverage:
+    name: Rust Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Generate LCOV report
+        run: cargo llvm-cov nextest --workspace --profile ci --lcov --output-path target/llvm-cov/lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/llvm-cov/lcov.info
+          flags: rust
+          name: rust-nextest
+          use_oidc: true
+          fail_ci_if_error: false
+
+  snapshots:
+    name: Snapshot Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-insta
+        run: cargo install cargo-insta --locked
+
+      - name: Verify committed snapshots
+        run: cargo insta test --workspace --check
+
   codex-review:
     name: Codex Structured Review
     runs-on: ubuntu-latest
