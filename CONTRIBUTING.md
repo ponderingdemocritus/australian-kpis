@@ -67,6 +67,9 @@ See `Spec.md § Testing strategy`. Minimum:
 - For adapter changes: add/update `insta` snapshots with real fixtures
 - For SQL changes: include a migration + integration test
 
+The repo-level test workflow and command references live in
+[`docs/testing.md`](./docs/testing.md).
+
 ## Flake policy
 
 Zero tolerance. Any retry in CI auto-files a `flaky`-labelled issue. Fix within 48h or delete the test.

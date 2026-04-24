@@ -1,0 +1,12 @@
+[package]
+name = "au-kpis-testing"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared helpers for container-backed integration tests."
+
+[dependencies]
+testcontainers = "0.23"
+tokio = { version = "1", features = ["time"] }

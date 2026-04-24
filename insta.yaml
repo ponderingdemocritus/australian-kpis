@@ -1,0 +1,9 @@
+behavior:
+  output: summary
+  update: new
+test:
+  runner: nextest
+  auto_review: false
+  auto_accept_unseen: false
+review:
+  warn_undiscovered: true

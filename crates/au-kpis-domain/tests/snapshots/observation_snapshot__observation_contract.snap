@@ -1,0 +1,15 @@
+---
+source: crates/au-kpis-domain/tests/observation_snapshot.rs
+expression: example_observation()
+---
+series_key: 583a8052a68ffddabd6ef062760e1a3ca6ed3fb07a00d03a0c1c57268beab809
+time: "2024-03-01T00:00:00Z"
+time_precision: quarter
+value: 134.2
+status: revised
+revision_no: 2
+attributes:
+  OBS_STATUS: R
+  UNIT_MULT: "0"
+ingested_at: "2024-04-30T00:00:00Z"
+source_artifact_id: 4c8992332d53c228a4687c4c0ebccb4e4a80f3d45fb939d0242147f3c26948cf

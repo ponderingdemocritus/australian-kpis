@@ -4,6 +4,7 @@ members = [
     "crates/au-kpis-domain",
     "crates/au-kpis-error",
     "crates/au-kpis-config",
+    "crates/testing",
     "crates/au-kpis-telemetry",
     "crates/au-kpis-schema",
     "crates/au-kpis-db",
@@ -40,6 +41,7 @@ repository = "https://github.com/ponderingdemocritus/australian-kpis"
 au-kpis-domain = { path = "crates/au-kpis-domain" }
 au-kpis-error = { path = "crates/au-kpis-error" }
 au-kpis-config = { path = "crates/au-kpis-config" }
+au-kpis-testing = { path = "crates/testing" }
 au-kpis-telemetry = { path = "crates/au-kpis-telemetry" }
 au-kpis-schema = { path = "crates/au-kpis-schema" }
 au-kpis-db = { path = "crates/au-kpis-db" }

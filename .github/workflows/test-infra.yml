@@ -1,0 +1,63 @@
+name: Test Infrastructure
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  nextest:
+    name: Rust Tests (nextest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --version 0.9.100 --locked
+      - name: Run workspace tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo nextest run --workspace 2>&1 | tee target/nextest-run.log
+      - name: Fail on flaky retries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -En "TRY [2-9][0-9]* PASS" target/nextest-run.log; then
+            echo "Zero-flake policy violated: at least one test only passed on retry." >&2
+            exit 1
+          fi
+
+  coverage:
+    name: Rust Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+      - uses: Swatinem/rust-cache@v2
+      - name: Install llvm coverage tooling
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --version 0.6.21 --locked
+      - name: Generate coverage report
+        run: |
+          mkdir -p target/llvm-cov
+          cargo llvm-cov --workspace --fail-under-lines 80 --lcov --output-path target/llvm-cov/lcov.info
+      - name: Upload LCOV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-report
+          path: target/llvm-cov/lcov.info
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: target/llvm-cov/lcov.info
+          fail_ci_if_error: false

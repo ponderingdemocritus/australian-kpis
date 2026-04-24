@@ -1,0 +1,11 @@
+generation.max-examples = 50
+request-timeout = 5.0
+base-url = "${AU_KPIS_API_BASE_URL}"
+
+[checks]
+not_a_server_error.enabled = true
+response_schema_conformance.enabled = true
+negative_data_rejection.enabled = true
+
+[phases]
+stateful.enabled = false

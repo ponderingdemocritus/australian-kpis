@@ -16,16 +16,9 @@ use std::time::Duration;
 
 use au_kpis_config::DatabaseConfig;
 use au_kpis_db::{connect, ensure_timescale, migrate, revert_latest, timescale_version};
+use au_kpis_testing::{postgres_connection_string, retry_async, timescale_image};
 use sqlx::{PgPool, Row};
-use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
-    core::{ContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
-
-const IMAGE_NAME: &str = "timescale/timescaledb";
-const IMAGE_TAG: &str = "latest-pg16";
-const POSTGRES_PORT: u16 = 5432;
+use testcontainers::{ContainerAsync, GenericImage, runners::AsyncRunner};
 
 struct Harness {
     // Holds the container alive for the lifetime of the test.
@@ -34,47 +27,26 @@ struct Harness {
 }
 
 async fn start_timescale() -> Harness {
-    let container = GenericImage::new(IMAGE_NAME, IMAGE_TAG)
-        .with_exposed_port(ContainerPort::Tcp(POSTGRES_PORT))
-        .with_wait_for(WaitFor::message_on_stderr(
-            "database system is ready to accept connections",
-        ))
-        .with_env_var("POSTGRES_PASSWORD", "postgres")
-        .with_env_var("POSTGRES_DB", "au_kpis_test")
+    let container = timescale_image("au_kpis_test")
         .start()
         .await
         .expect("start timescaledb container");
 
-    let host = container.get_host().await.expect("container host");
-    let port = container
-        .get_host_port_ipv4(POSTGRES_PORT)
-        .await
-        .expect("host port");
-    let url = format!("postgres://postgres:postgres@{host}:{port}/au_kpis_test");
+    let url = postgres_connection_string(&container, "au_kpis_test").await;
     let cfg = DatabaseConfig { url };
 
     // Some images take a beat between "ready" log line and accepting
     // TCP connections under load. Small retry loop avoids flakes.
-    let pool = connect_with_retry(&cfg).await;
+    let pool = retry_async(10, Duration::from_millis(500), || async {
+        connect(&cfg).await
+    })
+    .await
+    .expect("timescaledb did not accept connections");
 
     Harness {
         _container: container,
         pool,
     }
-}
-
-async fn connect_with_retry(cfg: &DatabaseConfig) -> PgPool {
-    let mut last_err = None;
-    for _ in 0..10 {
-        match connect(cfg).await {
-            Ok(pool) => return pool,
-            Err(err) => {
-                last_err = Some(err);
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        }
-    }
-    panic!("timescaledb did not accept connections: {last_err:?}");
 }
 
 async fn hypertable_exists(pool: &PgPool, name: &str) -> bool {

@@ -14,21 +14,14 @@ use std::{sync::Arc, time::Duration};
 
 use au_kpis_domain::ids::ArtifactId;
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
+use au_kpis_testing::{MINIO_ACCESS_KEY, MINIO_SECRET_KEY, endpoint_for, minio_image, retry_async};
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use object_store::{ObjectStore, aws::AmazonS3Builder};
-use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
-    core::{ContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
+use testcontainers::{ContainerAsync, GenericImage, runners::AsyncRunner};
 
-const MINIO_IMAGE: &str = "minio/minio";
-const MINIO_TAG: &str = "RELEASE.2024-10-02T17-50-41Z";
 const MINIO_PORT: u16 = 9000;
 const BUCKET: &str = "au-kpis-test";
-const ACCESS_KEY: &str = "minioadmin";
-const SECRET_KEY: &str = "minioadmin";
 
 struct Harness {
     // Holds the container alive for the lifetime of the test.
@@ -37,32 +30,12 @@ struct Harness {
 }
 
 async fn start_minio() -> Harness {
-    // MinIO's official image does not offer an env-var bucket
-    // bootstrap; overriding the entrypoint to `sh -c` lets us
-    // pre-create the bucket directory (MinIO treats top-level dirs
-    // under the data path as buckets) before starting the server.
-    let start_script = format!(
-        "mkdir -p /data/{BUCKET} && exec minio server /data --address :{MINIO_PORT} --console-address :9001"
-    );
-    let container = GenericImage::new(MINIO_IMAGE, MINIO_TAG)
-        .with_exposed_port(ContainerPort::Tcp(MINIO_PORT))
-        // MinIO writes all its startup banner to stderr (including the
-        // "API:" line), so that's the only stream worth watching.
-        .with_wait_for(WaitFor::message_on_stderr("API:"))
-        .with_entrypoint("sh")
-        .with_env_var("MINIO_ROOT_USER", ACCESS_KEY)
-        .with_env_var("MINIO_ROOT_PASSWORD", SECRET_KEY)
-        .with_cmd(["-c", start_script.as_str()])
+    let container = minio_image(BUCKET)
         .start()
         .await
         .expect("start minio container");
 
-    let host = container.get_host().await.expect("container host");
-    let port = container
-        .get_host_port_ipv4(MINIO_PORT)
-        .await
-        .expect("host port");
-    let endpoint = format!("http://{host}:{port}");
+    let endpoint = endpoint_for(&container, MINIO_PORT).await;
 
     let store = build_store(&endpoint);
     let store: Arc<dyn ObjectStore> = Arc::new(store);
@@ -83,8 +56,8 @@ fn build_store(endpoint: &str) -> object_store::aws::AmazonS3 {
         .with_endpoint(endpoint)
         .with_region("us-east-1")
         .with_bucket_name(BUCKET)
-        .with_access_key_id(ACCESS_KEY)
-        .with_secret_access_key(SECRET_KEY)
+        .with_access_key_id(MINIO_ACCESS_KEY)
+        .with_secret_access_key(MINIO_SECRET_KEY)
         .with_allow_http(true)
         .with_virtual_hosted_style_request(false)
         .build()
@@ -93,17 +66,18 @@ fn build_store(endpoint: &str) -> object_store::aws::AmazonS3 {
 
 async fn wait_for_ready(store: &Arc<dyn ObjectStore>) {
     let probe = object_store::path::Path::from("readiness-probe");
-    for _ in 0..20 {
-        // A list() call is cheap and succeeds as soon as the bucket is
-        // reachable; NotFound on an individual key would also be fine,
-        // but the list form also validates credentials.
-        let mut stream = store.list(Some(&probe));
-        if stream.next().await.is_none() || stream.next().await.is_some() {
-            return;
+    retry_async(20, Duration::from_millis(250), || {
+        let store = Arc::clone(store);
+        let probe = probe.clone();
+        async move {
+            // list() reaches the bucket and validates the credentials,
+            // which is enough to prove the backend is ready for tests.
+            let mut stream = store.list(Some(&probe));
+            stream.next().await.transpose().map(|_| ())
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    panic!("minio did not become ready within the retry window");
+    })
+    .await
+    .expect("minio did not become ready within the retry window");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
