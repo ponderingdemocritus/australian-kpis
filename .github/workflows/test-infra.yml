@@ -7,6 +7,7 @@ on:
       - main
 
 env:
+  CARGO_BUILD_RUSTC_WRAPPER: ""
   RUST_TOOLCHAIN: "1.85"
 
 jobs:
