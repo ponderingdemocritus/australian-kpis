@@ -305,3 +305,29 @@ async fn put_artifact_stream_is_idempotent_and_cleans_staging() {
         "streaming put left staged objects behind: {leaked:?}",
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn put_artifact_stream_handles_empty_source() {
+    // An upstream response body can legitimately be zero bytes (an
+    // API returning an empty document, a stub XLSX). S3 rejects
+    // `CompleteMultipartUpload` with zero parts, so the streaming
+    // writer must special-case that and still produce the canonical
+    // empty-content id.
+    let h = start_minio().await;
+    let blob = BlobStore::from_arc(Arc::clone(&h.store));
+
+    let empty: Vec<Result<Bytes, std::io::Error>> = Vec::new();
+    let id = blob
+        .put_artifact_stream(stream::iter(empty))
+        .await
+        .expect("streaming put of zero bytes");
+    assert_eq!(id, ArtifactId::of_content(b""));
+
+    let key = StorageKey::canonical_for(&id);
+    let mut body = blob.get(&key).await.expect("get empty artifact");
+    let mut total = 0usize;
+    while let Some(chunk) = body.next().await {
+        total += chunk.expect("chunk").len();
+    }
+    assert_eq!(total, 0, "stored empty artifact should be zero bytes");
+}

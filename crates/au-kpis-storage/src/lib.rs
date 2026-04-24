@@ -272,6 +272,7 @@ impl BlobStore {
         // reads from a slow HTTP response.
         let mut write = WriteMultipart::new(upload);
         let mut hasher = Sha256::new();
+        let mut wrote_any = false;
 
         while let Some(next) = chunks.next().await {
             let chunk = match next {
@@ -285,7 +286,14 @@ impl BlobStore {
                     return Err(StorageError::Source(err.to_string()));
                 }
             };
+            if chunk.is_empty() {
+                // Empty chunks don't affect the sha256 and would just
+                // waste a round-trip through `WriteMultipart::put`;
+                // drop them and keep draining the stream.
+                continue;
+            }
             hasher.update(&chunk);
+            wrote_any = true;
             // Cap in-flight part uploads so a fast producer can't run
             // the process out of memory; 8 concurrent 5 MB parts ≈ 40
             // MB of buffer, which is a reasonable ceiling for the
@@ -296,6 +304,18 @@ impl BlobStore {
             }
             write.put(chunk);
         }
+
+        // Zero-byte streams are legal upstream payloads (an API that
+        // returns an empty body, a 0-byte XLSX) but S3 rejects
+        // `CompleteMultipartUpload` with zero parts. Abort the
+        // multipart and fall through to the single-shot `put_artifact`
+        // path, which hits the canonical key directly via `put()` and
+        // reuses the same head-first idempotency guard.
+        if !wrote_any {
+            let _ = write.abort().await;
+            return self.put_artifact(Bytes::new()).await;
+        }
+
         if let Err(err) = write.finish().await {
             // `WriteMultipart::finish` already attempts an abort when
             // `complete()` fails, so we just surface the error.

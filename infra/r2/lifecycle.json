@@ -1,0 +1,11 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-artifacts-staging",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "artifacts-staging/" },
+      "Expiration": { "Days": 7 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}
