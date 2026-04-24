@@ -2,6 +2,9 @@ name: Test Infrastructure
 
 on:
   pull_request:
+  merge_group:
+    types:
+      - checks_requested
   push:
     branches:
       - main
@@ -9,6 +12,7 @@ on:
 env:
   CARGO_BUILD_RUSTC_WRAPPER: ""
   RUST_TOOLCHAIN: "1.85"
+  COVERAGE_TOOLCHAIN: nightly
 
 jobs:
   nextest:
@@ -16,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -25,16 +30,136 @@ jobs:
       - name: Install cargo-nextest
         run: cargo install cargo-nextest --version 0.9.100 --locked
       - name: Run workspace tests
+        id: run-nextest
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p target
+          set +e
           cargo nextest run --workspace 2>&1 | tee target/nextest-run.log
-      - name: Fail on flaky retries
+          nextest_exit=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$nextest_exit" >> "$GITHUB_OUTPUT"
+      - name: Detect flaky retries
+        id: flaky-retries
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          if grep -En "TRY [2-9][0-9]* PASS" target/nextest-run.log; then
+          if [ ! -f target/nextest-run.log ]; then
+            echo "has_flakes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          retry_lines="$(grep -En "TRY [2-9][0-9]* PASS" target/nextest-run.log || true)"
+
+          if [ -z "$retry_lines" ]; then
+            echo "has_flakes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_flakes=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "retry_lines<<EOF"
+            printf '%s\n' "$retry_lines"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "Flaky retries detected in cargo nextest output:"
+            echo ""
+            printf '%s\n' "$retry_lines"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Resolve default code owner
+        id: codeowner
+        if: always() && steps.flaky-retries.outputs.has_flakes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(awk '/^\* / {print $2; exit}' CODEOWNERS | sed 's/^@//')"
+          if [ -n "$owner" ]; then
+            echo "login=$owner" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Auto-file flaky test issue
+        if: always() && steps.flaky-retries.outputs.has_flakes == 'true'
+        env:
+          ASSIGNEE: ${{ steps.codeowner.outputs.login }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RETRY_LINES: ${{ steps.flaky-retries.outputs.retry_lines }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          pr_url=""
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            pr_url="$(jq -r '.pull_request.html_url // empty' "$GITHUB_EVENT_PATH")"
+          fi
+
+          body_file="$(mktemp)"
+          {
+            echo "## Flaky retry detected"
+            echo ""
+            echo "A Rust test retried in CI, which violates the repository zero-flake policy."
+            echo ""
+            echo "- Workflow: \`${GITHUB_WORKFLOW}\`"
+            echo "- Event: \`${GITHUB_EVENT_NAME}\`"
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Run: ${run_url}"
+            if [ -n "$pr_url" ]; then
+              echo "- Pull request: ${pr_url}"
+            fi
+            echo ""
+            echo "### nextest retry lines"
+            echo '```text'
+            printf '%s\n' "$RETRY_LINES"
+            echo '```'
+          } > "$body_file"
+
+          title="test(repo): flaky Rust retry in ${GITHUB_WORKFLOW} run #${GITHUB_RUN_NUMBER}"
+          payload_file="$(mktemp)"
+
+          if [ -n "${ASSIGNEE:-}" ]; then
+            jq -n \
+              --arg title "$title" \
+              --arg body "$(cat "$body_file")" \
+              --arg assignee "$ASSIGNEE" \
+              '{title:$title, body:$body, labels:["flaky","type:test","area:rust"], assignees:[$assignee]}' \
+              > "$payload_file"
+          else
+            jq -n \
+              --arg title "$title" \
+              --arg body "$(cat "$body_file")" \
+              '{title:$title, body:$body, labels:["flaky","type:test","area:rust"]}' \
+              > "$payload_file"
+          fi
+
+          issue_url="$(
+            curl -fsSL \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues" \
+              --data-binary "@${payload_file}" |
+              jq -r '.html_url'
+          )"
+
+          echo "Auto-filed flaky issue: ${issue_url}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce nextest success and zero flake
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          nextest_exit="${{ steps.run-nextest.outputs.exit_code }}"
+
+          if [ "$nextest_exit" -ne 0 ]; then
+            echo "cargo nextest run failed with exit code ${nextest_exit}." >&2
+            exit "$nextest_exit"
+          fi
+
+          if [ "${{ steps.flaky-retries.outputs.has_flakes }}" = "true" ]; then
             echo "Zero-flake policy violated: at least one test only passed on retry." >&2
             exit 1
           fi
@@ -49,7 +174,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          toolchain: ${{ env.COVERAGE_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - name: Install llvm coverage tooling
         run: |
@@ -58,7 +183,27 @@ jobs:
       - name: Generate coverage report
         run: |
           mkdir -p target/llvm-cov
-          cargo llvm-cov --workspace --fail-under-lines 80 --lcov --output-path target/llvm-cov/lcov.info
+          cargo llvm-cov --workspace --branch --fail-under-lines 80 --lcov --output-path target/llvm-cov/lcov.info
+      - name: Enforce branch coverage floor
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch_found="$(awk -F: '/^BRF:/ {sum += $2} END {print sum + 0}' target/llvm-cov/lcov.info)"
+          branch_hit="$(awk -F: '/^BRH:/ {sum += $2} END {print sum + 0}' target/llvm-cov/lcov.info)"
+
+          if [ "$branch_found" -eq 0 ]; then
+            echo "Branch coverage data was not emitted to LCOV output." >&2
+            exit 1
+          fi
+
+          awk -v hit="$branch_hit" -v found="$branch_found" 'BEGIN {
+            pct = (hit / found) * 100
+            printf "Branch coverage: %.2f%% (%d/%d)\n", pct, hit, found
+            if (pct < 70) {
+              exit 1
+            }
+          }'
       - name: Upload LCOV artifact
         uses: actions/upload-artifact@v4
         with:
