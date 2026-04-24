@@ -1,78 +1,68 @@
 //! Blob storage abstraction over `object_store`.
 //!
-//! In production we back this with Cloudflare R2 via the S3-compatible
+//! In production this is backed by Cloudflare R2 via the S3-compatible
 //! API (`object_store::aws::AmazonS3Builder`); locally and in integration
 //! tests we point the same builder at a MinIO container. The public
-//! surface hides the backend — callers see a [`BlobStore`] and an
-//! opaque, content-addressed [`Sha256Key`].
+//! surface hides the backend — callers see a [`BlobStore`] and
+//! [`au_kpis_domain::ids::ArtifactId`].
 //!
 //! # Content-addressed writes
 //!
-//! [`BlobStore::put_artifact`] hashes the payload with SHA-256 and
-//! writes it under a deterministic key (`artifacts/<hex-digest>`). A
-//! second call with identical content returns the same [`Sha256Key`]
-//! **and does not re-write the backend**, satisfying the idempotency
-//! contract in `Spec.md § Ingestion pipeline` (fetch is the one step
-//! we re-run on every retry).
+//! Two write paths share the same canonical key layout
+//! (`artifacts/<hex-digest>`) and return the same [`ArtifactId`]:
+//!
+//! * [`BlobStore::put_artifact`] — takes a `Bytes` value already in
+//!   memory. Cheapest path for small/medium artifacts that a caller
+//!   has already buffered.
+//! * [`BlobStore::put_artifact_stream`] — takes a `Stream<Item =
+//!   Result<Bytes, _>>`, hashes each chunk as it flows, and uploads
+//!   via `put_multipart`. **No in-memory buffer of the full body is
+//!   materialised**, which is what the adapter fetch stage needs for
+//!   multi-GB upstream files (`Spec.md § Ingestion pipeline`).
+//!
+//! Both paths are idempotent: a second call with identical content
+//! returns the same [`ArtifactId`] and does not re-write the backend.
 //!
 //! # Streaming reads
 //!
 //! [`BlobStore::get_artifact`] returns a [`ByteStream`] so large
-//! artifacts (multi-GB ABS dumps) never need to be buffered in memory.
+//! artifacts never need to be buffered in memory on the read side
+//! either.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
 use std::{fmt, sync::Arc};
 
+use au_kpis_domain::ids::{ArtifactId, Sha256Digest};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use bytes::Bytes;
-use futures::{StreamExt, stream::BoxStream};
-use object_store::{Error as ObjectStoreError, ObjectStore, path::Path as ObjectPath};
+use futures::{Stream, StreamExt, stream::BoxStream};
+use object_store::{
+    Error as ObjectStoreError, ObjectStore, WriteMultipart, path::Path as ObjectPath,
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-/// Prefix applied to every content-addressed key.
+/// Prefix applied to every canonical content-addressed key.
 ///
 /// The ingestion spec (`Spec.md § Database schema — artifacts`) places
 /// raw source files under this namespace; keeping it as a constant means
 /// loader queries and storage writes agree by construction.
 pub const ARTIFACTS_PREFIX: &str = "artifacts";
 
-/// Content-addressed key for an artifact.
+/// Prefix used for in-flight streaming uploads.
 ///
-/// Wraps the lower-case hex encoding of the payload's SHA-256 digest.
-/// The underlying string is always 64 characters long and matches
-/// `[0-9a-f]{64}`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Sha256Key(String);
+/// A streaming `put` cannot know the sha256 until the last byte has
+/// been hashed, so it writes to `artifacts-staging/<uuid>` first, then
+/// server-side copies to `artifacts/<hex>`. A dead staging object is
+/// inert — a bucket lifecycle rule on this prefix can sweep it later.
+pub const STAGING_PREFIX: &str = "artifacts-staging";
 
-impl Sha256Key {
-    /// Compute the sha256 of `content` and wrap it as a key.
-    #[must_use]
-    pub fn from_content(content: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(content);
-        Self(hex_encode(hasher.finalize().as_slice()))
-    }
-
-    /// Lower-case hex encoding of the digest (no prefix).
-    #[must_use]
-    pub fn as_hex(&self) -> &str {
-        &self.0
-    }
-
-    /// Full object-store path, including the `artifacts/` prefix.
-    #[must_use]
-    pub fn to_object_path(&self) -> ObjectPath {
-        ObjectPath::from(format!("{ARTIFACTS_PREFIX}/{}", self.0))
-    }
-}
-
-impl fmt::Display for Sha256Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
+/// Canonical object-store path for an artifact.
+#[must_use]
+pub fn artifact_path(id: &ArtifactId) -> ObjectPath {
+    ObjectPath::from(format!("{ARTIFACTS_PREFIX}/{}", id.to_hex()))
 }
 
 /// Errors returned by the storage layer.
@@ -89,6 +79,14 @@ pub enum StorageError {
     /// The requested key does not exist in the backend.
     #[error("object not found: {0}")]
     NotFound(String),
+
+    /// A caller-supplied stream yielded an error mid-upload.
+    ///
+    /// Stored as a string so the variant stays `Send + Sync + 'static`
+    /// and round-trips through `thiserror` cleanly; the original error
+    /// is displayed via `{}` before being captured.
+    #[error("source stream: {0}")]
+    Source(String),
 }
 
 impl Classify for StorageError {
@@ -102,6 +100,10 @@ impl Classify for StorageError {
             // means the producer never wrote the artifact, so retrying
             // the fetch will keep failing in the same way.
             StorageError::NotFound(_) => ErrorClass::Permanent,
+            // A failed upstream stream usually means the adapter's
+            // fetch hit a transport error partway through; let the
+            // queue retry with backoff.
+            StorageError::Source(_) => ErrorClass::Transient,
         }
     }
 }
@@ -153,11 +155,11 @@ impl BlobStore {
     ///
     /// If a blob with the same hash is already present the call is a
     /// no-op: the backend is **not** re-written. Either way the caller
-    /// receives the canonical [`Sha256Key`].
+    /// receives the canonical [`ArtifactId`].
     #[tracing::instrument(skip(self, content), fields(len = content.len()))]
-    pub async fn put_artifact(&self, content: Bytes) -> Result<Sha256Key, StorageError> {
-        let key = Sha256Key::from_content(&content);
-        let path = key.to_object_path();
+    pub async fn put_artifact(&self, content: Bytes) -> Result<ArtifactId, StorageError> {
+        let id = ArtifactId::of_content(&content);
+        let path = artifact_path(&id);
 
         // Content-addressed keys collapse "same content" to "same key",
         // so a successful head means the bytes are already present and
@@ -166,7 +168,7 @@ impl BlobStore {
         // and stays portable across S3/R2/MinIO — conditional writes
         // (`PutMode::Create`) aren't universally supported.
         match self.inner.head(&path).await {
-            Ok(_) => return Ok(key),
+            Ok(_) => return Ok(id),
             Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => return Err(StorageError::from_object_store(err)),
         }
@@ -175,16 +177,109 @@ impl BlobStore {
             .put(&path, content.into())
             .await
             .map_err(StorageError::from_object_store)?;
-        Ok(key)
+        Ok(id)
     }
 
-    /// Return a streaming reader of the artifact at `key`.
+    /// Stream `chunks` to the backend while hashing on the fly, then
+    /// land the content under the canonical `artifacts/<hex>` key.
+    ///
+    /// Writes are performed via `put_multipart` to a staging key so the
+    /// backend never has to see the whole body at once. The sha256 is
+    /// only known after the stream drains, so once it does the method
+    /// server-side copies the staged object to its canonical key (no
+    /// client round-trip of the bytes) and deletes the stage. A stream
+    /// error or a backend error during upload aborts the multipart,
+    /// leaving no partial object behind.
+    ///
+    /// Returns the canonical [`ArtifactId`] regardless of whether the
+    /// canonical key already existed — matching [`put_artifact`]'s
+    /// idempotency contract.
+    #[tracing::instrument(skip(self, chunks))]
+    pub async fn put_artifact_stream<S, E>(&self, mut chunks: S) -> Result<ArtifactId, StorageError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: fmt::Display,
+    {
+        let staging_path = ObjectPath::from(format!("{STAGING_PREFIX}/{}", uuid::Uuid::new_v4()));
+
+        let upload = self
+            .inner
+            .put_multipart(&staging_path)
+            .await
+            .map_err(StorageError::from_object_store)?;
+        // `WriteMultipart` batches small input chunks into 5 MB parts
+        // before dispatching them — S3/R2/MinIO reject intermediate
+        // parts below 5 MB (`EntityTooSmall`), so a naive per-chunk
+        // `put_part` breaks the moment a caller streams ~KB-sized
+        // reads from a slow HTTP response.
+        let mut write = WriteMultipart::new(upload);
+        let mut hasher = Sha256::new();
+
+        while let Some(next) = chunks.next().await {
+            let chunk = match next {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    // Best-effort abort; the staging key is disposable
+                    // either way. We swallow abort errors so the
+                    // original source-stream failure reaches the caller
+                    // instead of being masked.
+                    let _ = write.abort().await;
+                    return Err(StorageError::Source(err.to_string()));
+                }
+            };
+            hasher.update(&chunk);
+            // Cap in-flight part uploads so a fast producer can't run
+            // the process out of memory; 8 concurrent 5 MB parts ≈ 40
+            // MB of buffer, which is a reasonable ceiling for the
+            // ingestion binary.
+            if let Err(err) = write.wait_for_capacity(8).await {
+                let _ = write.abort().await;
+                return Err(StorageError::from_object_store(err));
+            }
+            write.put(chunk);
+        }
+        if let Err(err) = write.finish().await {
+            // `WriteMultipart::finish` already attempts an abort when
+            // `complete()` fails, so we just surface the error.
+            return Err(StorageError::from_object_store(err));
+        }
+
+        let id = ArtifactId::from_digest(Sha256Digest::from_bytes(hasher.finalize().into()));
+        let canonical = artifact_path(&id);
+
+        // Canonical key already present → discard the stage; caller
+        // still gets the deterministic id.
+        match self.inner.head(&canonical).await {
+            Ok(_) => {
+                let _ = self.inner.delete(&staging_path).await;
+                return Ok(id);
+            }
+            Err(ObjectStoreError::NotFound { .. }) => {}
+            Err(err) => {
+                let _ = self.inner.delete(&staging_path).await;
+                return Err(StorageError::from_object_store(err));
+            }
+        }
+
+        // Server-side copy; the bytes never travel back through this
+        // process. `copy` overwrites on S3/R2/MinIO, which is fine:
+        // content-addressed means "same bytes" even if a concurrent
+        // writer got there first.
+        if let Err(err) = self.inner.copy(&staging_path, &canonical).await {
+            let _ = self.inner.delete(&staging_path).await;
+            return Err(StorageError::from_object_store(err));
+        }
+        let _ = self.inner.delete(&staging_path).await;
+        Ok(id)
+    }
+
+    /// Return a streaming reader of the artifact at `id`.
     ///
     /// Yields chunks of [`Bytes`] as the backend delivers them; no
     /// in-memory buffer of the full body is materialised.
     #[tracing::instrument(skip(self))]
-    pub async fn get_artifact(&self, key: &Sha256Key) -> Result<ByteStream, StorageError> {
-        let path = key.to_object_path();
+    pub async fn get_artifact(&self, id: &ArtifactId) -> Result<ByteStream, StorageError> {
+        let path = artifact_path(id);
         let result = self
             .inner
             .get(&path)
@@ -196,10 +291,10 @@ impl BlobStore {
             .boxed())
     }
 
-    /// Return `true` when the artifact at `key` is present.
+    /// Return `true` when the artifact at `id` is present.
     #[tracing::instrument(skip(self))]
-    pub async fn contains(&self, key: &Sha256Key) -> Result<bool, StorageError> {
-        match self.inner.head(&key.to_object_path()).await {
+    pub async fn contains(&self, id: &ArtifactId) -> Result<bool, StorageError> {
+        match self.inner.head(&artifact_path(id)).await {
             Ok(_) => Ok(true),
             Err(ObjectStoreError::NotFound { .. }) => Ok(false),
             Err(err) => Err(StorageError::Backend(err)),
@@ -207,56 +302,44 @@ impl BlobStore {
     }
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn sha256_key_matches_known_vector() {
+    fn artifact_path_matches_known_empty_vector() {
         // SHA-256 of the empty string is a fixed reference value; if
         // the hashing glue ever regresses (wrong encoding, double-hash,
         // truncation) this test is the first to notice.
-        let key = Sha256Key::from_content(b"");
+        let id = ArtifactId::of_content(b"");
         assert_eq!(
-            key.as_hex(),
+            id.to_hex(),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(
-            key.to_object_path().as_ref(),
+            artifact_path(&id).as_ref(),
             "artifacts/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
 
     #[test]
-    fn sha256_key_is_deterministic() {
-        let a = Sha256Key::from_content(b"hello world");
-        let b = Sha256Key::from_content(b"hello world");
+    fn artifact_id_is_deterministic_and_reversible_via_hex() {
+        // The reviewer's P2 on PR #74 was that downstream stages
+        // persist the digest and need to reconstruct an id from it.
+        // Guard that invariant by round-tripping through hex.
+        let a = ArtifactId::of_content(b"hello world");
+        let b = ArtifactId::of_content(b"hello world");
         assert_eq!(a, b);
-        assert_eq!(a.as_hex().len(), 64);
-        assert!(a.as_hex().chars().all(|c| c.is_ascii_hexdigit()));
+
+        let restored = ArtifactId::from_hex(&a.to_hex()).expect("hex round-trip");
+        assert_eq!(restored, a);
     }
 
     #[test]
-    fn distinct_content_yields_distinct_keys() {
-        let a = Sha256Key::from_content(b"hello");
-        let b = Sha256Key::from_content(b"hell0");
+    fn distinct_content_yields_distinct_ids() {
+        let a = ArtifactId::of_content(b"hello");
+        let b = ArtifactId::of_content(b"hell0");
         assert_ne!(a, b);
-    }
-
-    #[test]
-    fn hex_encode_round_trips_known_bytes() {
-        assert_eq!(hex_encode(&[0x00, 0x0f, 0xff]), "000fff");
-        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
     }
 
     #[test]
@@ -280,6 +363,14 @@ mod tests {
         assert_eq!(
             StorageError::NotFound("artifacts/abc".into()).class(),
             ErrorClass::Permanent,
+        );
+    }
+
+    #[test]
+    fn source_stream_is_transient() {
+        assert_eq!(
+            StorageError::Source("broken pipe".into()).class(),
+            ErrorClass::Transient,
         );
     }
 

@@ -1,19 +1,21 @@
 //! Integration tests for `au-kpis-storage` against a real MinIO backend.
 //!
 //! The spec calls for content-addressed, idempotent artifact writes and
-//! streaming reads (`Spec.md § Ingestion pipeline`, issue #8). Asserting
-//! those contracts against the real `AmazonS3` client — pointed at a
-//! MinIO container — catches SigV4 / path-style / conditional-write
-//! regressions that a pure in-memory stub would not.
+//! streaming reads and writes (`Spec.md § Ingestion pipeline`, issue
+//! #8). Asserting those contracts against the real `AmazonS3` client —
+//! pointed at a MinIO container — catches SigV4 / path-style /
+//! conditional-write / multipart regressions that a pure in-memory stub
+//! would not.
 //!
 //! Requires a working Docker daemon. In CI the job runs against the
 //! default socket; locally `colima start` or Docker Desktop is enough.
 
 use std::{sync::Arc, time::Duration};
 
-use au_kpis_storage::{BlobStore, Sha256Key, StorageError};
+use au_kpis_domain::ids::ArtifactId;
+use au_kpis_storage::{BlobStore, StorageError, artifact_path};
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use object_store::{ObjectStore, aws::AmazonS3Builder};
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
@@ -110,17 +112,16 @@ async fn put_artifact_is_content_addressed() {
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let content = Bytes::from_static(b"the quick brown fox");
-    let key = blob.put_artifact(content.clone()).await.expect("put");
+    let id = blob.put_artifact(content.clone()).await.expect("put");
 
-    // Key matches the sha256 of the bytes we wrote, computed without
+    // Id matches the sha256 of the bytes we wrote, computed without
     // going through the blob store.
-    let expected = Sha256Key::from_content(&content);
-    assert_eq!(key, expected);
+    assert_eq!(id, ArtifactId::of_content(&content));
 
-    // Distinct content → distinct key.
+    // Distinct content → distinct id.
     let other = Bytes::from_static(b"the quick brown foz");
-    let other_key = blob.put_artifact(other).await.expect("put other");
-    assert_ne!(key, other_key);
+    let other_id = blob.put_artifact(other).await.expect("put other");
+    assert_ne!(id, other_id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -129,27 +130,28 @@ async fn put_artifact_is_idempotent_and_does_not_rewrite() {
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let content = Bytes::from_static(b"idempotent payload");
-    let key = blob.put_artifact(content.clone()).await.expect("put 1");
+    let id = blob.put_artifact(content.clone()).await.expect("put 1");
 
+    let canonical = artifact_path(&id);
     let meta_first = h
         .store
-        .head(&key.to_object_path())
+        .head(&canonical)
         .await
         .expect("head after first put");
 
-    // Second put of identical content: same key, same backend object.
-    let key_again = blob.put_artifact(content.clone()).await.expect("put 2");
-    assert_eq!(key, key_again);
+    // Second put of identical content: same id, same backend object.
+    let id_again = blob.put_artifact(content.clone()).await.expect("put 2");
+    assert_eq!(id, id_again);
 
     let meta_second = h
         .store
-        .head(&key.to_object_path())
+        .head(&canonical)
         .await
         .expect("head after second put");
 
     // `last_modified` and `e_tag` would both change if the backend
-    // actually received a second PUT — the conditional-write guard
-    // keeps them stable, which is the "no rewrite" contract.
+    // actually received a second PUT — skipping the re-write keeps
+    // them stable, which is the "no rewrite" contract.
     assert_eq!(
         meta_first.last_modified, meta_second.last_modified,
         "last_modified changed — backend was rewritten",
@@ -169,11 +171,11 @@ async fn get_artifact_streams_full_payload() {
     // A payload comfortably larger than a single chunk so the stream
     // actually yields multiple `Bytes` values on the happy path.
     let content = Bytes::from_iter((0u8..=255).cycle().take(64 * 1024));
-    let key = blob.put_artifact(content.clone()).await.expect("put");
+    let id = blob.put_artifact(content.clone()).await.expect("put");
 
-    let mut stream = blob.get_artifact(&key).await.expect("get stream");
+    let mut out = blob.get_artifact(&id).await.expect("get stream");
     let mut buf = Vec::with_capacity(content.len());
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = out.next().await {
         buf.extend_from_slice(&chunk.expect("chunk"));
     }
     assert_eq!(buf.len(), content.len());
@@ -185,7 +187,7 @@ async fn missing_artifact_surfaces_not_found() {
     let h = start_minio().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
-    let ghost = Sha256Key::from_content(b"never written");
+    let ghost = ArtifactId::of_content(b"never written");
     // `ByteStream` intentionally does not implement `Debug`, so we
     // inspect the `Result` by hand rather than going through
     // `.expect_err(...)`.
@@ -198,5 +200,89 @@ async fn missing_artifact_surfaces_not_found() {
     assert!(
         !blob.contains(&ghost).await.expect("contains probe"),
         "contains() on an unwritten key should return false",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn put_artifact_stream_matches_single_shot_id() {
+    let h = start_minio().await;
+    let blob = BlobStore::from_arc(Arc::clone(&h.store));
+
+    // Payload sized to span multiple S3 multipart parts: each `Bytes`
+    // in the input stream becomes a `put_part` call, so the final
+    // digest exercises the hash-while-uploading path and the
+    // server-side copy on completion.
+    let total: Vec<u8> = (0u8..=255).cycle().take(192 * 1024).collect();
+    let chunk_size = 32 * 1024;
+    let chunks: Vec<Bytes> = total
+        .chunks(chunk_size)
+        .map(Bytes::copy_from_slice)
+        .collect();
+    let stream_chunks = stream::iter(
+        chunks
+            .into_iter()
+            .map(Ok::<_, std::io::Error>)
+            .collect::<Vec<_>>(),
+    );
+
+    let streamed = blob
+        .put_artifact_stream(stream_chunks)
+        .await
+        .expect("streaming put");
+    let direct = ArtifactId::of_content(&total);
+    assert_eq!(
+        streamed, direct,
+        "streaming digest must match a one-shot hash of the same bytes",
+    );
+
+    // The bytes under the canonical key must match what we streamed.
+    let mut got = Vec::with_capacity(total.len());
+    let mut body = blob.get_artifact(&streamed).await.expect("get");
+    while let Some(chunk) = body.next().await {
+        got.extend_from_slice(&chunk.expect("chunk"));
+    }
+    assert_eq!(got, total, "stored bytes differ from the streamed input");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn put_artifact_stream_is_idempotent_and_cleans_staging() {
+    use object_store::path::Path;
+
+    let h = start_minio().await;
+    let blob = BlobStore::from_arc(Arc::clone(&h.store));
+
+    let content = b"streamed-idempotent".to_vec();
+    let build = || {
+        stream::iter(vec![Ok::<_, std::io::Error>(Bytes::copy_from_slice(
+            &content,
+        ))])
+    };
+
+    let first = blob.put_artifact_stream(build()).await.expect("stream 1");
+    let meta_first = h.store.head(&artifact_path(&first)).await.expect("head 1");
+
+    let second = blob.put_artifact_stream(build()).await.expect("stream 2");
+    assert_eq!(first, second);
+    let meta_second = h.store.head(&artifact_path(&first)).await.expect("head 2");
+
+    // The second streaming put discovered the canonical key already
+    // existed and deleted its staged copy without overwriting the
+    // canonical object. `last_modified` / `e_tag` stability proves no
+    // rewrite even though the upload-and-copy path ran a second time.
+    assert_eq!(meta_first.last_modified, meta_second.last_modified);
+    assert_eq!(meta_first.e_tag, meta_second.e_tag);
+
+    // Staging must be clean — no dangling `artifacts-staging/*` objects
+    // after either put settles.
+    let staging_prefix = Path::from("artifacts-staging");
+    let mut staged = h.store.list(Some(&staging_prefix));
+    let leaked: Vec<_> = std::iter::from_fn(|| {
+        futures::executor::block_on(staged.next())
+            .map(|r| r.expect("list staging").location.to_string())
+    })
+    .collect();
+    assert!(
+        leaked.is_empty(),
+        "streaming put left staged objects behind: {leaked:?}",
     );
 }
