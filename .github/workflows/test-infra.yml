@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+env:
+  RUST_TOOLCHAIN: "1.85"
+
 jobs:
   nextest:
     name: Rust Tests (nextest)
@@ -15,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-nextest
         run: cargo install cargo-nextest --version 0.9.100 --locked
@@ -22,6 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p target
           cargo nextest run --workspace 2>&1 | tee target/nextest-run.log
       - name: Fail on flaky retries
         shell: bash
@@ -41,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - name: Install llvm coverage tooling
         run: |
