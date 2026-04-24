@@ -52,7 +52,7 @@ fn validate_slug(s: &str) -> Result<(), IdError> {
 macro_rules! slug_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, ToSchema)]
         #[serde(transparent)]
         pub struct $name(String);
 
@@ -91,6 +91,33 @@ macro_rules! slug_id {
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
                 &self.0
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                struct SlugIdVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for SlugIdVisitor {
+                    type Value = $name;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        formatter.write_str("a non-empty identifier string")
+                    }
+
+                    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                        $name::new(value).map_err(E::custom)
+                    }
+
+                    fn visit_string<E: serde::de::Error>(
+                        self,
+                        value: String,
+                    ) -> Result<Self::Value, E> {
+                        $name::new(value).map_err(E::custom)
+                    }
+                }
+
+                deserializer.deserialize_string(SlugIdVisitor)
             }
         }
     };
@@ -442,6 +469,22 @@ mod tests {
     fn sha256_digest_rejects_non_hex() {
         let s = "z".repeat(64);
         assert_eq!(Sha256Digest::from_hex(&s), Err(IdError::HashEncoding));
+    }
+
+    #[test]
+    fn slug_id_json_deserialization_validates_input() {
+        let err = serde_json::from_str::<DimensionId>("\"\"").unwrap_err();
+        assert!(
+            err.to_string().contains("identifier must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let too_long = "x".repeat(MAX_ID_LEN + 1);
+        let err = serde_json::from_str::<CodeId>(&format!("\"{too_long}\"")).unwrap_err();
+        assert!(
+            err.to_string().contains("identifier exceeds"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

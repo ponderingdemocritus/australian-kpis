@@ -70,6 +70,8 @@ impl SeriesDescriptor {
 mod tests {
     use super::*;
     use crate::ids::{CodeId, DimensionId};
+    use serde_json::{Value, json};
+    use utoipa::PartialSchema;
 
     fn example_series() -> Series {
         let df = DataflowId::new("abs.cpi").unwrap();
@@ -96,6 +98,40 @@ mod tests {
         }
     }
 
+    fn example_descriptor() -> SeriesDescriptor {
+        let s = example_series();
+        SeriesDescriptor {
+            series_key: s.series_key,
+            dataflow_id: s.dataflow_id,
+            measure_id: s.measure_id,
+            dimensions: s.dimensions,
+            unit: s.unit,
+        }
+    }
+
+    fn assert_dimensions_schema(schema: &Value) {
+        let dimensions = &schema["properties"]["dimensions"];
+        assert_eq!(dimensions["type"], "object");
+        assert!(
+            dimensions.get("additionalProperties").is_some(),
+            "expected additionalProperties in schema: {schema}"
+        );
+        let additional_properties = &dimensions["additionalProperties"];
+        assert!(
+            additional_properties.get("type") == Some(&json!("string"))
+                || additional_properties.get("$ref").is_some(),
+            "expected string-like additionalProperties schema: {schema}"
+        );
+
+        let property_names = &dimensions["propertyNames"];
+        assert!(
+            property_names.is_null()
+                || property_names.get("type") == Some(&json!("string"))
+                || property_names.get("$ref").is_some(),
+            "expected string-like propertyNames schema: {schema}"
+        );
+    }
+
     #[test]
     fn series_roundtrips() {
         let s = example_series();
@@ -113,16 +149,51 @@ mod tests {
     #[test]
     fn descriptor_roundtrips_and_matches_series_key() {
         let s = example_series();
-        let d = SeriesDescriptor {
-            series_key: s.series_key,
-            dataflow_id: s.dataflow_id.clone(),
-            measure_id: s.measure_id.clone(),
-            dimensions: s.dimensions.clone(),
-            unit: s.unit.clone(),
-        };
+        let d = example_descriptor();
         let json = serde_json::to_string(&d).unwrap();
         let back: SeriesDescriptor = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
         assert_eq!(d.compute_series_key(), s.series_key);
+    }
+
+    #[test]
+    fn series_rejects_invalid_dimensions_at_json_boundary() {
+        let s = example_series();
+        let invalid = json!({
+            "series_key": s.series_key.to_hex(),
+            "dataflow_id": s.dataflow_id.as_str(),
+            "measure_id": s.measure_id.as_str(),
+            "dimensions": { "": "AUS" },
+            "unit": s.unit,
+            "first_observed": s.first_observed,
+            "last_observed": s.last_observed,
+            "active": s.active
+        });
+
+        let err = serde_json::from_value::<Series>(invalid).unwrap_err();
+        assert!(
+            err.to_string().contains("identifier must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn series_contract_serializes_dimensions_as_string_keyed_object() {
+        let s = example_series();
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["dimensions"], json!({ "region": "AUS" }));
+
+        let schema = serde_json::to_value(Series::schema()).unwrap();
+        assert_dimensions_schema(&schema);
+    }
+
+    #[test]
+    fn descriptor_contract_serializes_dimensions_as_string_keyed_object() {
+        let descriptor = example_descriptor();
+        let json = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(json["dimensions"], json!({ "region": "AUS" }));
+
+        let schema = serde_json::to_value(SeriesDescriptor::schema()).unwrap();
+        assert_dimensions_schema(&schema);
     }
 }
