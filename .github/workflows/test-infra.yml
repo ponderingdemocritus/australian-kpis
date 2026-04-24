@@ -178,12 +178,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install llvm coverage tooling
         run: |
-          rustup component add llvm-tools-preview
+          rustup component add llvm-tools-preview --toolchain ${{ env.COVERAGE_TOOLCHAIN }}
           cargo install cargo-llvm-cov --version 0.6.21 --locked
       - name: Generate coverage report
         run: |
           mkdir -p target/llvm-cov
-          cargo llvm-cov --workspace --branch --fail-under-lines 80 --lcov --output-path target/llvm-cov/lcov.info
+          cargo +${{ env.COVERAGE_TOOLCHAIN }} llvm-cov --workspace --branch --fail-under-lines 80 --lcov --output-path target/llvm-cov/lcov.info
       - name: Enforce branch coverage floor
         shell: bash
         run: |
