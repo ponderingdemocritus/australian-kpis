@@ -79,7 +79,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 - Licensing model: **Free tier** — generous default rate limits, API keys for abuse prevention + attribution.
 - SDK: **TypeScript first**; Python/Go SDKs later via same OpenAPI codegen.
 - First dataflow: **ABS CPI** (higher public demand than Labour Force; monthly + quarterly releases).
-- Raw artifacts: **retained in S3/R2 indefinitely** — lifecycle policy moves >1yr objects to cold storage.
+- Raw artifacts: **retained in S3/R2 indefinitely** — lifecycle policy moves >1yr objects to cold storage. Streaming uploads land first in `artifacts-staging/<uuid>` and are copied to `artifacts/<sha256>` once the hash is known; a second lifecycle rule expires `artifacts-staging/` after 7 days so any rare delete-failure leak from the storage crate is bounded. The declarative policy lives in `infra/r2/lifecycle.json`.
 - Rust: **2024 edition, MSRV 1.83**.
 - Migrations: **`sqlx migrate`** (sync-at-startup).
 
