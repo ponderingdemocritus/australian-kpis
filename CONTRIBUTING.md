@@ -56,6 +56,7 @@ cargo nextest run --workspace
 See `Spec.md § Testing strategy`. Minimum:
 
 - Every public fn has at least one test
+- `pnpm run lint` passes locally
 - `cargo nextest run --workspace` passes locally
 - Coverage ≥80% line / ≥70% branch (PR bot comments with diff)
 - For adapter changes: add/update `insta` snapshots with real fixtures

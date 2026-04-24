@@ -93,7 +93,7 @@ cargo nextest run --workspace
 cargo sqlx prepare --workspace        # if queries changed
 
 # TypeScript
-pnpm biome check .
+pnpm run lint
 pnpm turbo run typecheck test
 
 # Supply chain (catches bad deps before CI)
@@ -152,7 +152,7 @@ Full details in `Spec.md § CI/CD pipeline`. Summary:
 | # | Gate | Tool | Fail condition |
 |---|---|---|---|
 | 1 | Compile | `cargo check --workspace` | error |
-| 2 | Lint | `cargo clippy -D warnings` + `biome check` | any warning |
+| 2 | Lint | `cargo clippy -D warnings` + `pnpm run lint` | any warning |
 | 3 | Format | `cargo fmt --check` + `biome format --check` | diff |
 | 4 | Tests | `nextest` + `vitest` + Playwright | fail or flake (retry >0) |
 | 5 | Coverage | `cargo-llvm-cov` | <80% line or <70% branch |

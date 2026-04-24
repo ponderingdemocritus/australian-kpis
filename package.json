@@ -9,7 +9,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
-    "lint": "biome check .",
+    "lint": "biome check . && markdownlint-cli2 \"**/*.md\" \"#node_modules\"",
     "markdownlint": "markdownlint-cli2 \"**/*.md\" \"#node_modules\"",
     "format": "biome format --write .",
     "typecheck": "turbo run typecheck",
