@@ -448,3 +448,39 @@ jobs:
             exit 1
           fi
         shell: bash
+
+  # Single required-status-check gate. Branch protection points at
+  # `CI OK` and this job aggregates every upstream job's result, so
+  # adding or renaming jobs never forces a branch-protection edit —
+  # just keep the list in `needs:` current.
+  ci-ok:
+    name: CI OK
+    runs-on: ubuntu-latest
+    needs:
+      - codex-review
+    if: always()
+    steps:
+      - name: Enforce required job results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "Upstream job results:"
+          jq -r 'to_entries[] | "  \(.key): \(.value.result)"' <<<"$NEEDS"
+
+          # `skipped` is allowed — the upstream preflight deliberately
+          # skips Codex for draft PRs, forks, and repos without
+          # OPENAI_API_KEY, and we don't want those escape hatches to
+          # block merges. `failure` or `cancelled` fails the gate.
+          bad=$(jq -r '
+            to_entries
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | map(.key)
+            | join(", ")
+          ' <<<"$NEEDS")
+
+          if [ -n "$bad" ]; then
+            echo "::error::required checks failed or were cancelled: $bad"
+            exit 1
+          fi
+        shell: bash
