@@ -75,7 +75,11 @@ jobs:
         run: cargo install cargo-nextest --version 0.9.100 --locked
 
       - name: Generate LCOV report
-        run: cargo llvm-cov nextest --workspace --profile ci --lcov --output-path target/llvm-cov/lcov.info
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/llvm-cov
+          cargo llvm-cov nextest --workspace --profile ci --lcov --output-path target/llvm-cov/lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
