@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -31,7 +34,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-nextest
-        run: cargo install cargo-nextest --locked
+        run: cargo install cargo-nextest --version 0.9.100 --locked
 
       - name: Run workspace tests with CI profile
         shell: bash
@@ -50,6 +53,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -63,7 +69,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --version 0.6.21 --locked
 
       - name: Generate LCOV report
         run: cargo llvm-cov nextest --workspace --profile ci --lcov --output-path target/llvm-cov/lcov.info
@@ -82,6 +88,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -95,7 +104,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-insta
-        run: cargo install cargo-insta --locked
+        run: cargo install cargo-insta --version 1.47.2 --locked
 
       - name: Verify committed snapshots
         run: cargo insta test --workspace --check
