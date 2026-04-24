@@ -1,4 +1,12 @@
 {
+  "gitignore": true,
+  "globs": [
+    "**/*.md"
+  ],
+  "ignores": [
+    ".context/**",
+    "target/**"
+  ],
   "config": {
     "default": true,
     "line-length": false,
