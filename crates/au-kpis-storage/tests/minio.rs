@@ -13,7 +13,7 @@
 use std::{sync::Arc, time::Duration};
 
 use au_kpis_domain::ids::ArtifactId;
-use au_kpis_storage::{BlobStore, StorageError, artifact_path};
+use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use object_store::{ObjectStore, aws::AmazonS3Builder};
@@ -132,7 +132,8 @@ async fn put_artifact_is_idempotent_and_does_not_rewrite() {
     let content = Bytes::from_static(b"idempotent payload");
     let id = blob.put_artifact(content.clone()).await.expect("put 1");
 
-    let canonical = artifact_path(&id);
+    let key = StorageKey::canonical_for(&id);
+    let canonical = object_store::path::Path::from(key.as_str());
     let meta_first = h
         .store
         .head(&canonical)
@@ -173,7 +174,8 @@ async fn get_artifact_streams_full_payload() {
     let content = Bytes::from_iter((0u8..=255).cycle().take(64 * 1024));
     let id = blob.put_artifact(content.clone()).await.expect("put");
 
-    let mut out = blob.get_artifact(&id).await.expect("get stream");
+    let key = StorageKey::canonical_for(&id);
+    let mut out = blob.get(&key).await.expect("get stream");
     let mut buf = Vec::with_capacity(content.len());
     while let Some(chunk) = out.next().await {
         buf.extend_from_slice(&chunk.expect("chunk"));
@@ -187,19 +189,29 @@ async fn missing_artifact_surfaces_not_found() {
     let h = start_minio().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
-    let ghost = ArtifactId::of_content(b"never written");
+    let ghost_id = ArtifactId::of_content(b"never written");
+    let ghost = StorageKey::canonical_for(&ghost_id);
     // `ByteStream` intentionally does not implement `Debug`, so we
     // inspect the `Result` by hand rather than going through
     // `.expect_err(...)`.
-    match blob.get_artifact(&ghost).await {
+    match blob.get(&ghost).await {
         Ok(_) => panic!("unwritten key should not resolve"),
         Err(StorageError::NotFound(_)) => {}
         Err(other) => panic!("expected NotFound, got {other:?}"),
     }
 
     assert!(
-        !blob.contains(&ghost).await.expect("contains probe"),
-        "contains() on an unwritten key should return false",
+        !blob.exists(&ghost).await.expect("exists probe"),
+        "exists() on an unwritten key should return false",
+    );
+
+    // A persisted key that points outside `artifacts/` (e.g. a cold-tier
+    // move) must also round-trip cleanly through `exists`/`get` — this
+    // is the P1 from PR #74 about retention-tier rewrites.
+    let moved = StorageKey::from_persisted("cold/never-existed");
+    assert!(
+        !blob.exists(&moved).await.expect("exists moved"),
+        "unmoved/moved keys must both be reachable via StorageKey",
     );
 }
 
@@ -208,12 +220,17 @@ async fn put_artifact_stream_matches_single_shot_id() {
     let h = start_minio().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
-    // Payload sized to span multiple S3 multipart parts: each `Bytes`
-    // in the input stream becomes a `put_part` call, so the final
-    // digest exercises the hash-while-uploading path and the
-    // server-side copy on completion.
-    let total: Vec<u8> = (0u8..=255).cycle().take(192 * 1024).collect();
-    let chunk_size = 32 * 1024;
+    // Payload sized to genuinely cross S3's multipart boundary:
+    // `WriteMultipart` only dispatches parts once its internal buffer
+    // fills to 5 MiB, so anything smaller stays in one part and never
+    // exercises `put_part` / `complete` at all. 12 MiB spans two full
+    // 5 MiB parts plus a ~2 MiB trailer, matching what the adapter
+    // fetch stage will see for any non-trivial upstream file.
+    let total: Vec<u8> = (0u8..=255).cycle().take(12 * 1024 * 1024).collect();
+    // Small producer chunks (256 KiB) also prove the internal buffer
+    // coalesces sub-5 MiB writes; a naive per-chunk `put_part` would
+    // trip `EntityTooSmall` here.
+    let chunk_size = 256 * 1024;
     let chunks: Vec<Bytes> = total
         .chunks(chunk_size)
         .map(Bytes::copy_from_slice)
@@ -236,8 +253,9 @@ async fn put_artifact_stream_matches_single_shot_id() {
     );
 
     // The bytes under the canonical key must match what we streamed.
+    let key = StorageKey::canonical_for(&streamed);
     let mut got = Vec::with_capacity(total.len());
-    let mut body = blob.get_artifact(&streamed).await.expect("get");
+    let mut body = blob.get(&key).await.expect("get");
     while let Some(chunk) = body.next().await {
         got.extend_from_slice(&chunk.expect("chunk"));
     }
@@ -259,11 +277,12 @@ async fn put_artifact_stream_is_idempotent_and_cleans_staging() {
     };
 
     let first = blob.put_artifact_stream(build()).await.expect("stream 1");
-    let meta_first = h.store.head(&artifact_path(&first)).await.expect("head 1");
+    let canonical = object_store::path::Path::from(StorageKey::canonical_for(&first).as_str());
+    let meta_first = h.store.head(&canonical).await.expect("head 1");
 
     let second = blob.put_artifact_stream(build()).await.expect("stream 2");
     assert_eq!(first, second);
-    let meta_second = h.store.head(&artifact_path(&first)).await.expect("head 2");
+    let meta_second = h.store.head(&canonical).await.expect("head 2");
 
     // The second streaming put discovered the canonical key already
     // existed and deleted its staged copy without overwriting the

@@ -3,8 +3,9 @@
 //! In production this is backed by Cloudflare R2 via the S3-compatible
 //! API (`object_store::aws::AmazonS3Builder`); locally and in integration
 //! tests we point the same builder at a MinIO container. The public
-//! surface hides the backend — callers see a [`BlobStore`] and
-//! [`au_kpis_domain::ids::ArtifactId`].
+//! surface hides the backend — callers see a [`BlobStore`], a
+//! [`StorageKey`] read handle, and [`au_kpis_domain::ids::ArtifactId`]
+//! for content-addressed writes.
 //!
 //! # Content-addressed writes
 //!
@@ -23,16 +24,30 @@
 //! Both paths are idempotent: a second call with identical content
 //! returns the same [`ArtifactId`] and does not re-write the backend.
 //!
-//! # Streaming reads
+//! # Reads go via the persisted `storage_key`
 //!
-//! [`BlobStore::get_artifact`] returns a [`ByteStream`] so large
-//! artifacts never need to be buffered in memory on the read side
-//! either.
+//! [`BlobStore::get`] / [`BlobStore::exists`] take a [`StorageKey`]
+//! rather than an [`ArtifactId`]. `Artifact.storage_key` is persisted
+//! explicitly in the schema so retention policies can move an artifact
+//! to cold tier (rewriting the key) without changing its id; deriving
+//! the path from the id would 404 after any such move. Callers that
+//! just wrote (or never persist the key) can reconstruct the default
+//! with [`StorageKey::canonical_for`].
+//!
+//! # Staging
+//!
+//! Streaming writes land first in `artifacts-staging/<uuid>` and are
+//! server-side copied to the canonical key once the hash is known. The
+//! staging delete on the happy path is retried with backoff before
+//! being logged — see [`STAGING_PREFIX`] — so the deployment **must**
+//! configure a bucket lifecycle rule that sweeps this prefix (7d is
+//! generous) to catch the rare case where delete fails for longer
+//! than the retry window can cover.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Duration};
 
 use au_kpis_domain::ids::{ArtifactId, Sha256Digest};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
@@ -59,10 +74,53 @@ pub const ARTIFACTS_PREFIX: &str = "artifacts";
 /// inert — a bucket lifecycle rule on this prefix can sweep it later.
 pub const STAGING_PREFIX: &str = "artifacts-staging";
 
-/// Canonical object-store path for an artifact.
-#[must_use]
-pub fn artifact_path(id: &ArtifactId) -> ObjectPath {
-    ObjectPath::from(format!("{ARTIFACTS_PREFIX}/{}", id.to_hex()))
+/// Location at which a blob lives inside the backend.
+///
+/// Two constructors cover both call sites: callers that have just
+/// written go through [`StorageKey::canonical_for`], callers reading
+/// back from a persisted row use [`StorageKey::from_persisted`]. Both
+/// produce the same shape — opaque string — but the split keeps the
+/// intent visible at every call site.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StorageKey(String);
+
+impl StorageKey {
+    /// The default `artifacts/<hex>` placement written by this crate.
+    #[must_use]
+    pub fn canonical_for(id: &ArtifactId) -> Self {
+        Self(format!("{ARTIFACTS_PREFIX}/{}", id.to_hex()))
+    }
+
+    /// Wrap a key that was previously persisted (e.g. `artifacts.storage_key`
+    /// loaded from Postgres). The crate stores `storage_key` explicitly
+    /// so retention moves can rewrite it, and reads must follow the
+    /// persisted value rather than rederiving it from the digest.
+    #[must_use]
+    pub fn from_persisted(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    /// Underlying string representation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn as_object_path(&self) -> ObjectPath {
+        ObjectPath::from(self.0.as_str())
+    }
+}
+
+impl fmt::Display for StorageKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for StorageKey {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Errors returned by the storage layer.
@@ -159,7 +217,7 @@ impl BlobStore {
     #[tracing::instrument(skip(self, content), fields(len = content.len()))]
     pub async fn put_artifact(&self, content: Bytes) -> Result<ArtifactId, StorageError> {
         let id = ArtifactId::of_content(&content);
-        let path = artifact_path(&id);
+        let path = canonical_object_path(&id);
 
         // Content-addressed keys collapse "same content" to "same key",
         // so a successful head means the bytes are already present and
@@ -245,18 +303,18 @@ impl BlobStore {
         }
 
         let id = ArtifactId::from_digest(Sha256Digest::from_bytes(hasher.finalize().into()));
-        let canonical = artifact_path(&id);
+        let canonical = canonical_object_path(&id);
 
         // Canonical key already present → discard the stage; caller
         // still gets the deterministic id.
         match self.inner.head(&canonical).await {
             Ok(_) => {
-                let _ = self.inner.delete(&staging_path).await;
+                self.best_effort_delete_staging(&staging_path).await;
                 return Ok(id);
             }
             Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => {
-                let _ = self.inner.delete(&staging_path).await;
+                self.best_effort_delete_staging(&staging_path).await;
                 return Err(StorageError::from_object_store(err));
             }
         }
@@ -266,23 +324,25 @@ impl BlobStore {
         // content-addressed means "same bytes" even if a concurrent
         // writer got there first.
         if let Err(err) = self.inner.copy(&staging_path, &canonical).await {
-            let _ = self.inner.delete(&staging_path).await;
+            self.best_effort_delete_staging(&staging_path).await;
             return Err(StorageError::from_object_store(err));
         }
-        let _ = self.inner.delete(&staging_path).await;
+        self.best_effort_delete_staging(&staging_path).await;
         Ok(id)
     }
 
-    /// Return a streaming reader of the artifact at `id`.
+    /// Return a streaming reader of the artifact at `key`.
     ///
-    /// Yields chunks of [`Bytes`] as the backend delivers them; no
-    /// in-memory buffer of the full body is materialised.
+    /// Takes the persisted [`StorageKey`] rather than an
+    /// [`ArtifactId`] so retention-tier moves that rewrite the row's
+    /// `storage_key` continue to resolve after the move. Yields chunks
+    /// of [`Bytes`] as the backend delivers them; no in-memory buffer
+    /// of the full body is materialised.
     #[tracing::instrument(skip(self))]
-    pub async fn get_artifact(&self, id: &ArtifactId) -> Result<ByteStream, StorageError> {
-        let path = artifact_path(id);
+    pub async fn get(&self, key: &StorageKey) -> Result<ByteStream, StorageError> {
         let result = self
             .inner
-            .get(&path)
+            .get(&key.as_object_path())
             .await
             .map_err(StorageError::from_object_store)?;
         Ok(result
@@ -291,15 +351,57 @@ impl BlobStore {
             .boxed())
     }
 
-    /// Return `true` when the artifact at `id` is present.
+    /// Return `true` when an object exists at `key`.
     #[tracing::instrument(skip(self))]
-    pub async fn contains(&self, id: &ArtifactId) -> Result<bool, StorageError> {
-        match self.inner.head(&artifact_path(id)).await {
+    pub async fn exists(&self, key: &StorageKey) -> Result<bool, StorageError> {
+        match self.inner.head(&key.as_object_path()).await {
             Ok(_) => Ok(true),
             Err(ObjectStoreError::NotFound { .. }) => Ok(false),
             Err(err) => Err(StorageError::Backend(err)),
         }
     }
+
+    /// Retrying staging delete.
+    ///
+    /// A failed staging delete after a successful canonical write is
+    /// non-fatal for the caller — the bytes they wanted are in place —
+    /// but silently swallowing the error lets staging grow without
+    /// bound. Retry a few times with exponential backoff, then log at
+    /// `warn` level with the key so the bucket lifecycle rule (see
+    /// [`STAGING_PREFIX`] docs) and oncall both have a record. We
+    /// never surface this as an error: turning a benign staging leak
+    /// into a put failure would be a worse outcome.
+    async fn best_effort_delete_staging(&self, path: &ObjectPath) {
+        const ATTEMPTS: u32 = 3;
+        let mut backoff = Duration::from_millis(100);
+        let mut last_err: Option<ObjectStoreError> = None;
+        for _ in 0..ATTEMPTS {
+            match self.inner.delete(path).await {
+                Ok(()) => return,
+                // A concurrent cleanup (or a lifecycle sweep) may have
+                // already removed the object; nothing to do.
+                Err(ObjectStoreError::NotFound { .. }) => return,
+                Err(err) => {
+                    last_err = Some(err);
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                }
+            }
+        }
+        tracing::warn!(
+            staging_key = %path,
+            error = ?last_err,
+            "failed to delete staging object after {ATTEMPTS} retries; \
+             the bucket lifecycle rule on `{STAGING_PREFIX}/` will sweep it eventually",
+        );
+    }
+}
+
+/// Internal helper: object-store path for the canonical write target.
+/// Kept private so callers cannot accidentally bypass `StorageKey`
+/// when reading.
+fn canonical_object_path(id: &ArtifactId) -> ObjectPath {
+    ObjectPath::from(format!("{ARTIFACTS_PREFIX}/{}", id.to_hex()))
 }
 
 #[cfg(test)]
@@ -307,7 +409,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn artifact_path_matches_known_empty_vector() {
+    fn canonical_storage_key_matches_known_empty_vector() {
         // SHA-256 of the empty string is a fixed reference value; if
         // the hashing glue ever regresses (wrong encoding, double-hash,
         // truncation) this test is the first to notice.
@@ -317,9 +419,18 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(
-            artifact_path(&id).as_ref(),
+            StorageKey::canonical_for(&id).as_str(),
             "artifacts/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn storage_key_from_persisted_preserves_arbitrary_path() {
+        // The domain model allows retention moves to rewrite
+        // `storage_key` to something outside `artifacts/...` — the
+        // read API must treat the string as opaque.
+        let moved = StorageKey::from_persisted("cold/2024/abc123");
+        assert_eq!(moved.as_str(), "cold/2024/abc123");
     }
 
     #[test]
