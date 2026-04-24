@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 /// Errors produced while constructing an identifier.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub enum IdError {
     #[error("identifier must not be empty")]
     Empty,
@@ -353,6 +353,7 @@ impl ObservationId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use utoipa::ToSchema;
 
     #[test]
     fn slug_id_rejects_empty() {
@@ -441,5 +442,14 @@ mod tests {
     fn sha256_digest_rejects_non_hex() {
         let s = "z".repeat(64);
         assert_eq!(Sha256Digest::from_hex(&s), Err(IdError::HashEncoding));
+    }
+
+    #[test]
+    fn id_error_roundtrips_and_has_openapi_schema() {
+        let err = IdError::TooLong { max: MAX_ID_LEN };
+        let json = serde_json::to_string(&err).unwrap();
+        let back: IdError = serde_json::from_str(&json).unwrap();
+        assert_eq!(err, back);
+        assert_eq!(IdError::name(), "IdError");
     }
 }

@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::ids::{DataflowId, MeasureId, SeriesKey};
+use crate::ids::{CodeId, DataflowId, DimensionId, MeasureId, SeriesKey};
 
 /// One time series within a dataflow. `dimensions` is the sorted bag of
 /// `(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
@@ -16,10 +16,10 @@ pub struct Series {
     pub series_key: SeriesKey,
     pub dataflow_id: DataflowId,
     pub measure_id: MeasureId,
-    /// Dimension values keyed by `DimensionId::as_str()`. Stored sorted (via
-    /// `BTreeMap`) so iteration order is stable across serialisation +
-    /// re-hashing.
-    pub dimensions: BTreeMap<String, String>,
+    /// Dimension values keyed by typed dimension ids and code ids. Stored
+    /// sorted (via `BTreeMap`) so iteration order is stable across
+    /// serialisation + re-hashing.
+    pub dimensions: BTreeMap<DimensionId, CodeId>,
     pub unit: String,
     pub first_observed: Option<DateTime<Utc>>,
     pub last_observed: Option<DateTime<Utc>>,
@@ -51,7 +51,7 @@ pub struct SeriesDescriptor {
     pub series_key: SeriesKey,
     pub dataflow_id: DataflowId,
     pub measure_id: MeasureId,
-    pub dimensions: BTreeMap<String, String>,
+    pub dimensions: BTreeMap<DimensionId, CodeId>,
     pub unit: String,
 }
 
@@ -69,12 +69,16 @@ impl SeriesDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::{CodeId, DimensionId};
 
     fn example_series() -> Series {
         let df = DataflowId::new("abs.cpi").unwrap();
-        let dims: BTreeMap<String, String> = [("region".to_string(), "AUS".to_string())]
-            .into_iter()
-            .collect();
+        let dims: BTreeMap<DimensionId, CodeId> = [(
+            DimensionId::new("region").unwrap(),
+            CodeId::new("AUS").unwrap(),
+        )]
+        .into_iter()
+        .collect();
         let key = SeriesKey::derive(&df, dims.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         Series {
             series_key: key,
