@@ -80,7 +80,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 - SDK: **TypeScript first**; Python/Go SDKs later via same OpenAPI codegen.
 - First dataflow: **ABS CPI** (higher public demand than Labour Force; monthly + quarterly releases).
 - Raw artifacts: **retained in S3/R2 indefinitely** — lifecycle policy moves >1yr objects to cold storage. Streaming uploads land first in `artifacts-staging/<uuid>` and are copied to `artifacts/<sha256>` once the hash is known; a second lifecycle rule expires `artifacts-staging/` after 7 days so any rare delete-failure leak from the storage crate is bounded. The declarative policy lives in `infra/r2/lifecycle.json`.
-- Rust: **2024 edition, MSRV 1.83**.
+- Rust: **2024 edition, MSRV 1.85**.
 - Migrations: **`sqlx migrate`** (sync-at-startup).
 
 ## Stack (locked)
@@ -189,7 +189,7 @@ members = ["crates/*", "crates/adapters/*", "crates/bins/*"]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.83"
+rust-version = "1.85"
 license = "Apache-2.0"
 
 [workspace.dependencies]
@@ -445,7 +445,7 @@ pub struct Series {
     pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || sorted dimensions)
     pub dataflow_id: DataflowId,
     pub measure_id: MeasureId,
-    pub dimensions: BTreeMap<String, String>,  // JSONB in DB, GIN-indexed
+    pub dimensions: BTreeMap<DimensionId, CodeId>,  // JSONB in DB, GIN-indexed
     pub unit: String,
     pub first_observed: Option<DateTime<Utc>>,
     pub last_observed: Option<DateTime<Utc>>,
@@ -467,7 +467,7 @@ pub struct Observation {
 }
 ```
 
-Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `Series`, `Observation`, `Artifact`. `ToSchema` derive (utoipa) makes them OpenAPI-visible. `SeriesKey` is a newtype wrapping a hash — not `String` — for type-safety at all boundaries.
+Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `Series`, `Observation`, `Artifact`. `ToSchema` derive (utoipa) makes them OpenAPI-visible. `SeriesKey` is a newtype wrapping a hash — not `String` — for type-safety at all boundaries, and series dimensions stay typed in-memory (`DimensionId`/`CodeId`) while serializing to ordinary JSON object keys/values.
 
 ### Database schema (key tables)
 
@@ -1273,7 +1273,7 @@ All confirmed 2026-04-23:
 - SDK: TypeScript first; others via OpenAPI codegen
 - First dataflow: ABS CPI
 - Raw artifacts: retain indefinitely in R2, lifecycle-to-cold after 1 year
-- Rust 2024 edition, MSRV 1.83
+- Rust 2024 edition, MSRV 1.85
 - `sqlx migrate` for migrations
 
 ---

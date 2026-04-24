@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "extversion",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e8f890bc5c5f636e469eda26984cb3bc79a56d2bb5362d3aca600d6cacd14e73"
+}
