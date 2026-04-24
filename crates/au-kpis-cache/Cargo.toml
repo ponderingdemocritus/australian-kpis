@@ -8,3 +8,15 @@ repository.workspace = true
 description = "Redis cache abstraction."
 
 [dependencies]
+async-trait = "0.1"
+au-kpis-error = { workspace = true }
+fred = { version = "9", features = ["enable-rustls", "i-keys", "i-scripts", "sha-1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+testcontainers = "0.23"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

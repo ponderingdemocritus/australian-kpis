@@ -8,3 +8,10 @@ repository.workspace = true
 description = "axum routes + handlers (library)."
 
 [dependencies]
+axum = { version = "0.7", features = ["macros"] }
+serde = { version = "1", features = ["derive"] }
+utoipa = { version = "5", features = ["axum_extras"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
