@@ -45,3 +45,8 @@ fn cli_prints_same_document_as_emit() {
     let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
     assert_eq!(stdout, emit().expect("emit should succeed"));
 }
+
+#[test]
+fn emitted_openapi_matches_snapshot() {
+    insta::assert_json_snapshot!("openapi", emitted_spec());
+}

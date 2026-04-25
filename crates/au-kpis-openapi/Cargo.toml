@@ -15,4 +15,5 @@ utoipa = { version = "5", features = ["axum_extras"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+insta = { version = "1", features = ["json"] }
 jsonschema = "0.29"

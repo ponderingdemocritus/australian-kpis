@@ -14,57 +14,25 @@ use std::{sync::Arc, time::Duration};
 
 use au_kpis_domain::ids::ArtifactId;
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
+use au_kpis_testing::minio::{MinioHarness, start_minio};
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use object_store::{ObjectStore, aws::AmazonS3Builder};
-use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
-    core::{ContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
-
-const MINIO_IMAGE: &str = "minio/minio";
-const MINIO_TAG: &str = "RELEASE.2024-10-02T17-50-41Z";
-const MINIO_PORT: u16 = 9000;
 const BUCKET: &str = "au-kpis-test";
-const ACCESS_KEY: &str = "minioadmin";
-const SECRET_KEY: &str = "minioadmin";
 
 struct Harness {
-    // Holds the container alive for the lifetime of the test.
-    _container: ContainerAsync<GenericImage>,
+    _minio: MinioHarness,
     store: Arc<dyn ObjectStore>,
 }
 
-async fn start_minio() -> Harness {
-    // MinIO's official image does not offer an env-var bucket
-    // bootstrap; overriding the entrypoint to `sh -c` lets us
-    // pre-create the bucket directory (MinIO treats top-level dirs
-    // under the data path as buckets) before starting the server.
-    let start_script = format!(
-        "mkdir -p /data/{BUCKET} && exec minio server /data --address :{MINIO_PORT} --console-address :9001"
+async fn test_store() -> Harness {
+    let minio = start_minio(BUCKET).await.expect("start minio container");
+    let store = build_store(
+        minio.endpoint(),
+        minio.bucket(),
+        minio.access_key(),
+        minio.secret_key(),
     );
-    let container = GenericImage::new(MINIO_IMAGE, MINIO_TAG)
-        .with_exposed_port(ContainerPort::Tcp(MINIO_PORT))
-        // MinIO writes all its startup banner to stderr (including the
-        // "API:" line), so that's the only stream worth watching.
-        .with_wait_for(WaitFor::message_on_stderr("API:"))
-        .with_entrypoint("sh")
-        .with_env_var("MINIO_ROOT_USER", ACCESS_KEY)
-        .with_env_var("MINIO_ROOT_PASSWORD", SECRET_KEY)
-        .with_cmd(["-c", start_script.as_str()])
-        .start()
-        .await
-        .expect("start minio container");
-
-    let host = container.get_host().await.expect("container host");
-    let port = container
-        .get_host_port_ipv4(MINIO_PORT)
-        .await
-        .expect("host port");
-    let endpoint = format!("http://{host}:{port}");
-
-    let store = build_store(&endpoint);
     let store: Arc<dyn ObjectStore> = Arc::new(store);
 
     // MinIO is ready the moment it logs the API line, but the first
@@ -73,18 +41,23 @@ async fn start_minio() -> Harness {
     wait_for_ready(&store).await;
 
     Harness {
-        _container: container,
+        _minio: minio,
         store,
     }
 }
 
-fn build_store(endpoint: &str) -> object_store::aws::AmazonS3 {
+fn build_store(
+    endpoint: &str,
+    bucket: &str,
+    access_key: &str,
+    secret_key: &str,
+) -> object_store::aws::AmazonS3 {
     AmazonS3Builder::new()
         .with_endpoint(endpoint)
         .with_region("us-east-1")
-        .with_bucket_name(BUCKET)
-        .with_access_key_id(ACCESS_KEY)
-        .with_secret_access_key(SECRET_KEY)
+        .with_bucket_name(bucket)
+        .with_access_key_id(access_key)
+        .with_secret_access_key(secret_key)
         .with_allow_http(true)
         .with_virtual_hosted_style_request(false)
         .build()
@@ -108,7 +81,7 @@ async fn wait_for_ready(store: &Arc<dyn ObjectStore>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn put_artifact_is_content_addressed() {
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let content = Bytes::from_static(b"the quick brown fox");
@@ -126,7 +99,7 @@ async fn put_artifact_is_content_addressed() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn put_artifact_is_idempotent_and_does_not_rewrite() {
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let content = Bytes::from_static(b"idempotent payload");
@@ -166,7 +139,7 @@ async fn put_artifact_is_idempotent_and_does_not_rewrite() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_artifact_streams_full_payload() {
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     // A payload comfortably larger than a single chunk so the stream
@@ -186,7 +159,7 @@ async fn get_artifact_streams_full_payload() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_artifact_surfaces_not_found() {
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let ghost_id = ArtifactId::of_content(b"never written");
@@ -217,7 +190,7 @@ async fn missing_artifact_surfaces_not_found() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn put_artifact_stream_matches_single_shot_id() {
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     // Payload sized to genuinely cross S3's multipart boundary:
@@ -266,7 +239,7 @@ async fn put_artifact_stream_matches_single_shot_id() {
 async fn put_artifact_stream_is_idempotent_and_cleans_staging() {
     use object_store::path::Path;
 
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let content = b"streamed-idempotent".to_vec();
@@ -313,7 +286,7 @@ async fn put_artifact_stream_handles_empty_source() {
     // `CompleteMultipartUpload` with zero parts, so the streaming
     // writer must special-case that and still produce the canonical
     // empty-content id.
-    let h = start_minio().await;
+    let h = test_store().await;
     let blob = BlobStore::from_arc(Arc::clone(&h.store));
 
     let empty: Vec<Result<Bytes, std::io::Error>> = Vec::new();

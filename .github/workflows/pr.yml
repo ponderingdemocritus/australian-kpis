@@ -1,4 +1,4 @@
-name: PR Review
+name: Pull Request
 
 on:
   pull_request:
@@ -13,6 +13,218 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  nextest:
+    name: Rust Tests (nextest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --version 0.9.100 --locked
+
+      - name: Run workspace tests with CI profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/nextest
+          cargo nextest run --workspace --profile ci 2>&1 | tee target/nextest/ci-run.log
+          if grep -n "FLAKY" target/nextest/ci-run.log; then
+            echo "Flaky retries are not allowed in CI." >&2
+            exit 1
+          fi
+
+  coverage:
+    name: Rust Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Install nightly Rust toolchain
+        run: rustup toolchain install nightly --profile minimal --no-self-update
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.6.21 --locked
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --version 0.9.100 --locked
+
+      - name: Generate LCOV report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/llvm-cov
+          cargo +nightly llvm-cov nextest \
+            --workspace \
+            --profile ci \
+            --branch \
+            --lcov \
+            --output-path target/llvm-cov/lcov.info \
+            --fail-under-lines 80
+
+      - name: Enforce branch coverage floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          brf = 0
+          brh = 0
+
+          for line in Path("target/llvm-cov/lcov.info").read_text().splitlines():
+              if line.startswith("BRF:"):
+                  brf += int(line[4:])
+              elif line.startswith("BRH:"):
+                  brh += int(line[4:])
+
+          if brf == 0:
+              raise SystemExit("No branch coverage data found in LCOV output")
+
+          branch_coverage = (brh / brf) * 100
+          print(f"Total branch coverage: {branch_coverage:.2f}% ({brh}/{brf})")
+          if branch_coverage < 70:
+              raise SystemExit(
+                  f"Branch coverage below threshold: {branch_coverage:.2f}% < 70.00%"
+              )
+          PY
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/llvm-cov/lcov.info
+          flags: rust
+          name: rust-nextest
+          use_oidc: true
+          fail_ci_if_error: true
+
+  contract:
+    name: Contract (schemathesis)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
+      AU_KPIS_CONTRACT_ADDR: 127.0.0.1:38080
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Schemathesis
+        run: python -m pip install "schemathesis==4.15.2"
+
+      - name: Start contract server
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/contract
+          cargo run -p au-kpis-api-http --example contract_server > target/contract/server.log 2>&1 &
+          echo $! > target/contract/server.pid
+
+      - name: Wait for API readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            if curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Contract server did not become ready" >&2
+          cat target/contract/server.log >&2 || true
+          exit 1
+
+      - name: Export OpenAPI schema
+        run: cargo run -p au-kpis-openapi > target/contract/openapi.json
+
+      - name: Run Schemathesis
+        run: |
+          schemathesis run \
+            --checks all \
+            --request-timeout 5 \
+            --max-examples 16 \
+            --include-path /v1/health \
+            --url "http://${AU_KPIS_CONTRACT_ADDR}" \
+            target/contract/openapi.json
+
+      - name: Stop contract server
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f target/contract/server.pid ]; then
+            kill "$(cat target/contract/server.pid)" || true
+          fi
+
+  snapshots:
+    name: Snapshot Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUSTC_WRAPPER: ""
+      CARGO_BUILD_RUSTC_WRAPPER: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-insta
+        run: cargo install cargo-insta --version 1.47.2 --locked
+
+      - name: Verify committed snapshots
+        run: cargo insta test --workspace --check
+
   codex-review:
     name: Codex Structured Review
     runs-on: ubuntu-latest
@@ -457,6 +669,10 @@ jobs:
     name: CI OK
     runs-on: ubuntu-latest
     needs:
+      - nextest
+      - coverage
+      - contract
+      - snapshots
       - codex-review
     if: always()
     steps:
