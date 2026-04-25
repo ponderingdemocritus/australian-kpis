@@ -17,6 +17,45 @@ expression: emitted_spec()
           "status"
         ],
         "type": "object"
+      },
+      "ProblemDetails": {
+        "description": "RFC 7807 problem details body.",
+        "properties": {
+          "detail": {
+            "description": "Request-specific detail, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instance": {
+            "description": "Resource-specific identifier, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "HTTP status code for this problem.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Short, human-readable summary.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Problem type URI.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "type": "object"
       }
     }
   },

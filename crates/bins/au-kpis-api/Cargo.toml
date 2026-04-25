@@ -8,3 +8,6 @@ repository.workspace = true
 description = "API server binary."
 
 [dependencies]
+
+[lints]
+workspace = true

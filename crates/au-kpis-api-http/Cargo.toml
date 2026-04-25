@@ -8,10 +8,27 @@ repository.workspace = true
 description = "axum routes + handlers (library)."
 
 [dependencies]
+anyhow = "1"
+au-kpis-cache = { workspace = true }
+au-kpis-config = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
+http = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
+thiserror = "2"
+tokio = { version = "1", features = ["signal"] }
+tokio-util = "0.7"
+tower = { version = "0.5", features = ["timeout"] }
+tower-http = { version = "0.6", features = ["compression-full", "cors", "request-id", "timeout", "trace"] }
+tracing = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
 
 [dev-dependencies]
+async-trait = "0.1"
+au-kpis-error = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true
