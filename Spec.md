@@ -132,14 +132,14 @@ australian-kpis/
 │   ├── au-kpis-auth/                       # API key validation, Redis rate limiter
 │   ├── au-kpis-pdf-client/                 # HTTP client for Python sidecar
 │   ├── au-kpis-adapter/                    # Adapter trait + base helpers (discover/fetch/parse)
-│   ├── au-kpis-adapters/                   # Adapter implementations
-│   │   ├── abs/                            # SDMX-JSON
-│   │   ├── rba/                            # XLS/CSV + speeches
-│   │   ├── apra/                           # Quarterly XLS
-│   │   ├── asx/                            # Announcements + EOD
-│   │   ├── treasury/                       # PDF via sidecar
-│   │   ├── aemo/                           # High-frequency CSV
-│   │   └── state-budgets/                  # Per-state PDF
+│   ├── adapters/                           # Adapter implementation crates
+│   │   ├── abs/                            # package `au-kpis-adapter-abs` (SDMX-JSON)
+│   │   ├── rba/                            # package `au-kpis-adapter-rba` (XLS/CSV)
+│   │   ├── apra/                           # package `au-kpis-adapter-apra` (quarterly XLS)
+│   │   ├── asx/                            # package `au-kpis-adapter-asx` (announcements + EOD)
+│   │   ├── treasury/                       # package `au-kpis-adapter-treasury` (PDF via sidecar)
+│   │   ├── aemo/                           # package `au-kpis-adapter-aemo` (high-frequency CSV)
+│   │   └── state-budgets/                  # package `au-kpis-adapter-state-budgets` (per-state PDF)
 │   ├── au-kpis-loader/                     # Observation upsert, revision tracking
 │   ├── au-kpis-ingestion-core/             # Orchestration: discover→fetch→parse→load
 │   ├── au-kpis-api-http/                   # axum routes + handlers (library)
@@ -495,15 +495,15 @@ Typical query plan:
 
 Each source = its own crate implementing `SourceAdapter`. Adding source 15 never touches sources 1-14.
 
-| Source | Crate | Discovery | Fetch | Parse |
+| Source | Crate / path | Discovery | Fetch | Parse |
 |---|---|---|---|---|
-| **ABS** | `au-kpis-adapters/abs` | SDMX `/dataflow` diff | SDMX-JSON | Native stream (`serde_json` + `tokio-stream`) |
-| **RBA** | `au-kpis-adapters-rba` | Scrape stat-tables index weekly | XLS/CSV | `calamine` (XLS), `csv-async` (CSV) |
-| **APRA** | `au-kpis-adapters-apra` | Scrape release calendar | XLS | `calamine` |
-| **ASX** | `au-kpis-adapters-asx` | Announcements RSS + EOD | Mixed | `quick-xml` + `csv-async` |
-| **Treasury** | `au-kpis-adapters-treasury` | Watch budget pages | PDF | `pdf-client` → Python sidecar |
-| **AEMO** | `au-kpis-adapters-aemo` | NEMWeb directory listings | CSV (frequent) | `csv-async` |
-| **State budgets** | `au-kpis-adapters-state-budgets` | Hand-curated | PDF | Python sidecar |
+| **ABS** | `crates/adapters/abs` (`au-kpis-adapter-abs`) | SDMX `/dataflow` diff | SDMX-JSON | Native stream (`serde_json` + `tokio-stream`) |
+| **RBA** | `crates/adapters/rba` (`au-kpis-adapter-rba`) | Scrape stat-tables index weekly | XLS/CSV | `calamine` (XLS), `csv-async` (CSV) |
+| **APRA** | `crates/adapters/apra` (`au-kpis-adapter-apra`) | Scrape release calendar | XLS | `calamine` |
+| **ASX** | `crates/adapters/asx` (`au-kpis-adapter-asx`) | Announcements RSS + EOD | Mixed | `quick-xml` + `csv-async` |
+| **Treasury** | `crates/adapters/treasury` (`au-kpis-adapter-treasury`) | Watch budget pages | PDF | `pdf-client` → Python sidecar |
+| **AEMO** | `crates/adapters/aemo` (`au-kpis-adapter-aemo`) | NEMWeb directory listings | CSV (frequent) | `csv-async` |
+| **State budgets** | `crates/adapters/state-budgets` (`au-kpis-adapter-state-budgets`) | Hand-curated | PDF | Python sidecar |
 
 ### Guardrails
 
@@ -617,7 +617,7 @@ GET  /v1/observations
 GET  /v1/observations/latest
 GET  /v1/series/{dataflow}/{series_key}
 GET  /v1/search?q=unemployment
-POST /v1/subscriptions                        # phase 2
+POST /v1/subscriptions                        # phase 5
 GET  /v1/health
 GET  /v1/openapi.json
 ```
@@ -984,8 +984,8 @@ Priority bench targets:
 | `au-kpis-domain` | Serialize 10k `Observation` to JSON | <50 ms |
 | `au-kpis-domain` | Serialize 10k `Observation` to Parquet (arrow-rs) | <20 ms |
 | `au-kpis-adapter` (helpers) | SDMX-JSON parse 100MB fixture → stream of observations | >500k obs/s |
-| `au-kpis-adapters/abs` | Full CPI dataflow parse (real fixture) | <2 s, <100 MB RSS |
-| `au-kpis-adapters/rba` | XLS parse (`calamine`) 10-sheet workbook | <500 ms |
+| `crates/adapters/abs` (`au-kpis-adapter-abs`) | Full CPI dataflow parse (real fixture) | <2 s, <100 MB RSS |
+| `crates/adapters/rba` (`au-kpis-adapter-rba`) | XLS parse (`calamine`) 10-sheet workbook | <500 ms |
 | `au-kpis-loader` | Batch upsert 10k observations via COPY | <500 ms |
 | `au-kpis-api-http` | Request handler end-to-end (in-process) | <5 ms overhead above DB |
 | `au-kpis-auth` | API key verify (argon2id + Redis cache hit) | <1 ms p99 |
@@ -1125,7 +1125,7 @@ Each phase ends demo-able.
 
 ### Phase 2 — One end-to-end source: ABS CPI (2.5 weeks)
 - [ ] `au-kpis-adapter` trait crate + registry
-- [ ] `au-kpis-adapters/abs` — CPI dataflow (SDMX-JSON: `CPI` dataflow, monthly + quarterly)
+- [ ] `crates/adapters/abs` (`au-kpis-adapter-abs`) — CPI dataflow (SDMX-JSON: `CPI` dataflow, monthly + quarterly)
 - [ ] `au-kpis-queue` (`Queue` trait + apalis/Postgres impl)
 - [ ] `au-kpis-ingestion-core` + worker binary with graceful shutdown
 - [ ] `au-kpis-loader` with COPY-based batch upsert + series upsert-on-first-observation
@@ -1146,7 +1146,7 @@ Each phase ends demo-able.
 - [ ] Observability: full OTel pipeline + Grafana dashboards (incl. SLO dashboards)
 - [ ] Reference client: Explorer + Compare
 - [ ] k6 `sustained.js` + `burst.js` running nightly in staging
-- [ ] Parquet bench: 1M rows streamed, memory-profiled with `dhat`
+- [ ] Parquet bench: 1M rows streamed <30s, peak memory <100 MB, profiled with `dhat`
 
 ### Phase 4 — PDFs + difficult sources (3 weeks)
 - [ ] Python PDF extractor service
@@ -1162,7 +1162,7 @@ Each phase ends demo-able.
 - [ ] Public docs site (generated from OpenAPI via Scalar or Redoc)
 - [ ] Data-quality scheduled checks
 - [ ] SDK v1 published to npm
-- [ ] Load test: 1000 rps sustained; Parquet streaming 10M rows <30s
+- [ ] Load test: 1000 rps sustained; Parquet streaming 10M rows <30s end-to-end
 
 ---
 
@@ -1178,7 +1178,7 @@ Each phase ends demo-able.
 8. `infra/migrations/0001_init.sql` — includes `CREATE EXTENSION timescaledb; SELECT create_hypertable(...)`
 9. `crates/au-kpis-queue/src/lib.rs`
 10. `crates/au-kpis-adapter/src/{lib,traits,ctx,error}.rs`
-11. `crates/au-kpis-adapters/abs/src/{lib,discover,fetch,parse}.rs`
+11. `crates/adapters/abs/src/{lib,discover,fetch,parse}.rs`
 12. `crates/au-kpis-loader/src/lib.rs`
 13. `crates/au-kpis-ingestion-core/src/lib.rs`
 14. `crates/au-kpis-api-http/src/{lib,state,routes,docs,error}.rs`
@@ -1208,7 +1208,7 @@ Each phase ends demo-able.
 - Post-deploy smoke script runs green against `docker-compose` stack
 
 ### Phase 2 (ABS CPI end-to-end)
-- **Unit**: `au-kpis-adapters::abs::parse` insta snapshot matches CPI fixture
+- **Unit**: `au-kpis-adapter-abs::parse` insta snapshot matches CPI fixture
 - **Property**: `proptest` round-trip on Observation serialization; `SeriesKey` determinism over 10k random dimension combos
 - **Integration (testcontainers)**: real PG+Timescale spun up, ABS CPI fixture ingested, SQL returns expected rows including revisions; `observations_latest` view correct
 - **Contract**: `schemathesis` runs against running API, zero violations against `openapi.json`
@@ -1225,7 +1225,8 @@ Each phase ends demo-able.
 - OpenAPI diff CI: breaking change = PR comment blocks merge
 - **Criterion baseline enforcement**: `critcmp main pr --threshold 5` blocks PRs with >5% regression on any committed bench
 - **k6 sustained load**: 1000 rps on `/v1/observations`, p99 <1s, error rate <0.1%
-- **Parquet streaming bench**: 10M rows, peak memory <50MB, completes <30s (measured with `dhat`)
+- **Parquet streaming bench**: 1M rows, peak memory <100 MB, completes <30s (measured with `dhat`)
+- **Parquet scale validation**: 10M rows streamed end-to-end <30s in the Phase 5 load-test path
 - **Ingestion throughput**: 10K observations/sec/worker via COPY path
 - Synthetic freshness canary every 15min asserts recent observations exist
 - SLO burn-rate alerts configured and exercised via chaos drill
