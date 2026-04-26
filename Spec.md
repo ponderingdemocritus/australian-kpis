@@ -904,7 +904,7 @@ parallel:
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
   - test            (nextest + vitest, testcontainers)
-  - coverage        (clean cargo-llvm-cov profile data → LCOV line/branch coverage → Codecov PR comment)
+  - coverage        (clean cargo-llvm-cov profile data with pinned nightly coverage toolchain → LCOV line/branch coverage → Codecov PR comment)
   - snapshot        (insta check)
   - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
   - contract        (live `/v1/openapi.json` schema validation + schemathesis)

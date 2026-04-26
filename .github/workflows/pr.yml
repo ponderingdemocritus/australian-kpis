@@ -56,6 +56,7 @@ jobs:
     env:
       RUSTC_WRAPPER: ""
       CARGO_BUILD_RUSTC_WRAPPER: ""
+      COVERAGE_RUST_TOOLCHAIN: nightly-2025-10-01
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -66,7 +67,7 @@ jobs:
           toolchain: 1.85
 
       - name: Install nightly Rust toolchain
-        run: rustup toolchain install nightly --profile minimal --no-self-update
+        run: rustup toolchain install "$COVERAGE_RUST_TOOLCHAIN" --profile minimal --no-self-update
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -82,8 +83,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/llvm-cov
-          cargo +nightly llvm-cov clean --workspace
-          cargo +nightly llvm-cov nextest \
+          cargo +"$COVERAGE_RUST_TOOLCHAIN" llvm-cov clean --workspace
+          cargo +"$COVERAGE_RUST_TOOLCHAIN" llvm-cov nextest \
             --workspace \
             --profile ci \
             --skip-functions \
