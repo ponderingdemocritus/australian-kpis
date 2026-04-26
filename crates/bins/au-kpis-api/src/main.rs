@@ -3,12 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{
-    env,
-    future::{IntoFuture, pending},
-    sync::Arc,
-    time::Duration,
-};
+use std::{env, future::IntoFuture, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use au_kpis_api_http::{AppState, router};
@@ -38,29 +33,33 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&config.http.bind)
         .await
         .with_context(|| format!("bind listener on {}", config.http.bind))?;
-    write_startup_notify(&listener).context("write startup notification")?;
-
-    tokio::spawn(shutdown_signal(shutdown.clone()));
+    write_startup_notify(&listener)
+        .await
+        .context("write startup notification")?;
 
     let drain_window = Duration::from_secs(config.http.shutdown_grace_period_secs);
-    let cancel_watch = shutdown.clone();
     let server = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
         .into_future();
     tokio::pin!(server);
+    let shutdown_listener = shutdown_signal(shutdown);
+    tokio::pin!(shutdown_listener);
 
     tokio::select! {
         result = &mut server => {
             result.context("serve api")?;
         }
-        _ = cancel_watch.cancelled() => {
-            tokio::time::timeout(drain_window, &mut server)
-                .await
-                .with_context(|| format!(
-                    "graceful shutdown exceeded {}s drain window",
-                    drain_window.as_secs()
-                ))?
-                .context("serve api")?;
+        result = &mut shutdown_listener => {
+            result.context("listen for shutdown signal")?;
+            match tokio::time::timeout(drain_window, &mut server).await {
+                Ok(result) => result.context("serve api")?,
+                Err(_) => {
+                    tracing::warn!(
+                        drain_window_secs = drain_window.as_secs(),
+                        "graceful shutdown drain window elapsed; forcing server exit"
+                    );
+                }
+            }
         }
     }
 
@@ -77,33 +76,29 @@ fn init_or_disabled(config: &au_kpis_config::TelemetryConfig) -> anyhow::Result<
     }
 }
 
-async fn shutdown_signal(token: CancellationToken) {
-    let ctrl_c = async {
-        let _ = signal::ctrl_c().await;
-    };
+async fn shutdown_signal(token: CancellationToken) -> anyhow::Result<()> {
+    let ctrl_c = async { signal::ctrl_c().await.context("install Ctrl-C handler") };
 
     #[cfg(unix)]
     let terminate = async {
-        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut stream) => {
-                let _ = stream.recv().await;
-            }
-            Err(_) => pending::<()>().await,
-        }
+        let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .context("install SIGTERM handler")?;
+        stream.recv().await.context("SIGTERM stream closed")
     };
 
     #[cfg(not(unix))]
-    let terminate = pending::<()>();
+    let terminate = std::future::pending::<anyhow::Result<()>>();
 
     tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
+        result = ctrl_c => result?,
+        result = terminate => result?,
     }
 
     token.cancel();
+    Ok(())
 }
 
-fn write_startup_notify(listener: &TcpListener) -> anyhow::Result<()> {
+async fn write_startup_notify(listener: &TcpListener) -> anyhow::Result<()> {
     let Some(path) = env::var_os("AU_KPIS_STARTUP_NOTIFY_FILE") else {
         return Ok(());
     };
@@ -111,6 +106,8 @@ fn write_startup_notify(listener: &TcpListener) -> anyhow::Result<()> {
     let addr = listener
         .local_addr()
         .context("read bound listener address")?;
-    std::fs::write(path, addr.to_string()).context("persist bound listener address")?;
+    tokio::fs::write(path, addr.to_string())
+        .await
+        .context("persist bound listener address")?;
     Ok(())
 }

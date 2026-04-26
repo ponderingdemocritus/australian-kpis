@@ -1,60 +1,137 @@
 use std::{
+    io::Write,
+    net::TcpStream,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use assert_cmd::cargo::cargo_bin;
-use au_kpis_testing::{redis::start_redis, timescale::start_timescale};
+use au_kpis_testing::{
+    redis::{RedisHarness, start_redis},
+    timescale::{TimescaleHarness, start_timescale},
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn api_binary_honors_sigterm() {
-    let binary = cargo_bin("au-kpis-api");
-    let startup_file = unique_startup_file();
-    let timescale = start_timescale("au_kpis_api_sigterm")
-        .await
-        .expect("start timescale test container");
-    let redis = start_redis().await.expect("start redis test container");
-
-    let mut child = Command::new(binary)
-        .env("AU_KPIS_HTTP__BIND", "127.0.0.1:0")
-        .env("AU_KPIS_DATABASE__URL", timescale.url())
-        .env("AU_KPIS_CACHE__URL", redis.url())
-        .env("AU_KPIS_STARTUP_NOTIFY_FILE", &startup_file)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn au-kpis-api");
-
-    let addr = wait_for_startup_file(&startup_file, &mut child);
+    let mut harness = ApiProcess::start("au_kpis_api_sigterm", None).await;
+    let addr = harness.addr.clone();
 
     assert!(
-        std::net::TcpStream::connect(&addr).is_ok(),
+        TcpStream::connect(&addr).is_ok(),
         "au-kpis-api never became ready on {addr}"
     );
 
-    let kill = Command::new("kill")
-        .args(["-TERM", &child.id().to_string()])
-        .status()
-        .expect("send SIGTERM");
-    assert!(kill.success(), "SIGTERM failed: {kill:?}");
+    harness.send_sigterm();
+    harness.wait_for_exit(Duration::from_secs(5));
+}
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(status) = child.try_wait().expect("poll child") {
-            assert!(
-                status.success(),
-                "au-kpis-api exited unsuccessfully: {status}"
+#[tokio::test(flavor = "multi_thread")]
+async fn api_binary_honors_configured_shutdown_grace_period() {
+    let mut harness = ApiProcess::start("au_kpis_api_sigterm_drain", Some(1)).await;
+    let mut stream = TcpStream::connect(&harness.addr).expect("open in-flight request connection");
+    stream
+        .write_all(b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\n")
+        .expect("write partial request");
+
+    let started = Instant::now();
+    harness.send_sigterm();
+
+    thread::sleep(Duration::from_millis(400));
+    assert!(
+        harness.child.try_wait().expect("poll child").is_none(),
+        "server exited before the configured drain window elapsed"
+    );
+
+    harness.wait_for_exit(Duration::from_secs(5));
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "server did not honor configured shutdown grace period"
+    );
+}
+
+struct ApiProcess {
+    child: Child,
+    addr: String,
+    startup_file: PathBuf,
+    _timescale: TimescaleHarness,
+    _redis: RedisHarness,
+}
+
+impl ApiProcess {
+    async fn start(database: &str, shutdown_grace_period_secs: Option<u64>) -> Self {
+        let binary = cargo_bin("au-kpis-api");
+        let startup_file = unique_startup_file();
+        let timescale = start_timescale(database)
+            .await
+            .expect("start timescale test container");
+        let redis = start_redis().await.expect("start redis test container");
+
+        let mut command = Command::new(binary);
+        command
+            .env("AU_KPIS_HTTP__BIND", "127.0.0.1:0")
+            .env("AU_KPIS_DATABASE__URL", timescale.url())
+            .env("AU_KPIS_CACHE__URL", redis.url())
+            .env("AU_KPIS_STARTUP_NOTIFY_FILE", &startup_file)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if let Some(seconds) = shutdown_grace_period_secs {
+            command.env(
+                "AU_KPIS_HTTP__SHUTDOWN_GRACE_PERIOD_SECS",
+                seconds.to_string(),
             );
-            break;
         }
 
-        assert!(
-            Instant::now() < deadline,
-            "au-kpis-api did not exit within 5s of SIGTERM"
-        );
-        thread::sleep(Duration::from_millis(100));
+        let mut child = command.spawn().expect("spawn au-kpis-api");
+        let addr = wait_for_startup_file(&startup_file, &mut child);
+
+        Self {
+            child,
+            addr,
+            startup_file,
+            _timescale: timescale,
+            _redis: redis,
+        }
+    }
+
+    fn send_sigterm(&self) {
+        let kill = Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .expect("send SIGTERM");
+        assert!(kill.success(), "SIGTERM failed: {kill:?}");
+    }
+
+    fn wait_for_exit(&mut self, within: Duration) {
+        let deadline = Instant::now() + within;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("poll child") {
+                assert!(
+                    status.success(),
+                    "au-kpis-api exited unsuccessfully: {status}"
+                );
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "au-kpis-api did not exit within {}s of SIGTERM",
+                within.as_secs()
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for ApiProcess {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.startup_file);
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

@@ -18,6 +18,7 @@ au-kpis-telemetry = { workspace = true }
 axum = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = "0.7"
+tracing = "0.1"
 
 [dev-dependencies]
 assert_cmd = "2"
