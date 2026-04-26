@@ -422,6 +422,7 @@ jobs:
       - name: Run Codex structured review
         if: steps.preflight.outputs.should_run == 'true'
         id: run-codex
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -442,7 +443,11 @@ jobs:
             jq '.' codex-output.json
           else
             echo "Codex output file missing"
-            exit 1
+            if [ "${CODEX_REVIEW_BLOCK_ON_INCORRECT}" = "true" ]; then
+              echo "Codex blocking mode is enabled; missing review output fails the job."
+              exit 1
+            fi
+            echo "Codex review is advisory; continuing without review output."
           fi
         shell: bash
 
@@ -672,6 +677,11 @@ jobs:
           if [ "${CODEX_REVIEW_BLOCK_ON_INCORRECT}" != "true" ]; then
             echo "Blocking mode disabled; leaving Codex review advisory."
             exit 0
+          fi
+
+          if [ ! -s "$REVIEW_JSON" ]; then
+            echo "Codex output missing and blocking mode is enabled."
+            exit 1
           fi
 
           verdict=$(jq -r '.overall_correctness' "$REVIEW_JSON")

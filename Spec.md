@@ -899,7 +899,7 @@ Triggered on PR open/update. All jobs in parallel where possible; total target <
 
 ```
 parallel:
-  - review          (Codex structured PR review → inline findings + summary; advisory unless repo vars enable blocking)
+  - review          (Codex structured PR review → inline findings + summary; advisory, including missing output, unless repo vars enable blocking)
   - typecheck       (cargo check + tsc)
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
