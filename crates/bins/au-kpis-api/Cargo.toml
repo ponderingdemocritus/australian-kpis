@@ -19,5 +19,8 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = "0.7"
 
+[dev-dependencies]
+assert_cmd = "2"
+
 [lints]
 workspace = true
