@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{future::pending, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use au_kpis_cache::{CacheClient, CacheError};
@@ -12,19 +12,18 @@ use au_kpis_telemetry::Telemetry;
 use axum::{
     Json, Router,
     error_handling::HandleErrorLayer,
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use thiserror::Error;
-use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
 use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
 use tower_http::{
     compression::CompressionLayer,
-    cors::CorsLayer,
+    cors::{AllowOrigin, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
@@ -197,6 +196,12 @@ impl IntoResponse for ApiError {
             status = 200,
             description = "API is healthy.",
             body = HealthResponse
+        ),
+        (
+            status = 408,
+            description = "Request timed out.",
+            content_type = "application/problem+json",
+            body = ProblemDetails
         )
     )
 )]
@@ -217,6 +222,18 @@ pub async fn health() -> Json<HealthResponse> {
             description = "Current OpenAPI document.",
             content_type = "application/json",
             body = Object
+        ),
+        (
+            status = 408,
+            description = "Request timed out.",
+            content_type = "application/problem+json",
+            body = ProblemDetails
+        ),
+        (
+            status = 500,
+            description = "OpenAPI generation failed.",
+            content_type = "application/problem+json",
+            body = ProblemDetails
         )
     )
 )]
@@ -243,56 +260,23 @@ async fn openapi() -> Result<impl IntoResponse, ApiError> {
 pub struct ApiDoc;
 
 /// Minimal application router for the currently implemented handlers.
-pub fn router(state: AppState) -> Router {
-    Router::new()
+pub fn router(state: AppState) -> anyhow::Result<Router> {
+    let cors = cors_layer(&state.config)?;
+
+    Ok(Router::new()
         .route("/v1/health", get(health))
         .route("/v1/openapi.json", get(openapi))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
-                .layer(CorsLayer::permissive())
+                .layer(cors)
                 .layer(CompressionLayer::new())
                 .layer(HandleErrorLayer::new(handle_timeout_error))
                 .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
                 .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
                 .layer(PropagateRequestIdLayer::x_request_id()),
-        )
-}
-
-/// Serve the API until the state's shutdown token is cancelled.
-pub async fn serve(listener: TcpListener, state: AppState) -> std::io::Result<()> {
-    let shutdown = state.shutdown.clone();
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown.cancelled_owned())
-        .await
-}
-
-/// Wait for Ctrl-C or SIGTERM, then cancel the provided shutdown token.
-pub async fn shutdown_signal(token: CancellationToken) {
-    let ctrl_c = async {
-        let _ = signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut stream) => {
-                let _ = stream.recv().await;
-            }
-            Err(_) => pending::<()>().await,
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
-    }
-
-    token.cancel();
+        ))
 }
 
 async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
@@ -318,4 +302,26 @@ fn internal_server_error(
         },
         None,
     )
+}
+
+fn cors_layer(config: &AppConfig) -> anyhow::Result<CorsLayer> {
+    let mut layer = CorsLayer::new()
+        .allow_methods([Method::GET])
+        .allow_headers([
+            header::ACCEPT,
+            header::ACCEPT_ENCODING,
+            header::CONTENT_TYPE,
+        ]);
+
+    if !config.http.cors_allowed_origins.is_empty() {
+        let origins = config
+            .http
+            .cors_allowed_origins
+            .iter()
+            .map(|origin| HeaderValue::from_str(origin))
+            .collect::<Result<Vec<_>, _>>()?;
+        layer = layer.allow_origin(AllowOrigin::list(origins));
+    }
+
+    Ok(layer)
 }

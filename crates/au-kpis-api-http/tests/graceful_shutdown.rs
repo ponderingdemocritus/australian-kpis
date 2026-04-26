@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use au_kpis_api_http::{AppState, serve};
+use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
 use au_kpis_telemetry::Telemetry;
@@ -54,6 +54,7 @@ fn test_state(token: CancellationToken) -> AppState {
     let config = AppConfig {
         http: HttpConfig {
             bind: "127.0.0.1:0".into(),
+            cors_allowed_origins: Vec::new(),
         },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),
@@ -82,8 +83,14 @@ async fn server_exits_promptly_when_shutdown_token_is_cancelled() {
         .expect("bind listener");
     let token = CancellationToken::new();
     let state = test_state(token.clone());
+    let shutdown = token.clone();
 
-    let server = tokio::spawn(async move { serve(listener, state).await });
+    let router = router(state).expect("router");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await
+    });
 
     token.cancel();
 

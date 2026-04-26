@@ -1,10 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::pending, sync::Arc, time::Duration};
 
-use au_kpis_api_http::{AppState, serve, shutdown_signal};
+use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
 use au_kpis_telemetry::Telemetry;
 use sqlx::postgres::PgPoolOptions;
+use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Default)]
@@ -50,7 +51,10 @@ async fn main() {
         .connect_lazy("postgres://postgres:postgres@localhost/au_kpis")
         .expect("lazy postgres pool");
     let config = AppConfig {
-        http: HttpConfig { bind: addr.clone() },
+        http: HttpConfig {
+            bind: addr.clone(),
+            cors_allowed_origins: Vec::new(),
+        },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),
         },
@@ -68,10 +72,40 @@ async fn main() {
         Arc::new(Telemetry::disabled()),
         shutdown.clone(),
     );
-    tokio::spawn(shutdown_signal(shutdown));
+    tokio::spawn(shutdown_signal(shutdown.clone()));
 
-    let listener = tokio::net::TcpListener::bind(&addr)
+    let listener = TcpListener::bind(&addr)
         .await
         .expect("bind contract server listener");
-    serve(listener, state).await.expect("serve contract server");
+    let app = router(state).expect("router");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
+        .expect("serve contract server");
+}
+
+async fn shutdown_signal(token: CancellationToken) {
+    let ctrl_c = async {
+        let _ = signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut stream) => {
+                let _ = stream.recv().await;
+            }
+            Err(_) => pending::<()>().await,
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+
+    token.cancel();
 }

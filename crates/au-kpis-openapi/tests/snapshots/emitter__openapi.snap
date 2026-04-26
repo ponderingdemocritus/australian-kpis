@@ -83,6 +83,16 @@ expression: emitted_spec()
               }
             },
             "description": "API is healthy."
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
           }
         },
         "summary": "`GET /v1/health`.",
@@ -102,6 +112,26 @@ expression: emitted_spec()
               }
             },
             "description": "Current OpenAPI document."
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "OpenAPI generation failed."
           }
         },
         "summary": "`GET /v1/openapi.json`.",

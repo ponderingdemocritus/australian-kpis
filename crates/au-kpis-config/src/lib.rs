@@ -95,12 +95,15 @@ pub struct AppConfig {
 pub struct HttpConfig {
     /// Socket address the API binary binds to.
     pub bind: String,
+    /// Explicit browser origin allowlist for API routes.
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             bind: "0.0.0.0:8080".into(),
+            cors_allowed_origins: Vec::new(),
         }
     }
 }
@@ -206,6 +209,7 @@ mod tests {
             let cfg = load(None).expect("env supplies required field");
             assert_eq!(cfg.database.url, "postgres://env/db");
             assert_eq!(cfg.http.bind, "0.0.0.0:8080");
+            assert!(cfg.http.cors_allowed_origins.is_empty());
             assert_eq!(cfg.telemetry.service_name, "au-kpis");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Json);
             assert!(cfg.telemetry.otlp_endpoint.is_none());
@@ -221,6 +225,7 @@ mod tests {
                 r#"
                     [http]
                     bind = "127.0.0.1:3000"
+                    cors_allowed_origins = ["https://app.au-kpis.example"]
 
                     [database]
                     url = "postgres://from-toml/db"
@@ -233,6 +238,10 @@ mod tests {
             )?;
             let cfg = load(Some(Path::new("au-kpis.toml"))).unwrap();
             assert_eq!(cfg.http.bind, "127.0.0.1:3000");
+            assert_eq!(
+                cfg.http.cors_allowed_origins,
+                vec!["https://app.au-kpis.example".to_string()]
+            );
             assert_eq!(cfg.database.url, "postgres://from-toml/db");
             assert_eq!(cfg.telemetry.service_name, "from-toml");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Pretty);

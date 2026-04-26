@@ -46,6 +46,10 @@ impl CacheBackend for NoopCacheBackend {
 }
 
 fn test_state() -> AppState {
+    test_state_with_origins(Vec::new())
+}
+
+fn test_state_with_origins(cors_allowed_origins: Vec<String>) -> AppState {
     let db = PgPoolOptions::new()
         .max_connections(1)
         .connect_lazy("postgres://postgres:postgres@localhost/au_kpis")
@@ -54,6 +58,7 @@ fn test_state() -> AppState {
     let config = AppConfig {
         http: HttpConfig {
             bind: "127.0.0.1:0".into(),
+            cors_allowed_origins,
         },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),
@@ -78,6 +83,7 @@ fn test_state() -> AppState {
 #[tokio::test]
 async fn health_route_returns_ok_json_and_request_id() {
     let response = router(test_state())
+        .expect("router")
         .oneshot(
             Request::builder()
                 .uri("/v1/health")
@@ -108,6 +114,7 @@ async fn health_route_returns_ok_json_and_request_id() {
 #[tokio::test]
 async fn openapi_route_serves_generated_spec() {
     let response = router(test_state())
+        .expect("router")
         .oneshot(
             Request::builder()
                 .uri("/v1/openapi.json")
@@ -135,6 +142,16 @@ async fn openapi_route_serves_generated_spec() {
     assert_eq!(
         parsed["paths"]["/v1/openapi.json"]["get"]["operationId"],
         "openapi"
+    );
+    assert_eq!(
+        parsed["paths"]["/v1/health"]["get"]["responses"]["408"]["content"]["application/problem+json"]
+            ["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails"
+    );
+    assert_eq!(
+        parsed["paths"]["/v1/openapi.json"]["get"]["responses"]["500"]["content"]["application/problem+json"]
+            ["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails"
     );
 }
 
@@ -168,4 +185,50 @@ async fn internal_errors_do_not_leak_server_details() {
     let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
     assert_eq!(parsed.title, "Internal Server Error");
     assert_eq!(parsed.detail.as_deref(), Some("internal server error"));
+}
+
+#[tokio::test]
+async fn cors_does_not_allow_arbitrary_origins_by_default() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/v1/health")
+                .header(header::ORIGIN, "https://evil.example")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert!(
+        !response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+    );
+}
+
+#[tokio::test]
+async fn cors_allows_configured_origin() {
+    let response = router(test_state_with_origins(vec![
+        "https://app.au-kpis.example".into(),
+    ]))
+    .expect("router")
+    .oneshot(
+        Request::builder()
+            .uri("/v1/health")
+            .header(header::ORIGIN, "https://app.au-kpis.example")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "https://app.au-kpis.example"
+    );
 }
