@@ -179,6 +179,18 @@ version = "0.1.0"
 [[package]]
 name = "au-kpis-api"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "au-kpis-api-http",
+ "au-kpis-cache",
+ "au-kpis-config",
+ "au-kpis-telemetry",
+ "axum 0.7.9",
+ "sqlx",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "au-kpis-api-http"
