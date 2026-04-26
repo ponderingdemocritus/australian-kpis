@@ -135,7 +135,6 @@ jobs:
       RUSTC_WRAPPER: ""
       CARGO_BUILD_RUSTC_WRAPPER: ""
       AU_KPIS_CONTRACT_ADDR: 127.0.0.1:38080
-      AU_KPIS_DATABASE__URL: postgres://postgres:postgres@localhost/au_kpis
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -161,8 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/contract
-          AU_KPIS_HTTP__BIND="${AU_KPIS_CONTRACT_ADDR}" \
-          cargo run -p au-kpis-api > target/contract/server.log 2>&1 &
+          cargo run -p au-kpis-api-http --example contract_server > target/contract/server.log 2>&1 &
           echo $! > target/contract/server.pid
 
       - name: Wait for API readiness

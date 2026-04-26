@@ -187,6 +187,7 @@ dependencies = [
  "au-kpis-cache",
  "au-kpis-config",
  "au-kpis-telemetry",
+ "au-kpis-testing",
  "axum 0.7.9",
  "sqlx",
  "tokio",

@@ -8,7 +8,6 @@ repository.workspace = true
 description = "axum routes + handlers (library)."
 
 [dependencies]
-anyhow = "1"
 au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-telemetry = { workspace = true }
@@ -26,6 +25,7 @@ tracing = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
 
 [dev-dependencies]
+anyhow = "1"
 async-trait = "0.1"
 au-kpis-error = { workspace = true }
 jsonschema = "0.29"

@@ -1,13 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
-use au_kpis_api_http::{ApiError, AppState, ProblemDetails, router};
+use au_kpis_api_http::{ApiError, AppState, ProblemDetails, router, router_with};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
 use au_kpis_telemetry::Telemetry;
 use axum::{
+    Router,
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
     response::IntoResponse,
+    routing::get,
 };
 use jsonschema::draft202012;
 use sqlx::postgres::PgPoolOptions;
@@ -64,6 +66,9 @@ fn test_state_with_origins(cors_allowed_origins: Vec<String>) -> AppState {
         },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),
+        },
+        cache: au_kpis_config::CacheConfig {
+            url: "redis://127.0.0.1:6379".into(),
         },
         telemetry: TelemetryConfig {
             service_name: "au-kpis-test".into(),
@@ -189,7 +194,7 @@ async fn validation_errors_render_problem_json() {
 
 #[tokio::test]
 async fn internal_errors_do_not_leak_server_details() {
-    let response = ApiError::Internal(anyhow::anyhow!("database url leaked")).into_response();
+    let response = ApiError::Internal.into_response();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = to_bytes(response.into_body(), usize::MAX)
@@ -293,4 +298,43 @@ async fn cors_preflight_allows_x_api_key_header_for_configured_origin() {
             .to_ascii_lowercase()
             .contains("x-api-key")
     );
+}
+
+#[tokio::test]
+async fn timeout_middleware_returns_problem_json_through_router_stack() {
+    async fn slow() -> &'static str {
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        "slow"
+    }
+
+    let response = router_with(
+        Router::<AppState>::new().route("/v1/slow", get(slow)),
+        test_state(),
+    )
+    .expect("router")
+    .oneshot(
+        Request::builder()
+            .uri("/v1/slow")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+    assert!(
+        response.headers().contains_key("x-request-id"),
+        "timeout responses should preserve the request id"
+    );
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert_eq!(parsed.title, "Request Timeout");
+    assert_eq!(parsed.status, 408);
 }

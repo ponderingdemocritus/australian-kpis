@@ -86,6 +86,8 @@ pub struct AppConfig {
     pub http: HttpConfig,
     /// Database connection configuration — consumed by `au-kpis-db`.
     pub database: DatabaseConfig,
+    /// Redis cache configuration — consumed by `au-kpis-cache`.
+    pub cache: CacheConfig,
     /// Telemetry configuration — consumed by `au-kpis-telemetry`.
     pub telemetry: TelemetryConfig,
 }
@@ -116,6 +118,21 @@ impl Default for HttpConfig {
 pub struct DatabaseConfig {
     /// Postgres (Timescale) connection URL. Required — no default.
     pub url: String,
+}
+
+/// Redis cache configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CacheConfig {
+    /// Redis connection URL.
+    pub url: String,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            url: "redis://127.0.0.1:6379".into(),
+        }
+    }
 }
 
 /// Telemetry and logging configuration.
@@ -160,6 +177,7 @@ pub enum LogFormat {
 #[derive(Debug, Clone, Default, Serialize)]
 struct Defaults {
     http: HttpConfig,
+    cache: CacheConfig,
     telemetry: TelemetryConfig,
 }
 
@@ -211,6 +229,7 @@ mod tests {
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
             let cfg = load(None).expect("env supplies required field");
             assert_eq!(cfg.database.url, "postgres://env/db");
+            assert_eq!(cfg.cache.url, "redis://127.0.0.1:6379");
             assert_eq!(cfg.http.bind, "0.0.0.0:8080");
             assert!(cfg.http.cors_allowed_origins.is_empty());
             assert_eq!(cfg.http.shutdown_grace_period_secs, 30);
@@ -235,6 +254,9 @@ mod tests {
                     [database]
                     url = "postgres://from-toml/db"
 
+                    [cache]
+                    url = "redis://cache.internal:6379"
+
                     [telemetry]
                     service_name = "from-toml"
                     log_format = "pretty"
@@ -249,6 +271,7 @@ mod tests {
             );
             assert_eq!(cfg.http.shutdown_grace_period_secs, 45);
             assert_eq!(cfg.database.url, "postgres://from-toml/db");
+            assert_eq!(cfg.cache.url, "redis://cache.internal:6379");
             assert_eq!(cfg.telemetry.service_name, "from-toml");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Pretty);
             assert_eq!(cfg.telemetry.log_level, "debug");
@@ -271,12 +294,14 @@ mod tests {
             )?;
             jail.set_env("AU_KPIS_HTTP__BIND", "0.0.0.0:9999");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://from-env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://from-env:6379");
             jail.set_env("AU_KPIS_HTTP__SHUTDOWN_GRACE_PERIOD_SECS", "12");
             jail.set_env("AU_KPIS_TELEMETRY__OTLP_ENDPOINT", "http://otel:4317");
             let cfg = load(Some(Path::new("au-kpis.toml"))).unwrap();
             assert_eq!(cfg.http.bind, "0.0.0.0:9999");
             assert_eq!(cfg.http.shutdown_grace_period_secs, 12);
             assert_eq!(cfg.database.url, "postgres://from-env/db");
+            assert_eq!(cfg.cache.url, "redis://from-env:6379");
             assert_eq!(
                 cfg.telemetry.otlp_endpoint.as_deref(),
                 Some("http://otel:4317")

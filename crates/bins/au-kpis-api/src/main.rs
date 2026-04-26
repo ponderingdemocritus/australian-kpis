@@ -12,44 +12,12 @@ use std::{
 
 use anyhow::Context;
 use au_kpis_api_http::{AppState, router};
-use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
+use au_kpis_cache::CacheClient;
 use au_kpis_config::load;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
-
-#[derive(Debug, Default)]
-struct NoopCacheBackend;
-
-#[async_trait::async_trait]
-impl CacheBackend for NoopCacheBackend {
-    async fn get(&self, _key: &str) -> Result<Option<String>, CacheError> {
-        Ok(None)
-    }
-
-    async fn set(&self, _key: &str, _value: String, _ttl: Duration) -> Result<(), CacheError> {
-        Ok(())
-    }
-
-    async fn delete(&self, _key: &str) -> Result<bool, CacheError> {
-        Ok(false)
-    }
-
-    async fn take_token_bucket(
-        &self,
-        _key: &str,
-        _config: TokenBucketConfig,
-        _requested: u32,
-        _now_ms: u64,
-    ) -> Result<RateLimitDecision, CacheError> {
-        Ok(RateLimitDecision {
-            allowed: true,
-            remaining: 0,
-            retry_after: Duration::ZERO,
-        })
-    }
-}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -58,14 +26,13 @@ async fn main() -> anyhow::Result<()> {
     let db = PgPoolOptions::new()
         .connect_lazy(&config.database.url)
         .context("create lazy postgres pool")?;
-    let shutdown = CancellationToken::new();
-    let state = AppState::new(
-        db,
-        Arc::new(CacheClient::from_backend(NoopCacheBackend)),
-        config.clone(),
-        telemetry,
-        shutdown.clone(),
+    let cache = Arc::new(
+        CacheClient::connect(&config.cache.url)
+            .await
+            .context("connect redis cache")?,
     );
+    let shutdown = CancellationToken::new();
+    let state = AppState::new(db, cache, config.clone(), telemetry, shutdown.clone());
 
     let app = router(state).context("build router")?;
     let listener = TcpListener::bind(&config.http.bind)

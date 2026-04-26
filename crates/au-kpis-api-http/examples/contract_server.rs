@@ -59,6 +59,9 @@ async fn main() {
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),
         },
+        cache: au_kpis_config::CacheConfig {
+            url: "redis://127.0.0.1:6379".into(),
+        },
         telemetry: TelemetryConfig {
             service_name: "au-kpis-contract-server".into(),
             log_format: LogFormat::Json,

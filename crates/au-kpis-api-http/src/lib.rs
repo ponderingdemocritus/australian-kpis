@@ -5,14 +5,13 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::anyhow;
 use au_kpis_cache::{CacheClient, CacheError};
 use au_kpis_config::AppConfig;
 use au_kpis_telemetry::Telemetry;
 use axum::{
     Json, Router,
     error_handling::HandleErrorLayer,
-    http::{HeaderValue, Method, StatusCode, header},
+    http::{HeaderValue, Method, StatusCode, header, header::InvalidHeaderValue},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -114,8 +113,16 @@ pub enum ApiError {
     #[error(transparent)]
     Cache(#[from] CacheError),
     /// Unexpected internal failure.
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    #[error("internal server error")]
+    Internal,
+}
+
+/// Errors that can occur while assembling the HTTP router.
+#[derive(Debug, Error)]
+pub enum RouterBuildError {
+    /// One of the configured CORS origins is not a valid HTTP header value.
+    #[error("invalid CORS origin header value: {0}")]
+    InvalidCorsOrigin(#[from] InvalidHeaderValue),
 }
 
 impl IntoResponse for ApiError {
@@ -167,7 +174,7 @@ impl IntoResponse for ApiError {
             ),
             ApiError::Db(err) => internal_server_error(&err),
             ApiError::Cache(err) => internal_server_error(&err),
-            ApiError::Internal(err) => internal_server_error(&err),
+            ApiError::Internal => internal_server_error(&"internal"),
         };
 
         let mut response = Json(problem).into_response();
@@ -239,12 +246,12 @@ pub async fn health() -> Json<HealthResponse> {
     )
 )]
 async fn openapi() -> Result<impl IntoResponse, ApiError> {
-    Ok((
-        [(header::CONTENT_TYPE, "application/json")],
-        ApiDoc::openapi()
-            .to_pretty_json()
-            .map_err(|err| ApiError::Internal(anyhow!(err)))?,
-    ))
+    let document = ApiDoc::openapi().to_pretty_json().map_err(|err| {
+        tracing::error!(error = %err, "openapi serialization failed");
+        ApiError::Internal
+    })?;
+
+    Ok(([(header::CONTENT_TYPE, "application/json")], document))
 }
 
 /// Root OpenAPI document for the API handlers in this crate.
@@ -260,31 +267,38 @@ async fn openapi() -> Result<impl IntoResponse, ApiError> {
 )]
 pub struct ApiDoc;
 
-/// Minimal application router for the currently implemented handlers.
-pub fn router(state: AppState) -> anyhow::Result<Router> {
+/// Compose arbitrary routes with the standard API middleware stack.
+pub fn router_with(routes: Router<AppState>, state: AppState) -> Result<Router, RouterBuildError> {
     let cors = cors_layer(&state.config)?;
 
-    Ok(Router::new()
-        .route("/v1/health", get(health))
-        .route("/v1/openapi.json", get(openapi))
-        .with_state(state)
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(cors)
-                .layer(CompressionLayer::new())
-                .layer(HandleErrorLayer::new(handle_timeout_error))
-                .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
-                .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-                .layer(PropagateRequestIdLayer::x_request_id()),
-        ))
+    Ok(routes.with_state(state).layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(cors)
+            .layer(CompressionLayer::new())
+            .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+            .layer(PropagateRequestIdLayer::x_request_id())
+            .layer(HandleErrorLayer::new(handle_timeout_error))
+            .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
+    ))
+}
+
+/// Minimal application router for the currently implemented handlers.
+pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
+    router_with(
+        Router::<AppState>::new()
+            .route("/v1/health", get(health))
+            .route("/v1/openapi.json", get(openapi)),
+        state,
+    )
 }
 
 async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
     if err.is::<tower::timeout::error::Elapsed>() {
         ApiError::RequestTimeout.into_response()
     } else {
-        ApiError::Internal(anyhow!(err)).into_response()
+        tracing::error!(error = %err, "timeout layer returned unexpected error");
+        ApiError::Internal.into_response()
     }
 }
 
@@ -305,7 +319,7 @@ fn internal_server_error(
     )
 }
 
-fn cors_layer(config: &AppConfig) -> anyhow::Result<CorsLayer> {
+fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
     let mut layer = CorsLayer::new()
         .allow_methods([Method::GET])
         .allow_headers([
