@@ -44,7 +44,7 @@ pub enum TelemetryError {
 ///
 /// Keeping this value alive preserves the non-blocking log worker and allows
 /// `Drop` to flush/shutdown the tracer provider cleanly on process exit.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Telemetry {
     tracer_provider: Option<SdkTracerProvider>,
 }
@@ -54,6 +54,13 @@ impl Drop for Telemetry {
         if let Some(provider) = self.tracer_provider.take() {
             let _ = provider.shutdown();
         }
+    }
+}
+
+impl Telemetry {
+    /// Construct a telemetry handle with no exporter attached.
+    pub fn disabled() -> Self {
+        Self::default()
     }
 }
 

@@ -189,6 +189,7 @@ dependencies = [
  "au-kpis-cache",
  "au-kpis-config",
  "au-kpis-error",
+ "au-kpis-telemetry",
  "axum 0.7.9",
  "http",
  "serde",

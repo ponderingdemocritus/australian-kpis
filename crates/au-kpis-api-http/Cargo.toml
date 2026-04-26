@@ -11,6 +11,7 @@ description = "axum routes + handlers (library)."
 anyhow = "1"
 au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
+au-kpis-telemetry = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
 http = "1"
 serde = { version = "1", features = ["derive"] }

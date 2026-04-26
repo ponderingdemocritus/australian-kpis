@@ -8,6 +8,7 @@ use std::{future::pending, sync::Arc, time::Duration};
 use anyhow::anyhow;
 use au_kpis_cache::{CacheClient, CacheError};
 use au_kpis_config::AppConfig;
+use au_kpis_telemetry::Telemetry;
 use axum::{
     Json, Router,
     error_handling::HandleErrorLayer,
@@ -35,11 +36,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone)]
 pub struct AppState {
     /// Shared Postgres pool.
-    pub db: Arc<PgPool>,
+    pub db: PgPool,
     /// Shared cache client.
     pub cache: Arc<CacheClient>,
     /// Immutable runtime config.
     pub config: Arc<AppConfig>,
+    /// Telemetry handle kept alive for process lifetime.
+    pub telemetry: Arc<Telemetry>,
     /// Global shutdown token.
     pub shutdown: CancellationToken,
 }
@@ -47,15 +50,17 @@ pub struct AppState {
 impl AppState {
     /// Construct a new shared application state bundle.
     pub fn new(
-        db: Arc<PgPool>,
+        db: PgPool,
         cache: Arc<CacheClient>,
         config: Arc<AppConfig>,
+        telemetry: Arc<Telemetry>,
         shutdown: CancellationToken,
     ) -> Self {
         Self {
             db,
             cache,
             config,
+            telemetry,
             shutdown,
         }
     }
@@ -160,39 +165,9 @@ impl IntoResponse for ApiError {
                 },
                 None,
             ),
-            ApiError::Db(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ProblemDetails {
-                    r#type: "about:blank".into(),
-                    title: "Internal Server Error".into(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    detail: Some(err.to_string()),
-                    instance: None,
-                },
-                None,
-            ),
-            ApiError::Cache(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ProblemDetails {
-                    r#type: "about:blank".into(),
-                    title: "Internal Server Error".into(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    detail: Some(err.to_string()),
-                    instance: None,
-                },
-                None,
-            ),
-            ApiError::Internal(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ProblemDetails {
-                    r#type: "about:blank".into(),
-                    title: "Internal Server Error".into(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    detail: Some(err.to_string()),
-                    instance: None,
-                },
-                None,
-            ),
+            ApiError::Db(err) => internal_server_error(&err),
+            ApiError::Cache(err) => internal_server_error(&err),
+            ApiError::Internal(err) => internal_server_error(&err),
         };
 
         let mut response = Json(problem).into_response();
@@ -231,6 +206,20 @@ pub async fn health() -> Json<HealthResponse> {
     })
 }
 
+/// `GET /v1/openapi.json`.
+#[utoipa::path(
+    get,
+    operation_id = "openapi",
+    path = "/v1/openapi.json",
+    responses(
+        (
+            status = 200,
+            description = "Current OpenAPI document.",
+            content_type = "application/json",
+            body = Object
+        )
+    )
+)]
 async fn openapi() -> Result<impl IntoResponse, ApiError> {
     Ok((
         [(header::CONTENT_TYPE, "application/json")],
@@ -248,7 +237,7 @@ async fn openapi() -> Result<impl IntoResponse, ApiError> {
         version = "0.1.0",
         description = "Unified API for Australian public economic data."
     ),
-    paths(health),
+    paths(health, openapi),
     components(schemas(HealthResponse, ProblemDetails))
 )]
 pub struct ApiDoc;
@@ -312,4 +301,21 @@ async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
     } else {
         ApiError::Internal(anyhow!(err)).into_response()
     }
+}
+
+fn internal_server_error(
+    err: &impl std::fmt::Display,
+) -> (StatusCode, ProblemDetails, Option<Duration>) {
+    tracing::error!(error = %err, "internal API error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        ProblemDetails {
+            r#type: "about:blank".into(),
+            title: "Internal Server Error".into(),
+            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            detail: Some("internal server error".into()),
+            instance: None,
+        },
+        None,
+    )
 }

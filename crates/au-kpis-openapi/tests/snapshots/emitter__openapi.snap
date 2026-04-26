@@ -88,6 +88,25 @@ expression: emitted_spec()
         "summary": "`GET /v1/health`.",
         "tags": []
       }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "openapi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Current OpenAPI document."
+          }
+        },
+        "summary": "`GET /v1/openapi.json`.",
+        "tags": []
+      }
     }
   }
 }

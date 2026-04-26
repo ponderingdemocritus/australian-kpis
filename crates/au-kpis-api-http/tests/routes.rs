@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use au_kpis_api_http::{ApiError, AppState, ProblemDetails, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
@@ -66,9 +67,10 @@ fn test_state() -> AppState {
     };
 
     AppState::new(
-        Arc::new(db),
+        db,
         Arc::new(CacheClient::from_backend(NoopCacheBackend)),
         Arc::new(config),
+        Arc::new(Telemetry::disabled()),
         CancellationToken::new(),
     )
 }
@@ -130,6 +132,10 @@ async fn openapi_route_serves_generated_spec() {
         parsed["paths"]["/v1/health"]["get"]["operationId"],
         "health"
     );
+    assert_eq!(
+        parsed["paths"]["/v1/openapi.json"]["get"]["operationId"],
+        "openapi"
+    );
 }
 
 #[tokio::test]
@@ -149,4 +155,17 @@ async fn validation_errors_render_problem_json() {
     assert_eq!(parsed.title, "Bad Request");
     assert_eq!(parsed.status, 400);
     assert_eq!(parsed.detail.as_deref(), Some("bad query"));
+}
+
+#[tokio::test]
+async fn internal_errors_do_not_leak_server_details() {
+    let response = ApiError::Internal(anyhow::anyhow!("database url leaked")).into_response();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert_eq!(parsed.title, "Internal Server Error");
+    assert_eq!(parsed.detail.as_deref(), Some("internal server error"));
 }

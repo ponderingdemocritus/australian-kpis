@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use au_kpis_api_http::{AppState, serve, shutdown_signal};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_telemetry::Telemetry;
 use sqlx::postgres::PgPoolOptions;
 use tokio_util::sync::CancellationToken;
 
@@ -61,9 +62,10 @@ async fn main() {
         },
     };
     let state = AppState::new(
-        Arc::new(db),
+        db,
         Arc::new(CacheClient::from_backend(NoopCacheBackend)),
         Arc::new(config),
+        Arc::new(Telemetry::disabled()),
         shutdown.clone(),
     );
     tokio::spawn(shutdown_signal(shutdown));
