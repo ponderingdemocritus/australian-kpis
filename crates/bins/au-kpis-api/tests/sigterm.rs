@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -8,34 +9,22 @@ use assert_cmd::cargo::cargo_bin;
 
 #[test]
 fn api_binary_honors_sigterm() {
-    let addr = reserve_local_addr();
     let binary = cargo_bin("au-kpis-api");
+    let startup_file = unique_startup_file();
 
     let mut child = Command::new(binary)
-        .env("AU_KPIS_HTTP__BIND", &addr)
+        .env("AU_KPIS_HTTP__BIND", "127.0.0.1:0")
         .env(
             "AU_KPIS_DATABASE__URL",
             "postgres://postgres:postgres@localhost/au_kpis",
         )
+        .env("AU_KPIS_STARTUP_NOTIFY_FILE", &startup_file)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn au-kpis-api");
 
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_secs(10) {
-        if std::net::TcpStream::connect(&addr).is_ok() {
-            break;
-        }
-        if child
-            .try_wait()
-            .expect("poll child during startup")
-            .is_some()
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
+    let addr = wait_for_startup_file(&startup_file, &mut child);
 
     assert!(
         std::net::TcpStream::connect(&addr).is_ok(),
@@ -66,9 +55,38 @@ fn api_binary_honors_sigterm() {
     }
 }
 
-fn reserve_local_addr() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let addr = listener.local_addr().expect("local addr");
-    drop(listener);
-    addr.to_string()
+fn unique_startup_file() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "au-kpis-api-startup-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    path
+}
+
+fn wait_for_startup_file(path: &PathBuf, child: &mut std::process::Child) -> String {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(10) {
+        if let Ok(addr) = std::fs::read_to_string(path) {
+            let addr = addr.trim().to_string();
+            if !addr.is_empty() {
+                let _ = std::fs::remove_file(path);
+                return addr;
+            }
+        }
+        if child
+            .try_wait()
+            .expect("poll child during startup")
+            .is_some()
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    panic!("au-kpis-api never reported its bound address");
 }

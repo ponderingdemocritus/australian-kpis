@@ -187,6 +187,7 @@ jobs:
             --request-timeout 5 \
             --max-examples 16 \
             --include-path /v1/health \
+            --include-path /v1/openapi.json \
             --url "http://${AU_KPIS_CONTRACT_ADDR}" \
             target/contract/openapi.json
 

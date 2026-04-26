@@ -3,7 +3,12 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{future::pending, sync::Arc, time::Duration};
+use std::{
+    env,
+    future::{IntoFuture, pending},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
 use au_kpis_api_http::{AppState, router};
@@ -13,6 +18,8 @@ use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
+
+const SHUTDOWN_DRAIN_WINDOW: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Default)]
 struct NoopCacheBackend;
@@ -66,13 +73,27 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&config.http.bind)
         .await
         .with_context(|| format!("bind listener on {}", config.http.bind))?;
+    write_startup_notify(&listener).context("write startup notification")?;
 
     tokio::spawn(shutdown_signal(shutdown.clone()));
 
-    axum::serve(listener, app)
+    let cancel_watch = shutdown.clone();
+    let server = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.cancelled_owned())
-        .await
-        .context("serve api")?;
+        .into_future();
+    tokio::pin!(server);
+
+    tokio::select! {
+        result = &mut server => {
+            result.context("serve api")?;
+        }
+        _ = cancel_watch.cancelled() => {
+            tokio::time::timeout(SHUTDOWN_DRAIN_WINDOW, &mut server)
+                .await
+                .context("graceful shutdown exceeded 30s drain window")?
+                .context("serve api")?;
+        }
+    }
 
     Ok(())
 }
@@ -111,4 +132,16 @@ async fn shutdown_signal(token: CancellationToken) {
     }
 
     token.cancel();
+}
+
+fn write_startup_notify(listener: &TcpListener) -> anyhow::Result<()> {
+    let Some(path) = env::var_os("AU_KPIS_STARTUP_NOTIFY_FILE") else {
+        return Ok(());
+    };
+
+    let addr = listener
+        .local_addr()
+        .context("read bound listener address")?;
+    std::fs::write(path, addr.to_string()).context("persist bound listener address")?;
+    Ok(())
 }
