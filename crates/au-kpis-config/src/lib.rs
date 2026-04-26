@@ -78,7 +78,7 @@ impl Classify for ConfigError {
 ///
 /// Sections exist only for fields that already have a downstream consumer;
 /// new sections are added alongside the dependent crate. Required fields
-/// without a [`Default`] (currently `database.url`) force [`load`] to fail
+/// without a [`Default`] (currently `database.url` and `cache.url`) force [`load`] to fail
 /// at startup if unset.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -127,14 +127,6 @@ pub struct CacheConfig {
     pub url: String,
 }
 
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self {
-            url: "redis://127.0.0.1:6379".into(),
-        }
-    }
-}
-
 /// Telemetry and logging configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TelemetryConfig {
@@ -177,7 +169,6 @@ pub enum LogFormat {
 #[derive(Debug, Clone, Default, Serialize)]
 struct Defaults {
     http: HttpConfig,
-    cache: CacheConfig,
     telemetry: TelemetryConfig,
 }
 
@@ -207,7 +198,7 @@ mod tests {
     use figment::Jail;
 
     #[test]
-    fn missing_required_field_fails_fast() {
+    fn missing_database_url_fails_fast() {
         Jail::expect_with(|_jail| {
             let err = load(None).expect_err("database.url has no default");
             let msg = err.to_string();
@@ -224,12 +215,31 @@ mod tests {
     }
 
     #[test]
-    fn env_alone_supplies_required_field() {
+    fn missing_cache_url_fails_fast() {
         Jail::expect_with(|jail| {
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
-            let cfg = load(None).expect("env supplies required field");
+            let err = load(None).expect_err("cache.url has no default");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("cache") || msg.contains("url"),
+                "expected error to reference the missing path, got: {msg}"
+            );
+            match err {
+                ConfigError::Figment(_) => {}
+                other => panic!("expected Figment variant, got {other:?}"),
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn env_alone_supplies_required_fields() {
+        Jail::expect_with(|jail| {
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+            let cfg = load(None).expect("env supplies required fields");
             assert_eq!(cfg.database.url, "postgres://env/db");
-            assert_eq!(cfg.cache.url, "redis://127.0.0.1:6379");
+            assert_eq!(cfg.cache.url, "redis://env:6379");
             assert_eq!(cfg.http.bind, "0.0.0.0:8080");
             assert!(cfg.http.cors_allowed_origins.is_empty());
             assert_eq!(cfg.http.shutdown_grace_period_secs, 30);
@@ -314,6 +324,7 @@ mod tests {
     fn missing_toml_file_fails_fast() {
         Jail::expect_with(|jail| {
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
             let err =
                 load(Some(Path::new("does-not-exist.toml"))).expect_err("missing TOML should fail");
             assert!(matches!(err, ConfigError::Figment(_)));
@@ -324,7 +335,7 @@ mod tests {
     #[test]
     fn config_error_is_permanent() {
         Jail::expect_with(|_jail| {
-            let err = load(None).expect_err("no database.url");
+            let err = load(None).expect_err("no required connection URLs");
             assert_eq!(err.class(), ErrorClass::Permanent);
             Ok(())
         });

@@ -658,7 +658,11 @@ pub struct ApiDoc;
 ```
 
 - Each handler `#[utoipa::path(...)]` annotated.
-- `cargo run --bin au-kpis-api -- openapi export > openapi.json` emits spec.
+- `cargo run -p au-kpis-openapi > openapi.json` emits the canonical spec from the
+  shared `au-kpis-api-http::ApiDoc`.
+- The PR contract job also starts the phase-1 API server and validates the live
+  `GET /v1/openapi.json` response against the OpenAPI 3.1 schema before
+  fuzzing covered routes with Schemathesis.
 - CI compares against committed `openapi.json`; drift is a PR comment.
 
 ---
@@ -900,9 +904,10 @@ parallel:
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
   - test            (nextest + vitest, testcontainers)
-  - coverage        (cargo-llvm-cov → Codecov PR comment)
+  - coverage        (clean cargo-llvm-cov profile data → cargo-llvm-cov → Codecov PR comment)
   - snapshot        (insta check)
-  - openapi         (export + oasdiff vs main)
+  - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
+  - contract        (live `/v1/openapi.json` schema validation + schemathesis)
   - security        (cargo audit, trivy on built images)
   - smoke           (spin compose, run curl + SDK smoke)
   - bench           (critcmp — advisory on PR, blocking in merge queue)
@@ -1199,7 +1204,7 @@ Each phase ends demo-able.
 - `cargo-llvm-cov` baseline established (will trend upward)
 - `docker compose up` brings up all infra
 - `curl localhost:3000/v1/health` → `200`
-- `curl localhost:3000/v1/openapi.json` → valid OpenAPI 3.1 doc (validated via `openapi-validator`)
+- `curl localhost:3000/v1/openapi.json` → valid OpenAPI 3.1 doc (validated via the OpenAPI 3.1 JSON schema)
 - `SELECT * FROM timescaledb_information.hypertables` shows `observations` hypertable
 - Migrations round-trip: up → down → up yields identical schema
 - TS: `pnpm -w build` succeeds; SDK regen pipeline runs; `vitest run` passes
