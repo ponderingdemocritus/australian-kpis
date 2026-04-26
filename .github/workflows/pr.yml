@@ -86,6 +86,7 @@ jobs:
           cargo +nightly llvm-cov nextest \
             --workspace \
             --profile ci \
+            --skip-functions \
             --branch \
             --lcov \
             --output-path target/llvm-cov/lcov.info \
