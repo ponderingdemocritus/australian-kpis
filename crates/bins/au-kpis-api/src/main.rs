@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{env, future::IntoFuture, sync::Arc, time::Duration};
+use std::{env, ffi::OsString, future::IntoFuture, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use au_kpis_api_http::{AppState, router};
@@ -99,7 +99,14 @@ async fn shutdown_signal(token: CancellationToken) -> anyhow::Result<()> {
 }
 
 async fn write_startup_notify(listener: &TcpListener) -> anyhow::Result<()> {
-    let Some(path) = env::var_os("AU_KPIS_STARTUP_NOTIFY_FILE") else {
+    write_startup_notify_path(listener, env::var_os("AU_KPIS_STARTUP_NOTIFY_FILE")).await
+}
+
+async fn write_startup_notify_path(
+    listener: &TcpListener,
+    path: Option<OsString>,
+) -> anyhow::Result<()> {
+    let Some(path) = path else {
         return Ok(());
     };
 
@@ -110,4 +117,52 @@ async fn write_startup_notify(listener: &TcpListener) -> anyhow::Result<()> {
         .await
         .context("persist bound listener address")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn startup_notify_is_noop_without_path() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+
+        write_startup_notify_path(&listener, None)
+            .await
+            .expect("no-op startup notify");
+    }
+
+    #[tokio::test]
+    async fn startup_notify_writes_bound_address() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let path = unique_test_path();
+
+        write_startup_notify_path(&listener, Some(path.clone().into_os_string()))
+            .await
+            .expect("write startup notify");
+
+        let actual = tokio::fs::read_to_string(&path)
+            .await
+            .expect("read startup notify");
+        assert_eq!(
+            actual,
+            listener.local_addr().expect("listener address").to_string()
+        );
+        tokio::fs::remove_file(path)
+            .await
+            .expect("remove startup notify");
+    }
+
+    fn unique_test_path() -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "au-kpis-api-startup-unit-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        path
+    }
 }

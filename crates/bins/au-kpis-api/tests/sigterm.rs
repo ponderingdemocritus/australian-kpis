@@ -74,6 +74,10 @@ impl ApiProcess {
             .env("AU_KPIS_DATABASE__URL", timescale.url())
             .env("AU_KPIS_CACHE__URL", redis.url())
             .env("AU_KPIS_STARTUP_NOTIFY_FILE", &startup_file)
+            // The child is a different instrumented binary. Inheriting the
+            // nextest process profile path makes llvm-cov merge incompatible
+            // counters and can crash report generation.
+            .env("LLVM_PROFILE_FILE", ignored_child_coverage_profile())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
@@ -144,6 +148,15 @@ fn unique_startup_file() -> PathBuf {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time")
             .as_nanos()
+    ));
+    path
+}
+
+fn ignored_child_coverage_profile() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "au-kpis-api-child-coverage-{}-%p-%m.profraw",
+        std::process::id()
     ));
     path
 }
