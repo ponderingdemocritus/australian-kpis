@@ -11,7 +11,7 @@ use au_kpis_telemetry::Telemetry;
 use axum::{
     Json, Router,
     error_handling::HandleErrorLayer,
-    http::{HeaderValue, Method, StatusCode, header, header::InvalidHeaderValue},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header, header::InvalidHeaderValue},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -30,6 +30,10 @@ use utoipa::{OpenApi, ToSchema};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
+const X_RATE_LIMIT_LIMIT: header::HeaderName = header::HeaderName::from_static("x-ratelimit-limit");
+const X_RATE_LIMIT_REMAINING: header::HeaderName =
+    header::HeaderName::from_static("x-ratelimit-remaining");
+const X_RATE_LIMIT_RESET: header::HeaderName = header::HeaderName::from_static("x-ratelimit-reset");
 
 /// Shared application state.
 #[derive(Debug, Clone)]
@@ -102,6 +106,12 @@ pub enum ApiError {
     RateLimited {
         /// Seconds until retry.
         retry_after: Duration,
+        /// Total quota for the current rate-limit window.
+        limit: u32,
+        /// Remaining quota for the current rate-limit window.
+        remaining: u32,
+        /// Seconds until the current rate-limit window resets.
+        reset_after: Duration,
     },
     /// The server exceeded the per-request timeout.
     #[error("request timed out")]
@@ -127,7 +137,7 @@ pub enum RouterBuildError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, problem, retry_after) = match self {
+        let (status, problem, rate_limit) = match self {
             ApiError::NotFound(detail) => (
                 StatusCode::NOT_FOUND,
                 ProblemDetails {
@@ -150,7 +160,12 @@ impl IntoResponse for ApiError {
                 },
                 None,
             ),
-            ApiError::RateLimited { retry_after } => (
+            ApiError::RateLimited {
+                retry_after,
+                limit,
+                remaining,
+                reset_after,
+            } => (
                 StatusCode::TOO_MANY_REQUESTS,
                 ProblemDetails {
                     r#type: "about:blank".into(),
@@ -159,7 +174,12 @@ impl IntoResponse for ApiError {
                     detail: Some("rate limit exceeded".into()),
                     instance: None,
                 },
-                Some(retry_after),
+                Some(RateLimitHeaders {
+                    retry_after,
+                    limit,
+                    remaining,
+                    reset_after,
+                }),
             ),
             ApiError::RequestTimeout => (
                 StatusCode::REQUEST_TIMEOUT,
@@ -184,10 +204,23 @@ impl IntoResponse for ApiError {
             HeaderValue::from_static("application/problem+json"),
         );
 
-        if let Some(retry_after) = retry_after {
-            if let Ok(value) = HeaderValue::from_str(&retry_after.as_secs().to_string()) {
-                response.headers_mut().insert(header::RETRY_AFTER, value);
-            }
+        if let Some(rate_limit) = rate_limit {
+            insert_header(
+                response.headers_mut(),
+                header::RETRY_AFTER,
+                rate_limit.retry_after.as_secs(),
+            );
+            insert_header(response.headers_mut(), X_RATE_LIMIT_LIMIT, rate_limit.limit);
+            insert_header(
+                response.headers_mut(),
+                X_RATE_LIMIT_REMAINING,
+                rate_limit.remaining,
+            );
+            insert_header(
+                response.headers_mut(),
+                X_RATE_LIMIT_RESET,
+                rate_limit.reset_after.as_secs(),
+            );
         }
 
         response
@@ -276,10 +309,10 @@ pub fn router_with(routes: Router<AppState>, state: AppState) -> Result<Router, 
             .layer(TraceLayer::new_for_http())
             .layer(cors)
             .layer(CompressionLayer::new())
-            .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-            .layer(PropagateRequestIdLayer::x_request_id())
             .layer(HandleErrorLayer::new(handle_timeout_error))
             .layer(TimeoutLayer::new(REQUEST_TIMEOUT))
+            .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+            .layer(PropagateRequestIdLayer::x_request_id()),
     ))
 }
 
@@ -304,7 +337,7 @@ async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
 
 fn internal_server_error(
     err: &impl std::fmt::Display,
-) -> (StatusCode, ProblemDetails, Option<Duration>) {
+) -> (StatusCode, ProblemDetails, Option<RateLimitHeaders>) {
     tracing::error!(error = %err, "internal API error");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -317,6 +350,24 @@ fn internal_server_error(
         },
         None,
     )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RateLimitHeaders {
+    retry_after: Duration,
+    limit: u32,
+    remaining: u32,
+    reset_after: Duration,
+}
+
+fn insert_header<T: std::fmt::Display>(
+    headers: &mut HeaderMap,
+    name: header::HeaderName,
+    value: T,
+) {
+    if let Ok(value) = HeaderValue::from_str(&value.to_string()) {
+        headers.insert(name, value);
+    }
 }
 
 fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {

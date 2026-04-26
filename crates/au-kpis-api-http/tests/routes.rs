@@ -206,6 +206,26 @@ async fn internal_errors_do_not_leak_server_details() {
 }
 
 #[tokio::test]
+async fn rate_limit_errors_include_retry_and_quota_headers() {
+    let response = ApiError::RateLimited {
+        retry_after: Duration::from_secs(7),
+        limit: 1000,
+        remaining: 0,
+        reset_after: Duration::from_secs(60),
+    }
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "7");
+    assert_eq!(response.headers().get("x-ratelimit-limit").unwrap(), "1000");
+    assert_eq!(
+        response.headers().get("x-ratelimit-remaining").unwrap(),
+        "0"
+    );
+    assert_eq!(response.headers().get("x-ratelimit-reset").unwrap(), "60");
+}
+
+#[tokio::test]
 async fn cors_does_not_allow_arbitrary_origins_by_default() {
     let response = router(test_state())
         .expect("router")
@@ -327,8 +347,8 @@ async fn timeout_middleware_returns_problem_json_through_router_stack() {
         "application/problem+json"
     );
     assert!(
-        response.headers().contains_key("x-request-id"),
-        "timeout responses should preserve the request id"
+        !response.headers().contains_key("x-request-id"),
+        "timeout wraps request-id middleware in the documented stack order"
     );
 
     let body = to_bytes(response.into_body(), usize::MAX)

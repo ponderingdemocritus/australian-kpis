@@ -6,20 +6,20 @@ use std::{
 };
 
 use assert_cmd::cargo::cargo_bin;
-use au_kpis_testing::redis::start_redis;
+use au_kpis_testing::{redis::start_redis, timescale::start_timescale};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn api_binary_honors_sigterm() {
     let binary = cargo_bin("au-kpis-api");
     let startup_file = unique_startup_file();
+    let timescale = start_timescale("au_kpis_api_sigterm")
+        .await
+        .expect("start timescale test container");
     let redis = start_redis().await.expect("start redis test container");
 
     let mut child = Command::new(binary)
         .env("AU_KPIS_HTTP__BIND", "127.0.0.1:0")
-        .env(
-            "AU_KPIS_DATABASE__URL",
-            "postgres://postgres:postgres@localhost/au_kpis",
-        )
+        .env("AU_KPIS_DATABASE__URL", timescale.url())
         .env("AU_KPIS_CACHE__URL", redis.url())
         .env("AU_KPIS_STARTUP_NOTIFY_FILE", &startup_file)
         .stdout(Stdio::null())

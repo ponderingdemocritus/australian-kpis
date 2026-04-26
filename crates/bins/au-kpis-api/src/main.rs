@@ -14,8 +14,8 @@ use anyhow::Context;
 use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::CacheClient;
 use au_kpis_config::load;
+use au_kpis_db::connect as connect_db;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
-use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
 
@@ -23,9 +23,9 @@ use tokio_util::sync::CancellationToken;
 async fn main() -> anyhow::Result<()> {
     let config = Arc::new(load(None).context("load config")?);
     let telemetry = Arc::new(init_or_disabled(&config.telemetry)?);
-    let db = PgPoolOptions::new()
-        .connect_lazy(&config.database.url)
-        .context("create lazy postgres pool")?;
+    let db = connect_db(&config.database)
+        .await
+        .context("connect postgres database")?;
     let cache = Arc::new(
         CacheClient::connect(&config.cache.url)
             .await

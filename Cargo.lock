@@ -186,10 +186,10 @@ dependencies = [
  "au-kpis-api-http",
  "au-kpis-cache",
  "au-kpis-config",
+ "au-kpis-db",
  "au-kpis-telemetry",
  "au-kpis-testing",
  "axum 0.7.9",
- "sqlx",
  "tokio",
  "tokio-util",
 ]
