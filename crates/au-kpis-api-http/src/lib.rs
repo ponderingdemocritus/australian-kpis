@@ -311,6 +311,7 @@ fn cors_layer(config: &AppConfig) -> anyhow::Result<CorsLayer> {
             header::ACCEPT,
             header::ACCEPT_ENCODING,
             header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-api-key"),
         ]);
 
     if !config.http.cors_allowed_origins.is_empty() {

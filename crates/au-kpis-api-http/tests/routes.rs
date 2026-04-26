@@ -232,3 +232,42 @@ async fn cors_allows_configured_origin() {
         "https://app.au-kpis.example"
     );
 }
+
+#[tokio::test]
+async fn cors_preflight_allows_x_api_key_header_for_configured_origin() {
+    let response = router(test_state_with_origins(vec![
+        "https://app.au-kpis.example".into(),
+    ]))
+    .expect("router")
+    .oneshot(
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/v1/health")
+            .header(header::ORIGIN, "https://app.au-kpis.example")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "x-api-key")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+
+    assert!(response.status().is_success(), "preflight should succeed");
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "https://app.au-kpis.example"
+    );
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .unwrap()
+            .to_str()
+            .expect("allow headers string")
+            .to_ascii_lowercase()
+            .contains("x-api-key")
+    );
+}

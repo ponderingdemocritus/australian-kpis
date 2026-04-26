@@ -103,43 +103,47 @@ async fn server_exits_promptly_when_shutdown_token_is_cancelled() {
 }
 
 #[test]
-fn contract_server_example_honors_sigterm() {
+fn api_binary_honors_sigterm() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let build = Command::new("cargo")
-        .args([
-            "build",
-            "-p",
-            "au-kpis-api-http",
-            "--example",
-            "contract_server",
-        ])
+        .args(["build", "-p", "au-kpis-api"])
         .current_dir(manifest_dir)
         .status()
-        .expect("build contract server example");
-    assert!(build.success(), "example build failed: {build:?}");
+        .expect("build au-kpis-api binary");
+    assert!(build.success(), "binary build failed: {build:?}");
 
-    let example_bin =
-        std::path::Path::new(manifest_dir).join("../../target/debug/examples/contract_server");
-    let addr = "127.0.0.1:38180";
+    let binary = std::path::Path::new(manifest_dir).join("../../target/debug/au-kpis-api");
+    let addr = reserve_local_addr();
 
-    let mut child = Command::new(example_bin)
-        .env("AU_KPIS_CONTRACT_ADDR", addr)
+    let mut child = Command::new(binary)
+        .env("AU_KPIS_HTTP__BIND", &addr)
+        .env(
+            "AU_KPIS_DATABASE__URL",
+            "postgres://postgres:postgres@localhost/au_kpis",
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn contract server example");
+        .expect("spawn au-kpis-api");
 
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(10) {
-        if std::net::TcpStream::connect(addr).is_ok() {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            break;
+        }
+        if child
+            .try_wait()
+            .expect("poll child during startup")
+            .is_some()
+        {
             break;
         }
         thread::sleep(Duration::from_millis(100));
     }
 
     assert!(
-        std::net::TcpStream::connect(addr).is_ok(),
-        "contract server example never became ready"
+        std::net::TcpStream::connect(&addr).is_ok(),
+        "au-kpis-api never became ready on {addr}"
     );
 
     let kill = Command::new("kill")
@@ -164,4 +168,11 @@ fn contract_server_example_honors_sigterm() {
         );
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn reserve_local_addr() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    drop(listener);
+    addr.to_string()
 }
