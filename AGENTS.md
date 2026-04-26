@@ -41,6 +41,91 @@ tests/             Cross-crate e2e, chaos, contract tests
 3. **Claim it** by assigning yourself (or linking the branch you create).
 4. Each issue's **Pass requirements** checklist is the contract. Every box must be ticked before merge.
 
+### Writing good GitHub issues
+
+If you're creating or rewriting an issue, write it as an **execution contract**, not a brainstorm. A good issue should let an agent or human implement the change without guessing architecture, hidden requirements, or where the code belongs.
+
+**Every implementation issue should contain these sections:**
+
+| Section | What it must say |
+|---|---|
+| **Context** | One short paragraph: what problem this solves and why it matters |
+| **Spec anchors** | Exact `Spec.md` sections that govern the work |
+| **Scope** | What this issue implements in this PR-sized slice |
+| **Out of scope** | Explicitly list nearby work that is **not** part of this issue |
+| **Pass requirements** | Flat checklist of verifiable outcomes; this is the merge contract |
+| **Files/modules likely touched** | Expected crates, apps, workflows, docs, or migrations |
+| **Dependencies** | `Blocked by:` and `Blocks:` lines that reflect actual sequencing |
+| **Test requirements** | The exact test layers required by `Spec.md § Testing strategy` |
+| **Estimated effort** | `S`, `M`, `L`, or `XL`; if `XL`, split before implementation |
+
+**Rules for writing pass requirements:**
+
+1. Anchor each requirement to the spec. If a requirement extends the spec, amend `Spec.md` in the same PR or issue rewrite.
+2. Write outcomes, not implementation trivia. Prefer "returns 429 with `Retry-After`" over "use crate X".
+3. Keep the issue PR-sized. Target one crate, one workflow, one adapter, or one user-visible feature slice.
+4. Do not bundle unrelated surfaces. Backend API + dashboard UI + ops automation is usually too much for one issue.
+5. Do not require live-upstream tests unless the spec explicitly calls for them; prefer fixtures, `wiremock`, and `testcontainers`.
+6. State performance budgets, response formats, and error semantics explicitly when they matter.
+7. Name migrations, OpenAPI changes, docs updates, or fixture additions when they are part of the contract.
+8. If an issue changes architecture or introduces a new endpoint not already in `Spec.md`, the issue must say so and require a spec amendment.
+9. If an issue is a tracker or umbrella, say that clearly in the title/body and do **not** assign it to a coding agent as if it were an implementation ticket.
+
+**Template**
+
+```md
+## Context
+
+<1 short paragraph>
+
+## Spec anchors
+
+- `Spec.md § ...`
+- `Spec.md § ...`
+
+## Scope
+
+- ...
+
+## Out of scope
+
+- ...
+
+## Pass requirements
+
+- [ ] ...
+- [ ] ...
+
+## Files/modules likely touched
+
+- `crates/...`
+- `apps/...`
+
+## Dependencies
+
+- Blocked by: #...
+- Blocks: #...
+
+## Test requirements
+
+- Unit: ...
+- Integration: ...
+- Contract/E2E/bench: ...
+
+## Estimated effort
+
+M (≤3d)
+```
+
+**Anti-patterns to avoid:**
+
+- Vague goals like "support X" without naming endpoints, crates, fixtures, or tests
+- "And also" scope creep into dashboards, docs sites, alerts, and deployment wiring
+- Issue bodies that contradict `Spec.md`
+- `XL` issues assigned directly to an implementer instead of being split first
+- Pass requirements that depend on flaky external systems when local fixtures would do
+- Checklists that mention outputs but not the tests needed to prove them
+
 ## 4. Setup (one-time)
 
 ```bash
