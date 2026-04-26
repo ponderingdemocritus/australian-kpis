@@ -54,6 +54,7 @@ async fn main() {
         http: HttpConfig {
             bind: addr.clone(),
             cors_allowed_origins: Vec::new(),
+            shutdown_grace_period_secs: 30,
         },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),

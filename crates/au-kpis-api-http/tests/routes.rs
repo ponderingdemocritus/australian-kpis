@@ -9,6 +9,7 @@ use axum::{
     http::{Request, StatusCode, header},
     response::IntoResponse,
 };
+use jsonschema::draft202012;
 use sqlx::postgres::PgPoolOptions;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
@@ -59,6 +60,7 @@ fn test_state_with_origins(cors_allowed_origins: Vec<String>) -> AppState {
         http: HttpConfig {
             bind: "127.0.0.1:0".into(),
             cors_allowed_origins,
+            shutdown_grace_period_secs: 30,
         },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),
@@ -153,6 +155,17 @@ async fn openapi_route_serves_generated_spec() {
             ["schema"]["$ref"],
         "#/components/schemas/ProblemDetails"
     );
+
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../au-kpis-openapi/tests/fixtures/openapi-3.1-schema.json"
+    ))
+    .expect("schema fixture should parse");
+    let validator = draft202012::new(&schema).expect("compile schema");
+    let output = validator.validate(&parsed);
+    assert!(
+        output.is_ok(),
+        "expected live /v1/openapi.json payload to validate, got {output:?}"
+    );
 }
 
 #[tokio::test]
@@ -230,6 +243,16 @@ async fn cors_allows_configured_origin() {
             .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
             .unwrap(),
         "https://app.au-kpis.example"
+    );
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .unwrap()
+            .to_str()
+            .expect("exposed headers string")
+            .to_ascii_lowercase()
+            .contains("x-request-id")
     );
 }
 

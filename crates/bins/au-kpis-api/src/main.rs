@@ -19,8 +19,6 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, signal};
 use tokio_util::sync::CancellationToken;
 
-const SHUTDOWN_DRAIN_WINDOW: Duration = Duration::from_secs(30);
-
 #[derive(Debug, Default)]
 struct NoopCacheBackend;
 
@@ -77,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(shutdown_signal(shutdown.clone()));
 
+    let drain_window = Duration::from_secs(config.http.shutdown_grace_period_secs);
     let cancel_watch = shutdown.clone();
     let server = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.cancelled_owned())
@@ -88,9 +87,12 @@ async fn main() -> anyhow::Result<()> {
             result.context("serve api")?;
         }
         _ = cancel_watch.cancelled() => {
-            tokio::time::timeout(SHUTDOWN_DRAIN_WINDOW, &mut server)
+            tokio::time::timeout(drain_window, &mut server)
                 .await
-                .context("graceful shutdown exceeded 30s drain window")?
+                .with_context(|| format!(
+                    "graceful shutdown exceeded {}s drain window",
+                    drain_window.as_secs()
+                ))?
                 .context("serve api")?;
         }
     }

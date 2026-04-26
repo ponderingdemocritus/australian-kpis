@@ -30,6 +30,7 @@ use tower_http::{
 use utoipa::{OpenApi, ToSchema};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
 
 /// Shared application state.
 #[derive(Debug, Clone)]
@@ -312,7 +313,8 @@ fn cors_layer(config: &AppConfig) -> anyhow::Result<CorsLayer> {
             header::ACCEPT_ENCODING,
             header::CONTENT_TYPE,
             header::HeaderName::from_static("x-api-key"),
-        ]);
+        ])
+        .expose_headers([REQUEST_ID_HEADER]);
 
     if !config.http.cors_allowed_origins.is_empty() {
         let origins = config

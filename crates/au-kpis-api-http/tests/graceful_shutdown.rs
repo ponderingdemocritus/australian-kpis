@@ -50,6 +50,7 @@ fn test_state(token: CancellationToken) -> AppState {
         http: HttpConfig {
             bind: "127.0.0.1:0".into(),
             cors_allowed_origins: Vec::new(),
+            shutdown_grace_period_secs: 30,
         },
         database: DatabaseConfig {
             url: "postgres://postgres:postgres@localhost/au_kpis".into(),

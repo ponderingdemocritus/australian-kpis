@@ -97,6 +97,8 @@ pub struct HttpConfig {
     pub bind: String,
     /// Explicit browser origin allowlist for API routes.
     pub cors_allowed_origins: Vec<String>,
+    /// Graceful shutdown drain window, in seconds.
+    pub shutdown_grace_period_secs: u64,
 }
 
 impl Default for HttpConfig {
@@ -104,6 +106,7 @@ impl Default for HttpConfig {
         Self {
             bind: "0.0.0.0:8080".into(),
             cors_allowed_origins: Vec::new(),
+            shutdown_grace_period_secs: 30,
         }
     }
 }
@@ -210,6 +213,7 @@ mod tests {
             assert_eq!(cfg.database.url, "postgres://env/db");
             assert_eq!(cfg.http.bind, "0.0.0.0:8080");
             assert!(cfg.http.cors_allowed_origins.is_empty());
+            assert_eq!(cfg.http.shutdown_grace_period_secs, 30);
             assert_eq!(cfg.telemetry.service_name, "au-kpis");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Json);
             assert!(cfg.telemetry.otlp_endpoint.is_none());
@@ -226,6 +230,7 @@ mod tests {
                     [http]
                     bind = "127.0.0.1:3000"
                     cors_allowed_origins = ["https://app.au-kpis.example"]
+                    shutdown_grace_period_secs = 45
 
                     [database]
                     url = "postgres://from-toml/db"
@@ -242,6 +247,7 @@ mod tests {
                 cfg.http.cors_allowed_origins,
                 vec!["https://app.au-kpis.example".to_string()]
             );
+            assert_eq!(cfg.http.shutdown_grace_period_secs, 45);
             assert_eq!(cfg.database.url, "postgres://from-toml/db");
             assert_eq!(cfg.telemetry.service_name, "from-toml");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Pretty);
@@ -265,9 +271,11 @@ mod tests {
             )?;
             jail.set_env("AU_KPIS_HTTP__BIND", "0.0.0.0:9999");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://from-env/db");
+            jail.set_env("AU_KPIS_HTTP__SHUTDOWN_GRACE_PERIOD_SECS", "12");
             jail.set_env("AU_KPIS_TELEMETRY__OTLP_ENDPOINT", "http://otel:4317");
             let cfg = load(Some(Path::new("au-kpis.toml"))).unwrap();
             assert_eq!(cfg.http.bind, "0.0.0.0:9999");
+            assert_eq!(cfg.http.shutdown_grace_period_secs, 12);
             assert_eq!(cfg.database.url, "postgres://from-env/db");
             assert_eq!(
                 cfg.telemetry.otlp_endpoint.as_deref(),

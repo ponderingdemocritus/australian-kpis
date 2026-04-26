@@ -28,6 +28,7 @@ utoipa = { version = "5", features = ["axum_extras"] }
 [dev-dependencies]
 async-trait = "0.1"
 au-kpis-error = { workspace = true }
+jsonschema = "0.29"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 
