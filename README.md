@@ -25,20 +25,39 @@ This workspace targets Rust 2024 on the pinned Rust 1.85 toolchain in
 [`rust-toolchain.toml`](./rust-toolchain.toml). Earlier compilers such as 1.83
 are not supported.
 
-Once [scaffolding is in place](https://github.com/ponderingdemocritus/australian-kpis/issues?q=is%3Aissue+label%3Atype%3Ascaffold):
+Start the local development stack:
 
 ```bash
-# Start infra
-docker compose -f infra/compose/docker-compose.yml up -d
+docker compose -f infra/compose/docker-compose.yml up -d --build --wait
 
-# Run API
-cargo run --bin au-kpis-api
+DATABASE_URL=postgres://au_kpis:au_kpis@127.0.0.1:54320/au_kpis \
+  sqlx migrate run --source infra/migrations
 
-# Run ingestion worker
-cargo run --bin au-kpis-ingestion
+curl http://127.0.0.1:3000/v1/health
+curl http://127.0.0.1:3000/v1/openapi.json
+```
 
-# Run reference client
-pnpm --filter web dev
+The compose stack exposes:
+
+| Service | URL |
+|---|---|
+| API | `http://127.0.0.1:3000` |
+| Postgres/Timescale | `postgres://au_kpis:au_kpis@127.0.0.1:54320/au_kpis` |
+| Redis | `redis://127.0.0.1:63790` |
+| MinIO API | `http://127.0.0.1:9000` |
+| MinIO console | `http://127.0.0.1:9001` |
+| PDF extractor stub | `http://127.0.0.1:8010` |
+
+Named Docker volumes persist Postgres, Redis, and MinIO data between runs.
+Use `docker compose -f infra/compose/docker-compose.yml down -v` when you
+need a clean local stack.
+
+Run local binaries against the compose services:
+
+```bash
+AU_KPIS_DATABASE__URL=postgres://au_kpis:au_kpis@127.0.0.1:54320/au_kpis \
+AU_KPIS_CACHE__URL=redis://127.0.0.1:63790 \
+  cargo run --bin au-kpis-api
 ```
 
 ## Contributing

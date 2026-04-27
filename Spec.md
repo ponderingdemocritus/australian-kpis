@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.0` |
+| **Version** | `v0.1.1` |
 | **Status** | Approved |
-| **Last updated** | 2026-04-23 |
+| **Last updated** | 2026-04-28 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -82,6 +82,9 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 - Raw artifacts: **retained in S3/R2 indefinitely** — lifecycle policy moves >1yr objects to cold storage. Streaming uploads land first in `artifacts-staging/<uuid>` and are copied to `artifacts/<sha256>` once the hash is known; a second lifecycle rule expires `artifacts-staging/` after 7 days so any rare delete-failure leak from the storage crate is bounded. The declarative policy lives in `infra/r2/lifecycle.json`.
 - Rust: **2024 edition, MSRV 1.85**.
 - Migrations: **`sqlx migrate`** (sync-at-startup).
+- PDF extraction: **deterministic first, model-assisted fallback**. Open-source
+  document models are allowed, but only as pinned local sidecar backends whose
+  output passes the same source-specific validation as non-model extraction.
 
 ## Stack (locked)
 
@@ -89,7 +92,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 |---|---|---|
 | **API server** | **Rust 2024 edition, latest stable axum + tokio 1** | Hot path, 24/7, cost + latency sensitive; streams Parquet natively |
 | **Ingestion + workers** | **Rust (tokio, reqwest, calamine, polars)** | Flat memory at millions of rows; shared types with API; `polars`/`arrow-rs` advantage |
-| **PDF extractor** | **Python FastAPI sidecar** (`pdfplumber` + `camelot`) | TS/Rust have no competitive PDF-table extractor |
+| **PDF extractor** | **Python FastAPI sidecar** with strategy backends (`pdfplumber` + `camelot` baseline; optional pinned local Docling/VLM fallback) | Deterministic extraction first; model assistance only when validation/format-drift requires it |
 | **SDK** | **TypeScript**, generated from OpenAPI (`openapi-typescript` + orval + hand-written ergonomic wrapper) | Consumer language; typed; tree-shakeable; Bun/Node/browser/Deno compatible |
 | **Client** | **TypeScript (Vite + React + TanStack Query + shadcn/ui)** | Reference app demonstrating SDK |
 | **DB** | **Timescale Cloud (Postgres 16 + TimescaleDB)** | Hypertables, continuous aggregates, compression; managed ops |
@@ -501,9 +504,9 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 | **RBA** | `crates/adapters/rba` (`au-kpis-adapter-rba`) | Scrape stat-tables index weekly | XLS/CSV | `calamine` (XLS), `csv-async` (CSV) |
 | **APRA** | `crates/adapters/apra` (`au-kpis-adapter-apra`) | Scrape release calendar | XLS | `calamine` |
 | **ASX** | `crates/adapters/asx` (`au-kpis-adapter-asx`) | Announcements RSS + EOD | Mixed | `quick-xml` + `csv-async` |
-| **Treasury** | `crates/adapters/treasury` (`au-kpis-adapter-treasury`) | Watch budget pages | PDF | `pdf-client` → Python sidecar |
+| **Treasury** | `crates/adapters/treasury` (`au-kpis-adapter-treasury`) | Watch budget pages | PDF | `pdf-client` -> Python sidecar extraction strategy |
 | **AEMO** | `crates/adapters/aemo` (`au-kpis-adapter-aemo`) | NEMWeb directory listings | CSV (frequent) | `csv-async` |
-| **State budgets** | `crates/adapters/state-budgets` (`au-kpis-adapter-state-budgets`) | Hand-curated | PDF | Python sidecar |
+| **State budgets** | `crates/adapters/state-budgets` (`au-kpis-adapter-state-budgets`) | Hand-curated | PDF | Python sidecar extraction strategy |
 
 ### Guardrails
 
@@ -532,7 +535,7 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 
 - **`discovery`** — cron-triggered per adapter schedule. Cheap.
 - **`fetch`** — rate-limited per source (Tower layer on HTTP client + queue-level concurrency). Streams raw to S3 via `object_store`.
-- **`parse`** — CPU-ish; Polars/calamine/XLS parsing in `spawn_blocking` pool. PDFs → HTTP call to Python sidecar.
+- **`parse`** — CPU-ish; Polars/calamine/XLS parsing in `spawn_blocking` pool. PDFs call the Python sidecar, which runs deterministic extraction first and can fall back to a pinned local model backend only after validation fails or drift is detected.
 - **`load`** — DB upserts. Serialized per `(dataflow_id)` via job-group keys to avoid upsert conflicts on shared series.
 - **`backfill`** — low priority queue for historical re-ingest; paused when live queues have backlog.
 
@@ -588,12 +591,83 @@ async fn load_batch(
 
 ## PDF extractor service (Python)
 
-Unchanged from prior iteration:
+The sidecar is an extraction orchestrator, not a trusted parser of final
+economic observations. Rust adapters still own source-specific mapping and
+validation.
 
-- FastAPI + `pdfplumber` + `camelot-py[cv]`.
-- `POST /extract { s3_key }` → fetches direct from S3, streams tables back.
-- Dockerized with Ghostscript, OpenCV, Tk.
-- Horizontally scalable; Rust adapter calls via `au-kpis-pdf-client` crate (reqwest wrapper with retries).
+- FastAPI service with pluggable extraction backends.
+- Required baseline backend: deterministic `pdfplumber` + `camelot-py[cv]`
+  for born-digital PDFs.
+- Optional model backends: open-source document/table models such as Docling
+  or Granite Docling, used only as a fallback or comparison path.
+- `POST /extract { s3_key, source_id, artifact_date?, strategy? }` fetches
+  directly from S3/R2 and streams structured table candidates back.
+- Dockerized with Ghostscript, OpenCV, Tk, and optional model dependencies in
+  a separate image/profile so the deterministic sidecar remains lightweight.
+- Horizontally scalable; Rust adapter calls via `au-kpis-pdf-client` crate
+  (reqwest wrapper with retries).
+
+### Extraction strategy
+
+Default order:
+
+1. `deterministic`: run `pdfplumber`/`camelot`, preserving page number,
+   bounding boxes, raw cell text, row/column spans where available, and parser
+   diagnostics.
+2. `validate`: source adapter checks table shape, period labels, numeric
+   coercion, totals/cross-foot rules where present, plausible ranges, and
+   expected row/column headers.
+3. `model_fallback`: if deterministic extraction fails validation or schema
+   hash drift is detected, run a pinned local model backend and re-run the
+   same validation.
+4. `manual_review`: if both paths fail, capture `parse_errors`, pause the
+   adapter, and alert. Do not silently ingest model output.
+
+Models may propose table structure and OCR text, but they must not directly
+emit `Observation` rows. Every model result is normalized through the same
+source-specific Rust parser and validation path as deterministic output.
+
+### Model governance
+
+- Model inference is local/self-hosted. Do not send government PDFs to
+  hosted third-party inference APIs in production ingestion.
+- Model name, version/revision, weights checksum, runtime, prompt/instruction,
+  decoding parameters, page image hash, and output hash are persisted with the
+  extraction metadata.
+- Model backends are opt-in per source/date range through config. The default
+  production path remains deterministic.
+- Any model change that can affect parsed observations requires fixture
+  snapshots, a before/after extraction report, and a changelog note.
+- Generated table candidates must include confidence/diagnostic metadata where
+  the backend exposes it. Low-confidence tables are treated as parse errors
+  unless source-specific validation proves them safe.
+
+### Sidecar response shape
+
+The sidecar returns table candidates, not final observations:
+
+```json
+{
+  "artifact_key": "artifacts/<sha256>",
+  "backend": {
+    "kind": "deterministic|model",
+    "name": "camelot|pdfplumber|docling|granite-docling",
+    "version": "...",
+    "model_sha256": null
+  },
+  "tables": [
+    {
+      "page": 12,
+      "bbox": [72.0, 120.0, 540.0, 720.0],
+      "cells": [["Year", "Revenue"], ["2026-27", "123.4"]],
+      "diagnostics": {"confidence": 0.98}
+    }
+  ]
+}
+```
+
+The exact response type lives in `au-kpis-pdf-client`; this JSON is the
+contract shape, not a hand-written OpenAPI replacement.
 
 ---
 
@@ -792,12 +866,16 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 
 **Snapshot** (`insta`)
 - Every adapter: fixture artifact → `Vec<Observation>` YAML snapshot. Format drift = PR with obvious diff.
+- PDF sidecar fixtures: raw table candidates snapshot per backend. Adapter
+  snapshots remain the merge contract for final observations.
 - Golden API responses (JSON shape stability).
 - OpenAPI spec snapshot — intentional changes get committed; drift needs review.
 
 **Integration** (`testcontainers` — real PG+Timescale+Redis+Minio per test file)
 - Loader: COPY batch → query back → revision upsert → `observations_latest` view correctness.
 - Adapter: `wiremock` stubs upstream HTTP → full adapter run → DB rows match expected.
+- PDF sidecar: deterministic backend, model fallback trigger, validation
+  failure, and provenance metadata covered with committed fixtures.
 - API: full request through middleware stack → DB → response validated against OpenAPI schema.
 - Queue: enqueue → worker dequeue → retry on failure → DLQ on exhaustion.
 - Migrations: apply forward; apply backward (where reversible); apply forward again — idempotent.
@@ -828,7 +906,8 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - Compaction/vacuum during heavy writes → verify no deadlocks.
 
 **Fuzzing** (`cargo-fuzz`)
-- Parsers are the primary attack surface: SDMX-JSON, XLS (calamine), CSV, PDF responses.
+- Parsers are the primary attack surface: SDMX-JSON, XLS (calamine), CSV, PDF
+  sidecar responses, and model-produced table markup/JSON.
 - Corpus: real production samples + mutation-generated inputs.
 - Nightly runs for 30min each; any panic/OOM/infinite-loop blocks release + files bug.
 
@@ -1158,7 +1237,7 @@ Each phase ends demo-able.
 - [ ] Parquet bench: 1M rows streamed <30s, peak memory <100 MB, profiled with `dhat`
 
 ### Phase 4 — PDFs + difficult sources (3 weeks)
-- [ ] Python PDF extractor service
+- [ ] Python PDF extractor service with deterministic baseline and optional pinned local model fallback
 - [ ] Treasury adapter
 - [ ] State budget adapters (NSW, VIC, QLD first)
 - [ ] Versioned parsers + format-drift alerting
@@ -1340,9 +1419,13 @@ All confirmed 2026-04-23:
 - **apalis** — `docs.rs/apalis`
 - **Tokio Console** — `github.com/tokio-rs/console`
 - **schemathesis** — `schemathesis.readthedocs.io`
+- **Docling** — `docling.ai`
+- **Granite Docling** — `huggingface.co/ibm-granite/granite-docling-258M`
+- **Table Transformer** — `huggingface.co/microsoft/table-transformer-structure-recognition`
 
 ---
 
 ## Changelog
 
+- **v0.1.1 (2026-04-28)** — Clarified PDF extraction architecture: deterministic `pdfplumber`/`camelot` remains the baseline, with optional pinned local document-model backends for fallback/comparison. Added validation, provenance, testing, and model-governance requirements.
 - **v0.1.0 (2026-04-23)** — Initial spec approved. Rust API (Cargo workspace, ~20 crates), TypeScript SDK + client, Python PDF sidecar, Timescale Cloud, Fly.io. Full testing + CI + benchmarking baked in. 65 issues across 5 milestones tracked in GitHub.
