@@ -1,5 +1,5 @@
 use std::{
-    io::Write,
+    io::{Read, Write},
     net::TcpStream,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -25,6 +25,21 @@ async fn api_binary_honors_sigterm() {
 
     harness.send_sigterm();
     harness.wait_for_exit(Duration::from_secs(5));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_binary_serves_health_route() {
+    let _harness = ApiProcess::start("au_kpis_api_health", None).await;
+    let response = http_get(&(_harness.addr), "/v1/health");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected health response: {response}"
+    );
+    assert!(
+        response.contains(r#""status":"ok""#),
+        "health body did not include ok status: {response}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -182,4 +197,19 @@ fn wait_for_startup_file(path: &PathBuf, child: &mut std::process::Child) -> Str
     }
 
     panic!("au-kpis-api never reported its bound address");
+}
+
+fn http_get(addr: &str, path: &str) -> String {
+    let mut stream = TcpStream::connect(addr).expect("connect to API");
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .expect("write HTTP request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read HTTP response");
+    response
 }
