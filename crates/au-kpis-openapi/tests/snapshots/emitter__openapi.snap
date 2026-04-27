@@ -17,6 +17,45 @@ expression: emitted_spec()
           "status"
         ],
         "type": "object"
+      },
+      "ProblemDetails": {
+        "description": "RFC 7807 problem details body.",
+        "properties": {
+          "detail": {
+            "description": "Request-specific detail, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instance": {
+            "description": "Resource-specific identifier, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "HTTP status code for this problem.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Short, human-readable summary.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Problem type URI.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "type": "object"
       }
     }
   },
@@ -44,9 +83,58 @@ expression: emitted_spec()
               }
             },
             "description": "API is healthy."
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
           }
         },
         "summary": "`GET /v1/health`.",
+        "tags": []
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "openapi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Current OpenAPI document."
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "OpenAPI generation failed."
+          }
+        },
+        "summary": "`GET /v1/openapi.json`.",
         "tags": []
       }
     }

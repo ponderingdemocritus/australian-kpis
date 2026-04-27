@@ -78,7 +78,7 @@ impl Classify for ConfigError {
 ///
 /// Sections exist only for fields that already have a downstream consumer;
 /// new sections are added alongside the dependent crate. Required fields
-/// without a [`Default`] (currently `database.url`) force [`load`] to fail
+/// without a [`Default`] (currently `database.url` and `cache.url`) force [`load`] to fail
 /// at startup if unset.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -86,6 +86,8 @@ pub struct AppConfig {
     pub http: HttpConfig,
     /// Database connection configuration — consumed by `au-kpis-db`.
     pub database: DatabaseConfig,
+    /// Redis cache configuration — consumed by `au-kpis-cache`.
+    pub cache: CacheConfig,
     /// Telemetry configuration — consumed by `au-kpis-telemetry`.
     pub telemetry: TelemetryConfig,
 }
@@ -95,12 +97,18 @@ pub struct AppConfig {
 pub struct HttpConfig {
     /// Socket address the API binary binds to.
     pub bind: String,
+    /// Explicit browser origin allowlist for API routes.
+    pub cors_allowed_origins: Vec<String>,
+    /// Graceful shutdown drain window, in seconds.
+    pub shutdown_grace_period_secs: u64,
 }
 
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             bind: "0.0.0.0:8080".into(),
+            cors_allowed_origins: Vec::new(),
+            shutdown_grace_period_secs: 30,
         }
     }
 }
@@ -109,6 +117,13 @@ impl Default for HttpConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DatabaseConfig {
     /// Postgres (Timescale) connection URL. Required — no default.
+    pub url: String,
+}
+
+/// Redis cache configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CacheConfig {
+    /// Redis connection URL.
     pub url: String,
 }
 
@@ -183,7 +198,7 @@ mod tests {
     use figment::Jail;
 
     #[test]
-    fn missing_required_field_fails_fast() {
+    fn missing_database_url_fails_fast() {
         Jail::expect_with(|_jail| {
             let err = load(None).expect_err("database.url has no default");
             let msg = err.to_string();
@@ -200,12 +215,34 @@ mod tests {
     }
 
     #[test]
-    fn env_alone_supplies_required_field() {
+    fn missing_cache_url_fails_fast() {
         Jail::expect_with(|jail| {
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
-            let cfg = load(None).expect("env supplies required field");
+            let err = load(None).expect_err("cache.url has no default");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("cache") || msg.contains("url"),
+                "expected error to reference the missing path, got: {msg}"
+            );
+            match err {
+                ConfigError::Figment(_) => {}
+                other => panic!("expected Figment variant, got {other:?}"),
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn env_alone_supplies_required_fields() {
+        Jail::expect_with(|jail| {
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+            let cfg = load(None).expect("env supplies required fields");
             assert_eq!(cfg.database.url, "postgres://env/db");
+            assert_eq!(cfg.cache.url, "redis://env:6379");
             assert_eq!(cfg.http.bind, "0.0.0.0:8080");
+            assert!(cfg.http.cors_allowed_origins.is_empty());
+            assert_eq!(cfg.http.shutdown_grace_period_secs, 30);
             assert_eq!(cfg.telemetry.service_name, "au-kpis");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Json);
             assert!(cfg.telemetry.otlp_endpoint.is_none());
@@ -221,9 +258,14 @@ mod tests {
                 r#"
                     [http]
                     bind = "127.0.0.1:3000"
+                    cors_allowed_origins = ["https://app.au-kpis.example"]
+                    shutdown_grace_period_secs = 45
 
                     [database]
                     url = "postgres://from-toml/db"
+
+                    [cache]
+                    url = "redis://cache.internal:6379"
 
                     [telemetry]
                     service_name = "from-toml"
@@ -233,7 +275,13 @@ mod tests {
             )?;
             let cfg = load(Some(Path::new("au-kpis.toml"))).unwrap();
             assert_eq!(cfg.http.bind, "127.0.0.1:3000");
+            assert_eq!(
+                cfg.http.cors_allowed_origins,
+                vec!["https://app.au-kpis.example".to_string()]
+            );
+            assert_eq!(cfg.http.shutdown_grace_period_secs, 45);
             assert_eq!(cfg.database.url, "postgres://from-toml/db");
+            assert_eq!(cfg.cache.url, "redis://cache.internal:6379");
             assert_eq!(cfg.telemetry.service_name, "from-toml");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Pretty);
             assert_eq!(cfg.telemetry.log_level, "debug");
@@ -256,10 +304,14 @@ mod tests {
             )?;
             jail.set_env("AU_KPIS_HTTP__BIND", "0.0.0.0:9999");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://from-env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://from-env:6379");
+            jail.set_env("AU_KPIS_HTTP__SHUTDOWN_GRACE_PERIOD_SECS", "12");
             jail.set_env("AU_KPIS_TELEMETRY__OTLP_ENDPOINT", "http://otel:4317");
             let cfg = load(Some(Path::new("au-kpis.toml"))).unwrap();
             assert_eq!(cfg.http.bind, "0.0.0.0:9999");
+            assert_eq!(cfg.http.shutdown_grace_period_secs, 12);
             assert_eq!(cfg.database.url, "postgres://from-env/db");
+            assert_eq!(cfg.cache.url, "redis://from-env:6379");
             assert_eq!(
                 cfg.telemetry.otlp_endpoint.as_deref(),
                 Some("http://otel:4317")
@@ -272,6 +324,7 @@ mod tests {
     fn missing_toml_file_fails_fast() {
         Jail::expect_with(|jail| {
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
             let err =
                 load(Some(Path::new("does-not-exist.toml"))).expect_err("missing TOML should fail");
             assert!(matches!(err, ConfigError::Figment(_)));
@@ -282,7 +335,7 @@ mod tests {
     #[test]
     fn config_error_is_permanent() {
         Jail::expect_with(|_jail| {
-            let err = load(None).expect_err("no database.url");
+            let err = load(None).expect_err("no required connection URLs");
             assert_eq!(err.class(), ErrorClass::Permanent);
             Ok(())
         });

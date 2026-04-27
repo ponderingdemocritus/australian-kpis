@@ -484,6 +484,15 @@ mod tests {
     }
 
     #[test]
+    fn sha256_digest_rejects_oversized_hex() {
+        let too_long = "a".repeat((SHA256_BYTES * 2) + 1);
+        assert!(matches!(
+            Sha256Digest::from_hex(&too_long),
+            Err(IdError::HashLength { .. })
+        ));
+    }
+
+    #[test]
     fn sha256_digest_rejects_non_hex() {
         let s = "z".repeat(64);
         assert_eq!(Sha256Digest::from_hex(&s), Err(IdError::HashEncoding));

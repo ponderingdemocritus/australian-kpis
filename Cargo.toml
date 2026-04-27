@@ -56,6 +56,9 @@ au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
 au-kpis-api-http = { path = "crates/au-kpis-api-http" }
 au-kpis-openapi = { path = "crates/au-kpis-openapi" }
 
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

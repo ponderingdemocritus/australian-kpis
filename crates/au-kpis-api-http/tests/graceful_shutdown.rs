@@ -1,11 +1,11 @@
-use std::{future::pending, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
 use au_kpis_telemetry::Telemetry;
 use sqlx::postgres::PgPoolOptions;
-use tokio::{net::TcpListener, signal};
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Default)]
@@ -40,19 +40,15 @@ impl CacheBackend for NoopCacheBackend {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let addr = std::env::var("AU_KPIS_CONTRACT_ADDR")
-        .ok()
-        .unwrap_or_else(|| "127.0.0.1:38080".into());
-    let shutdown = CancellationToken::new();
+fn test_state(token: CancellationToken) -> AppState {
     let db = PgPoolOptions::new()
         .max_connections(1)
         .connect_lazy("postgres://postgres:postgres@localhost/au_kpis")
         .expect("lazy postgres pool");
+
     let config = AppConfig {
         http: HttpConfig {
-            bind: addr.clone(),
+            bind: "127.0.0.1:0".into(),
             cors_allowed_origins: Vec::new(),
             shutdown_grace_period_secs: 30,
         },
@@ -63,53 +59,44 @@ async fn main() {
             url: "redis://127.0.0.1:6379".into(),
         },
         telemetry: TelemetryConfig {
-            service_name: "au-kpis-contract-server".into(),
+            service_name: "au-kpis-test".into(),
             log_format: LogFormat::Json,
             log_level: "info".into(),
             otlp_endpoint: None,
         },
     };
-    let state = AppState::new(
+
+    AppState::new(
         db,
         Arc::new(CacheClient::from_backend(NoopCacheBackend)),
         Arc::new(config),
         Arc::new(Telemetry::disabled()),
-        shutdown.clone(),
-    );
-    tokio::spawn(shutdown_signal(shutdown.clone()));
-
-    let listener = TcpListener::bind(&addr)
-        .await
-        .expect("bind contract server listener");
-    let app = router(state).expect("router");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.cancelled_owned())
-        .await
-        .expect("serve contract server");
+        token,
+    )
 }
 
-async fn shutdown_signal(token: CancellationToken) {
-    let ctrl_c = async {
-        let _ = signal::ctrl_c().await;
-    };
+#[tokio::test]
+async fn server_exits_promptly_when_shutdown_token_is_cancelled() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let token = CancellationToken::new();
+    let state = test_state(token.clone());
+    let shutdown = token.clone();
 
-    #[cfg(unix)]
-    let terminate = async {
-        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut stream) => {
-                let _ = stream.recv().await;
-            }
-            Err(_) => pending::<()>().await,
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
-    }
+    let router = router(state).expect("router");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await
+    });
 
     token.cancel();
+
+    let join = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("server should stop within timeout")
+        .expect("server task should join");
+
+    join.expect("server should exit cleanly");
 }

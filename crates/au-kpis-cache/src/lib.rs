@@ -514,6 +514,20 @@ mod tests {
             err.to_string().contains("capacity"),
             "expected validation message, got {err}"
         );
+
+        let err = TokenBucketConfig::new(1, 0, Duration::from_secs(1))
+            .expect_err("zero refill should fail");
+        assert!(
+            err.to_string().contains("refill rate"),
+            "expected validation message, got {err}"
+        );
+
+        let err = TokenBucketConfig::new(1, 1, Duration::ZERO)
+            .expect_err("zero refill interval should fail");
+        assert!(
+            err.to_string().contains("refill interval"),
+            "expected validation message, got {err}"
+        );
     }
 
     #[tokio::test]
@@ -527,6 +541,21 @@ mod tests {
 
         assert!(
             err.to_string().contains("cannot exceed capacity"),
+            "expected validation message, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_token_request_is_rejected() {
+        let client = CacheClient::from_backend(MockBackend::default());
+        let config = TokenBucketConfig::new(2, 1, Duration::from_secs(1)).expect("bucket config");
+        let err = client
+            .take_token_bucket("ratelimit:key", config, 0)
+            .await
+            .expect_err("zero-sized request should fail");
+
+        assert!(
+            err.to_string().contains("greater than zero"),
             "expected validation message, got {err}"
         );
     }
