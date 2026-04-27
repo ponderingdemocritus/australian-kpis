@@ -106,7 +106,7 @@ pub struct HttpConfig {
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
-            bind: "0.0.0.0:8080".into(),
+            bind: "0.0.0.0:3000".into(),
             cors_allowed_origins: Vec::new(),
             shutdown_grace_period_secs: 30,
         }
@@ -240,7 +240,7 @@ mod tests {
             let cfg = load(None).expect("env supplies required fields");
             assert_eq!(cfg.database.url, "postgres://env/db");
             assert_eq!(cfg.cache.url, "redis://env:6379");
-            assert_eq!(cfg.http.bind, "0.0.0.0:8080");
+            assert_eq!(cfg.http.bind, "0.0.0.0:3000");
             assert!(cfg.http.cors_allowed_origins.is_empty());
             assert_eq!(cfg.http.shutdown_grace_period_secs, 30);
             assert_eq!(cfg.telemetry.service_name, "au-kpis");
