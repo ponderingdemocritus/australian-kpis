@@ -112,24 +112,11 @@ mod tests {
     fn assert_dimensions_schema(schema: &Value) {
         let dimensions = &schema["properties"]["dimensions"];
         assert_eq!(dimensions["type"], "object");
-        assert!(
-            dimensions.get("additionalProperties").is_some(),
-            "expected additionalProperties in schema: {schema}"
+        assert_eq!(
+            dimensions["additionalProperties"]["$ref"],
+            "#/components/schemas/CodeId"
         );
-        let additional_properties = &dimensions["additionalProperties"];
-        assert!(
-            additional_properties.get("type") == Some(&json!("string"))
-                || additional_properties.get("$ref").is_some(),
-            "expected string-like additionalProperties schema: {schema}"
-        );
-
-        let property_names = &dimensions["propertyNames"];
-        assert!(
-            property_names.is_null()
-                || property_names.get("type") == Some(&json!("string"))
-                || property_names.get("$ref").is_some(),
-            "expected string-like propertyNames schema: {schema}"
-        );
+        assert_eq!(dimensions["propertyNames"]["type"], "string");
     }
 
     #[test]

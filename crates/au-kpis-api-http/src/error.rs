@@ -194,3 +194,27 @@ fn insert_header<T: std::fmt::Display>(
         headers.insert(name, value);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::header;
+
+    use super::insert_header;
+
+    struct InvalidHeaderValue;
+
+    impl std::fmt::Display for InvalidHeaderValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("invalid\nheader")
+        }
+    }
+
+    #[test]
+    fn insert_header_ignores_invalid_display_values() {
+        let mut headers = axum::http::HeaderMap::new();
+
+        insert_header(&mut headers, header::RETRY_AFTER, InvalidHeaderValue);
+
+        assert!(!headers.contains_key(header::RETRY_AFTER));
+    }
+}

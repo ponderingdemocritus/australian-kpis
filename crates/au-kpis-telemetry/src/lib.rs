@@ -231,7 +231,7 @@ mod tests {
     use serde_json::Value;
     use tracing_subscriber::fmt::MakeWriter;
 
-    use super::{build_subscriber, resolve_config};
+    use super::{build_subscriber, build_tracer_provider, resolve_config};
 
     #[test]
     fn otlp_endpoint_can_come_from_env() {
@@ -271,6 +271,22 @@ mod tests {
             assert_eq!(json["fields"]["rows"], 42);
             assert_eq!(json["span"]["job_id"], 7);
             assert_eq!(json["span"]["name"], "load_batch");
+
+            Ok(())
+        });
+    }
+
+    #[tokio::test]
+    async fn otlp_endpoint_builds_tracer_provider() {
+        Jail::expect_with(|_jail| {
+            let mut config = base_config();
+            config.otlp_endpoint = Some("http://127.0.0.1:4318/v1/traces".into());
+
+            let resolved = resolve_config(&config);
+            let tracer_provider = build_tracer_provider(&resolved)
+                .expect("provider should build")
+                .expect("provider should be configured");
+            std::mem::forget(tracer_provider);
 
             Ok(())
         });

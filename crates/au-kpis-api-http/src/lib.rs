@@ -101,3 +101,21 @@ fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
 
     Ok(layer)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use axum::{http::StatusCode, response::IntoResponse};
+    use tower::BoxError;
+
+    use super::handle_timeout_error;
+
+    #[tokio::test]
+    async fn unexpected_timeout_layer_errors_map_to_internal_problem() {
+        let err: BoxError = Box::new(io::Error::other("unexpected middleware failure"));
+        let response = handle_timeout_error(err).await.into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}
