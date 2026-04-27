@@ -127,7 +127,7 @@ jobs:
           flags: rust
           name: rust-nextest
           use_oidc: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   contract:
     name: Contract (schemathesis)

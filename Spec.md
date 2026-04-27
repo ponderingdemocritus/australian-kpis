@@ -915,6 +915,10 @@ parallel:
 
 All gates from the table above run here. Blocking for merge.
 
+The coverage job blocks on local `cargo-llvm-cov` line and branch thresholds.
+The Codecov upload/reporting step is advisory so third-party ingest outages do
+not fail an otherwise valid PR gate.
+
 Codex review is an additional review signal, not part of the 14 blocking gates by default. It runs only when `OPENAI_API_KEY` is configured for the repository and the PR originates from the same repository (not a fork). Default model: `gpt-5.5`; allow `CODEX_MODEL`, `CODEX_REVIEW_EFFORT`, and `CODEX_REVIEW_BLOCK_ON_INCORRECT` as repository variables for tuning.
 
 ### 2. Merge-queue flow (`.github/workflows/merge.yml`)
