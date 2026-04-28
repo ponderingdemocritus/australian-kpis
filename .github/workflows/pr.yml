@@ -9,29 +9,294 @@ on:
       - ready_for_review
 
 concurrency:
-  group: codex-structured-review-${{ github.event.pull_request.number }}
+  group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_RUSTC_WRAPPER: sccache
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: 2G
+
 jobs:
+  rust-check:
+    name: Rust Compile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Compile workspace
+        run: cargo check --workspace --locked
+
+  typescript:
+    name: TypeScript Typecheck and Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Typecheck TypeScript packages
+        run: pnpm turbo run typecheck --cache-dir=.turbo
+
+      - name: Test TypeScript packages
+        run: pnpm turbo run test --cache-dir=.turbo
+
+  lint-format:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Lint TypeScript and Markdown
+        run: pnpm run lint
+
+  openapi:
+    name: OpenAPI Drift and Breaking Diff
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+
+      - name: Install oasdiff
+        run: go install github.com/oasdiff/oasdiff@v1.15.0
+
+      - name: Generate OpenAPI document
+        run: |
+          set -euo pipefail
+          mkdir -p target/openapi
+          cargo run -p au-kpis-openapi > target/openapi/openapi.json
+
+      - name: Check committed OpenAPI is current
+        run: |
+          set -euo pipefail
+          jq -S . openapi.json > target/openapi/committed-normalized.json
+          jq -S . target/openapi/openapi.json > target/openapi/generated-normalized.json
+          git diff --no-index --exit-code \
+            target/openapi/committed-normalized.json \
+            target/openapi/generated-normalized.json
+
+      - name: Compare against base branch OpenAPI
+        run: |
+          set -euo pipefail
+          git show "origin/${{ github.event.pull_request.base.ref }}:openapi.json" > target/openapi/base-openapi.json
+          oasdiff breaking target/openapi/base-openapi.json target/openapi/openapi.json
+
+  supply-chain:
+    name: Supply Chain and Secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Check Rust dependency policy
+        continue-on-error: true
+        run: cargo deny check
+
+      - name: Audit Rust advisories
+        continue-on-error: true
+        run: cargo audit
+
+      - name: Audit pnpm dependencies
+        continue-on-error: true
+        run: pnpm audit --audit-level critical
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  container-security:
+    name: Container Build and Trivy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/au-kpis-api.Dockerfile
+          target: runtime
+          tags: au-kpis-api:pr
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: au-kpis-api:pr
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  smoke:
+    name: Smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AU_KPIS_CONTRACT_ADDR: 127.0.0.1:38081
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Build SDK packages
+        run: pnpm turbo run build --cache-dir=.turbo
+
+      - name: Start smoke server
+        run: |
+          set -euo pipefail
+          mkdir -p target/smoke
+          cargo run -p au-kpis-api-http --example contract_server > target/smoke/server.log 2>&1 &
+          echo $! > target/smoke/server.pid
+
+      - name: Wait for API readiness
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            if curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Smoke server did not become ready" >&2
+          cat target/smoke/server.log >&2 || true
+          exit 1
+
+      - name: Run curl smoke checks
+        run: |
+          set -euo pipefail
+          curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/health" | jq -e '.status == "ok"'
+          curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/openapi.json" | jq -e '.openapi'
+
+      - name: Run SDK smoke check
+        run: |
+          node --input-type=module <<'JS'
+          import { createClient } from './packages/sdk/dist/client.js'
+
+          const client = createClient({ baseUrl: `http://${process.env.AU_KPIS_CONTRACT_ADDR}` })
+          const health = await client.health()
+          if (health.status !== 'ok') {
+            throw new Error(`unexpected health status: ${health.status}`)
+          }
+          await client.openapi()
+          JS
+
+      - name: Stop smoke server
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f target/smoke/server.pid ]; then
+            kill "$(cat target/smoke/server.pid)" || true
+          fi
+
+  bench:
+    name: Bench Advisory
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Check workspace bench targets
+        run: cargo check --workspace --benches --locked
+
+      - name: Report advisory status
+        run: |
+          set -euo pipefail
+          if [ -d benches/baselines ]; then
+            echo "Bench baselines found; #18 will replace this scaffold with critcmp comparison."
+          else
+            echo "No bench baselines yet; advisory bench scaffold is intentionally non-blocking until #18."
+          fi
+
   nextest:
     name: Rust Tests (nextest)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      RUSTC_WRAPPER: ""
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.85
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install cargo-nextest
         run: cargo install cargo-nextest --version 0.9.100 --locked
@@ -54,23 +319,16 @@ jobs:
       contents: read
       id-token: write
     env:
-      RUSTC_WRAPPER: ""
-      CARGO_BUILD_RUSTC_WRAPPER: ""
       COVERAGE_RUST_TOOLCHAIN: nightly-2025-10-01
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.85
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install nightly Rust toolchain
         run: rustup toolchain install "$COVERAGE_RUST_TOOLCHAIN" --profile minimal --no-self-update
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --version 0.6.21 --locked
@@ -135,20 +393,13 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTC_WRAPPER: ""
-      CARGO_BUILD_RUSTC_WRAPPER: ""
       AU_KPIS_CONTRACT_ADDR: 127.0.0.1:38080
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.85
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -225,20 +476,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      RUSTC_WRAPPER: ""
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.85
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install cargo-insta
         run: cargo install cargo-insta --version 1.47.2 --locked
@@ -700,6 +943,14 @@ jobs:
     name: CI OK
     runs-on: ubuntu-latest
     needs:
+      - rust-check
+      - typescript
+      - lint-format
+      - openapi
+      - supply-chain
+      - container-security
+      - smoke
+      - bench
       - nextest
       - coverage
       - contract
