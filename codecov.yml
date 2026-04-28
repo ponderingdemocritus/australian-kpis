@@ -1,0 +1,4 @@
+comment:
+  behavior: default
+  layout: reach,diff,flags,tree
+  require_changes: false
