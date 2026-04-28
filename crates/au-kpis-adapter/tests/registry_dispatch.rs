@@ -6,11 +6,13 @@ use au_kpis_adapter::{
     DiscoveryCtx, FetchCtx, ObservationStream, ParseCtx, RateLimit, SourceAdapter,
 };
 use au_kpis_domain::{
-    ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor, SourceId,
-    TimePrecision,
+    Artifact, ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor,
+    SourceId, TimePrecision,
     ids::{CodeId, DimensionId, SeriesKey},
 };
+use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::BlobStore;
+use au_kpis_storage::StorageError;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{StreamExt, stream};
@@ -211,4 +213,92 @@ fn register_arc_supports_shared_adapter_values() {
     let mut builder = Adapters::builder();
     builder.register_arc(adapter).unwrap();
     assert_eq!(builder.build().len(), 1);
+}
+
+#[test]
+fn rate_limit_rejects_invalid_configurations() {
+    let zero_requests = RateLimit::new(0, Duration::from_secs(1)).unwrap_err();
+    assert!(
+        matches!(zero_requests, AdapterError::Validation(message) if message.contains("max_requests"))
+    );
+
+    let zero_window = RateLimit::new(1, Duration::ZERO).unwrap_err();
+    assert!(matches!(zero_window, AdapterError::Validation(message) if message.contains("window")));
+}
+
+#[test]
+fn adapter_error_classification_matches_retry_policy() {
+    let core = AdapterError::Core(CoreError::Validation("bad input".into()));
+    assert_eq!(core.class(), ErrorClass::Validation);
+
+    let storage = AdapterError::Storage(StorageError::Source("upstream reset".into()));
+    assert_eq!(storage.class(), ErrorClass::Transient);
+
+    assert_eq!(
+        AdapterError::UnknownAdapter("missing".into()).class(),
+        ErrorClass::Permanent
+    );
+    assert_eq!(
+        AdapterError::DuplicateAdapter("stub".into()).class(),
+        ErrorClass::Permanent
+    );
+    assert_eq!(
+        AdapterError::FormatDrift("schema hash changed".into()).class(),
+        ErrorClass::Permanent
+    );
+    assert_eq!(
+        AdapterError::Validation("missing source_url".into()).class(),
+        ErrorClass::Validation
+    );
+}
+
+#[test]
+fn artifact_ref_roundtrips_domain_artifact() {
+    let fetched_at = Utc.with_ymd_and_hms(2026, 4, 28, 1, 2, 3).unwrap();
+    let artifact = Artifact {
+        id: ArtifactId::of_content(b"fixture"),
+        source_id: SourceId::new("stub").unwrap(),
+        source_url: "https://example.test/fixture.json".into(),
+        content_type: "application/json".into(),
+        size_bytes: 7,
+        storage_key: "artifacts/fixture".into(),
+        fetched_at,
+    };
+
+    let reference: ArtifactRef = artifact.clone().into();
+    assert_eq!(reference.id, artifact.id);
+    assert_eq!(Artifact::from(reference), artifact);
+}
+
+#[test]
+fn empty_registry_reports_empty_and_parse_unknown_adapter() {
+    let adapters = Adapters::builder().build();
+    assert!(adapters.is_empty());
+    assert_eq!(adapters.len(), 0);
+
+    let http = AdapterHttpClient::new(RateLimit::new(60, Duration::from_secs(60)).unwrap());
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = ArtifactRef {
+        id: ArtifactId::of_content(b"fixture"),
+        source_id: SourceId::new("stub").unwrap(),
+        source_url: "https://example.test/fixture.json".into(),
+        content_type: "application/json".into(),
+        storage_key: "artifacts/fixture".into(),
+        size_bytes: 7,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 1, 2, 3).unwrap(),
+    };
+
+    let err = match adapters.parse(
+        "missing",
+        artifact,
+        &ParseCtx::new(
+            http,
+            blob_store,
+            Utc.with_ymd_and_hms(2026, 4, 28, 1, 2, 3).unwrap(),
+        ),
+    ) {
+        Ok(_) => panic!("missing adapter unexpectedly returned a parse stream"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, AdapterError::UnknownAdapter(id) if id == "missing"));
 }
