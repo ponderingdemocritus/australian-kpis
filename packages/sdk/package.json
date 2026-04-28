@@ -1,0 +1,20 @@
+{
+  "name": "@au-kpis/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json --pretty false",
+    "typecheck": "tsc -b tsconfig.json --pretty false",
+    "test": "tsc -b tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@au-kpis/sdk-generated": "workspace:*"
+  }
+}
