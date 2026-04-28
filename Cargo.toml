@@ -55,6 +55,7 @@ au-kpis-loader = { path = "crates/au-kpis-loader" }
 au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
 au-kpis-api-http = { path = "crates/au-kpis-api-http" }
 au-kpis-openapi = { path = "crates/au-kpis-openapi" }
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [workspace.lints.clippy]
 await_holding_lock = "deny"

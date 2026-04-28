@@ -19,7 +19,7 @@ the single `CI OK` status check.
 - Supply-chain and secret scans
 - API container build plus Trivy HIGH/CRITICAL image scan
 - Curl and SDK smoke checks against the local contract server
-- Advisory bench target checks until issue #18 lands real baselines
+- Advisory Criterion bench comparison through `critcmp`
 - Advisory Codex structured review when repository secrets allow it
 
 Rust jobs install `sccache` and use the GitHub Actions backend. TypeScript jobs
