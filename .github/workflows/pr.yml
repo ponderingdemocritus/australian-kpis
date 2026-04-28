@@ -214,11 +214,14 @@ jobs:
       - name: Build SDK packages
         run: pnpm turbo run build --cache-dir=.turbo
 
+      - name: Build smoke server
+        run: cargo build -p au-kpis-api-http --example contract_server --locked
+
       - name: Start smoke server
         run: |
           set -euo pipefail
           mkdir -p target/smoke
-          cargo run -p au-kpis-api-http --example contract_server > target/smoke/server.log 2>&1 &
+          ./target/debug/examples/contract_server > target/smoke/server.log 2>&1 &
           echo $! > target/smoke/server.pid
 
       - name: Wait for API readiness

@@ -38,3 +38,20 @@ fn benchmark_scaffold_matches_issue_contract() {
         "PR workflow should run advisory critcmp comparison"
     );
 }
+
+#[test]
+fn smoke_workflow_builds_server_before_readiness_polling() {
+    let root = repo_root();
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+
+    assert!(
+        pr_workflow.contains("cargo build -p au-kpis-api-http --example contract_server --locked"),
+        "smoke workflow should build the contract server before starting it"
+    );
+    assert!(
+        pr_workflow
+            .contains("./target/debug/examples/contract_server > target/smoke/server.log 2>&1 &"),
+        "smoke workflow should start the prebuilt contract server binary"
+    );
+}
