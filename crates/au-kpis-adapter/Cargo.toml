@@ -8,3 +8,22 @@ repository.workspace = true
 description = "Adapter trait + base helpers (discover/fetch/parse)."
 
 [dependencies]
+async-trait = "0.1"
+au-kpis-domain = { workspace = true }
+au-kpis-error = { workspace = true }
+au-kpis-storage = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "brotli", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+bytes = "1"
+object_store = "0.11"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true
