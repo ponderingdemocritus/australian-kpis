@@ -17,4 +17,9 @@ hex = "0.4"
 thiserror = "2"
 
 [dev-dependencies]
+criterion.workspace = true
 proptest = "1"
+
+[[bench]]
+name = "observation_json"
+harness = false

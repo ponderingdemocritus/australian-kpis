@@ -277,13 +277,28 @@ jobs:
       - name: Check workspace bench targets
         run: cargo check --workspace --benches --locked
 
-      - name: Report advisory status
+      - name: Install critcmp
+        run: cargo install critcmp --locked
+
+      - name: Capture main benchmark baseline
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
           set -euo pipefail
-          if [ -d benches/baselines ]; then
-            echo "Bench baselines found; #18 will replace this scaffold with critcmp comparison."
+          pr_sha="$(git rev-parse HEAD)"
+          git fetch --depth=1 origin "${BASE_REF}"
+          git checkout --detach FETCH_HEAD
+          cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline main
+          git checkout --detach "${pr_sha}"
+
+      - name: Run advisory benchmark comparison
+        run: |
+          set -euo pipefail
+          cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline pr
+          if find target/criterion -path '*/base/main' -type d | grep -q .; then
+            critcmp main pr --threshold 5
           else
-            echo "No bench baselines yet; advisory bench scaffold is intentionally non-blocking until #18."
+            echo "No main benchmark baseline exists yet; skipping advisory critcmp comparison for the first bench scaffold."
           fi
 
   nextest:

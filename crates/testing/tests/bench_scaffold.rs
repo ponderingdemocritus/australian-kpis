@@ -1,0 +1,40 @@
+use std::{fs, path::Path};
+
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("testing crate lives under crates/testing")
+}
+
+#[test]
+fn benchmark_scaffold_matches_issue_contract() {
+    let root = repo_root();
+
+    assert!(
+        root.join("crates/au-kpis-domain/benches/observation_json.rs")
+            .is_file(),
+        "au-kpis-domain should provide the first placeholder criterion bench"
+    );
+    assert!(
+        root.join("benches/baselines/README.md").is_file(),
+        "repo should document committed benchmark baseline storage"
+    );
+    assert!(
+        root.join("apps/bench/smoke.js").is_file(),
+        "k6 smoke scaffold should live under apps/bench"
+    );
+
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    assert!(
+        pr_workflow.contains(
+            "cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline pr"
+        ),
+        "PR workflow should run the criterion bench and save the PR baseline"
+    );
+    assert!(
+        pr_workflow.contains("critcmp main pr --threshold 5"),
+        "PR workflow should run advisory critcmp comparison"
+    );
+}
