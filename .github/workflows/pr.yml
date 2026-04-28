@@ -291,7 +291,11 @@ jobs:
           pr_sha="$(git rev-parse HEAD)"
           git fetch --depth=1 origin "${BASE_REF}"
           git checkout --detach FETCH_HEAD
-          cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline main
+          if [ -f crates/au-kpis-domain/benches/observation_json.rs ]; then
+            cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline main
+          else
+            echo "Base branch has no observation_json bench yet; skipping main benchmark baseline."
+          fi
           git checkout --detach "${pr_sha}"
 
       - name: Run advisory benchmark comparison

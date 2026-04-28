@@ -55,3 +55,21 @@ fn smoke_workflow_builds_server_before_readiness_polling() {
         "smoke workflow should start the prebuilt contract server binary"
     );
 }
+
+#[test]
+fn bench_workflow_skips_missing_base_benchmark() {
+    let root = repo_root();
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+
+    assert!(
+        pr_workflow.contains("if [ -f crates/au-kpis-domain/benches/observation_json.rs ]; then"),
+        "bench workflow should guard the main baseline when the base branch lacks the bench target"
+    );
+    assert!(
+        pr_workflow.contains(
+            "Base branch has no observation_json bench yet; skipping main benchmark baseline."
+        ),
+        "bench workflow should explain why the first baseline capture is skipped"
+    );
+}
