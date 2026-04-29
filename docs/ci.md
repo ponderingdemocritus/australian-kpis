@@ -16,7 +16,8 @@ the single `CI OK` status check.
 - Snapshot checks with `cargo insta`
 - OpenAPI drift and `oasdiff breaking` checks against the base branch document
 - Schemathesis contract checks against the local contract server
-- Supply-chain and secret scans
+- Supply-chain and secret scans: `cargo deny`, `cargo audit`,
+  `pnpm audit --audit-level critical`, and gitleaks over full history
 - API container build plus Trivy HIGH/CRITICAL image scan
 - Curl and SDK smoke checks against the local contract server
 - Advisory Criterion bench comparison through `critcmp`
@@ -24,6 +25,28 @@ the single `CI OK` status check.
 
 Rust jobs install `sccache` and use the GitHub Actions backend. TypeScript jobs
 restore the pnpm store and `.turbo` cache before running Turborepo tasks.
+
+## Dependency and secret policy
+
+`deny.toml` is the Rust dependency policy. It rejects yanked crates, vulnerable
+RustSec advisories, unknown registries, unknown git sources, and
+GPL-incompatible licenses. Multiple versions and unmaintained advisories are
+surfaced as warnings so they can be scheduled without blocking unrelated work.
+
+The pull request workflow fails on `cargo audit`, `cargo deny`, critical
+`pnpm audit` findings, gitleaks findings, and Trivy HIGH/CRITICAL image
+findings. Cargo audit ignores two vulnerable lockfile entries explicitly in CI:
+an optional `sqlx-mysql` package that is not enabled by any workspace crate, and
+a `testcontainers` archive advisory in local integration-test harness code where
+the fixed crate currently requires a newer Rust toolchain than the repository
+pin. `cargo deny` carries the testcontainers exception plus the transitive
+`rustls-pemfile` unmaintained advisory, which currently has no safe direct
+replacement in upstream network/client dependency chains. The gitleaks job
+checks out full history with `fetch-depth: 0`, so the scan covers both the pull
+request and the reachable repository history.
+
+Renovate is configured in `renovate.json` for weekly dependency PRs and lockfile
+maintenance.
 
 ## Runtime target
 
