@@ -194,6 +194,18 @@ dependencies = [
 [[package]]
 name = "au-kpis-adapter-abs"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "au-kpis-adapter",
+ "au-kpis-domain",
+ "au-kpis-error",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "au-kpis-adapter-aemo"
