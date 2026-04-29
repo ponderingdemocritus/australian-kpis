@@ -437,7 +437,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/contract
-          cargo run -p au-kpis-api-http --example contract_server > target/contract/server.log 2>&1 &
+          cargo build -p au-kpis-api-http --example contract_server --locked
+          ./target/debug/examples/contract_server > target/contract/server.log 2>&1 &
           echo $! > target/contract/server.pid
 
       - name: Wait for API readiness
