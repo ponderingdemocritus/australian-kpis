@@ -361,6 +361,15 @@ dependencies = [
 [[package]]
 name = "au-kpis-pdf-client"
 version = "0.1.0"
+dependencies = [
+ "au-kpis-error",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "au-kpis-queue"
