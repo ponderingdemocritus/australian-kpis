@@ -530,7 +530,7 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 
 ### Queue abstraction + semantics
 
-`au-kpis-queue` exposes a `Queue` trait (push, pop, ack, nack, schedule-cron) with a Postgres implementation using transactional leasing. The rest of the codebase depends on the trait — this implementation is swappable with `apalis` if we later want its worker runtime or scheduler model.
+`au-kpis-queue` exposes a `Queue` trait (push, pop, renew, ack, nack, schedule-cron) with a Postgres implementation using transactional leasing. Workers must periodically renew long-running leases; ack/nack operations are accepted only for the current lease handle. The rest of the codebase depends on the trait — this implementation is swappable with `apalis` if we later want its worker runtime or scheduler model.
 
 - **`discovery`** — cron-triggered per adapter schedule. Cheap.
 - **`fetch`** — rate-limited per source (Tower layer on HTTP client + queue-level concurrency). Streams raw to S3 via `object_store`.
@@ -538,7 +538,7 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 - **`load`** — DB upserts. Serialized per `(dataflow_id)` via job-group keys to avoid upsert conflicts on shared series.
 - **`backfill`** — low priority queue for historical re-ingest; paused when live queues have backlog.
 
-Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no separate job store to operate. Retries + exponential backoff built in. Dead-letter queue per stage. Running jobs carry a lease timeout so crashed workers do not strand work; `load` job groups are enforced with database constraints so only one running job per `dataflow_id` exists at a time.
+Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no separate job store to operate. Retries + exponential backoff built in. Dead-letter queue per stage, retained independently of queue job retention. Running jobs carry a renewable lease timeout so crashed workers do not strand work; `load` job groups are enforced with database constraints so only one running job per `dataflow_id` exists at a time.
 
 **Tracing context propagation**: every job carries a `trace_parent` field; worker restores span from it before processing, so traces span discovery → load as a single tree.
 

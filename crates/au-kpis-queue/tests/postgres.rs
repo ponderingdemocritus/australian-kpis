@@ -110,6 +110,15 @@ async fn nack_retries_then_dead_letters_after_attempt_budget() {
     assert_eq!(dead.job(), &job);
     assert_eq!(dead.attempts(), 2);
     assert!(dead.error_message().contains("still timing out"));
+
+    sqlx::query("DELETE FROM queue_jobs WHERE id = $1")
+        .bind(id.get())
+        .execute(queue.pool())
+        .await
+        .expect("delete retained queue row");
+    let retained = queue.dead_lettered(id).await.expect("read retained dlq");
+    assert_eq!(retained.job(), &job);
+    assert!(retained.error_message().contains("still timing out"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -183,6 +192,47 @@ async fn concurrent_load_pops_cannot_lease_same_dataflow_group() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn load_pop_skips_blocked_group_and_leases_ready_group() {
+    let pool = migrated_pool("au_kpis_queue_mixed_groups").await;
+    let queue = ApalisPgQueue::new(pool.pool);
+    let cpi = DataflowId::new("abs.cpi").unwrap();
+    let wages = DataflowId::new("abs.wpi").unwrap();
+
+    queue
+        .push(Job::load(cpi.clone(), "artifact-a").with_priority(10))
+        .await
+        .expect("push first CPI load");
+    queue
+        .push(Job::load(cpi, "artifact-b").with_priority(9))
+        .await
+        .expect("push blocked CPI load");
+    let wages_id = queue
+        .push(Job::load(wages.clone(), "artifact-c").with_priority(8))
+        .await
+        .expect("push WPI load");
+
+    let first = queue
+        .pop(QueueStage::Load, WorkerId::new("worker-a").unwrap())
+        .await
+        .expect("first pop")
+        .expect("first CPI load should lease");
+    let next = queue
+        .pop(QueueStage::Load, WorkerId::new("worker-b").unwrap())
+        .await
+        .expect("second pop")
+        .expect("different dataflow load should remain leaseable");
+
+    assert_eq!(next.id(), wages_id);
+    assert!(matches!(
+        next.job().kind(),
+        JobKind::Load { dataflow_id, .. } if dataflow_id == &wages
+    ));
+
+    queue.ack(&first).await.expect("ack CPI load");
+    queue.ack(&next).await.expect("ack WPI load");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_running_jobs_are_reclaimed_after_lease_timeout() {
     let pool = migrated_pool("au_kpis_queue_reclaim").await;
     let queue = ApalisPgQueue::new(pool.pool).with_lease_timeout(Duration::from_millis(1));
@@ -208,6 +258,41 @@ async fn stale_running_jobs_are_reclaimed_after_lease_timeout() {
     assert_eq!(reclaimed.id(), id);
     assert_eq!(reclaimed.worker_id().as_str(), "worker-b");
     assert_eq!(reclaimed.attempts(), 2);
+    assert!(queue.ack(&first).await.is_err(), "stale handles cannot ack");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn renew_extends_lease_and_invalidates_old_handle() {
+    let pool = migrated_pool("au_kpis_queue_renew").await;
+    let queue = ApalisPgQueue::new(pool.pool);
+    let id = queue
+        .push(Job::parse(
+            SourceId::new("abs").unwrap(),
+            "artifact-a",
+            "raw/abs/a.pdf",
+        ))
+        .await
+        .expect("push parse job");
+
+    let first = queue
+        .pop(QueueStage::Parse, WorkerId::new("worker-a").unwrap())
+        .await
+        .expect("pop parse job")
+        .expect("parse job should lease");
+    let renewed = queue.renew(&first).await.expect("renew lease");
+
+    assert_eq!(renewed.id(), id);
+    assert_eq!(renewed.worker_id().as_str(), "worker-a");
+    assert!(
+        renewed.leased_at() >= first.leased_at(),
+        "renew should not move the lease timestamp backwards"
+    );
+    assert!(
+        queue.ack(&first).await.is_err(),
+        "old lease handles must not complete a renewed job"
+    );
+
+    queue.ack(&renewed).await.expect("ack renewed lease");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

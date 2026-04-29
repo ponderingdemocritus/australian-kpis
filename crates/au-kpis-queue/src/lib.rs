@@ -24,6 +24,7 @@ pub type QueueResult<T> = Result<T, QueueError>;
 
 /// Default lease timeout before a running job can be reclaimed by another worker.
 pub const DEFAULT_LEASE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const POP_CONFLICT_RETRIES: usize = 8;
 
 /// Durable queue stage. Each variant maps to one logical ingestion queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -514,6 +515,9 @@ pub trait Queue: fmt::Debug + Send + Sync {
     /// Mark a leased job complete.
     async fn ack(&self, job: &LeasedJob) -> QueueResult<()>;
 
+    /// Extend a running lease and return the refreshed lease handle.
+    async fn renew(&self, job: &LeasedJob) -> QueueResult<LeasedJob>;
+
     /// Release, retry, or dead-letter a leased job.
     async fn nack(&self, job: &LeasedJob, nack: Nack) -> QueueResult<()>;
 
@@ -623,59 +627,64 @@ impl Queue for ApalisPgQueue {
 
     #[tracing::instrument(skip(self, worker_id), fields(stage = %stage, worker = worker_id.as_str()))]
     async fn pop(&self, stage: QueueStage, worker_id: WorkerId) -> QueueResult<Option<LeasedJob>> {
-        let row = match sqlx::query(
-            "WITH candidate AS (
-                 SELECT q.id
-                 FROM queue_jobs q
-                 WHERE q.stage = $1
-                   AND (
-                       (q.status = 'pending' AND q.run_at <= now())
-                       OR (
-                           q.status = 'running'
-                           AND q.locked_at <= now() - ($3 * INTERVAL '1 millisecond')
+        for attempt in 0..POP_CONFLICT_RETRIES {
+            let row = match sqlx::query(
+                "WITH candidate AS (
+                     SELECT q.id
+                     FROM queue_jobs q
+                     WHERE q.stage = $1
+                       AND (
+                           (q.status = 'pending' AND q.run_at <= now())
+                           OR (
+                               q.status = 'running'
+                               AND q.locked_at <= now() - ($3 * INTERVAL '1 millisecond')
+                           )
                        )
-                   )
-                   AND (
-                       q.job_group_key IS NULL
-                       OR pg_try_advisory_xact_lock(hashtext(q.job_group_key))
-                   )
-                   AND (
-                       q.job_group_key IS NULL
-                       OR NOT EXISTS (
-                           SELECT 1
-                           FROM queue_jobs running
-                           WHERE running.status = 'running'
-                             AND running.job_group_key = q.job_group_key
-                             AND running.id <> q.id
-                             AND running.locked_at > now() - ($3 * INTERVAL '1 millisecond')
+                       AND (
+                           q.job_group_key IS NULL
+                           OR pg_try_advisory_xact_lock(hashtext(q.job_group_key))
                        )
-                   )
-                 ORDER BY q.priority DESC, q.run_at ASC, q.id ASC
-                 LIMIT 1
-                 FOR UPDATE SKIP LOCKED
-             )
-             UPDATE queue_jobs q
-             SET status = 'running',
-                 locked_by = $2,
-                 locked_at = now(),
-                 attempts = attempts + 1,
-                 updated_at = now()
-             FROM candidate
-             WHERE q.id = candidate.id
-             RETURNING q.id, q.payload, q.attempts, q.locked_at",
-        )
-        .bind(stage.as_str())
-        .bind(worker_id.as_str())
-        .bind(duration_millis_i64(self.lease_timeout))
-        .fetch_optional(&self.pool)
-        .await
-        {
-            Ok(row) => row,
-            Err(err) if is_unique_violation(&err) => return Ok(None),
-            Err(err) => return Err(QueueError::Db(err)),
-        };
+                       AND (
+                           q.job_group_key IS NULL
+                           OR q.status = 'running'
+                           OR NOT EXISTS (
+                               SELECT 1
+                               FROM queue_jobs running
+                               WHERE running.status = 'running'
+                                 AND running.job_group_key = q.job_group_key
+                           )
+                       )
+                     ORDER BY q.priority DESC, q.run_at ASC, q.id ASC
+                     LIMIT 1
+                     FOR UPDATE SKIP LOCKED
+                 )
+                 UPDATE queue_jobs q
+                 SET status = 'running',
+                     locked_by = $2,
+                     locked_at = now(),
+                     attempts = attempts + 1,
+                     updated_at = now()
+                 FROM candidate
+                 WHERE q.id = candidate.id
+                 RETURNING q.id, q.payload, q.attempts, q.locked_at",
+            )
+            .bind(stage.as_str())
+            .bind(worker_id.as_str())
+            .bind(duration_millis_i64(self.lease_timeout))
+            .fetch_optional(&self.pool)
+            .await
+            {
+                Ok(row) => row,
+                Err(err) if is_unique_violation(&err) && attempt + 1 < POP_CONFLICT_RETRIES => {
+                    continue;
+                }
+                Err(err) => return Err(QueueError::Db(err)),
+            };
 
-        row.map(|row| leased_from_row(row, worker_id)).transpose()
+            return row.map(|row| leased_from_row(row, worker_id)).transpose();
+        }
+
+        Ok(None)
     }
 
     #[tracing::instrument(skip(self, job), fields(job_id = %job.id()))]
@@ -688,10 +697,12 @@ impl Queue for ApalisPgQueue {
                  updated_at = now()
              WHERE id = $1
                AND status = 'running'
-               AND locked_by = $2",
+               AND locked_by = $2
+               AND locked_at = $3",
         )
         .bind(job.id().get())
         .bind(job.worker_id().as_str())
+        .bind(job.leased_at())
         .execute(&self.pool)
         .await
         .map_err(QueueError::Db)?;
@@ -700,6 +711,30 @@ impl Queue for ApalisPgQueue {
             return Err(QueueError::LeaseLost(job.id()));
         }
         Ok(())
+    }
+
+    #[tracing::instrument(skip(self, job), fields(job_id = %job.id()))]
+    async fn renew(&self, job: &LeasedJob) -> QueueResult<LeasedJob> {
+        let row = sqlx::query(
+            "UPDATE queue_jobs
+             SET locked_at = now(),
+                 updated_at = now()
+             WHERE id = $1
+               AND status = 'running'
+               AND locked_by = $2
+               AND locked_at = $3
+             RETURNING id, payload, attempts, locked_at",
+        )
+        .bind(job.id().get())
+        .bind(job.worker_id().as_str())
+        .bind(job.leased_at())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(QueueError::Db)?;
+
+        row.map(|row| leased_from_row(row, job.worker_id().clone()))
+            .transpose()?
+            .ok_or(QueueError::LeaseLost(job.id()))
     }
 
     #[tracing::instrument(skip(self, job, nack), fields(job_id = %job.id()))]
@@ -756,12 +791,14 @@ async fn retry_job(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult<(
              updated_at = now()
          WHERE id = $1
            AND status = 'running'
-           AND locked_by = $2",
+           AND locked_by = $2
+           AND locked_at = $5",
     )
     .bind(job.id().get())
     .bind(job.worker_id().as_str())
     .bind(retry_after_ms)
     .bind(&nack.message)
+    .bind(job.leased_at())
     .execute(pool)
     .await
     .map_err(QueueError::Db)?;
@@ -783,11 +820,13 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
              updated_at = now()
          WHERE id = $1
            AND status = 'running'
-           AND locked_by = $2",
+           AND locked_by = $2
+           AND locked_at = $4",
     )
     .bind(job.id().get())
     .bind(job.worker_id().as_str())
     .bind(&nack.message)
+    .bind(job.leased_at())
     .execute(&mut *tx)
     .await
     .map_err(QueueError::Db)?;

@@ -33,7 +33,7 @@ CREATE UNIQUE INDEX queue_jobs_one_running_group_idx
 
 CREATE TABLE queue_dead_letters (
     id            BIGSERIAL PRIMARY KEY,
-    job_id        BIGINT NOT NULL UNIQUE REFERENCES queue_jobs(id) ON DELETE CASCADE,
+    job_id        BIGINT NOT NULL UNIQUE,
     stage         TEXT NOT NULL,
     payload       JSONB NOT NULL,
     attempts      INTEGER NOT NULL CHECK (attempts > 0),
