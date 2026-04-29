@@ -25,7 +25,6 @@ const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION
 pub struct AbsAdapter {
     manifest: AdapterManifest,
     base_url: String,
-    known_revisions: BTreeMap<String, DataflowRevision>,
 }
 
 impl Default for AbsAdapter {
@@ -67,6 +66,16 @@ impl AbsAdapter {
             .collect()
     }
 
+    /// Convert current ABS dataflows into discovery jobs without persisted diff state.
+    #[must_use]
+    pub fn current_jobs(current: &[AbsDataflow]) -> Vec<DiscoveredJob> {
+        current
+            .iter()
+            .filter(|flow| flow.id == CPI_DATAFLOW_ID)
+            .map(AbsDataflow::to_discovered_job)
+            .collect()
+    }
+
     fn dataflow_url(&self) -> String {
         format!("{}/dataflow/ABS/CPI?detail=allstubs", self.base_url)
     }
@@ -96,10 +105,7 @@ impl SourceAdapter for AbsAdapter {
             .await?
             .error_for_status()?;
         let message = response.json::<AbsDataflowMessage>().await?;
-        Ok(Self::discoverable_jobs(
-            &message.data.dataflows,
-            &self.known_revisions,
-        ))
+        Ok(Self::current_jobs(&message.data.dataflows))
     }
 
     async fn fetch(
@@ -125,14 +131,12 @@ impl SourceAdapter for AbsAdapter {
 #[derive(Debug, Clone)]
 pub struct AbsAdapterBuilder {
     base_url: String,
-    known_revisions: BTreeMap<String, DataflowRevision>,
 }
 
 impl Default for AbsAdapterBuilder {
     fn default() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
-            known_revisions: BTreeMap::new(),
         }
     }
 }
@@ -142,17 +146,6 @@ impl AbsAdapterBuilder {
     #[must_use]
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into().trim_end_matches('/').to_string();
-        self
-    }
-
-    /// Register the stored upstream revision for a dataflow.
-    #[must_use]
-    pub fn known_revision(
-        mut self,
-        dataflow_id: impl Into<String>,
-        revision: DataflowRevision,
-    ) -> Self {
-        self.known_revisions.insert(dataflow_id.into(), revision);
         self
     }
 
@@ -169,7 +162,6 @@ impl AbsAdapterBuilder {
                 dataflows: vec![DataflowId::new("abs.cpi").expect("static dataflow id is valid")],
             },
             base_url: self.base_url,
-            known_revisions: self.known_revisions,
         }
     }
 }
@@ -283,6 +275,8 @@ struct RawAbsDataflow {
 #[derive(Debug, Deserialize)]
 struct AbsLink {
     href: String,
+    #[serde(default)]
+    rel: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for AbsDataflow {
@@ -296,11 +290,8 @@ impl<'de> Deserialize<'de> for AbsDataflow {
             .or_else(|| raw.names.get("en").cloned())
             .unwrap_or_else(|| raw.id.clone());
         let agency_id = raw.agency_id.unwrap_or_else(|| "ABS".to_string());
-        let dataflow_url = raw
-            .links
-            .first()
-            .map(|link| link.href.clone())
-            .ok_or_else(|| serde::de::Error::custom("ABS dataflow is missing links"))?;
+        let dataflow_url = canonical_dataflow_url(&raw.links, &agency_id, &raw.id, &raw.version)
+            .ok_or_else(|| serde::de::Error::custom("ABS dataflow is missing canonical link"))?;
         let source_url =
             data_url_from_dataflow_url(&dataflow_url, &agency_id, &raw.id, &raw.version);
 
@@ -313,6 +304,44 @@ impl<'de> Deserialize<'de> for AbsDataflow {
             source_url,
             dataflow_url,
         })
+    }
+}
+
+fn canonical_dataflow_url(
+    links: &[AbsLink],
+    agency_id: &str,
+    dataflow_id: &str,
+    version: &str,
+) -> Option<String> {
+    let expected_suffix = format!("/dataflow/{agency_id}/{dataflow_id}/{version}");
+    links
+        .iter()
+        .filter(|link| is_supported_dataflow_rel(link.rel.as_deref()))
+        .filter(|link| {
+            let href = link
+                .href
+                .split_once('?')
+                .map_or(link.href.as_str(), |(href, _)| href);
+            href.ends_with(&expected_suffix)
+        })
+        .min_by_key(|link| dataflow_link_rank(link.rel.as_deref()))
+        .map(|link| link.href.clone())
+}
+
+fn is_supported_dataflow_rel(rel: Option<&str>) -> bool {
+    rel.is_none_or(|rel| {
+        matches!(
+            rel.to_ascii_lowercase().as_str(),
+            "self" | "canonical" | "dataflow" | "external"
+        )
+    })
+}
+
+fn dataflow_link_rank(rel: Option<&str>) -> u8 {
+    match rel.map(str::to_ascii_lowercase).as_deref() {
+        Some("self" | "canonical" | "dataflow") => 0,
+        Some("external") => 1,
+        _ => 2,
     }
 }
 

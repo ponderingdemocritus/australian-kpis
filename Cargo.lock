@@ -201,6 +201,8 @@ dependencies = [
  "au-kpis-error",
  "chrono",
  "futures",
+ "insta",
+ "proptest",
  "serde",
  "serde_json",
  "tokio",

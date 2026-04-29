@@ -19,4 +19,6 @@ tracing = "0.1"
 
 [dev-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+insta = { version = "1", features = ["json"] }
+proptest = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread"] }
