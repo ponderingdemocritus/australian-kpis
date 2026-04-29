@@ -154,6 +154,63 @@ async fn load_job_group_key_serializes_same_dataflow() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_load_pops_cannot_lease_same_dataflow_group() {
+    let pool = migrated_pool("au_kpis_queue_group_race").await;
+    let queue = ApalisPgQueue::new(pool.pool);
+    let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+
+    queue
+        .push(Job::load(dataflow_id.clone(), "artifact-a"))
+        .await
+        .expect("push first load");
+    queue
+        .push(Job::load(dataflow_id, "artifact-b"))
+        .await
+        .expect("push second load");
+
+    let first_queue = queue.clone();
+    let second_queue = queue.clone();
+    let (first, second) = tokio::join!(
+        first_queue.pop(QueueStage::Load, WorkerId::new("worker-a").unwrap()),
+        second_queue.pop(QueueStage::Load, WorkerId::new("worker-b").unwrap())
+    );
+
+    let leased = [first.expect("first pop"), second.expect("second pop")]
+        .into_iter()
+        .filter(Option::is_some)
+        .count();
+    assert_eq!(leased, 1, "only one load job per dataflow may run");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_running_jobs_are_reclaimed_after_lease_timeout() {
+    let pool = migrated_pool("au_kpis_queue_reclaim").await;
+    let queue = ApalisPgQueue::new(pool.pool).with_lease_timeout(Duration::from_millis(1));
+    let id = queue
+        .push(Job::load(DataflowId::new("abs.cpi").unwrap(), "artifact-a"))
+        .await
+        .expect("push load");
+
+    let first = queue
+        .pop(QueueStage::Load, WorkerId::new("worker-a").unwrap())
+        .await
+        .expect("first pop")
+        .expect("first worker leases job");
+    assert_eq!(first.id(), id);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let reclaimed = queue
+        .pop(QueueStage::Load, WorkerId::new("worker-b").unwrap())
+        .await
+        .expect("reclaim stale lease")
+        .expect("stale lease should be visible");
+
+    assert_eq!(reclaimed.id(), id);
+    assert_eq!(reclaimed.worker_id().as_str(), "worker-b");
+    assert_eq!(reclaimed.attempts(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schedule_upserts_cron_registration() {
     let pool = migrated_pool("au_kpis_queue_cron").await;
     let queue = ApalisPgQueue::new(pool.pool);

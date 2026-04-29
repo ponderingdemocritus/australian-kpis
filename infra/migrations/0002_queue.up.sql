@@ -27,7 +27,7 @@ CREATE INDEX queue_jobs_ready_idx
     ON queue_jobs (stage, status, run_at, priority DESC, id)
     WHERE status = 'pending';
 
-CREATE INDEX queue_jobs_running_group_idx
+CREATE UNIQUE INDEX queue_jobs_one_running_group_idx
     ON queue_jobs (job_group_key)
     WHERE status = 'running' AND job_group_key IS NOT NULL;
 

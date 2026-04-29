@@ -22,6 +22,9 @@ use thiserror::Error;
 /// Result alias for queue operations.
 pub type QueueResult<T> = Result<T, QueueError>;
 
+/// Default lease timeout before a running job can be reclaimed by another worker.
+pub const DEFAULT_LEASE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 /// Durable queue stage. Each variant maps to one logical ingestion queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -522,19 +525,36 @@ pub trait Queue: fmt::Debug + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ApalisPgQueue {
     pool: PgPool,
+    lease_timeout: Duration,
 }
 
 impl ApalisPgQueue {
     /// Construct a queue from a configured Postgres pool.
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            lease_timeout: DEFAULT_LEASE_TIMEOUT,
+        }
+    }
+
+    /// Override the lease timeout used to reclaim jobs from crashed workers.
+    #[must_use]
+    pub const fn with_lease_timeout(mut self, lease_timeout: Duration) -> Self {
+        self.lease_timeout = lease_timeout;
+        self
     }
 
     /// Borrow the underlying pool.
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Lease timeout used to reclaim jobs from crashed workers.
+    #[must_use]
+    pub const fn lease_timeout(&self) -> Duration {
+        self.lease_timeout
     }
 
     /// Fetch a dead-lettered job by original job id.
@@ -603,13 +623,22 @@ impl Queue for ApalisPgQueue {
 
     #[tracing::instrument(skip(self, worker_id), fields(stage = %stage, worker = worker_id.as_str()))]
     async fn pop(&self, stage: QueueStage, worker_id: WorkerId) -> QueueResult<Option<LeasedJob>> {
-        let row = sqlx::query(
+        let row = match sqlx::query(
             "WITH candidate AS (
                  SELECT q.id
                  FROM queue_jobs q
                  WHERE q.stage = $1
-                   AND q.status = 'pending'
-                   AND q.run_at <= now()
+                   AND (
+                       (q.status = 'pending' AND q.run_at <= now())
+                       OR (
+                           q.status = 'running'
+                           AND q.locked_at <= now() - ($3 * INTERVAL '1 millisecond')
+                       )
+                   )
+                   AND (
+                       q.job_group_key IS NULL
+                       OR pg_try_advisory_xact_lock(hashtext(q.job_group_key))
+                   )
                    AND (
                        q.job_group_key IS NULL
                        OR NOT EXISTS (
@@ -617,6 +646,8 @@ impl Queue for ApalisPgQueue {
                            FROM queue_jobs running
                            WHERE running.status = 'running'
                              AND running.job_group_key = q.job_group_key
+                             AND running.id <> q.id
+                             AND running.locked_at > now() - ($3 * INTERVAL '1 millisecond')
                        )
                    )
                  ORDER BY q.priority DESC, q.run_at ASC, q.id ASC
@@ -635,9 +666,14 @@ impl Queue for ApalisPgQueue {
         )
         .bind(stage.as_str())
         .bind(worker_id.as_str())
+        .bind(duration_millis_i64(self.lease_timeout))
         .fetch_optional(&self.pool)
         .await
-        .map_err(QueueError::Db)?;
+        {
+            Ok(row) => row,
+            Err(err) if is_unique_violation(&err) => return Ok(None),
+            Err(err) => return Err(QueueError::Db(err)),
+        };
 
         row.map(|row| leased_from_row(row, worker_id)).transpose()
     }
@@ -789,6 +825,17 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
 fn default_backoff(attempts: i32) -> Duration {
     let shift = attempts.saturating_sub(1).clamp(0, 6) as u32;
     Duration::from_secs(1_u64 << shift)
+}
+
+fn duration_millis_i64(duration: Duration) -> i64 {
+    duration.as_millis().min(i64::MAX as u128) as i64
+}
+
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .and_then(|db_err| db_err.code())
+        .as_deref()
+        == Some("23505")
 }
 
 fn leased_from_row(row: sqlx::postgres::PgRow, worker_id: WorkerId) -> QueueResult<LeasedJob> {
