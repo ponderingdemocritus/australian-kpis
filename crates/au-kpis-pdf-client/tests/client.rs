@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_pdf_client::{
     ExtractRequest, ExtractionBackendKind, ExtractionStrategy, PdfClient, RetryPolicy,
 };
@@ -53,8 +54,7 @@ async fn serve_responses(
 }
 
 fn request() -> ExtractRequest {
-    ExtractRequest::new("artifacts/abc123")
-        .source_id("treasury")
+    ExtractRequest::new("artifacts/abc123", "treasury")
         .artifact_date("2026-05-12")
         .strategy(ExtractionStrategy::Deterministic)
 }
@@ -74,6 +74,7 @@ async fn extract_posts_typed_request_and_parses_tables() {
           "page": 12,
           "bbox": [72.0, 120.0, 540.0, 720.0],
           "cells": [["Year", "Revenue"], ["2026-27", "123.4"]],
+          "spans": [{"row": 0, "column": 0, "row_span": 1, "column_span": 2}],
           "diagnostics": {"confidence": 0.98}
         }
       ]
@@ -92,6 +93,7 @@ async fn extract_posts_typed_request_and_parses_tables() {
     assert_eq!(extracted.backend.kind, ExtractionBackendKind::Deterministic);
     assert_eq!(extracted.tables[0].page, 12);
     assert_eq!(extracted.tables[0].cells[1][1], "123.4");
+    assert_eq!(extracted.tables[0].spans[0].column_span, 2);
     assert_eq!(extracted.tables[0].diagnostics["confidence"], 0.98);
 }
 
@@ -120,4 +122,37 @@ async fn extract_retries_5xx_with_backoff() {
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert_eq!(extracted.artifact_key, "artifacts/abc123");
     assert!(extracted.tables.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_timeout_bounds_hung_sidecar_calls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+    let addr = listener.local_addr().expect("server address");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_task = Arc::clone(&attempts);
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = vec![0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.starts_with("POST /extract HTTP/1.1"));
+        attempts_for_task.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    });
+
+    let client = PdfClient::builder()
+        .base_url(format!("http://{addr}"))
+        .timeout(Duration::from_millis(20))
+        .retry_policy(RetryPolicy::none())
+        .build()
+        .unwrap();
+
+    let err = client
+        .extract(request())
+        .await
+        .expect_err("hung sidecar should time out");
+
+    assert_eq!(err.class(), ErrorClass::Transient);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }

@@ -10,6 +10,8 @@ use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// HTTP client for `POST /extract`.
 #[derive(Debug, Clone)]
 pub struct PdfClient {
@@ -76,17 +78,19 @@ impl PdfClient {
 /// Builder for [`PdfClient`].
 #[derive(Debug, Clone)]
 pub struct PdfClientBuilder {
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
     base_url: Option<String>,
     retry_policy: RetryPolicy,
+    request_timeout: Duration,
 }
 
 impl Default for PdfClientBuilder {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: None,
             base_url: None,
             retry_policy: RetryPolicy::default(),
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
         }
     }
 }
@@ -95,7 +99,7 @@ impl PdfClientBuilder {
     /// Override the underlying HTTP client.
     #[must_use]
     pub fn http_client(mut self, client: reqwest::Client) -> Self {
-        self.client = client;
+        self.client = Some(client);
         self
     }
 
@@ -113,6 +117,13 @@ impl PdfClientBuilder {
         self
     }
 
+    /// Set the request timeout used by the default HTTP client.
+    #[must_use]
+    pub const fn timeout(mut self, request_timeout: Duration) -> Self {
+        self.request_timeout = request_timeout;
+        self
+    }
+
     /// Build the client.
     pub fn build(self) -> Result<PdfClient, PdfClientError> {
         let base_url = self
@@ -121,8 +132,14 @@ impl PdfClientBuilder {
             .and_then(|url| {
                 Url::parse(&url).map_err(|err| PdfClientError::InvalidUrl(err.to_string()))
             })?;
+        let client = match self.client {
+            Some(client) => client,
+            None => reqwest::Client::builder()
+                .timeout(self.request_timeout)
+                .build()?,
+        };
         Ok(PdfClient {
-            client: self.client,
+            client,
             base_url,
             retry_policy: self.retry_policy,
         })
@@ -178,8 +195,7 @@ impl RetryPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExtractRequest {
     s3_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_id: Option<String>,
+    source_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     artifact_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -187,22 +203,15 @@ pub struct ExtractRequest {
 }
 
 impl ExtractRequest {
-    /// Construct a request for the stored artifact key.
+    /// Construct a request for the stored artifact key and source id.
     #[must_use]
-    pub fn new(s3_key: impl Into<String>) -> Self {
+    pub fn new(s3_key: impl Into<String>, source_id: impl Into<String>) -> Self {
         Self {
             s3_key: s3_key.into(),
-            source_id: None,
+            source_id: source_id.into(),
             artifact_date: None,
             strategy: None,
         }
-    }
-
-    /// Set source id context.
-    #[must_use]
-    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
-        self.source_id = Some(source_id.into());
-        self
     }
 
     /// Set artifact publication date context.
@@ -275,9 +284,25 @@ pub struct TableCandidate {
     pub bbox: [f64; 4],
     /// Raw table cells, preserving sidecar row/column structure.
     pub cells: Vec<Vec<String>>,
+    /// Row/column span metadata for merged cells when available.
+    #[serde(default, alias = "cell_spans")]
+    pub spans: Vec<CellSpan>,
     /// Backend diagnostics such as confidence.
     #[serde(default)]
     pub diagnostics: BTreeMap<String, serde_json::Value>,
+}
+
+/// Row/column span metadata for a table cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct CellSpan {
+    /// Zero-indexed cell row.
+    pub row: u32,
+    /// Zero-indexed cell column.
+    pub column: u32,
+    /// Number of rows covered by the cell.
+    pub row_span: u32,
+    /// Number of columns covered by the cell.
+    pub column_span: u32,
 }
 
 /// Errors returned by the PDF client.
@@ -382,13 +407,16 @@ mod tests {
     }
 
     #[test]
-    fn extraction_request_omits_optional_fields_until_set() {
-        let minimal = serde_json::to_value(ExtractRequest::new("raw/report.pdf")).unwrap();
-        assert_eq!(minimal, serde_json::json!({ "s3_key": "raw/report.pdf" }));
+    fn extraction_request_requires_source_id_and_omits_optional_fields_until_set() {
+        let minimal =
+            serde_json::to_value(ExtractRequest::new("raw/report.pdf", "treasury")).unwrap();
+        assert_eq!(
+            minimal,
+            serde_json::json!({ "s3_key": "raw/report.pdf", "source_id": "treasury" })
+        );
 
         let enriched = serde_json::to_value(
-            ExtractRequest::new("raw/report.pdf")
-                .source_id("treasury")
+            ExtractRequest::new("raw/report.pdf", "treasury")
                 .artifact_date("2026-05-12")
                 .strategy(ExtractionStrategy::ModelFallback),
         )
@@ -415,6 +443,40 @@ mod tests {
         assert_eq!(response.backend.kind, ExtractionBackendKind::Model);
         assert_eq!(response.backend.model_sha256.as_deref(), Some("abc123"));
         assert!(response.tables.is_empty());
+    }
+
+    #[test]
+    fn extraction_response_preserves_cell_span_metadata() {
+        let response: ExtractionResponse = serde_json::from_value(serde_json::json!({
+            "artifact_key": "raw/report.pdf",
+            "backend": {
+                "kind": "deterministic",
+                "name": "camelot",
+                "version": "1.0.0",
+                "model_sha256": null
+            },
+            "tables": [
+                {
+                    "page": 3,
+                    "bbox": [10.0, 20.0, 30.0, 40.0],
+                    "cells": [["Year", "Revenue"]],
+                    "spans": [
+                        {
+                            "row": 0,
+                            "column": 0,
+                            "row_span": 1,
+                            "column_span": 2
+                        }
+                    ]
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(response.tables[0].spans[0].row, 0);
+        assert_eq!(response.tables[0].spans[0].column, 0);
+        assert_eq!(response.tables[0].spans[0].row_span, 1);
+        assert_eq!(response.tables[0].spans[0].column_span, 2);
     }
 
     #[test]
