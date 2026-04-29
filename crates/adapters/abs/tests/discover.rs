@@ -242,6 +242,29 @@ fn parse_dataflow_listing_rejects_missing_version() {
 }
 
 #[test]
+fn parse_dataflow_listing_rejects_missing_id_rows() {
+    let body = r#"{
+      "data": {
+        "dataflows": [
+          {
+            "agencyID": "ABS",
+            "version": "2.0.0",
+            "name": "Consumer Price Index",
+            "updated": "2026-04-28T00:00:00Z",
+            "links": [
+              { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0", "rel": "self" }
+            ]
+          }
+        ]
+      }
+    }"#;
+
+    let err = AbsAdapter::parse_dataflow_listing(body).expect_err("missing id should fail");
+
+    assert!(err.to_string().contains("missing id"));
+}
+
+#[test]
 fn parse_dataflow_listing_skips_malformed_non_cpi_rows() {
     let body = r#"{
       "data": {

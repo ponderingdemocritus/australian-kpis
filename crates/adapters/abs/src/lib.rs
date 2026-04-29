@@ -239,7 +239,11 @@ fn parse_dataflow_listing_with_base(
                     dataflows.push(dataflow);
                 }
             }
-            None => {}
+            None => {
+                return Err(AdapterError::Validation(
+                    "ABS dataflow row is missing id".to_string(),
+                ));
+            }
         }
     }
     Ok(dataflows)
