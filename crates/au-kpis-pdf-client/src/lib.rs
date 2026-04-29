@@ -332,3 +332,108 @@ impl Classify for PdfClientError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_requires_base_url_and_rejects_invalid_url() {
+        assert_eq!(
+            PdfClient::builder().build().unwrap_err().class(),
+            ErrorClass::Validation
+        );
+        assert_eq!(
+            PdfClient::new("not a url").unwrap_err().class(),
+            ErrorClass::Validation
+        );
+    }
+
+    #[test]
+    fn builder_normalizes_base_url_and_accepts_custom_http_client() {
+        let client = reqwest::Client::builder().build().unwrap();
+        let pdf_client = PdfClient::builder()
+            .http_client(client)
+            .base_url("http://127.0.0.1:3000////")
+            .retry_policy(RetryPolicy::none())
+            .build()
+            .unwrap();
+
+        assert_eq!(pdf_client.base_url.as_str(), "http://127.0.0.1:3000/");
+        assert_eq!(pdf_client.retry_policy, RetryPolicy::none());
+    }
+
+    #[test]
+    fn retry_policy_rejects_zero_attempts_and_caps_backoff() {
+        assert_eq!(
+            RetryPolicy::new(0, Duration::ZERO).unwrap_err().class(),
+            ErrorClass::Validation
+        );
+
+        let retry_policy = RetryPolicy::new(3, Duration::from_millis(10)).unwrap();
+        assert_eq!(retry_policy.delay_for_attempt(0), Duration::from_millis(10));
+        assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(10));
+        assert_eq!(retry_policy.delay_for_attempt(2), Duration::from_millis(20));
+        assert_eq!(
+            retry_policy.delay_for_attempt(99),
+            Duration::from_millis(640)
+        );
+        assert_eq!(RetryPolicy::none().delay_for_attempt(2), Duration::ZERO);
+    }
+
+    #[test]
+    fn extraction_request_omits_optional_fields_until_set() {
+        let minimal = serde_json::to_value(ExtractRequest::new("raw/report.pdf")).unwrap();
+        assert_eq!(minimal, serde_json::json!({ "s3_key": "raw/report.pdf" }));
+
+        let enriched = serde_json::to_value(
+            ExtractRequest::new("raw/report.pdf")
+                .source_id("treasury")
+                .artifact_date("2026-05-12")
+                .strategy(ExtractionStrategy::ModelFallback),
+        )
+        .unwrap();
+        assert_eq!(enriched["source_id"], "treasury");
+        assert_eq!(enriched["artifact_date"], "2026-05-12");
+        assert_eq!(enriched["strategy"], "model_fallback");
+    }
+
+    #[test]
+    fn extraction_response_accepts_s3_key_alias_and_defaults_tables() {
+        let response: ExtractionResponse = serde_json::from_value(serde_json::json!({
+            "s3_key": "raw/report.pdf",
+            "backend": {
+                "kind": "model",
+                "name": "layoutlm",
+                "version": "1.0.0",
+                "model_sha256": "abc123"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(response.artifact_key, "raw/report.pdf");
+        assert_eq!(response.backend.kind, ExtractionBackendKind::Model);
+        assert_eq!(response.backend.model_sha256.as_deref(), Some("abc123"));
+        assert!(response.tables.is_empty());
+    }
+
+    #[test]
+    fn error_classification_separates_retryable_statuses() {
+        assert_eq!(
+            PdfClientError::Status {
+                status: StatusCode::BAD_REQUEST,
+                body: "bad request".to_string()
+            }
+            .class(),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            PdfClientError::Status {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                body: "busy".to_string()
+            }
+            .class(),
+            ErrorClass::Transient
+        );
+    }
+}
