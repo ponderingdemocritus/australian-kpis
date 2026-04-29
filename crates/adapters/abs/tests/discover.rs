@@ -38,6 +38,33 @@ const DATAFLOW_FIXTURE: &str = r#"{
   }
 }"#;
 
+const MULTI_VERSION_CPI_FIXTURE: &str = r#"{
+  "data": {
+    "dataflows": [
+      {
+        "id": "CPI",
+        "agencyID": "ABS",
+        "version": "1.0.0",
+        "name": "Consumer Price Index (old)",
+        "updated": "2025-01-01T00:00:00Z",
+        "links": [
+          { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/1.0.0", "rel": "self" }
+        ]
+      },
+      {
+        "id": "CPI",
+        "agencyID": "ABS",
+        "version": "2.0.0",
+        "name": "Consumer Price Index",
+        "updated": "2026-04-28T00:00:00Z",
+        "links": [
+          { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0", "rel": "self" }
+        ]
+      }
+    ]
+  }
+}"#;
+
 async fn serve_once(body: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -75,12 +102,12 @@ async fn serve_once(body: &'static str) -> String {
 fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
     let current = AbsAdapter::parse_dataflow_listing(DATAFLOW_FIXTURE).expect("parse fixture");
     let unchanged = BTreeMap::from([(
-        "CPI".to_string(),
+        "ABS:CPI:2.0.0".to_string(),
         DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
     )]);
     let changed = BTreeMap::from([(
-        "CPI".to_string(),
-        DataflowRevision::new("1.0.0", Some("2025-01-01T00:00:00Z")),
+        "ABS:CPI:2.0.0".to_string(),
+        DataflowRevision::new("2.0.0", Some("2025-01-01T00:00:00Z")),
     )]);
 
     assert!(AbsAdapter::discoverable_jobs(&current, &unchanged).is_empty());
@@ -100,6 +127,7 @@ fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
     );
     assert_eq!(jobs[0].metadata["abs_dataflow_id"], "CPI");
     assert_eq!(jobs[0].metadata["version"], "2.0.0");
+    assert_eq!(jobs[0].metadata["revision_key"], "ABS:CPI:2.0.0");
     assert_eq!(jobs[0].metadata["last_updated"], "2026-04-28T00:00:00Z");
 }
 
@@ -116,17 +144,66 @@ async fn discover_fetches_abs_dataflow_listing_over_http() {
     assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_applies_known_revisions_from_context() {
+    let base_url = serve_once(DATAFLOW_FIXTURE).await;
+    let adapter = AbsAdapter::builder().base_url(base_url).build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap())
+        .with_known_revision(
+            "ABS:CPI:2.0.0",
+            DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
+        );
+
+    let jobs = adapter.discover(&ctx).await.expect("discover CPI");
+
+    assert!(jobs.is_empty());
+}
+
 #[test]
 fn changed_timestamp_emits_distinct_job_id_for_same_version() {
     let current = AbsAdapter::parse_dataflow_listing(DATAFLOW_FIXTURE).expect("parse fixture");
     let known = BTreeMap::from([(
-        "CPI".to_string(),
+        "ABS:CPI:2.0.0".to_string(),
         DataflowRevision::new("2.0.0", Some("2026-04-27T00:00:00Z")),
     )]);
 
     let jobs = AbsAdapter::discoverable_jobs(&current, &known);
 
     assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
+}
+
+#[test]
+fn diff_keys_cpi_revisions_by_agency_id_and_version() {
+    let current =
+        AbsAdapter::parse_dataflow_listing(MULTI_VERSION_CPI_FIXTURE).expect("parse fixture");
+    let unchanged = BTreeMap::from([
+        (
+            "ABS:CPI:1.0.0".to_string(),
+            DataflowRevision::new("1.0.0", Some("2025-01-01T00:00:00Z")),
+        ),
+        (
+            "ABS:CPI:2.0.0".to_string(),
+            DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
+        ),
+    ]);
+    assert!(AbsAdapter::discoverable_jobs(&current, &unchanged).is_empty());
+
+    let changed_latest = BTreeMap::from([
+        (
+            "ABS:CPI:1.0.0".to_string(),
+            DataflowRevision::new("1.0.0", Some("2025-01-01T00:00:00Z")),
+        ),
+        (
+            "ABS:CPI:2.0.0".to_string(),
+            DataflowRevision::new("2.0.0", Some("2026-04-27T00:00:00Z")),
+        ),
+    ]);
+    let jobs = AbsAdapter::discoverable_jobs(&current, &changed_latest);
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].metadata["revision_key"], "ABS:CPI:2.0.0");
     assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
 }
 
@@ -228,6 +305,7 @@ fn parse_dataflow_listing_snapshot() {
                 "last_updated": flow.last_updated,
                 "source_url": flow.source_url,
                 "dataflow_url": flow.dataflow_url,
+                "revision_key": format!("{}:{}:{}", flow.agency_id, flow.id, flow.version),
             })
         })
         .collect::<Vec<_>>();

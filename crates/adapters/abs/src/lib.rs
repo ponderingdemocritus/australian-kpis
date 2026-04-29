@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, time::Duration};
 use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterManifest, ArtifactRef, DiscoveredJob, DiscoveryCtx, FetchCtx,
-    ObservationStream, ParseCtx, RateLimit, SourceAdapter,
+    ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
 };
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::CoreError;
@@ -52,14 +52,14 @@ impl AbsAdapter {
     #[must_use]
     pub fn discoverable_jobs(
         current: &[AbsDataflow],
-        known_revisions: &BTreeMap<String, DataflowRevision>,
+        known_revisions: &BTreeMap<String, UpstreamRevision>,
     ) -> Vec<DiscoveredJob> {
         current
             .iter()
             .filter(|flow| flow.id == CPI_DATAFLOW_ID)
             .filter(|flow| {
                 known_revisions
-                    .get(&flow.id)
+                    .get(&flow.revision_key())
                     .is_none_or(|known| known != &flow.revision())
             })
             .map(AbsDataflow::to_discovered_job)
@@ -105,7 +105,10 @@ impl SourceAdapter for AbsAdapter {
             .await?
             .error_for_status()?;
         let message = response.json::<AbsDataflowMessage>().await?;
-        Ok(Self::current_jobs(&message.data.dataflows))
+        Ok(Self::discoverable_jobs(
+            &message.data.dataflows,
+            ctx.known_revisions(),
+        ))
     }
 
     async fn fetch(
@@ -167,34 +170,7 @@ impl AbsAdapterBuilder {
 }
 
 /// Stored upstream dataflow revision used for discovery diffing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DataflowRevision {
-    version: String,
-    last_updated: Option<String>,
-}
-
-impl DataflowRevision {
-    /// Construct a stored revision.
-    #[must_use]
-    pub fn new(version: impl Into<String>, last_updated: Option<impl Into<String>>) -> Self {
-        Self {
-            version: version.into(),
-            last_updated: last_updated.map(Into::into),
-        }
-    }
-
-    /// Upstream dataflow version.
-    #[must_use]
-    pub fn version(&self) -> &str {
-        &self.version
-    }
-
-    /// Upstream update timestamp when exposed by ABS.
-    #[must_use]
-    pub fn last_updated(&self) -> Option<&str> {
-        self.last_updated.as_deref()
-    }
-}
+pub type DataflowRevision = UpstreamRevision;
 
 /// ABS dataflow metadata relevant to discovery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,8 +192,12 @@ pub struct AbsDataflow {
 }
 
 impl AbsDataflow {
-    fn revision(&self) -> DataflowRevision {
-        DataflowRevision::new(self.version.clone(), self.last_updated.clone())
+    fn revision(&self) -> UpstreamRevision {
+        UpstreamRevision::new(self.version.clone(), self.last_updated.clone())
+    }
+
+    fn revision_key(&self) -> String {
+        format!("{}:{}:{}", self.agency_id, self.id, self.version)
     }
 
     fn to_discovered_job(&self) -> DiscoveredJob {
@@ -225,6 +205,7 @@ impl AbsDataflow {
             ("abs_dataflow_id".to_string(), self.id.clone()),
             ("agency_id".to_string(), self.agency_id.clone()),
             ("version".to_string(), self.version.clone()),
+            ("revision_key".to_string(), self.revision_key()),
             ("name".to_string(), self.name.clone()),
             ("dataflow_url".to_string(), self.dataflow_url.clone()),
         ]);
