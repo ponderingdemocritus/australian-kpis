@@ -59,6 +59,7 @@ async fn push_pop_ack_preserves_payload_and_trace_parent() {
     assert_eq!(leased.job(), &job);
     assert_eq!(leased.trace_parent(), Some(trace_parent));
     assert_eq!(leased.attempts(), 1);
+    assert_eq!(leased.lease_version(), 1);
 
     queue.ack(&leased).await.expect("ack job");
 
@@ -98,6 +99,7 @@ async fn nack_retries_then_dead_letters_after_attempt_budget() {
         .expect("job should be retried");
     assert_eq!(second.id(), id);
     assert_eq!(second.attempts(), 2);
+    assert_eq!(second.lease_version(), 2);
     queue
         .nack(
             &second,
@@ -111,8 +113,7 @@ async fn nack_retries_then_dead_letters_after_attempt_budget() {
     assert_eq!(dead.attempts(), 2);
     assert!(dead.error_message().contains("still timing out"));
 
-    sqlx::query("DELETE FROM queue_jobs WHERE id = $1")
-        .bind(id.get())
+    sqlx::query!("DELETE FROM queue_jobs WHERE id = $1", id.get())
         .execute(queue.pool())
         .await
         .expect("delete retained queue row");
@@ -258,6 +259,7 @@ async fn stale_running_jobs_are_reclaimed_after_lease_timeout() {
     assert_eq!(reclaimed.id(), id);
     assert_eq!(reclaimed.worker_id().as_str(), "worker-b");
     assert_eq!(reclaimed.attempts(), 2);
+    assert_eq!(reclaimed.lease_version(), first.lease_version() + 1);
     assert!(queue.ack(&first).await.is_err(), "stale handles cannot ack");
 }
 
@@ -283,6 +285,7 @@ async fn renew_extends_lease_and_invalidates_old_handle() {
 
     assert_eq!(renewed.id(), id);
     assert_eq!(renewed.worker_id().as_str(), "worker-a");
+    assert_eq!(renewed.lease_version(), first.lease_version() + 1);
     assert!(
         renewed.leased_at() >= first.leased_at(),
         "renew should not move the lease timestamp backwards"

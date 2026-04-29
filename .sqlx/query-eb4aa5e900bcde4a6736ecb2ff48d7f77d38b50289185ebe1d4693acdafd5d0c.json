@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue_jobs\n         SET status = 'dead',\n             locked_by = NULL,\n             locked_at = NULL,\n             last_error = $3,\n             updated_at = now()\n         WHERE id = $1\n           AND status = 'running'\n           AND locked_by = $2\n           AND lease_version = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eb4aa5e900bcde4a6736ecb2ff48d7f77d38b50289185ebe1d4693acdafd5d0c"
+}

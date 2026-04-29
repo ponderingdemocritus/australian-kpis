@@ -530,7 +530,7 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 
 ### Queue abstraction + semantics
 
-`au-kpis-queue` exposes a `Queue` trait (push, pop, renew, ack, nack, schedule-cron) with a Postgres implementation using transactional leasing. Workers must periodically renew long-running leases; ack/nack operations are accepted only for the current lease handle. The rest of the codebase depends on the trait — this implementation is swappable with `apalis` if we later want its worker runtime or scheduler model.
+`au-kpis-queue` exposes a `Queue` trait (push, pop, renew, ack, nack, schedule-cron) with a Postgres implementation using transactional leasing. Workers must periodically renew long-running leases; ack/nack operations are accepted only for the current monotonic lease token. The rest of the codebase depends on the trait — this implementation is swappable with `apalis` if we later want its worker runtime or scheduler model.
 
 - **`discovery`** — cron-triggered per adapter schedule. Cheap.
 - **`fetch`** — rate-limited per source (Tower layer on HTTP client + queue-level concurrency). Streams raw to S3 via `object_store`.

@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH candidate AS (\n                     SELECT q.id\n                     FROM queue_jobs q\n                     WHERE q.stage = $1\n                       AND (\n                           (q.status = 'pending' AND q.run_at <= now())\n                           OR (\n                               q.status = 'running'\n                               AND q.locked_at <= now() - ($3::BIGINT * INTERVAL '1 millisecond')\n                           )\n                       )\n                       AND (\n                           q.job_group_key IS NULL\n                           OR pg_try_advisory_xact_lock(hashtext(q.job_group_key))\n                       )\n                       AND (\n                           q.job_group_key IS NULL\n                           OR q.status = 'running'\n                           OR NOT EXISTS (\n                               SELECT 1\n                               FROM queue_jobs running\n                               WHERE running.status = 'running'\n                                 AND running.job_group_key = q.job_group_key\n                           )\n                       )\n                     ORDER BY q.priority DESC, q.run_at ASC, q.id ASC\n                     LIMIT 1\n                     FOR UPDATE SKIP LOCKED\n                 )\n                 UPDATE queue_jobs q\n                 SET status = 'running',\n                     locked_by = $2,\n                     locked_at = now(),\n                     lease_version = lease_version + 1,\n                     attempts = attempts + 1,\n                     updated_at = now()\n                 FROM candidate\n                 WHERE q.id = candidate.id\n                 RETURNING q.id,\n                           q.payload AS \"payload!: serde_json::Value\",\n                           q.attempts,\n                           q.locked_at AS \"locked_at!: DateTime<Utc>\",\n                           q.lease_version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "payload!: serde_json::Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "locked_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "lease_version",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "ca2c8e65d3af64b6244ea3550c2ba6c433f27abad0598801ce9c98f8b3de9295"
+}

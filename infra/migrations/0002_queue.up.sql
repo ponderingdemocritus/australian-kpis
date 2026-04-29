@@ -16,6 +16,7 @@ CREATE TABLE queue_jobs (
     run_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     locked_by     TEXT,
     locked_at     TIMESTAMPTZ,
+    lease_version BIGINT NOT NULL DEFAULT 0,
     trace_parent  TEXT,
     job_group_key TEXT,
     last_error    TEXT,

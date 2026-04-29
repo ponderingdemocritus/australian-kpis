@@ -16,7 +16,7 @@ use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use thiserror::Error;
 
 /// Result alias for queue operations.
@@ -314,6 +314,7 @@ pub struct LeasedJob {
     worker_id: WorkerId,
     attempts: i32,
     leased_at: DateTime<Utc>,
+    lease_version: i64,
 }
 
 impl LeasedJob {
@@ -345,6 +346,12 @@ impl LeasedJob {
     #[must_use]
     pub const fn leased_at(&self) -> DateTime<Utc> {
         self.leased_at
+    }
+
+    /// Monotonic token identifying the current lease ownership.
+    #[must_use]
+    pub const fn lease_version(&self) -> i64 {
+        self.lease_version
     }
 
     /// Trace context copied from the job.
@@ -564,40 +571,50 @@ impl ApalisPgQueue {
     /// Fetch a dead-lettered job by original job id.
     #[tracing::instrument(skip(self))]
     pub async fn dead_lettered(&self, id: JobId) -> QueueResult<DeadLetteredJob> {
-        let row = sqlx::query(
-            "SELECT job_id, payload, attempts, error_class, error_message, failed_at
+        let row = sqlx::query!(
+            r#"SELECT job_id, payload AS "payload!: serde_json::Value", attempts,
+                      error_class, error_message, failed_at
              FROM queue_dead_letters
-             WHERE job_id = $1",
+             WHERE job_id = $1"#,
+            id.get()
         )
-        .bind(id.get())
         .fetch_one(&self.pool)
         .await
         .map_err(QueueError::Db)?;
 
         Ok(DeadLetteredJob {
-            id,
-            job: serde_json::from_value(row.get("payload"))?,
-            attempts: row.get("attempts"),
-            error_class: row.get("error_class"),
-            error_message: row.get("error_message"),
-            failed_at: row.get("failed_at"),
+            id: JobId::new(row.job_id),
+            job: serde_json::from_value(row.payload)?,
+            attempts: row.attempts,
+            error_class: row.error_class,
+            error_message: row.error_message,
+            failed_at: row.failed_at,
         })
     }
 
     /// Fetch a schedule by id.
     #[tracing::instrument(skip(self))]
     pub async fn schedule_by_id(&self, id: &str) -> QueueResult<Option<CronSchedule>> {
-        let row = sqlx::query(
-            "SELECT id, cron_expression, payload, enabled
+        let row = sqlx::query!(
+            r#"SELECT id, cron_expression, payload AS "payload!: serde_json::Value", enabled
              FROM queue_cron_schedules
-             WHERE id = $1",
+             WHERE id = $1"#,
+            id
         )
-        .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(QueueError::Db)?;
 
-        row.map(schedule_from_row).transpose()
+        row.map(|row| {
+            let mut schedule = CronSchedule::new(
+                row.id,
+                row.cron_expression,
+                serde_json::from_value(row.payload)?,
+            )?;
+            schedule.enabled = row.enabled;
+            Ok(schedule)
+        })
+        .transpose()
     }
 }
 
@@ -606,30 +623,30 @@ impl Queue for ApalisPgQueue {
     #[tracing::instrument(skip(self, job), fields(stage = %job.stage()))]
     async fn push(&self, job: Job) -> QueueResult<JobId> {
         let payload = serde_json::to_value(&job)?;
-        let row = sqlx::query(
-            "INSERT INTO queue_jobs
+        let row = sqlx::query!(
+            r#"INSERT INTO queue_jobs
                 (stage, payload, priority, max_attempts, trace_parent, job_group_key)
              VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id",
+             RETURNING id"#,
+            job.stage().as_str(),
+            payload,
+            job.priority(),
+            job.max_attempts(),
+            job.trace_parent(),
+            job.job_group_key()
         )
-        .bind(job.stage().as_str())
-        .bind(payload)
-        .bind(job.priority())
-        .bind(job.max_attempts())
-        .bind(job.trace_parent())
-        .bind(job.job_group_key())
         .fetch_one(&self.pool)
         .await
         .map_err(QueueError::Db)?;
 
-        Ok(JobId::new(row.get("id")))
+        Ok(JobId::new(row.id))
     }
 
     #[tracing::instrument(skip(self, worker_id), fields(stage = %stage, worker = worker_id.as_str()))]
     async fn pop(&self, stage: QueueStage, worker_id: WorkerId) -> QueueResult<Option<LeasedJob>> {
         for attempt in 0..POP_CONFLICT_RETRIES {
-            let row = match sqlx::query(
-                "WITH candidate AS (
+            let row = match sqlx::query!(
+                r#"WITH candidate AS (
                      SELECT q.id
                      FROM queue_jobs q
                      WHERE q.stage = $1
@@ -637,7 +654,7 @@ impl Queue for ApalisPgQueue {
                            (q.status = 'pending' AND q.run_at <= now())
                            OR (
                                q.status = 'running'
-                               AND q.locked_at <= now() - ($3 * INTERVAL '1 millisecond')
+                               AND q.locked_at <= now() - ($3::BIGINT * INTERVAL '1 millisecond')
                            )
                        )
                        AND (
@@ -662,15 +679,20 @@ impl Queue for ApalisPgQueue {
                  SET status = 'running',
                      locked_by = $2,
                      locked_at = now(),
+                     lease_version = lease_version + 1,
                      attempts = attempts + 1,
                      updated_at = now()
                  FROM candidate
                  WHERE q.id = candidate.id
-                 RETURNING q.id, q.payload, q.attempts, q.locked_at",
+                 RETURNING q.id,
+                           q.payload AS "payload!: serde_json::Value",
+                           q.attempts,
+                           q.locked_at AS "locked_at!: DateTime<Utc>",
+                           q.lease_version"#,
+                stage.as_str(),
+                worker_id.as_str(),
+                duration_millis_i64(self.lease_timeout)
             )
-            .bind(stage.as_str())
-            .bind(worker_id.as_str())
-            .bind(duration_millis_i64(self.lease_timeout))
             .fetch_optional(&self.pool)
             .await
             {
@@ -681,7 +703,18 @@ impl Queue for ApalisPgQueue {
                 Err(err) => return Err(QueueError::Db(err)),
             };
 
-            return row.map(|row| leased_from_row(row, worker_id)).transpose();
+            return row
+                .map(|row| {
+                    leased_from_parts(
+                        row.id,
+                        row.payload,
+                        row.attempts,
+                        row.locked_at,
+                        row.lease_version,
+                        worker_id,
+                    )
+                })
+                .transpose();
         }
 
         Ok(None)
@@ -689,8 +722,8 @@ impl Queue for ApalisPgQueue {
 
     #[tracing::instrument(skip(self, job), fields(job_id = %job.id()))]
     async fn ack(&self, job: &LeasedJob) -> QueueResult<()> {
-        let result = sqlx::query(
-            "UPDATE queue_jobs
+        let result = sqlx::query!(
+            r#"UPDATE queue_jobs
              SET status = 'completed',
                  locked_by = NULL,
                  locked_at = NULL,
@@ -698,11 +731,11 @@ impl Queue for ApalisPgQueue {
              WHERE id = $1
                AND status = 'running'
                AND locked_by = $2
-               AND locked_at = $3",
+               AND lease_version = $3"#,
+            job.id().get(),
+            job.worker_id().as_str(),
+            job.lease_version()
         )
-        .bind(job.id().get())
-        .bind(job.worker_id().as_str())
-        .bind(job.leased_at())
         .execute(&self.pool)
         .await
         .map_err(QueueError::Db)?;
@@ -715,26 +748,40 @@ impl Queue for ApalisPgQueue {
 
     #[tracing::instrument(skip(self, job), fields(job_id = %job.id()))]
     async fn renew(&self, job: &LeasedJob) -> QueueResult<LeasedJob> {
-        let row = sqlx::query(
-            "UPDATE queue_jobs
+        let row = sqlx::query!(
+            r#"UPDATE queue_jobs
              SET locked_at = now(),
+                 lease_version = lease_version + 1,
                  updated_at = now()
              WHERE id = $1
                AND status = 'running'
                AND locked_by = $2
-               AND locked_at = $3
-             RETURNING id, payload, attempts, locked_at",
+               AND lease_version = $3
+             RETURNING id,
+                       payload AS "payload!: serde_json::Value",
+                       attempts,
+                       locked_at AS "locked_at!: DateTime<Utc>",
+                       lease_version"#,
+            job.id().get(),
+            job.worker_id().as_str(),
+            job.lease_version()
         )
-        .bind(job.id().get())
-        .bind(job.worker_id().as_str())
-        .bind(job.leased_at())
         .fetch_optional(&self.pool)
         .await
         .map_err(QueueError::Db)?;
 
-        row.map(|row| leased_from_row(row, job.worker_id().clone()))
-            .transpose()?
-            .ok_or(QueueError::LeaseLost(job.id()))
+        row.map(|row| {
+            leased_from_parts(
+                row.id,
+                row.payload,
+                row.attempts,
+                row.locked_at,
+                row.lease_version,
+                job.worker_id().clone(),
+            )
+        })
+        .transpose()?
+        .ok_or(QueueError::LeaseLost(job.id()))
     }
 
     #[tracing::instrument(skip(self, job, nack), fields(job_id = %job.id()))]
@@ -749,8 +796,8 @@ impl Queue for ApalisPgQueue {
     #[tracing::instrument(skip(self, schedule), fields(schedule = schedule.id()))]
     async fn schedule(&self, schedule: CronSchedule) -> QueueResult<()> {
         let payload = serde_json::to_value(schedule.job())?;
-        sqlx::query(
-            "INSERT INTO queue_cron_schedules
+        sqlx::query!(
+            r#"INSERT INTO queue_cron_schedules
                 (id, stage, cron_expression, payload, trace_parent, enabled)
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (id) DO UPDATE
@@ -759,14 +806,14 @@ impl Queue for ApalisPgQueue {
                  payload = EXCLUDED.payload,
                  trace_parent = EXCLUDED.trace_parent,
                  enabled = EXCLUDED.enabled,
-                 updated_at = now()",
+                 updated_at = now()"#,
+            schedule.id(),
+            schedule.job().stage().as_str(),
+            schedule.cron_expression(),
+            payload,
+            schedule.job().trace_parent(),
+            schedule.enabled()
         )
-        .bind(schedule.id())
-        .bind(schedule.job().stage().as_str())
-        .bind(schedule.cron_expression())
-        .bind(payload)
-        .bind(schedule.job().trace_parent())
-        .bind(schedule.enabled())
         .execute(&self.pool)
         .await
         .map_err(QueueError::Db)?;
@@ -781,24 +828,24 @@ async fn retry_job(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult<(
         .as_millis()
         .min(i64::MAX as u128) as i64;
 
-    let result = sqlx::query(
-        "UPDATE queue_jobs
+    let result = sqlx::query!(
+        r#"UPDATE queue_jobs
          SET status = 'pending',
              locked_by = NULL,
              locked_at = NULL,
-             run_at = now() + ($3 * INTERVAL '1 millisecond'),
+             run_at = now() + ($3::BIGINT * INTERVAL '1 millisecond'),
              last_error = $4,
              updated_at = now()
          WHERE id = $1
            AND status = 'running'
            AND locked_by = $2
-           AND locked_at = $5",
+           AND lease_version = $5"#,
+        job.id().get(),
+        job.worker_id().as_str(),
+        retry_after_ms,
+        &nack.message,
+        job.lease_version()
     )
-    .bind(job.id().get())
-    .bind(job.worker_id().as_str())
-    .bind(retry_after_ms)
-    .bind(&nack.message)
-    .bind(job.leased_at())
     .execute(pool)
     .await
     .map_err(QueueError::Db)?;
@@ -811,8 +858,8 @@ async fn retry_job(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult<(
 
 async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult<()> {
     let mut tx = pool.begin().await.map_err(QueueError::Db)?;
-    let result = sqlx::query(
-        "UPDATE queue_jobs
+    let result = sqlx::query!(
+        r#"UPDATE queue_jobs
          SET status = 'dead',
              locked_by = NULL,
              locked_at = NULL,
@@ -821,12 +868,12 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
          WHERE id = $1
            AND status = 'running'
            AND locked_by = $2
-           AND locked_at = $4",
+           AND lease_version = $4"#,
+        job.id().get(),
+        job.worker_id().as_str(),
+        &nack.message,
+        job.lease_version()
     )
-    .bind(job.id().get())
-    .bind(job.worker_id().as_str())
-    .bind(&nack.message)
-    .bind(job.leased_at())
     .execute(&mut *tx)
     .await
     .map_err(QueueError::Db)?;
@@ -835,8 +882,8 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
         return Err(QueueError::LeaseLost(job.id()));
     }
 
-    sqlx::query(
-        "INSERT INTO queue_dead_letters
+    sqlx::query!(
+        r#"INSERT INTO queue_dead_letters
             (job_id, stage, payload, attempts, error_class, error_message, trace_parent)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (job_id) DO UPDATE
@@ -844,15 +891,15 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
              error_class = EXCLUDED.error_class,
              error_message = EXCLUDED.error_message,
              trace_parent = EXCLUDED.trace_parent,
-             failed_at = now()",
+             failed_at = now()"#,
+        job.id().get(),
+        job.job().stage().as_str(),
+        serde_json::to_value(job.job())?,
+        job.attempts(),
+        format!("{:?}", nack.error_class),
+        &nack.message,
+        job.trace_parent()
     )
-    .bind(job.id().get())
-    .bind(job.job().stage().as_str())
-    .bind(serde_json::to_value(job.job())?)
-    .bind(job.attempts())
-    .bind(format!("{:?}", nack.error_class))
-    .bind(&nack.message)
-    .bind(job.trace_parent())
     .execute(&mut *tx)
     .await
     .map_err(QueueError::Db)?;
@@ -877,24 +924,22 @@ fn is_unique_violation(err: &sqlx::Error) -> bool {
         == Some("23505")
 }
 
-fn leased_from_row(row: sqlx::postgres::PgRow, worker_id: WorkerId) -> QueueResult<LeasedJob> {
+fn leased_from_parts(
+    id: i64,
+    payload: serde_json::Value,
+    attempts: i32,
+    locked_at: DateTime<Utc>,
+    lease_version: i64,
+    worker_id: WorkerId,
+) -> QueueResult<LeasedJob> {
     Ok(LeasedJob {
-        id: JobId::new(row.get("id")),
-        job: serde_json::from_value(row.get("payload"))?,
+        id: JobId::new(id),
+        job: serde_json::from_value(payload)?,
         worker_id,
-        attempts: row.get("attempts"),
-        leased_at: row.get("locked_at"),
+        attempts,
+        leased_at: locked_at,
+        lease_version,
     })
-}
-
-fn schedule_from_row(row: sqlx::postgres::PgRow) -> QueueResult<CronSchedule> {
-    let mut schedule = CronSchedule::new(
-        row.get::<String, _>("id"),
-        row.get::<String, _>("cron_expression"),
-        serde_json::from_value(row.get("payload"))?,
-    )?;
-    schedule.enabled = row.get("enabled");
-    Ok(schedule)
 }
 
 /// Errors returned by queue operations.
