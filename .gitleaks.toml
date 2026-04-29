@@ -1,0 +1,8 @@
+[allowlist]
+description = "Non-secret fixture identifiers used in committed insta snapshots."
+paths = [
+    '''crates/au-kpis-domain/tests/snapshots/observation_snapshot__observation_contract\.snap''',
+]
+regexes = [
+    '''series_key:''',
+]

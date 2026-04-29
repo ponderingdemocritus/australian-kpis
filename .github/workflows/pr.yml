@@ -145,21 +145,22 @@ jobs:
         uses: taiki-e/install-action@cargo-audit
 
       - name: Check Rust dependency policy
-        continue-on-error: true
         run: cargo deny check
 
       - name: Audit Rust advisories
-        continue-on-error: true
-        run: cargo audit
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2025-0111
 
       - name: Audit pnpm dependencies
-        continue-on-error: true
         run: pnpm audit --audit-level critical
 
-      - name: Scan repository for secrets
+      - name: Scan full repository history for secrets
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 
   container-security:
     name: Container Build and Trivy

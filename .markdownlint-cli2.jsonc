@@ -11,6 +11,7 @@
     "fenced-code-language": false,
     "first-line-heading": false,
     "no-emphasis-as-heading": false,
+    "table-column-style": false,
     "no-duplicate-heading": {
       "siblings_only": true
     }

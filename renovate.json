@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Australia/Sydney",
+  "schedule": ["before 7am on sunday"],
+  "dependencyDashboard": true,
+  "labels": ["dependencies"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 7am on sunday"]
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "groupName": "rust crates"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "matchManagers": ["npm"],
+      "groupName": "node packages"
+    }
+  ]
+}
