@@ -787,7 +787,7 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
 }
 
 fn default_backoff(attempts: i32) -> Duration {
-    let shift = attempts.saturating_sub(1).min(6) as u32;
+    let shift = attempts.saturating_sub(1).clamp(0, 6) as u32;
     Duration::from_secs(1_u64 << shift)
 }
 
@@ -864,5 +864,107 @@ mod tests {
     #[test]
     fn worker_id_rejects_blank_values() {
         assert!(WorkerId::new(" ").is_err());
+    }
+
+    #[test]
+    fn queue_stage_parses_known_values_and_rejects_unknown_values() {
+        let cases = [
+            ("discover", QueueStage::Discover),
+            ("fetch", QueueStage::Fetch),
+            ("parse", QueueStage::Parse),
+            ("load", QueueStage::Load),
+            ("backfill", QueueStage::Backfill),
+        ];
+
+        for (raw, expected) in cases {
+            let parsed = raw.parse::<QueueStage>().expect("stage should parse");
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.to_string(), raw);
+        }
+
+        let err = "other".parse::<QueueStage>().expect_err("unknown stage");
+        assert_eq!(err.class(), ErrorClass::Validation);
+    }
+
+    #[test]
+    fn job_builders_assign_expected_stage_and_defaults() {
+        let source_id = SourceId::new("abs").unwrap();
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let cases = [
+            Job::discover(source_id.clone()),
+            Job::fetch("job-a", source_id.clone()),
+            Job::parse(source_id.clone(), "artifact-a", "raw/abs/a.pdf"),
+            Job::load(dataflow_id, "artifact-a"),
+            Job::backfill(source_id, None),
+        ];
+
+        for job in cases {
+            assert_eq!(job.stage(), job.kind().stage());
+            assert_eq!(job.priority(), 0);
+            assert_eq!(job.max_attempts(), 5);
+            assert!(job.trace_parent().is_none());
+        }
+    }
+
+    #[test]
+    fn job_metadata_builders_store_values_and_clamp_attempts() {
+        let job = Job::discover(SourceId::new("abs").unwrap())
+            .with_priority(10)
+            .with_max_attempts(0)
+            .with_trace_parent("trace-a");
+
+        assert_eq!(job.priority(), 10);
+        assert_eq!(job.max_attempts(), 1);
+        assert_eq!(job.trace_parent(), Some("trace-a"));
+    }
+
+    #[test]
+    fn cron_schedule_validation_covers_empty_fields_and_updates() {
+        let job = Job::discover(SourceId::new("abs").unwrap());
+
+        assert!(CronSchedule::new(" ", "0 8 * * *", job.clone()).is_err());
+        assert!(CronSchedule::new("abs-cpi", " ", job.clone()).is_err());
+
+        let schedule =
+            CronSchedule::new("abs-cpi", "0 8 * * *", job).expect("schedule should be valid");
+        assert_eq!(schedule.id(), "abs-cpi");
+        assert_eq!(schedule.cron_expression(), "0 8 * * *");
+        assert!(schedule.enabled());
+
+        assert!(schedule.clone().with_cron_expression(" ").is_err());
+        let updated = schedule
+            .with_cron_expression("0 9 * * *")
+            .expect("cron expression should update");
+        assert_eq!(updated.cron_expression(), "0 9 * * *");
+    }
+
+    #[test]
+    fn default_backoff_doubles_until_capped() {
+        assert_eq!(default_backoff(0), Duration::from_secs(1));
+        assert_eq!(default_backoff(1), Duration::from_secs(1));
+        assert_eq!(default_backoff(2), Duration::from_secs(2));
+        assert_eq!(default_backoff(7), Duration::from_secs(64));
+        assert_eq!(default_backoff(99), Duration::from_secs(64));
+    }
+
+    #[test]
+    fn queue_error_classifies_variants() {
+        assert_eq!(
+            QueueError::Validation("bad".to_string()).class(),
+            ErrorClass::Validation
+        );
+        assert_eq!(
+            QueueError::LeaseLost(JobId::new(42)).class(),
+            ErrorClass::Validation
+        );
+        assert_eq!(
+            QueueError::Db(sqlx::Error::RowNotFound).class(),
+            ErrorClass::Transient
+        );
+
+        let json_err: QueueError = serde_json::from_str::<Job>("not json")
+            .expect_err("invalid json")
+            .into();
+        assert_eq!(json_err.class(), ErrorClass::Validation);
     }
 }
