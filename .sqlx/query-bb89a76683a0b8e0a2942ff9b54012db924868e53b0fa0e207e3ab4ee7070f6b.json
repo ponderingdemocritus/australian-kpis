@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT job_id, payload AS \"payload!: serde_json::Value\", attempts,\n                      error_class, error_message, failed_at\n             FROM queue_dead_letters\n             WHERE job_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "job_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "payload!: serde_json::Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "error_class",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "error_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "failed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": ["Int8"]
+    },
+    "nullable": [false, false, false, false, false, false]
+  },
+  "hash": "bb89a76683a0b8e0a2942ff9b54012db924868e53b0fa0e207e3ab4ee7070f6b"
+}

@@ -96,7 +96,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 | **SDK** | **TypeScript**, generated from OpenAPI (`openapi-typescript` + orval + hand-written ergonomic wrapper) | Consumer language; typed; tree-shakeable; Bun/Node/browser/Deno compatible |
 | **Client** | **TypeScript (Vite + React + TanStack Query + shadcn/ui)** | Reference app demonstrating SDK |
 | **DB** | **Timescale Cloud (Postgres 16 + TimescaleDB)** | Hypertables, continuous aggregates, compression; managed ops |
-| **Queue** | **`apalis` (Postgres backend)** behind an internal `Queue` trait | One fewer infra piece; transactional dequeue; retries + cron built-in; trait lets us swap later |
+| **Queue** | **Postgres-backed `Queue` trait implementation** | One fewer infra piece; transactional dequeue; retries + cron registration built in; trait lets us swap to `apalis` later |
 | **Cache + rate limit** | **Redis (`fred`)** | Token bucket, ETags, hot-path caching |
 | **Blob store** | **Cloudflare R2** via `object_store` crate | Egress-free; artifacts retained indefinitely; lifecycle → cold after 1y |
 | **OpenAPI gen** | **`utoipa` + `utoipa-axum`** | Compile-time derivation, stays in sync with handlers |
@@ -131,7 +131,7 @@ australian-kpis/
 │   ├── au-kpis-db/                         # sqlx + Timescale queries
 │   ├── au-kpis-storage/                    # object_store wrapper for S3/R2
 │   ├── au-kpis-cache/                      # Redis cache abstraction
-│   ├── au-kpis-queue/                      # apalis wrapper: job types, scheduling
+│   ├── au-kpis-queue/                      # Postgres queue: job types, scheduling
 │   ├── au-kpis-auth/                       # API key validation, Redis rate limiter
 │   ├── au-kpis-pdf-client/                 # HTTP client for Python sidecar
 │   ├── au-kpis-adapter/                    # Adapter trait + base helpers (discover/fetch/parse)
@@ -232,7 +232,6 @@ opentelemetry = "0.27"
 opentelemetry-otlp = "0.27"
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = "0.1"
-apalis = { version = "0.6", features = ["postgres", "cron"] }
 object_store = { version = "0.11", features = ["aws"] }
 calamine = "0.26"
 polars = { version = "0.44", features = ["lazy", "parquet", "csv", "json"] }
@@ -531,7 +530,7 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 
 ### Queue abstraction + semantics
 
-`au-kpis-queue` exposes a `Queue` trait (push, pop, ack, nack, schedule-cron) with `apalis` as the first implementation. The rest of the codebase depends on the trait — `apalis` is swappable with a hand-rolled PG queue (~200 lines using `FOR UPDATE SKIP LOCKED`) if apalis becomes a bottleneck or we outgrow its model.
+`au-kpis-queue` exposes a `Queue` trait (push, pop, renew, ack, nack, schedule-cron) with a Postgres implementation using transactional leasing. Workers must periodically renew long-running leases; ack/nack operations are accepted only for the current monotonic lease token. The rest of the codebase depends on the trait — this implementation is swappable with `apalis` if we later want its worker runtime or scheduler model.
 
 - **`discovery`** — cron-triggered per adapter schedule. Cheap.
 - **`fetch`** — rate-limited per source (Tower layer on HTTP client + queue-level concurrency). Streams raw to S3 via `object_store`.
@@ -539,7 +538,7 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 - **`load`** — DB upserts. Serialized per `(dataflow_id)` via job-group keys to avoid upsert conflicts on shared series.
 - **`backfill`** — low priority queue for historical re-ingest; paused when live queues have backlog.
 
-Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no separate job store to operate. Retries + exponential backoff built in. Dead-letter queue per stage.
+Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no separate job store to operate. Retries + exponential backoff built in. Dead-letter queue per stage, retained independently of queue job retention. Running jobs carry a renewable lease timeout so crashed workers do not strand work; `load` job groups are enforced with database constraints so only one running job per `dataflow_id` exists at a time.
 
 **Tracing context propagation**: every job carries a `trace_parent` field; worker restores span from it before processing, so traces span discovery → load as a single tree.
 
@@ -552,7 +551,7 @@ Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no sepa
 
 ### Failure handling
 
-- **Transient** (5xx, timeout): retry via apalis `RetryPolicy`, max 5, exp backoff, DLQ.
+- **Transient** (5xx, timeout): retry via queue retry policy, max 5, exp backoff, DLQ.
 - **Format error** (validation fails): pause adapter + Grafana alert + capture raw for review. **No retry** — format changed, human decides.
 - **Partial parse**: validated observations load; failures → `parse_errors` with artifact pointer.
 - **Circuit breaker**: per-source `tower` layer opens on >20%/50 fetch fail rate; pages on-call.
@@ -1214,7 +1213,7 @@ Each phase ends demo-able.
 ### Phase 2 — One end-to-end source: ABS CPI (2.5 weeks)
 - [ ] `au-kpis-adapter` trait crate + registry
 - [ ] `crates/adapters/abs` (`au-kpis-adapter-abs`) — CPI dataflow (SDMX-JSON: `CPI` dataflow, monthly + quarterly)
-- [ ] `au-kpis-queue` (`Queue` trait + apalis/Postgres impl)
+- [ ] `au-kpis-queue` (`Queue` trait + Postgres impl)
 - [ ] `au-kpis-ingestion-core` + worker binary with graceful shutdown
 - [ ] `au-kpis-loader` with COPY-based batch upsert + series upsert-on-first-observation
 - [ ] `/v1/observations` endpoint with JSON + CSV (Parquet in Phase 3)
@@ -1335,7 +1334,7 @@ Pass 1 over the plan. Fixes applied in-place:
 1. **Series vs Observation split** — added explicit `series` table so dimensions aren't duplicated across millions of observation rows. Hot table (`observations`) stays narrow: `(series_key, time, revision_no, value, status, attributes, artifact_id)`. Dimensional queries ("all VIC CPI") go through `series` with GIN index, then join to hypertable.
 2. **Revision handling** — `revision_no` as part of PK rather than `revision_of` pointer. Simpler. `observations_latest` view (continuous aggregate) is the default query target.
 3. **`SeriesKey` as a newtype** — type-safe at every boundary; prevents string/id mix-ups.
-4. **Queue trait abstraction** — `au-kpis-queue` exports a `Queue` trait; `apalis` is implementation #1, swappable for custom PG queue later. Business logic depends on the trait.
+4. **Queue trait abstraction** — `au-kpis-queue` exports a `Queue` trait backed by Postgres transactional leasing. Business logic depends on the trait, so the backend remains swappable later.
 5. **`async-trait` justified** — adapters live behind `Arc<dyn SourceAdapter>` for the registry pattern; native async-fn-in-trait does not yet support this cleanly. Revisit when Rust stabilises dyn-compat for async.
 6. **Tracing context propagation** — jobs carry `trace_parent`; workers reconstruct span. Traces span discovery→load as one tree, not one-per-worker-task.
 7. **Adapter registry pattern** — `Adapters::builder().register(abs::new()).build()` in ingestion binary. Adding a source = one line. No central switch statement.

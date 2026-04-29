@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, cron_expression, payload AS \"payload!: serde_json::Value\", enabled\n             FROM queue_cron_schedules\n             WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "cron_expression",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "payload!: serde_json::Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "enabled",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": ["Text"]
+    },
+    "nullable": [false, false, false, false]
+  },
+  "hash": "de8c0bf5a29e15ab6a16cf217f6568bcc6bb7654cc93005bde605f8873c42967"
+}
