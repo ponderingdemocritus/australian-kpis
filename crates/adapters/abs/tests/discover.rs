@@ -26,7 +26,10 @@ const DATAFLOW_FIXTURE: &str = r#"{
         "agencyID": "ABS",
         "version": "1.0.0",
         "name": "Wage Price Index",
-        "updated": "2026-04-20T00:00:00Z"
+        "updated": "2026-04-20T00:00:00Z",
+        "links": [
+          { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/WPI/1.0.0", "rel": "external" }
+        ]
       }
     ]
   }
@@ -45,6 +48,11 @@ async fn serve_once(body: &'static str) -> String {
         let request = String::from_utf8_lossy(&request[..read]);
         assert!(request.starts_with("GET /rest/dataflow/ABS/CPI?detail=allstubs HTTP/1.1"));
         assert!(request.contains("application/vnd.sdmx.structure+json"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
 
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
@@ -76,7 +84,7 @@ fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
 
     let jobs = AbsAdapter::discoverable_jobs(&current, &changed);
     assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].id, "abs:CPI:2.0.0");
+    assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
     assert_eq!(jobs[0].source_id.as_str(), "abs");
     assert_eq!(jobs[0].dataflow_id.as_str(), "abs.cpi");
     assert_eq!(
@@ -108,7 +116,72 @@ async fn discover_fetches_abs_dataflow_listing_over_http() {
     let jobs = adapter.discover(&ctx).await.expect("discover CPI");
 
     assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].id, "abs:CPI:2.0.0");
+    assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
+}
+
+#[test]
+fn changed_timestamp_emits_distinct_job_id_for_same_version() {
+    let current = AbsAdapter::parse_dataflow_listing(DATAFLOW_FIXTURE).expect("parse fixture");
+    let known = BTreeMap::from([(
+        "CPI".to_string(),
+        DataflowRevision::new("2.0.0", Some("2026-04-27T00:00:00Z")),
+    )]);
+
+    let jobs = AbsAdapter::discoverable_jobs(&current, &known);
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
+}
+
+#[test]
+fn parse_dataflow_listing_rejects_missing_dataflows() {
+    let err = AbsAdapter::parse_dataflow_listing(r#"{"data":{}}"#)
+        .expect_err("missing dataflows should fail");
+
+    assert!(err.to_string().contains("dataflows"));
+}
+
+#[test]
+fn parse_dataflow_listing_rejects_missing_version() {
+    let body = r#"{
+      "data": {
+        "dataflows": [
+          {
+            "id": "CPI",
+            "agencyID": "ABS",
+            "name": "Consumer Price Index",
+            "links": [
+              { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0" }
+            ]
+          }
+        ]
+      }
+    }"#;
+
+    let err = AbsAdapter::parse_dataflow_listing(body).expect_err("missing version should fail");
+
+    assert!(err.to_string().contains("version"));
+}
+
+#[test]
+fn parse_dataflow_listing_rejects_missing_links() {
+    let body = r#"{
+      "data": {
+        "dataflows": [
+          {
+            "id": "CPI",
+            "agencyID": "ABS",
+            "version": "2.0.0",
+            "name": "Consumer Price Index",
+            "links": []
+          }
+        ]
+      }
+    }"#;
+
+    let err = AbsAdapter::parse_dataflow_listing(body).expect_err("missing links should fail");
+
+    assert!(err.to_string().contains("links"));
 }
 
 #[test]

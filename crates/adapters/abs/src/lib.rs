@@ -18,6 +18,7 @@ use serde::Deserialize;
 const DEFAULT_BASE_URL: &str = "https://data.api.abs.gov.au/rest";
 const STRUCTURE_JSON_ACCEPT: &str = "application/vnd.sdmx.structure+json";
 const CPI_DATAFLOW_ID: &str = "CPI";
+const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
 /// ABS SDMX adapter.
 #[derive(Debug, Clone)]
@@ -89,6 +90,7 @@ impl SourceAdapter for AbsAdapter {
                 ctx.http
                     .raw()
                     .get(self.dataflow_url())
+                    .header("user-agent", USER_AGENT)
                     .header("accept", STRUCTURE_JSON_ACCEPT),
             )
             .await?
@@ -239,7 +241,12 @@ impl AbsDataflow {
         }
 
         DiscoveredJob {
-            id: format!("abs:{}:{}", self.id, self.version),
+            id: format!(
+                "abs:{}:{}:{}",
+                self.id,
+                self.version,
+                revision_token(self.last_updated.as_deref())
+            ),
             source_id: SourceId::new("abs").expect("static source id is valid"),
             dataflow_id: DataflowId::new("abs.cpi").expect("static dataflow id is valid"),
             source_url: self.source_url.clone(),
@@ -255,7 +262,6 @@ struct AbsDataflowMessage {
 
 #[derive(Debug, Deserialize)]
 struct AbsDataflowData {
-    #[serde(default)]
     dataflows: Vec<AbsDataflow>,
 }
 
@@ -264,15 +270,13 @@ struct RawAbsDataflow {
     id: String,
     #[serde(rename = "agencyID", default)]
     agency_id: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
+    version: String,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     names: BTreeMap<String, String>,
     #[serde(default, alias = "lastUpdated", alias = "last_updated")]
     updated: Option<String>,
-    #[serde(default)]
     links: Vec<AbsLink>,
 }
 
@@ -292,23 +296,18 @@ impl<'de> Deserialize<'de> for AbsDataflow {
             .or_else(|| raw.names.get("en").cloned())
             .unwrap_or_else(|| raw.id.clone());
         let agency_id = raw.agency_id.unwrap_or_else(|| "ABS".to_string());
-        let version = raw.version.unwrap_or_else(|| "latest".to_string());
         let dataflow_url = raw
             .links
             .first()
             .map(|link| link.href.clone())
-            .unwrap_or_else(|| {
-                format!(
-                    "{DEFAULT_BASE_URL}/dataflow/{agency_id}/{}/{version}",
-                    raw.id
-                )
-            });
-        let source_url = data_url_from_dataflow_url(&dataflow_url, &agency_id, &raw.id, &version);
+            .ok_or_else(|| serde::de::Error::custom("ABS dataflow is missing links"))?;
+        let source_url =
+            data_url_from_dataflow_url(&dataflow_url, &agency_id, &raw.id, &raw.version);
 
         Ok(Self {
             id: raw.id,
             agency_id,
-            version,
+            version: raw.version,
             name,
             last_updated: raw.updated,
             source_url,
@@ -331,4 +330,18 @@ fn data_url_from_dataflow_url(
     format!(
         "{DEFAULT_BASE_URL}/data/{agency_id},{dataflow_id},{version}/all?dimensionAtObservation=TIME_PERIOD"
     )
+}
+
+fn revision_token(last_updated: Option<&str>) -> String {
+    last_updated
+        .unwrap_or("unknown")
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
