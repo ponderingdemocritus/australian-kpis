@@ -134,7 +134,7 @@ fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_fetches_abs_dataflow_listing_over_http() {
     let base_url = serve_once(DATAFLOW_FIXTURE).await;
-    let adapter = AbsAdapter::builder().base_url(base_url).build();
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap());
 
@@ -142,6 +142,10 @@ async fn discover_fetches_abs_dataflow_listing_over_http() {
 
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
+    assert_eq!(
+        jobs[0].source_url,
+        format!("{base_url}/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -238,6 +242,36 @@ fn parse_dataflow_listing_rejects_missing_version() {
 }
 
 #[test]
+fn parse_dataflow_listing_skips_malformed_non_cpi_rows() {
+    let body = r#"{
+      "data": {
+        "dataflows": [
+          {
+            "id": "WPI",
+            "agencyID": "ABS",
+            "name": "Wage Price Index"
+          },
+          {
+            "id": "CPI",
+            "agencyID": "ABS",
+            "version": "2.0.0",
+            "name": "Consumer Price Index",
+            "updated": "2026-04-28T00:00:00Z",
+            "links": [
+              { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0", "rel": "self" }
+            ]
+          }
+        ]
+      }
+    }"#;
+
+    let current = AbsAdapter::parse_dataflow_listing(body).expect("parse valid CPI");
+
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].id, "CPI");
+}
+
+#[test]
 fn parse_dataflow_listing_rejects_missing_links() {
     let body = r#"{
       "data": {
@@ -289,6 +323,41 @@ fn parse_dataflow_listing_selects_canonical_dataflow_link_by_href_and_rel() {
         "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"
     );
     assert_eq!(current[0].name, "Consumer Price Index");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_derives_fetch_url_from_configured_abs_base() {
+    let body = r#"{
+      "data": {
+        "dataflows": [
+          {
+            "id": "CPI",
+            "agencyID": "ABS",
+            "version": "2.0.0",
+            "name": "Consumer Price Index",
+            "updated": "2026-04-28T00:00:00Z",
+            "links": [
+              { "href": "https://metadata.example.test/rest/dataflow/ABS/CPI/2.0.0", "rel": "external" }
+            ]
+          }
+        ]
+      }
+    }"#;
+    let base_url = serve_once(body).await;
+    let adapter = AbsAdapter::builder().base_url(base_url.clone()).build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap());
+
+    let jobs = adapter.discover(&ctx).await.expect("discover CPI");
+
+    assert_eq!(
+        jobs[0].metadata["dataflow_url"],
+        "https://metadata.example.test/rest/dataflow/ABS/CPI/2.0.0"
+    );
+    assert_eq!(
+        jobs[0].source_url,
+        format!("{base_url}/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD")
+    );
 }
 
 #[test]

@@ -42,10 +42,7 @@ impl AbsAdapter {
 
     /// Parse an ABS SDMX-JSON dataflow listing.
     pub fn parse_dataflow_listing(body: &str) -> Result<Vec<AbsDataflow>, AdapterError> {
-        Ok(serde_json::from_str::<AbsDataflowMessage>(body)
-            .map_err(CoreError::from)?
-            .data
-            .dataflows)
+        parse_dataflow_listing_with_base(body, DEFAULT_BASE_URL)
     }
 
     /// Diff current ABS dataflows against stored upstream revisions.
@@ -104,11 +101,9 @@ impl SourceAdapter for AbsAdapter {
             )
             .await?
             .error_for_status()?;
-        let message = response.json::<AbsDataflowMessage>().await?;
-        Ok(Self::discoverable_jobs(
-            &message.data.dataflows,
-            ctx.known_revisions(),
-        ))
+        let body = response.text().await?;
+        let dataflows = parse_dataflow_listing_with_base(&body, &self.base_url)?;
+        Ok(Self::discoverable_jobs(&dataflows, ctx.known_revisions()))
     }
 
     async fn fetch(
@@ -228,28 +223,51 @@ impl AbsDataflow {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct AbsDataflowMessage {
-    data: AbsDataflowData,
+fn parse_dataflow_listing_with_base(
+    body: &str,
+    source_base_url: &str,
+) -> Result<Vec<AbsDataflow>, AdapterError> {
+    let message = serde_json::from_str::<RawAbsDataflowMessage>(body).map_err(CoreError::from)?;
+    let mut dataflows = Vec::new();
+    for raw in message.data.dataflows {
+        match raw.id.as_deref() {
+            Some(CPI_DATAFLOW_ID) => {
+                dataflows.push(AbsDataflow::try_from_raw(raw, source_base_url)?)
+            }
+            Some(_) => {
+                if let Ok(dataflow) = AbsDataflow::try_from_raw(raw, source_base_url) {
+                    dataflows.push(dataflow);
+                }
+            }
+            None => {}
+        }
+    }
+    Ok(dataflows)
 }
 
 #[derive(Debug, Deserialize)]
-struct AbsDataflowData {
-    dataflows: Vec<AbsDataflow>,
+struct RawAbsDataflowMessage {
+    data: RawAbsDataflowData,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAbsDataflowData {
+    dataflows: Vec<RawAbsDataflow>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawAbsDataflow {
-    id: String,
+    id: Option<String>,
     #[serde(rename = "agencyID", default)]
     agency_id: Option<String>,
-    version: String,
+    version: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     names: BTreeMap<String, String>,
     #[serde(default, alias = "lastUpdated", alias = "last_updated")]
     updated: Option<String>,
+    #[serde(default)]
     links: Vec<AbsLink>,
 }
 
@@ -260,26 +278,29 @@ struct AbsLink {
     rel: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for AbsDataflow {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawAbsDataflow::deserialize(deserializer)?;
+impl AbsDataflow {
+    fn try_from_raw(raw: RawAbsDataflow, source_base_url: &str) -> Result<Self, AdapterError> {
+        let id = raw
+            .id
+            .ok_or_else(|| AdapterError::Validation("ABS dataflow is missing id".to_string()))?;
+        let version = raw.version.ok_or_else(|| {
+            AdapterError::Validation(format!("ABS dataflow {id} is missing version"))
+        })?;
         let name = raw
             .name
             .or_else(|| raw.names.get("en").cloned())
-            .unwrap_or_else(|| raw.id.clone());
+            .unwrap_or_else(|| id.clone());
         let agency_id = raw.agency_id.unwrap_or_else(|| "ABS".to_string());
-        let dataflow_url = canonical_dataflow_url(&raw.links, &agency_id, &raw.id, &raw.version)
-            .ok_or_else(|| serde::de::Error::custom("ABS dataflow is missing canonical link"))?;
-        let source_url =
-            data_url_from_dataflow_url(&dataflow_url, &agency_id, &raw.id, &raw.version);
+        let dataflow_url = canonical_dataflow_url(&raw.links, &agency_id, &id, &version)
+            .ok_or_else(|| {
+                AdapterError::Validation(format!("ABS dataflow {id} is missing canonical link"))
+            })?;
+        let source_url = data_url_from_base(source_base_url, &agency_id, &id, &version);
 
         Ok(Self {
-            id: raw.id,
+            id,
             agency_id,
-            version: raw.version,
+            version,
             name,
             last_updated: raw.updated,
             source_url,
@@ -326,19 +347,15 @@ fn dataflow_link_rank(rel: Option<&str>) -> u8 {
     }
 }
 
-fn data_url_from_dataflow_url(
-    dataflow_url: &str,
+fn data_url_from_base(
+    source_base_url: &str,
     agency_id: &str,
     dataflow_id: &str,
     version: &str,
 ) -> String {
-    if let Some((base, _)) = dataflow_url.split_once("/dataflow/") {
-        return format!(
-            "{base}/data/{agency_id},{dataflow_id},{version}/all?dimensionAtObservation=TIME_PERIOD"
-        );
-    }
+    let base = source_base_url.trim_end_matches('/');
     format!(
-        "{DEFAULT_BASE_URL}/data/{agency_id},{dataflow_id},{version}/all?dimensionAtObservation=TIME_PERIOD"
+        "{base}/data/{agency_id},{dataflow_id},{version}/all?dimensionAtObservation=TIME_PERIOD"
     )
 }
 
