@@ -20,6 +20,7 @@ pub struct PdfClient {
     client: ClientWithMiddleware,
     base_url: Url,
     retry_policy: RetryPolicy,
+    request_timeout: Duration,
 }
 
 impl PdfClient {
@@ -47,7 +48,15 @@ impl PdfClient {
         let mut attempt = 1;
 
         loop {
-            let result = self.post_extract(&url, &request).await;
+            let result =
+                match tokio::time::timeout(self.request_timeout, self.post_extract(&url, &request))
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(PdfClientError::Timeout {
+                        timeout: self.request_timeout,
+                    }),
+                };
             match result {
                 Ok(response) => return Ok(response),
                 Err(err)
@@ -125,7 +134,7 @@ impl PdfClientBuilder {
         self
     }
 
-    /// Set the request timeout used by the default HTTP client.
+    /// Set the per-attempt request timeout.
     #[must_use]
     pub const fn timeout(mut self, request_timeout: Duration) -> Self {
         self.request_timeout = request_timeout;
@@ -150,6 +159,7 @@ impl PdfClientBuilder {
             client: traced_http_client(client),
             base_url,
             retry_policy: self.retry_policy,
+            request_timeout: self.request_timeout,
         })
     }
 }
@@ -346,6 +356,13 @@ pub enum PdfClientError {
         body: String,
     },
 
+    /// Sidecar request exceeded the configured timeout.
+    #[error("pdf sidecar request timed out after {timeout:?}")]
+    Timeout {
+        /// Configured per-attempt timeout.
+        timeout: Duration,
+    },
+
     /// Caller supplied invalid configuration.
     #[error("validation: {0}")]
     Validation(String),
@@ -378,6 +395,7 @@ impl Classify for PdfClientError {
                     ErrorClass::Permanent
                 }
             }
+            Self::Timeout { .. } => ErrorClass::Transient,
         }
     }
 }

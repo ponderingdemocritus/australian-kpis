@@ -13,7 +13,7 @@ use au_kpis_pdf_client::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
 use tracing::{Id, Subscriber, span::Attributes};
 use tracing_subscriber::{
@@ -39,6 +39,41 @@ where
     }
 }
 
+async fn read_http_request(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+
+    loop {
+        let read = stream.read(&mut buffer).await.expect("read request");
+        assert_ne!(read, 0, "client closed connection before sending request");
+        request.extend_from_slice(&buffer[..read]);
+
+        let Some(header_end) = find_subslice(&request, b"\r\n\r\n") else {
+            continue;
+        };
+        let body_start = header_end + 4;
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().expect("valid content-length"))
+            })
+            .unwrap_or(0);
+
+        if request.len() >= body_start + content_length {
+            return String::from_utf8(request).expect("request is utf-8");
+        }
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 async fn serve_responses(
     responses: Vec<&'static str>,
     statuses: Vec<u16>,
@@ -51,11 +86,13 @@ async fn serve_responses(
     tokio::spawn(async move {
         for (body, status) in responses.into_iter().zip(statuses) {
             let (mut stream, _) = listener.accept().await.expect("accept request");
-            let mut request = vec![0_u8; 4096];
-            let read = stream.read(&mut request).await.expect("read request");
-            let request = String::from_utf8_lossy(&request[..read]);
+            let request = read_http_request(&mut stream).await;
             assert!(request.starts_with("POST /extract HTTP/1.1"));
-            assert!(request.contains("content-type: application/json"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/json")
+            );
             assert!(request.contains(r#""s3_key":"artifacts/abc123""#));
             assert!(request.contains(r#""source_id":"treasury""#));
             assert!(request.contains(r#""artifact_date":"2026-05-12""#));
@@ -215,9 +252,7 @@ async fn request_timeout_bounds_hung_sidecar_calls() {
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept request");
-        let mut request = vec![0_u8; 4096];
-        let read = stream.read(&mut request).await.expect("read request");
-        let request = String::from_utf8_lossy(&request[..read]);
+        let request = read_http_request(&mut stream).await;
         assert!(request.starts_with("POST /extract HTTP/1.1"));
         attempts_for_task.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -235,6 +270,39 @@ async fn request_timeout_bounds_hung_sidecar_calls() {
         .await
         .expect_err("hung sidecar should time out");
 
+    assert_eq!(err.class(), ErrorClass::Transient);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_http_client_still_enforces_request_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+    let addr = listener.local_addr().expect("server address");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_task = Arc::clone(&attempts);
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let request = read_http_request(&mut stream).await;
+        assert!(request.starts_with("POST /extract HTTP/1.1"));
+        attempts_for_task.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    });
+
+    let client = PdfClient::builder()
+        .base_url(format!("http://{addr}"))
+        .http_client(reqwest::Client::new())
+        .timeout(Duration::from_millis(20))
+        .retry_policy(RetryPolicy::none())
+        .build()
+        .unwrap();
+
+    let err = client
+        .extract(request())
+        .await
+        .expect_err("hung sidecar should time out");
+
+    assert!(matches!(err, PdfClientError::Timeout { .. }));
     assert_eq!(err.class(), ErrorClass::Transient);
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
