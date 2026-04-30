@@ -1,8 +1,10 @@
 #![cfg(feature = "dhat-heap")]
 
-use std::{collections::BTreeMap, fmt, io};
+use std::{collections::BTreeMap, fmt, io, sync::Arc};
 
-use au_kpis_adapter::{AdapterHttpClient, DiscoveredJob, FetchCtx, SourceAdapter};
+use au_kpis_adapter::{
+    AdapterHttpClient, DiscoveredJob, FetchCtx, NoopArtifactRecorder, SourceAdapter,
+};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_storage::BlobStore;
@@ -91,6 +93,7 @@ async fn fetch_500mb_stays_below_50mb_peak_heap_under_dhat() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(NullObjectStore),
                 Utc::now(),
+                Arc::new(NoopArtifactRecorder),
             ),
         )
         .await

@@ -18,7 +18,7 @@ use au_kpis_adapter::{
     ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
     capture_response_headers, retry_after_delta,
 };
-use au_kpis_domain::{DataflowId, SourceId};
+use au_kpis_domain::{Artifact, DataflowId, SourceId};
 use au_kpis_error::CoreError;
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, stream};
@@ -199,7 +199,7 @@ impl SourceAdapter for AbsAdapter {
         let id = ctx.blob_store.put_artifact_stream(counted.boxed()).await?;
         let fetched_at = Utc::now();
 
-        Ok(ArtifactRef {
+        ctx.persist_artifact(Artifact {
             id,
             source_id: job.source_id,
             source_url: fetch_url,
@@ -209,6 +209,7 @@ impl SourceAdapter for AbsAdapter {
             size_bytes: size_bytes.load(Ordering::Relaxed),
             fetched_at,
         })
+        .await
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {

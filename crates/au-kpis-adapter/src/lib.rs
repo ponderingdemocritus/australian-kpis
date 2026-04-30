@@ -31,6 +31,27 @@ use tokio::{sync::Mutex, time::sleep};
 pub type ObservationStream<'a> =
     BoxStream<'a, Result<(SeriesDescriptor, Observation), AdapterError>>;
 
+/// Shared artifact provenance recorder used by fetch contexts.
+pub type ArtifactRecorderRef = Arc<dyn ArtifactRecorder>;
+
+/// Persists artifact provenance after a fetch stores raw bytes.
+#[async_trait]
+pub trait ArtifactRecorder: fmt::Debug + Send + Sync + 'static {
+    /// Persist one fetched artifact row.
+    async fn record(&self, artifact: &Artifact) -> Result<(), AdapterError>;
+}
+
+/// Artifact recorder for tests or intentionally non-persistent callers.
+#[derive(Debug, Default)]
+pub struct NoopArtifactRecorder;
+
+#[async_trait]
+impl ArtifactRecorder for NoopArtifactRecorder {
+    async fn record(&self, _artifact: &Artifact) -> Result<(), AdapterError> {
+        Ok(())
+    }
+}
+
 /// Capture an HTTP header map for artifact provenance without silently
 /// dropping non-visible-ASCII values.
 ///
@@ -299,17 +320,30 @@ pub struct FetchCtx {
     pub blob_store: BlobStore,
     /// Timestamp captured by the worker when fetch started.
     pub started_at: DateTime<Utc>,
+    artifact_recorder: ArtifactRecorderRef,
 }
 
 impl FetchCtx {
     /// Construct a fetch context.
     #[must_use]
-    pub fn new(http: AdapterHttpClient, blob_store: BlobStore, started_at: DateTime<Utc>) -> Self {
+    pub fn new(
+        http: AdapterHttpClient,
+        blob_store: BlobStore,
+        started_at: DateTime<Utc>,
+        artifact_recorder: ArtifactRecorderRef,
+    ) -> Self {
         Self {
             http,
             blob_store,
             started_at,
+            artifact_recorder,
         }
+    }
+
+    /// Persist fetched artifact provenance, then return the parse reference.
+    pub async fn persist_artifact(&self, artifact: Artifact) -> Result<ArtifactRef, AdapterError> {
+        self.artifact_recorder.record(&artifact).await?;
+        Ok(artifact.into())
     }
 }
 
@@ -566,6 +600,15 @@ pub enum AdapterError {
         response_headers: ResponseHeaders,
     },
 
+    /// Persisting fetched artifact provenance failed.
+    #[error("artifact provenance: {message}")]
+    ArtifactRecord {
+        /// Human-readable persistence failure.
+        message: String,
+        /// Retry classification supplied by the persistence layer.
+        class: ErrorClass,
+    },
+
     /// Object-storage failure.
     #[error(transparent)]
     Storage(#[from] StorageError),
@@ -587,6 +630,17 @@ pub enum AdapterError {
     Validation(String),
 }
 
+impl AdapterError {
+    /// Construct an artifact provenance persistence error.
+    #[must_use]
+    pub fn artifact_record(message: impl Into<String>, class: ErrorClass) -> Self {
+        Self::ArtifactRecord {
+            message: message.into(),
+            class,
+        }
+    }
+}
+
 impl Classify for AdapterError {
     fn class(&self) -> ErrorClass {
         match self {
@@ -601,12 +655,13 @@ impl Classify for AdapterError {
                 }
             }
             AdapterError::UpstreamStatus { status, .. } => {
-                if status.as_u16() == 429 || status.is_server_error() {
+                if matches!(status.as_u16(), 408 | 409 | 425 | 429) || status.is_server_error() {
                     ErrorClass::Transient
                 } else {
                     ErrorClass::Permanent
                 }
             }
+            AdapterError::ArtifactRecord { class, .. } => *class,
             AdapterError::Storage(err) => err.class(),
             AdapterError::UnknownAdapter(_)
             | AdapterError::DuplicateAdapter(_)

@@ -1,8 +1,12 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use au_kpis_adapter::{AdapterError, AdapterHttpClient, FetchCtx, SourceAdapter};
+use async_trait::async_trait;
+use au_kpis_adapter::{
+    AdapterError, AdapterHttpClient, ArtifactRecorder, FetchCtx, NoopArtifactRecorder,
+    SourceAdapter,
+};
 use au_kpis_adapter_abs::AbsAdapter;
-use au_kpis_domain::ArtifactId;
+use au_kpis_domain::{Artifact, ArtifactId};
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageKey};
 use chrono::{TimeZone, Utc};
@@ -14,6 +18,23 @@ use tokio::{
 };
 
 const SDMX_FIXTURE: &[u8] = br#"{"data":{"dataSets":[{"observations":{"0:0":[123.4]}}]}}"#;
+
+#[derive(Debug, Default)]
+struct RecordingArtifactRecorder {
+    artifacts: tokio::sync::Mutex<Vec<Artifact>>,
+}
+
+#[async_trait]
+impl ArtifactRecorder for RecordingArtifactRecorder {
+    async fn record(&self, artifact: &Artifact) -> Result<(), AdapterError> {
+        self.artifacts.lock().await.push(artifact.clone());
+        Ok(())
+    }
+}
+
+fn noop_recorder() -> Arc<NoopArtifactRecorder> {
+    Arc::new(NoopArtifactRecorder)
+}
 
 fn cpi_job(source_url: String) -> au_kpis_adapter::DiscoveredJob {
     let job = AbsAdapter::current_jobs(
@@ -147,11 +168,12 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
     let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let blob_store = BlobStore::new(InMemory::new());
+    let recorder = Arc::new(RecordingArtifactRecorder::default());
 
     let artifact = adapter
         .fetch(
             job.clone(),
-            &FetchCtx::new(http, blob_store.clone(), started_at),
+            &FetchCtx::new(http, blob_store.clone(), started_at, recorder.clone()),
         )
         .await
         .expect("fetch ABS artifact");
@@ -177,6 +199,10 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
         format!("artifacts/{}", expected_id.to_hex())
     );
 
+    let recorded = recorder.artifacts.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0], Artifact::from(artifact.clone()));
+
     let mut stored = blob_store
         .get(&StorageKey::from_persisted(&artifact.storage_key))
         .await
@@ -199,6 +225,7 @@ async fn fetch_preserves_retry_after_on_upstream_throttle() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                noop_recorder(),
             ),
         )
         .await
@@ -231,6 +258,7 @@ async fn fetch_encodes_non_utf8_response_headers_losslessly() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                noop_recorder(),
             ),
         )
         .await
@@ -256,6 +284,7 @@ async fn fetch_rejects_abs_metadata_that_conflicts_with_typed_dataflow() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                noop_recorder(),
             ),
         )
         .await
@@ -285,6 +314,7 @@ async fn fetch_rejects_jobs_for_other_sources() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                noop_recorder(),
             ),
         )
         .await
@@ -314,6 +344,7 @@ async fn fetch_rejects_non_canonical_source_urls() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                noop_recorder(),
             ),
         )
         .await

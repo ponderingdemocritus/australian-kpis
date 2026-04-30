@@ -368,6 +368,21 @@ version = "0.1.0"
 [[package]]
 name = "au-kpis-ingestion-core"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "au-kpis-adapter",
+ "au-kpis-adapter-abs",
+ "au-kpis-config",
+ "au-kpis-db",
+ "au-kpis-domain",
+ "au-kpis-error",
+ "au-kpis-storage",
+ "au-kpis-testing",
+ "chrono",
+ "object_store",
+ "sqlx",
+ "tokio",
+]
 
 [[package]]
 name = "au-kpis-loader"

@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterHttpClient, AdapterManifest, Adapters, ArtifactRef, DiscoveredJob,
-    DiscoveryCtx, FetchCtx, ObservationStream, ParseCtx, RateLimit, SourceAdapter,
+    DiscoveryCtx, FetchCtx, NoopArtifactRecorder, ObservationStream, ParseCtx, RateLimit,
+    SourceAdapter,
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor,
@@ -133,7 +134,12 @@ async fn registry_dispatches_discover_fetch_and_parse() {
         .fetch(
             "stub",
             jobs[0].clone(),
-            &FetchCtx::new(http.clone(), blob_store.clone(), started_at),
+            &FetchCtx::new(
+                http.clone(),
+                blob_store.clone(),
+                started_at,
+                Arc::new(NoopArtifactRecorder),
+            ),
         )
         .await
         .unwrap();
@@ -253,6 +259,24 @@ fn adapter_error_classification_matches_retry_policy() {
     assert_eq!(
         AdapterError::Validation("missing source_url".into()).class(),
         ErrorClass::Validation
+    );
+    assert_eq!(
+        AdapterError::UpstreamStatus {
+            status: reqwest::StatusCode::REQUEST_TIMEOUT,
+            retry_after: None,
+            response_headers: BTreeMap::new(),
+        }
+        .class(),
+        ErrorClass::Transient
+    );
+    assert_eq!(
+        AdapterError::UpstreamStatus {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            retry_after: None,
+            response_headers: BTreeMap::new(),
+        }
+        .class(),
+        ErrorClass::Permanent
     );
 }
 

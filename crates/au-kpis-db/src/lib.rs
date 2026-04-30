@@ -36,7 +36,9 @@ use std::time::Duration;
 use au_kpis_config::DatabaseConfig;
 use au_kpis_domain::{Artifact, SourceId, ids::ArtifactId};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
-use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
+/// PostgreSQL connection pool used by database helpers.
+pub use sqlx::PgPool;
+use sqlx::{migrate::Migrator, postgres::PgPoolOptions};
 use thiserror::Error;
 use tracing::instrument;
 
