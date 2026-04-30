@@ -57,6 +57,24 @@ fn smoke_workflow_builds_server_before_readiness_polling() {
 }
 
 #[test]
+fn contract_workflow_builds_server_before_readiness_polling() {
+    let root = repo_root();
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+
+    assert!(
+        pr_workflow.contains("cargo build -p au-kpis-api-http --example contract_server --locked"),
+        "contract workflow should build the contract server before starting it"
+    );
+    assert!(
+        pr_workflow.contains(
+            "./target/debug/examples/contract_server > target/contract/server.log 2>&1 &"
+        ),
+        "contract workflow should start the prebuilt contract server binary"
+    );
+}
+
+#[test]
 fn bench_workflow_skips_missing_base_benchmark() {
     let root = repo_root();
     let pr_workflow =

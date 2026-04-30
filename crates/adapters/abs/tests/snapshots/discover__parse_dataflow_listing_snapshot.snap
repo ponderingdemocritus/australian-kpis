@@ -1,0 +1,26 @@
+---
+source: crates/adapters/abs/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "agency_id": "ABS",
+    "dataflow_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0",
+    "id": "CPI",
+    "last_updated": "2026-04-28T00:00:00Z",
+    "name": "Consumer Price Index (CPI)",
+    "revision_key": "ABS:CPI",
+    "source_url": "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD",
+    "version": "2.0.0"
+  },
+  {
+    "agency_id": "ABS",
+    "dataflow_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/WPI/1.0.0",
+    "id": "WPI",
+    "last_updated": "2026-04-20T00:00:00Z",
+    "name": "Wage Price Index",
+    "revision_key": "ABS:WPI",
+    "source_url": "https://data.api.abs.gov.au/rest/data/ABS,WPI,1.0.0/all?dimensionAtObservation=TIME_PERIOD",
+    "version": "1.0.0"
+  }
+]

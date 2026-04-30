@@ -175,13 +175,66 @@ pub struct DiscoveryCtx {
     pub http: AdapterHttpClient,
     /// Timestamp captured by the scheduler when discovery started.
     pub started_at: DateTime<Utc>,
+    /// Stored upstream revisions for this discovery run, keyed by adapter-defined upstream identity.
+    pub known_revisions: BTreeMap<String, UpstreamRevision>,
 }
 
 impl DiscoveryCtx {
     /// Construct a discovery context.
     #[must_use]
     pub fn new(http: AdapterHttpClient, started_at: DateTime<Utc>) -> Self {
-        Self { http, started_at }
+        Self {
+            http,
+            started_at,
+            known_revisions: BTreeMap::new(),
+        }
+    }
+
+    /// Add one stored upstream revision to this discovery run.
+    #[must_use]
+    pub fn with_known_revision(
+        mut self,
+        key: impl Into<String>,
+        revision: UpstreamRevision,
+    ) -> Self {
+        self.known_revisions.insert(key.into(), revision);
+        self
+    }
+
+    /// Borrow the stored upstream revisions for this discovery run.
+    #[must_use]
+    pub const fn known_revisions(&self) -> &BTreeMap<String, UpstreamRevision> {
+        &self.known_revisions
+    }
+}
+
+/// Stored upstream revision metadata supplied to adapter discovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpstreamRevision {
+    version: String,
+    last_updated: Option<String>,
+}
+
+impl UpstreamRevision {
+    /// Construct a stored upstream revision.
+    #[must_use]
+    pub fn new(version: impl Into<String>, last_updated: Option<impl Into<String>>) -> Self {
+        Self {
+            version: version.into(),
+            last_updated: last_updated.map(Into::into),
+        }
+    }
+
+    /// Upstream version string.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// Upstream update timestamp when exposed by the source.
+    #[must_use]
+    pub fn last_updated(&self) -> Option<&str> {
+        self.last_updated.as_deref()
     }
 }
 
