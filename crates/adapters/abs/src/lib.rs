@@ -3,7 +3,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -12,11 +19,12 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::CoreError;
-use futures::stream;
+use futures::{StreamExt, TryStreamExt, stream};
 use serde::Deserialize;
 
 const DEFAULT_BASE_URL: &str = "https://data.api.abs.gov.au/rest";
 const STRUCTURE_JSON_ACCEPT: &str = "application/vnd.sdmx.structure+json";
+const DATA_JSON_ACCEPT: &str = "application/vnd.sdmx.data+json";
 const CPI_DATAFLOW_ID: &str = "CPI";
 const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
@@ -104,14 +112,61 @@ impl SourceAdapter for AbsAdapter {
         Ok(Self::discoverable_jobs(&dataflows, ctx.known_revisions()))
     }
 
-    async fn fetch(
-        &self,
-        _job: DiscoveredJob,
-        _ctx: &FetchCtx,
-    ) -> Result<ArtifactRef, AdapterError> {
-        Err(AdapterError::Validation(
-            "ABS fetch is implemented in issue #25".to_string(),
-        ))
+    async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
+        if job.source_id != self.manifest.source_id {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch received job for source `{}`",
+                job.source_id.as_str()
+            )));
+        }
+        if !self
+            .manifest
+            .dataflows
+            .iter()
+            .any(|dataflow_id| dataflow_id == &job.dataflow_id)
+        {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch received unsupported dataflow `{}`",
+                job.dataflow_id.as_str()
+            )));
+        }
+
+        let response = ctx
+            .http
+            .execute(
+                ctx.http
+                    .raw()
+                    .get(&job.source_url)
+                    .header("user-agent", USER_AGENT)
+                    .header("accept", DATA_JSON_ACCEPT),
+            )
+            .await?
+            .error_for_status()?;
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map_or_else(|| DATA_JSON_ACCEPT.to_string(), str::to_string);
+
+        let size_bytes = Arc::new(AtomicU64::new(0));
+        let counted = {
+            let size_bytes = Arc::clone(&size_bytes);
+            response.bytes_stream().map_ok(move |chunk| {
+                size_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                chunk
+            })
+        };
+        let id = ctx.blob_store.put_artifact_stream(counted.boxed()).await?;
+
+        Ok(ArtifactRef {
+            id,
+            source_id: job.source_id,
+            source_url: job.source_url,
+            content_type,
+            storage_key: format!("artifacts/{}", id.to_hex()),
+            size_bytes: size_bytes.load(Ordering::Relaxed),
+            fetched_at: ctx.started_at,
+        })
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {
