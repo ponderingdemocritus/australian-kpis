@@ -7,6 +7,8 @@ use std::{collections::BTreeMap, time::Duration};
 
 use au_kpis_error::{Classify, ErrorClass};
 use reqwest::{StatusCode, Url};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_tracing::{OtelName, TracingMiddleware};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -15,7 +17,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// HTTP client for `POST /extract`.
 #[derive(Debug, Clone)]
 pub struct PdfClient {
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
     base_url: Url,
     retry_policy: RetryPolicy,
 }
@@ -64,7 +66,13 @@ impl PdfClient {
         url: &Url,
         request: &ExtractRequest,
     ) -> Result<ExtractionResponse, PdfClientError> {
-        let response = self.client.post(url.clone()).json(request).send().await?;
+        let response = self
+            .client
+            .post(url.clone())
+            .with_extension(OtelName("pdf.extract".into()))
+            .json(request)
+            .send()
+            .await?;
         let status = response.status();
         if status.is_success() {
             return Ok(response.json().await?);
@@ -139,11 +147,17 @@ impl PdfClientBuilder {
                 .build()?,
         };
         Ok(PdfClient {
-            client,
+            client: traced_http_client(client),
             base_url,
             retry_policy: self.retry_policy,
         })
     }
+}
+
+fn traced_http_client(client: reqwest::Client) -> ClientWithMiddleware {
+    ClientBuilder::new(client)
+        .with(TracingMiddleware::default())
+        .build()
 }
 
 /// Retry policy for transient sidecar failures.
@@ -248,7 +262,6 @@ pub struct ExtractionResponse {
     /// Backend that produced table candidates.
     pub backend: BackendInfo,
     /// Extracted table candidates.
-    #[serde(default)]
     pub tables: Vec<TableCandidate>,
 }
 
@@ -320,6 +333,10 @@ pub enum PdfClientError {
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// Middleware-wrapped HTTP request failed before a response was available.
+    #[error("http middleware: {0}")]
+    Middleware(#[from] reqwest_middleware::Error),
+
     /// Sidecar returned an unsuccessful status.
     #[error("pdf sidecar returned {status}: {body}")]
     Status {
@@ -341,6 +358,13 @@ impl Classify for PdfClientError {
                 ErrorClass::Validation
             }
             Self::Http(err) => {
+                if err.is_decode() {
+                    ErrorClass::Permanent
+                } else {
+                    ErrorClass::Transient
+                }
+            }
+            Self::Middleware(err) => {
                 if err.is_decode() {
                     ErrorClass::Permanent
                 } else {
@@ -427,8 +451,25 @@ mod tests {
     }
 
     #[test]
-    fn extraction_response_accepts_s3_key_alias_and_defaults_tables() {
+    fn extraction_response_accepts_s3_key_alias_and_requires_tables() {
         let response: ExtractionResponse = serde_json::from_value(serde_json::json!({
+            "s3_key": "raw/report.pdf",
+            "backend": {
+                "kind": "model",
+                "name": "layoutlm",
+                "version": "1.0.0",
+                "model_sha256": "abc123"
+            },
+            "tables": []
+        }))
+        .unwrap();
+
+        assert_eq!(response.artifact_key, "raw/report.pdf");
+        assert_eq!(response.backend.kind, ExtractionBackendKind::Model);
+        assert_eq!(response.backend.model_sha256.as_deref(), Some("abc123"));
+        assert!(response.tables.is_empty());
+
+        let err = serde_json::from_value::<ExtractionResponse>(serde_json::json!({
             "s3_key": "raw/report.pdf",
             "backend": {
                 "kind": "model",
@@ -437,12 +478,8 @@ mod tests {
                 "model_sha256": "abc123"
             }
         }))
-        .unwrap();
-
-        assert_eq!(response.artifact_key, "raw/report.pdf");
-        assert_eq!(response.backend.kind, ExtractionBackendKind::Model);
-        assert_eq!(response.backend.model_sha256.as_deref(), Some("abc123"));
-        assert!(response.tables.is_empty());
+        .expect_err("missing tables should be a response contract error");
+        assert!(err.to_string().contains("tables"));
     }
 
     #[test]

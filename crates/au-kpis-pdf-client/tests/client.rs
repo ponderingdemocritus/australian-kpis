@@ -8,12 +8,36 @@ use std::{
 
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_pdf_client::{
-    ExtractRequest, ExtractionBackendKind, ExtractionStrategy, PdfClient, RetryPolicy,
+    ExtractRequest, ExtractionBackendKind, ExtractionStrategy, PdfClient, PdfClientError,
+    RetryPolicy,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+use tracing::{Id, Subscriber, span::Attributes};
+use tracing_subscriber::{
+    Layer,
+    layer::{Context, SubscriberExt},
+    registry::LookupSpan,
+};
+
+#[derive(Debug, Clone)]
+struct SpanCounter {
+    name: &'static str,
+    count: Arc<AtomicUsize>,
+}
+
+impl<S> Layer<S> for SpanCounter
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+        if attrs.metadata().name() == self.name {
+            self.count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
 
 async fn serve_responses(
     responses: Vec<&'static str>,
@@ -122,6 +146,64 @@ async fn extract_retries_5xx_with_backoff() {
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert_eq!(extracted.artifact_key, "artifacts/abc123");
     assert!(extracted.tables.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extract_rejects_response_missing_tables() {
+    let body = r#"{
+      "artifact_key": "artifacts/abc123",
+      "backend": {
+        "kind": "deterministic",
+        "name": "camelot",
+        "version": "1.0.0",
+        "model_sha256": null
+      }
+    }"#;
+    let (base_url, attempts) = serve_responses(vec![body], vec![200]).await;
+    let client = PdfClient::builder()
+        .base_url(base_url)
+        .retry_policy(RetryPolicy::none())
+        .build()
+        .unwrap();
+
+    let err = client
+        .extract(request())
+        .await
+        .expect_err("missing tables should fail response decoding");
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(err.class(), ErrorClass::Permanent);
+    assert!(matches!(err, PdfClientError::Http(http) if http.is_decode()));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extract_emits_outbound_http_span() {
+    let body = r#"{
+      "artifact_key": "artifacts/abc123",
+      "backend": {
+        "kind": "deterministic",
+        "name": "camelot",
+        "version": "1.0.0",
+        "model_sha256": null
+      },
+      "tables": []
+    }"#;
+    let (base_url, _attempts) = serve_responses(vec![body], vec![200]).await;
+    let client = PdfClient::builder()
+        .base_url(base_url)
+        .retry_policy(RetryPolicy::none())
+        .build()
+        .unwrap();
+    let span_count = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(SpanCounter {
+        name: "HTTP request",
+        count: Arc::clone(&span_count),
+    });
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    client.extract(request()).await.expect("extract");
+
+    assert_eq!(span_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
