@@ -64,6 +64,21 @@ async fn has_compression_policy(pool: &PgPool, name: &str) -> bool {
     row.0
 }
 
+async fn column_default(pool: &PgPool, table: &str, column: &str) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT column_default
+         FROM   information_schema.columns
+         WHERE  table_schema = 'public'
+         AND    table_name = $1
+         AND    column_name = $2",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .expect("query column default")
+}
+
 /// Collect a stable `(table, column)` list for every user table in the
 /// `public` schema. Excludes sqlx's bookkeeping table so fingerprints
 /// compare equal regardless of migration-tracking state.
@@ -126,6 +141,11 @@ async fn migration_creates_hypertable_and_compression_policy() {
     assert!(
         has_compression_policy(&pool, "observations").await,
         "observations should have a compression policy installed"
+    );
+    assert_eq!(
+        column_default(&pool, "artifacts", "response_headers").await,
+        None,
+        "artifact response_headers must be explicitly supplied"
     );
 
     // Sanity-check one representative table + the latest-revision view.

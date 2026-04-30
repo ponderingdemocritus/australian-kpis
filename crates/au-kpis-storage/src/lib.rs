@@ -391,6 +391,18 @@ impl BlobStore {
         }
     }
 
+    /// Delete the object at `key`.
+    ///
+    /// Missing objects are treated as success so orphan cleanup can be retried
+    /// safely.
+    #[tracing::instrument(skip(self))]
+    pub async fn delete(&self, key: &StorageKey) -> Result<(), StorageError> {
+        match self.inner.delete(&key.as_object_path()).await {
+            Ok(()) | Err(ObjectStoreError::NotFound { .. }) => Ok(()),
+            Err(err) => Err(StorageError::from_object_store(err)),
+        }
+    }
+
     /// Retrying staging delete.
     ///
     /// A failed staging delete after a successful canonical write is

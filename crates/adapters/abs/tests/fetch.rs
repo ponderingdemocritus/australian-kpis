@@ -27,11 +27,26 @@ struct RecordingArtifactRecorder {
 #[derive(Debug, Default)]
 struct FailingArtifactRecorder;
 
+#[derive(Debug)]
+struct ExistingColdArtifactRecorder {
+    storage_key: String,
+}
+
 #[async_trait]
 impl ArtifactRecorder for RecordingArtifactRecorder {
     async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
         self.artifacts.lock().await.push(artifact.clone());
         Ok(artifact.clone())
+    }
+}
+
+#[async_trait]
+impl ArtifactRecorder for ExistingColdArtifactRecorder {
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(Artifact {
+            storage_key: self.storage_key.clone(),
+            ..artifact.clone()
+        })
     }
 }
 
@@ -264,6 +279,39 @@ async fn fetch_writes_provenance_sidecar_when_primary_record_fails() {
             .await
             .expect("check provenance sidecar"),
         "fallback provenance sidecar should be durable when the DB recorder fails"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_removes_hot_copy_when_durable_row_uses_rewritten_storage_key() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let blob_store = BlobStore::new(InMemory::new());
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let cold_key = format!("cold/{}", expected_id.to_hex());
+
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(ExistingColdArtifactRecorder {
+                    storage_key: cold_key.clone(),
+                }),
+            ),
+        )
+        .await
+        .expect("fetch duplicate artifact with rewritten durable storage key");
+
+    assert_eq!(artifact.storage_key, cold_key);
+    assert!(
+        !blob_store
+            .exists(&StorageKey::canonical_for(&expected_id))
+            .await
+            .expect("check hot canonical copy"),
+        "hot canonical copy should be removed when the durable row points elsewhere"
     );
 }
 

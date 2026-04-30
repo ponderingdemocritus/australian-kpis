@@ -212,7 +212,12 @@ impl SourceAdapter for AbsAdapter {
         };
 
         match ctx.persist_artifact(artifact.clone()).await {
-            Ok(reference) => Ok(reference),
+            Ok(reference) => {
+                if reference.storage_key != artifact.storage_key {
+                    ctx.delete_artifact(&artifact.storage_key).await?;
+                }
+                Ok(reference)
+            }
             Err(err) => {
                 ctx.record_artifact_provenance_fallback(&artifact).await?;
                 Err(err)

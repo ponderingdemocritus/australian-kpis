@@ -375,6 +375,14 @@ impl FetchCtx {
             .await?;
         Ok(())
     }
+
+    /// Delete a storage key that is known not to be the durable artifact row.
+    pub async fn delete_artifact(&self, storage_key: &str) -> Result<(), AdapterError> {
+        self.blob_store
+            .delete(&StorageKey::from_persisted(storage_key))
+            .await?;
+        Ok(())
+    }
 }
 
 /// Context supplied to streaming parsers.
