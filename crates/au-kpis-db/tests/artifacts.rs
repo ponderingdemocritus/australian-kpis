@@ -56,10 +56,14 @@ async fn upsert_artifact_persists_first_seen_provenance() {
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
         response_headers: BTreeMap::from([
-            ("etag".to_string(), "\"fixture-etag\"".to_string()),
+            ("etag".to_string(), vec!["\"fixture-etag\"".to_string()]),
             (
                 "last-modified".to_string(),
-                "Wed, 29 Apr 2026 00:00:00 GMT".to_string(),
+                vec!["Wed, 29 Apr 2026 00:00:00 GMT".to_string()],
+            ),
+            (
+                "x-audit".to_string(),
+                vec!["first".to_string(), "second".to_string()],
             ),
         ]),
         size_bytes: 9,
@@ -74,7 +78,10 @@ async fn upsert_artifact_persists_first_seen_provenance() {
     let later_duplicate = Artifact {
         source_url: "https://mirror.example.invalid/rest/data/ABS,CPI,2.0.0/all".into(),
         content_type: "application/octet-stream".into(),
-        response_headers: BTreeMap::from([("etag".to_string(), "\"mirror-etag\"".to_string())]),
+        response_headers: BTreeMap::from([(
+            "etag".to_string(),
+            vec!["\"mirror-etag\"".to_string()],
+        )]),
         size_bytes: 99,
         storage_key: "artifacts/mirror-copy".into(),
         fetched_at: Utc.with_ymd_and_hms(2026, 4, 30, 0, 0, 0).unwrap(),

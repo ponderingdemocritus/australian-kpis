@@ -122,7 +122,7 @@ pub mod timescale {
 pub mod minio {
     use super::*;
 
-    const MINIO_IMAGE: &str = "minio/minio";
+    const MINIO_IMAGE: &str = "quay.io/minio/minio";
     const MINIO_TAG: &str = "RELEASE.2024-10-02T17-50-41Z";
     const MINIO_PORT: u16 = 9000;
     const ACCESS_KEY: &str = "minioadmin";

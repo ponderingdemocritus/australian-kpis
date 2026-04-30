@@ -17,7 +17,7 @@ use std::{
 
 use async_trait::async_trait;
 use au_kpis_domain::{
-    Artifact, DataflowId, Observation, SeriesDescriptor, SourceId, ids::ArtifactId,
+    Artifact, DataflowId, Observation, ResponseHeaders, SeriesDescriptor, SourceId, ids::ArtifactId,
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError};
@@ -310,8 +310,9 @@ pub struct ArtifactRef {
     pub source_url: String,
     /// MIME-style content type.
     pub content_type: String,
-    /// HTTP response headers captured when the artifact was fetched.
-    pub response_headers: BTreeMap<String, String>,
+    /// HTTP response headers captured when the artifact was fetched, retaining
+    /// repeated values for the same header name.
+    pub response_headers: ResponseHeaders,
     /// Persisted storage key.
     pub storage_key: String,
     /// On-wire size in bytes.

@@ -17,7 +17,7 @@ use au_kpis_adapter::{
     AdapterError, AdapterManifest, ArtifactRef, DiscoveredJob, DiscoveryCtx, FetchCtx,
     ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
 };
-use au_kpis_domain::{DataflowId, SourceId};
+use au_kpis_domain::{DataflowId, ResponseHeaders, SourceId};
 use au_kpis_error::CoreError;
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, stream};
@@ -80,9 +80,32 @@ impl AbsAdapter {
             .collect()
     }
 
+    fn validated_fetch_url(&self, job: &DiscoveredJob) -> Result<String, AdapterError> {
+        let agency_id = required_metadata(job, "agency_id")?;
+        let dataflow_id = required_metadata(job, "abs_dataflow_id")?;
+        let version = required_metadata(job, "version")?;
+        let expected = data_url_from_base(&self.base_url, agency_id, dataflow_id, version);
+
+        if job.source_url != expected {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch URL `{}` does not match canonical URL `{expected}`",
+                job.source_url
+            )));
+        }
+
+        Ok(expected)
+    }
+
     fn dataflow_url(&self) -> String {
         format!("{}/dataflow/ABS/CPI?detail=allstubs", self.base_url)
     }
+}
+
+fn required_metadata<'a>(job: &'a DiscoveredJob, key: &str) -> Result<&'a str, AdapterError> {
+    job.metadata
+        .get(key)
+        .map(String::as_str)
+        .ok_or_else(|| AdapterError::Validation(format!("ABS fetch job is missing `{key}`")))
 }
 
 #[async_trait]
@@ -132,12 +155,13 @@ impl SourceAdapter for AbsAdapter {
             )));
         }
 
+        let fetch_url = self.validated_fetch_url(&job)?;
         let response = ctx
             .http
             .execute(
                 ctx.http
                     .raw()
-                    .get(&job.source_url)
+                    .get(&fetch_url)
                     .header("user-agent", USER_AGENT)
                     .header("accept", DATA_JSON_ACCEPT),
             )
@@ -148,16 +172,15 @@ impl SourceAdapter for AbsAdapter {
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .map_or_else(|| DATA_JSON_ACCEPT.to_string(), str::to_string);
-        let response_headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.as_str().to_string(), value.to_string()))
-            })
-            .collect();
+        let mut response_headers = ResponseHeaders::new();
+        for (name, value) in response.headers() {
+            if let Ok(value) = value.to_str() {
+                response_headers
+                    .entry(name.as_str().to_string())
+                    .or_default()
+                    .push(value.to_string());
+            }
+        }
 
         let size_bytes = Arc::new(AtomicU64::new(0));
         let counted = {
@@ -173,7 +196,7 @@ impl SourceAdapter for AbsAdapter {
         Ok(ArtifactRef {
             id,
             source_id: job.source_id,
-            source_url: job.source_url,
+            source_url: fetch_url,
             content_type,
             response_headers,
             storage_key: format!("artifacts/{}", id.to_hex()),

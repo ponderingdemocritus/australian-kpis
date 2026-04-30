@@ -35,10 +35,9 @@ async fn serve_large_artifact_once() -> String {
         let (mut stream, _) = listener.accept().await.expect("accept request");
         let mut request = [0_u8; 4096];
         let read = stream.read(&mut request).await.expect("read request");
-        assert!(
-            String::from_utf8_lossy(&request[..read])
-                .starts_with("GET /rest/data/ABS,CPI,2.0.0/all HTTP/1.1")
-        );
+        assert!(String::from_utf8_lossy(&request[..read]).starts_with(
+            "GET /rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD HTTP/1.1"
+        ));
 
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\ncontent-length: {PAYLOAD_BYTES}\r\n\r\n",
@@ -60,7 +59,7 @@ async fn serve_large_artifact_once() -> String {
         }
     });
 
-    format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all")
+    format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -68,13 +67,21 @@ async fn serve_large_artifact_once() -> String {
 async fn fetch_500mb_stays_below_50mb_peak_heap_under_dhat() {
     let profiler = dhat::Profiler::builder().testing().build();
     let source_url = serve_large_artifact_once().await;
-    let adapter = AbsAdapter::default();
+    let base_url = source_url
+        .split_once("/data/")
+        .map(|(base, _)| base)
+        .expect("fixture URL has ABS data path");
+    let adapter = AbsAdapter::builder().base_url(base_url).build();
     let job = DiscoveredJob {
         id: "abs:CPI:2.0.0:memory".into(),
         source_id: SourceId::new("abs").unwrap(),
         dataflow_id: DataflowId::new("abs.cpi").unwrap(),
         source_url,
-        metadata: BTreeMap::new(),
+        metadata: BTreeMap::from([
+            ("abs_dataflow_id".into(), "CPI".into()),
+            ("agency_id".into(), "ABS".into()),
+            ("version".into(), "2.0.0".into()),
+        ]),
     };
 
     let artifact = adapter

@@ -12,7 +12,7 @@ use tokio::{
 
 const SDMX_FIXTURE: &[u8] = br#"{"data":{"dataSets":[{"observations":{"0:0":[123.4]}}]}}"#;
 
-async fn serve_artifact_once() -> String {
+async fn serve_artifact_once() -> (String, String) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind fixture server");
@@ -39,7 +39,7 @@ async fn serve_artifact_once() -> String {
         );
 
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\netag: \"fixture-etag\"\r\nlast-modified: Wed, 29 Apr 2026 00:00:00 GMT\r\ncontent-length: {}\r\n\r\n",
+            "HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\netag: \"fixture-etag\"\r\nlast-modified: Wed, 29 Apr 2026 00:00:00 GMT\r\nx-audit: first\r\nx-audit: second\r\ncontent-length: {}\r\n\r\n",
             SDMX_FIXTURE.len(),
         );
         stream
@@ -49,13 +49,16 @@ async fn serve_artifact_once() -> String {
         stream.write_all(SDMX_FIXTURE).await.expect("write body");
     });
 
-    format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD")
+    (
+        format!("http://{addr}/rest"),
+        format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
-    let source_url = serve_artifact_once().await;
-    let adapter = AbsAdapter::default();
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let job = AbsAdapter::current_jobs(
         &AbsAdapter::parse_dataflow_listing(
             r#"{
@@ -96,11 +99,12 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
     assert_eq!(artifact.source_id.as_str(), "abs");
     assert_eq!(artifact.source_url, job.source_url);
     assert_eq!(artifact.content_type, "application/vnd.sdmx.data+json");
-    assert_eq!(artifact.response_headers["etag"], "\"fixture-etag\"");
+    assert_eq!(artifact.response_headers["etag"], ["\"fixture-etag\""]);
     assert_eq!(
         artifact.response_headers["last-modified"],
-        "Wed, 29 Apr 2026 00:00:00 GMT"
+        ["Wed, 29 Apr 2026 00:00:00 GMT"]
     );
+    assert_eq!(artifact.response_headers["x-audit"], ["first", "second"]);
     assert_eq!(artifact.size_bytes, SDMX_FIXTURE.len() as u64);
     assert!(
         artifact.fetched_at > started_at,
@@ -149,4 +153,33 @@ async fn fetch_rejects_jobs_for_other_sources() {
         .expect_err("source mismatch should fail");
 
     assert!(err.to_string().contains("source"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_rejects_non_canonical_source_urls() {
+    let adapter = AbsAdapter::default();
+    let mut job = AbsAdapter::current_jobs(
+        &AbsAdapter::parse_dataflow_listing(
+            r#"{"data":{"dataflows":[{"id":"CPI","agencyID":"ABS","version":"2.0.0","name":"Consumer Price Index","links":[{"href":"https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0","rel":"self"}]}]}}"#,
+        )
+        .expect("parse dataflow listing"),
+    )
+    .into_iter()
+    .next()
+    .expect("one CPI job");
+    job.source_url = "http://169.254.169.254/latest/meta-data".into();
+
+    let err = adapter
+        .fetch(
+            job,
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                BlobStore::new(InMemory::new()),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+            ),
+        )
+        .await
+        .expect_err("non-canonical URL should fail before HTTP");
+
+    assert!(err.to_string().contains("canonical URL"));
 }
