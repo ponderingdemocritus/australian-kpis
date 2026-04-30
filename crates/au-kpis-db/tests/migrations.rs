@@ -89,6 +89,13 @@ async fn schema_fingerprint(pool: &PgPool) -> Vec<(String, String)> {
         .collect()
 }
 
+async fn applied_migration_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(pool)
+        .await
+        .expect("count applied migrations")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn migration_creates_hypertable_and_compression_policy() {
     let timescale = start_timescale("au_kpis_test")
@@ -165,7 +172,10 @@ async fn revert_then_run_is_idempotent() {
     let first = schema_fingerprint(&pool).await;
     assert!(!first.is_empty(), "migration produced no tables");
 
-    revert_latest(&pool).await.expect("revert");
+    let migrations = applied_migration_count(&pool).await;
+    for _ in 0..migrations {
+        revert_latest(&pool).await.expect("revert migration");
+    }
     let after_revert = schema_fingerprint(&pool).await;
     assert!(
         after_revert.is_empty(),

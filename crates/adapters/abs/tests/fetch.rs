@@ -24,11 +24,24 @@ struct RecordingArtifactRecorder {
     artifacts: tokio::sync::Mutex<Vec<Artifact>>,
 }
 
+#[derive(Debug, Default)]
+struct FailingArtifactRecorder;
+
 #[async_trait]
 impl ArtifactRecorder for RecordingArtifactRecorder {
     async fn record(&self, artifact: &Artifact) -> Result<(), AdapterError> {
         self.artifacts.lock().await.push(artifact.clone());
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ArtifactRecorder for FailingArtifactRecorder {
+    async fn record(&self, _artifact: &Artifact) -> Result<(), AdapterError> {
+        Err(AdapterError::artifact_record(
+            "db unavailable",
+            ErrorClass::Transient,
+        ))
     }
 }
 
@@ -212,6 +225,36 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
         bytes.extend_from_slice(&chunk.expect("stored chunk"));
     }
     assert_eq!(bytes, SDMX_FIXTURE);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_deletes_new_blob_when_artifact_provenance_record_fails() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let blob_store = BlobStore::new(InMemory::new());
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+
+    let err = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(FailingArtifactRecorder),
+            ),
+        )
+        .await
+        .expect_err("provenance persistence failure should fail fetch");
+
+    assert_eq!(err.class(), ErrorClass::Transient);
+    assert!(
+        !blob_store
+            .exists(&StorageKey::canonical_for(&expected_id))
+            .await
+            .expect("check blob cleanup"),
+        "newly written blob should be deleted when provenance cannot be recorded"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

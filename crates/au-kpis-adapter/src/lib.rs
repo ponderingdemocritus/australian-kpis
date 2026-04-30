@@ -12,7 +12,7 @@ use std::{
     collections::BTreeMap,
     fmt,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ use au_kpis_domain::{
     Artifact, DataflowId, Observation, ResponseHeaders, SeriesDescriptor, SourceId, ids::ArtifactId,
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
-use au_kpis_storage::{BlobStore, StorageError};
+use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -77,8 +77,22 @@ pub fn retry_after_delta(headers: &ResponseHeaders) -> Option<Duration> {
     headers
         .get("retry-after")
         .and_then(|values| values.first())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .and_then(|value| {
+            value
+                .parse::<u64>()
+                .map(Duration::from_secs)
+                .ok()
+                .or_else(|| retry_after_http_date(value))
+        })
+}
+
+fn retry_after_http_date(value: &str) -> Option<Duration> {
+    let deadline = httpdate::parse_http_date(value).ok()?;
+    Some(
+        deadline
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 fn header_value_for_audit(value: &reqwest::header::HeaderValue) -> String {
@@ -344,6 +358,14 @@ impl FetchCtx {
     pub async fn persist_artifact(&self, artifact: Artifact) -> Result<ArtifactRef, AdapterError> {
         self.artifact_recorder.record(&artifact).await?;
         Ok(artifact.into())
+    }
+
+    /// Delete a just-written artifact after a provenance persistence failure.
+    pub async fn delete_artifact(&self, storage_key: &str) -> Result<(), AdapterError> {
+        self.blob_store
+            .delete(&StorageKey::from_persisted(storage_key))
+            .await?;
+        Ok(())
     }
 }
 

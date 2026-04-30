@@ -192,6 +192,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "httpdate",
  "object_store",
  "reqwest",
  "serde",

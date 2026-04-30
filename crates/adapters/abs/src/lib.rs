@@ -196,20 +196,35 @@ impl SourceAdapter for AbsAdapter {
                 chunk
             })
         };
-        let id = ctx.blob_store.put_artifact_stream(counted.boxed()).await?;
+        let write = ctx
+            .blob_store
+            .put_artifact_stream_with_outcome(counted.boxed())
+            .await?;
+        let id = write.id;
         let fetched_at = Utc::now();
+        let storage_key = format!("artifacts/{}", id.to_hex());
 
-        ctx.persist_artifact(Artifact {
+        let artifact = Artifact {
             id,
             source_id: job.source_id,
             source_url: fetch_url,
             content_type,
             response_headers,
-            storage_key: format!("artifacts/{}", id.to_hex()),
+            storage_key,
             size_bytes: size_bytes.load(Ordering::Relaxed),
             fetched_at,
-        })
-        .await
+        };
+
+        match ctx.persist_artifact(artifact).await {
+            Ok(reference) => Ok(reference),
+            Err(err) => {
+                if write.created {
+                    ctx.delete_artifact(&format!("artifacts/{}", id.to_hex()))
+                        .await?;
+                }
+                Err(err)
+            }
+        }
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterHttpClient, AdapterManifest, Adapters, ArtifactRef, DiscoveredJob,
     DiscoveryCtx, FetchCtx, NoopArtifactRecorder, ObservationStream, ParseCtx, RateLimit,
-    SourceAdapter,
+    SourceAdapter, retry_after_delta,
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor,
@@ -278,6 +278,17 @@ fn adapter_error_classification_matches_retry_policy() {
         .class(),
         ErrorClass::Permanent
     );
+}
+
+#[test]
+fn retry_after_delta_accepts_http_date_values() {
+    let retry_after = retry_after_delta(&BTreeMap::from([(
+        "retry-after".into(),
+        vec!["Fri, 01 Jan 2100 00:00:00 GMT".into()],
+    )]))
+    .expect("parse HTTP-date Retry-After");
+
+    assert!(retry_after > Duration::from_secs(24 * 60 * 60));
 }
 
 #[test]

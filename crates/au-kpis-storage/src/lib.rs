@@ -184,6 +184,15 @@ pub struct BlobStore {
     inner: Arc<dyn ObjectStore>,
 }
 
+/// Result of a content-addressed artifact write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactWrite {
+    /// Content-addressed artifact id.
+    pub id: ArtifactId,
+    /// `true` when this call created the canonical object.
+    pub created: bool,
+}
+
 impl fmt::Debug for BlobStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BlobStore").finish_non_exhaustive()
@@ -216,6 +225,15 @@ impl BlobStore {
     /// receives the canonical [`ArtifactId`].
     #[tracing::instrument(skip(self, content), fields(len = content.len()))]
     pub async fn put_artifact(&self, content: Bytes) -> Result<ArtifactId, StorageError> {
+        Ok(self.put_artifact_with_outcome(content).await?.id)
+    }
+
+    /// Write `content` and report whether this call created the object.
+    #[tracing::instrument(skip(self, content), fields(len = content.len()))]
+    pub async fn put_artifact_with_outcome(
+        &self,
+        content: Bytes,
+    ) -> Result<ArtifactWrite, StorageError> {
         let id = ArtifactId::of_content(&content);
         let path = canonical_object_path(&id);
 
@@ -226,7 +244,7 @@ impl BlobStore {
         // and stays portable across S3/R2/MinIO — conditional writes
         // (`PutMode::Create`) aren't universally supported.
         match self.inner.head(&path).await {
-            Ok(_) => return Ok(id),
+            Ok(_) => return Ok(ArtifactWrite { id, created: false }),
             Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => return Err(StorageError::from_object_store(err)),
         }
@@ -235,7 +253,7 @@ impl BlobStore {
             .put(&path, content.into())
             .await
             .map_err(StorageError::from_object_store)?;
-        Ok(id)
+        Ok(ArtifactWrite { id, created: true })
     }
 
     /// Stream `chunks` to the backend while hashing on the fly, then
@@ -254,6 +272,19 @@ impl BlobStore {
     /// idempotency contract.
     #[tracing::instrument(skip(self, chunks))]
     pub async fn put_artifact_stream<S, E>(&self, mut chunks: S) -> Result<ArtifactId, StorageError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: fmt::Display,
+    {
+        Ok(self.put_artifact_stream_with_outcome(&mut chunks).await?.id)
+    }
+
+    /// Stream `chunks` and report whether this call created the object.
+    #[tracing::instrument(skip(self, chunks))]
+    pub async fn put_artifact_stream_with_outcome<S, E>(
+        &self,
+        mut chunks: S,
+    ) -> Result<ArtifactWrite, StorageError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
         E: fmt::Display,
@@ -313,7 +344,7 @@ impl BlobStore {
         // reuses the same head-first idempotency guard.
         if !wrote_any {
             let _ = write.abort().await;
-            return self.put_artifact(Bytes::new()).await;
+            return self.put_artifact_with_outcome(Bytes::new()).await;
         }
 
         if let Err(err) = write.finish().await {
@@ -330,7 +361,7 @@ impl BlobStore {
         match self.inner.head(&canonical).await {
             Ok(_) => {
                 self.best_effort_delete_staging(&staging_path).await;
-                return Ok(id);
+                return Ok(ArtifactWrite { id, created: false });
             }
             Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => {
@@ -348,7 +379,7 @@ impl BlobStore {
             return Err(StorageError::from_object_store(err));
         }
         self.best_effort_delete_staging(&staging_path).await;
-        Ok(id)
+        Ok(ArtifactWrite { id, created: true })
     }
 
     /// Return a streaming reader of the artifact at `key`.
@@ -378,6 +409,18 @@ impl BlobStore {
             Ok(_) => Ok(true),
             Err(ObjectStoreError::NotFound { .. }) => Ok(false),
             Err(err) => Err(StorageError::Backend(err)),
+        }
+    }
+
+    /// Delete the object at `key`.
+    ///
+    /// Missing objects are treated as success so compensating cleanup can be
+    /// retried safely after partial failures.
+    #[tracing::instrument(skip(self))]
+    pub async fn delete(&self, key: &StorageKey) -> Result<(), StorageError> {
+        match self.inner.delete(&key.as_object_path()).await {
+            Ok(()) | Err(ObjectStoreError::NotFound { .. }) => Ok(()),
+            Err(err) => Err(StorageError::from_object_store(err)),
         }
     }
 
