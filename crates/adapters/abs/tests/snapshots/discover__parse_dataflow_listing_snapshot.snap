@@ -9,7 +9,7 @@ expression: snapshot
     "id": "CPI",
     "last_updated": "2026-04-28T00:00:00Z",
     "name": "Consumer Price Index (CPI)",
-    "revision_key": "ABS:CPI:2.0.0",
+    "revision_key": "ABS:CPI",
     "source_url": "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD",
     "version": "2.0.0"
   },
@@ -19,7 +19,7 @@ expression: snapshot
     "id": "WPI",
     "last_updated": "2026-04-20T00:00:00Z",
     "name": "Wage Price Index",
-    "revision_key": "ABS:WPI:1.0.0",
+    "revision_key": "ABS:WPI",
     "source_url": "https://data.api.abs.gov.au/rest/data/ABS,WPI,1.0.0/all?dimensionAtObservation=TIME_PERIOD",
     "version": "1.0.0"
   }

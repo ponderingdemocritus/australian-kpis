@@ -51,9 +51,8 @@ impl AbsAdapter {
         current: &[AbsDataflow],
         known_revisions: &BTreeMap<String, UpstreamRevision>,
     ) -> Vec<DiscoveredJob> {
-        current
-            .iter()
-            .filter(|flow| flow.id == CPI_DATAFLOW_ID)
+        latest_dataflow_revisions(current)
+            .into_values()
             .filter(|flow| {
                 known_revisions
                     .get(&flow.revision_key())
@@ -66,9 +65,8 @@ impl AbsAdapter {
     /// Convert current ABS dataflows into discovery jobs without persisted diff state.
     #[must_use]
     pub fn current_jobs(current: &[AbsDataflow]) -> Vec<DiscoveredJob> {
-        current
-            .iter()
-            .filter(|flow| flow.id == CPI_DATAFLOW_ID)
+        latest_dataflow_revisions(current)
+            .into_values()
             .map(AbsDataflow::to_discovered_job)
             .collect()
     }
@@ -192,7 +190,7 @@ impl AbsDataflow {
     }
 
     fn revision_key(&self) -> String {
-        format!("{}:{}:{}", self.agency_id, self.id, self.version)
+        format!("{}:{}", self.agency_id, self.id)
     }
 
     fn to_discovered_job(&self) -> DiscoveredJob {
@@ -230,23 +228,24 @@ fn parse_dataflow_listing_with_base(
     let message = serde_json::from_str::<RawAbsDataflowMessage>(body).map_err(CoreError::from)?;
     let mut dataflows = Vec::new();
     for raw in message.data.dataflows {
-        match raw.id.as_deref() {
-            Some(CPI_DATAFLOW_ID) => {
-                dataflows.push(AbsDataflow::try_from_raw(raw, source_base_url)?)
-            }
-            Some(_) => {
-                if let Ok(dataflow) = AbsDataflow::try_from_raw(raw, source_base_url) {
-                    dataflows.push(dataflow);
-                }
-            }
-            None => {
-                return Err(AdapterError::Validation(
-                    "ABS dataflow row is missing id".to_string(),
-                ));
-            }
-        }
+        dataflows.push(AbsDataflow::try_from_raw(raw, source_base_url)?);
     }
     Ok(dataflows)
+}
+
+fn latest_dataflow_revisions(current: &[AbsDataflow]) -> BTreeMap<String, &AbsDataflow> {
+    let mut latest = BTreeMap::new();
+    for flow in current.iter().filter(|flow| flow.id == CPI_DATAFLOW_ID) {
+        latest
+            .entry(flow.revision_key())
+            .and_modify(|stored: &mut &AbsDataflow| {
+                if flow.is_newer_revision_than(stored) {
+                    *stored = flow;
+                }
+            })
+            .or_insert(flow);
+    }
+    latest
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,9 +285,9 @@ impl AbsDataflow {
     fn try_from_raw(raw: RawAbsDataflow, source_base_url: &str) -> Result<Self, AdapterError> {
         let id = raw
             .id
-            .ok_or_else(|| AdapterError::Validation("ABS dataflow is missing id".to_string()))?;
+            .ok_or_else(|| AdapterError::FormatDrift("ABS dataflow is missing id".to_string()))?;
         let version = raw.version.ok_or_else(|| {
-            AdapterError::Validation(format!("ABS dataflow {id} is missing version"))
+            AdapterError::FormatDrift(format!("ABS dataflow {id} is missing version"))
         })?;
         let name = raw
             .name
@@ -297,7 +296,7 @@ impl AbsDataflow {
         let agency_id = raw.agency_id.unwrap_or_else(|| "ABS".to_string());
         let dataflow_url = canonical_dataflow_url(&raw.links, &agency_id, &id, &version)
             .ok_or_else(|| {
-                AdapterError::Validation(format!("ABS dataflow {id} is missing canonical link"))
+                AdapterError::FormatDrift(format!("ABS dataflow {id} is missing canonical link"))
             })?;
         let source_url = data_url_from_base(source_base_url, &agency_id, &id, &version);
 
@@ -311,6 +310,18 @@ impl AbsDataflow {
             dataflow_url,
         })
     }
+
+    fn is_newer_revision_than(&self, other: &Self) -> bool {
+        version_cmp_key(&self.version) > version_cmp_key(&other.version)
+            || (self.version == other.version && self.last_updated > other.last_updated)
+    }
+}
+
+fn version_cmp_key(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect()
 }
 
 fn canonical_dataflow_url(

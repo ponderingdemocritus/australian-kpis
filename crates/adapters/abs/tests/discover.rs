@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use au_kpis_adapter::{AdapterHttpClient, DiscoveryCtx, SourceAdapter};
+use au_kpis_adapter::{AdapterError, AdapterHttpClient, DiscoveryCtx, SourceAdapter};
 use au_kpis_adapter_abs::{AbsAdapter, DataflowRevision};
+use au_kpis_error::{Classify, ErrorClass};
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
 use serde_json::json;
@@ -102,11 +103,11 @@ async fn serve_once(body: &'static str) -> String {
 fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
     let current = AbsAdapter::parse_dataflow_listing(DATAFLOW_FIXTURE).expect("parse fixture");
     let unchanged = BTreeMap::from([(
-        "ABS:CPI:2.0.0".to_string(),
+        "ABS:CPI".to_string(),
         DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
     )]);
     let changed = BTreeMap::from([(
-        "ABS:CPI:2.0.0".to_string(),
+        "ABS:CPI".to_string(),
         DataflowRevision::new("2.0.0", Some("2025-01-01T00:00:00Z")),
     )]);
 
@@ -127,7 +128,7 @@ fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
     );
     assert_eq!(jobs[0].metadata["abs_dataflow_id"], "CPI");
     assert_eq!(jobs[0].metadata["version"], "2.0.0");
-    assert_eq!(jobs[0].metadata["revision_key"], "ABS:CPI:2.0.0");
+    assert_eq!(jobs[0].metadata["revision_key"], "ABS:CPI");
     assert_eq!(jobs[0].metadata["last_updated"], "2026-04-28T00:00:00Z");
 }
 
@@ -155,7 +156,7 @@ async fn discover_applies_known_revisions_from_context() {
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap())
         .with_known_revision(
-            "ABS:CPI:2.0.0",
+            "ABS:CPI",
             DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
         );
 
@@ -168,7 +169,7 @@ async fn discover_applies_known_revisions_from_context() {
 fn changed_timestamp_emits_distinct_job_id_for_same_version() {
     let current = AbsAdapter::parse_dataflow_listing(DATAFLOW_FIXTURE).expect("parse fixture");
     let known = BTreeMap::from([(
-        "ABS:CPI:2.0.0".to_string(),
+        "ABS:CPI".to_string(),
         DataflowRevision::new("2.0.0", Some("2026-04-27T00:00:00Z")),
     )]);
 
@@ -179,35 +180,23 @@ fn changed_timestamp_emits_distinct_job_id_for_same_version() {
 }
 
 #[test]
-fn diff_keys_cpi_revisions_by_agency_id_and_version() {
+fn diff_keys_cpi_revisions_by_dataflow_and_selects_latest_version() {
     let current =
         AbsAdapter::parse_dataflow_listing(MULTI_VERSION_CPI_FIXTURE).expect("parse fixture");
-    let unchanged = BTreeMap::from([
-        (
-            "ABS:CPI:1.0.0".to_string(),
-            DataflowRevision::new("1.0.0", Some("2025-01-01T00:00:00Z")),
-        ),
-        (
-            "ABS:CPI:2.0.0".to_string(),
-            DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
-        ),
-    ]);
+    let unchanged = BTreeMap::from([(
+        "ABS:CPI".to_string(),
+        DataflowRevision::new("2.0.0", Some("2026-04-28T00:00:00Z")),
+    )]);
     assert!(AbsAdapter::discoverable_jobs(&current, &unchanged).is_empty());
 
-    let changed_latest = BTreeMap::from([
-        (
-            "ABS:CPI:1.0.0".to_string(),
-            DataflowRevision::new("1.0.0", Some("2025-01-01T00:00:00Z")),
-        ),
-        (
-            "ABS:CPI:2.0.0".to_string(),
-            DataflowRevision::new("2.0.0", Some("2026-04-27T00:00:00Z")),
-        ),
-    ]);
+    let changed_latest = BTreeMap::from([(
+        "ABS:CPI".to_string(),
+        DataflowRevision::new("1.0.0", Some("2025-01-01T00:00:00Z")),
+    )]);
     let jobs = AbsAdapter::discoverable_jobs(&current, &changed_latest);
 
     assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].metadata["revision_key"], "ABS:CPI:2.0.0");
+    assert_eq!(jobs[0].metadata["revision_key"], "ABS:CPI");
     assert_eq!(jobs[0].id, "abs:CPI:2.0.0:2026-04-28T00-00-00Z");
 }
 
@@ -238,6 +227,8 @@ fn parse_dataflow_listing_rejects_missing_version() {
 
     let err = AbsAdapter::parse_dataflow_listing(body).expect_err("missing version should fail");
 
+    assert!(matches!(err, AdapterError::FormatDrift(_)));
+    assert_eq!(err.class(), ErrorClass::Permanent);
     assert!(err.to_string().contains("version"));
 }
 
@@ -261,11 +252,13 @@ fn parse_dataflow_listing_rejects_missing_id_rows() {
 
     let err = AbsAdapter::parse_dataflow_listing(body).expect_err("missing id should fail");
 
+    assert!(matches!(err, AdapterError::FormatDrift(_)));
+    assert_eq!(err.class(), ErrorClass::Permanent);
     assert!(err.to_string().contains("missing id"));
 }
 
 #[test]
-fn parse_dataflow_listing_skips_malformed_non_cpi_rows() {
+fn parse_dataflow_listing_rejects_malformed_non_cpi_rows() {
     let body = r#"{
       "data": {
         "dataflows": [
@@ -288,10 +281,11 @@ fn parse_dataflow_listing_skips_malformed_non_cpi_rows() {
       }
     }"#;
 
-    let current = AbsAdapter::parse_dataflow_listing(body).expect("parse valid CPI");
+    let err = AbsAdapter::parse_dataflow_listing(body).expect_err("malformed row should fail");
 
-    assert_eq!(current.len(), 1);
-    assert_eq!(current[0].id, "CPI");
+    assert!(matches!(err, AdapterError::FormatDrift(_)));
+    assert_eq!(err.class(), ErrorClass::Permanent);
+    assert!(err.to_string().contains("version"));
 }
 
 #[test]
@@ -312,6 +306,8 @@ fn parse_dataflow_listing_rejects_missing_links() {
 
     let err = AbsAdapter::parse_dataflow_listing(body).expect_err("missing links should fail");
 
+    assert!(matches!(err, AdapterError::FormatDrift(_)));
+    assert_eq!(err.class(), ErrorClass::Permanent);
     assert!(err.to_string().contains("canonical link"));
 }
 
@@ -397,7 +393,7 @@ fn parse_dataflow_listing_snapshot() {
                 "last_updated": flow.last_updated,
                 "source_url": flow.source_url,
                 "dataflow_url": flow.dataflow_url,
-                "revision_key": format!("{}:{}:{}", flow.agency_id, flow.id, flow.version),
+                "revision_key": format!("{}:{}", flow.agency_id, flow.id),
             })
         })
         .collect::<Vec<_>>();
