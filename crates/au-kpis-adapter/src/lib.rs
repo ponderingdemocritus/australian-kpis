@@ -31,6 +31,50 @@ use tokio::{sync::Mutex, time::sleep};
 pub type ObservationStream<'a> =
     BoxStream<'a, Result<(SeriesDescriptor, Observation), AdapterError>>;
 
+/// Capture an HTTP header map for artifact provenance without silently
+/// dropping non-visible-ASCII values.
+///
+/// Values that cannot be represented as `HeaderValue::to_str()` are encoded as
+/// lower-case hex with a `hex:` prefix so the original bytes remain recoverable.
+#[must_use]
+pub fn capture_response_headers(headers: &reqwest::header::HeaderMap) -> ResponseHeaders {
+    let mut captured = ResponseHeaders::new();
+    for (name, value) in headers {
+        captured
+            .entry(name.as_str().to_string())
+            .or_default()
+            .push(header_value_for_audit(value));
+    }
+    captured
+}
+
+/// Parse `Retry-After` delta-seconds from captured response headers.
+#[must_use]
+pub fn retry_after_delta(headers: &ResponseHeaders) -> Option<Duration> {
+    headers
+        .get("retry-after")
+        .and_then(|values| values.first())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn header_value_for_audit(value: &reqwest::header::HeaderValue) -> String {
+    value.to_str().map_or_else(
+        |_| format!("hex:{}", hex_lower(value.as_bytes())),
+        str::to_string,
+    )
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
 /// Per-source HTTP rate-limit declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RateLimit {
@@ -503,6 +547,17 @@ pub enum AdapterError {
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// Upstream returned a non-success status and associated retry/provenance metadata.
+    #[error("upstream status {status}")]
+    UpstreamStatus {
+        /// HTTP status code returned by the upstream source.
+        status: reqwest::StatusCode,
+        /// Parsed delta-seconds from `Retry-After`, when supplied in that form.
+        retry_after: Option<Duration>,
+        /// Response headers captured from the failed upstream response.
+        response_headers: ResponseHeaders,
+    },
+
     /// Object-storage failure.
     #[error(transparent)]
     Storage(#[from] StorageError),
@@ -537,11 +592,25 @@ impl Classify for AdapterError {
                     ErrorClass::Transient
                 }
             }
+            AdapterError::UpstreamStatus { status, .. } => {
+                if status.as_u16() == 429 || status.is_server_error() {
+                    ErrorClass::Transient
+                } else {
+                    ErrorClass::Permanent
+                }
+            }
             AdapterError::Storage(err) => err.class(),
             AdapterError::UnknownAdapter(_)
             | AdapterError::DuplicateAdapter(_)
             | AdapterError::FormatDrift(_) => ErrorClass::Permanent,
             AdapterError::Validation(_) => ErrorClass::Validation,
+        }
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            AdapterError::UpstreamStatus { retry_after, .. } => *retry_after,
+            _ => None,
         }
     }
 }

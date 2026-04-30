@@ -1,6 +1,9 @@
-use au_kpis_adapter::{AdapterHttpClient, FetchCtx, SourceAdapter};
+use std::time::Duration;
+
+use au_kpis_adapter::{AdapterError, AdapterHttpClient, FetchCtx, SourceAdapter};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_domain::ArtifactId;
+use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageKey};
 use chrono::{TimeZone, Utc};
 use futures::StreamExt;
@@ -11,6 +14,33 @@ use tokio::{
 };
 
 const SDMX_FIXTURE: &[u8] = br#"{"data":{"dataSets":[{"observations":{"0:0":[123.4]}}]}}"#;
+
+fn cpi_job(source_url: String) -> au_kpis_adapter::DiscoveredJob {
+    let job = AbsAdapter::current_jobs(
+        &AbsAdapter::parse_dataflow_listing(
+            r#"{
+              "data": {
+                "dataflows": [{
+                  "id": "CPI",
+                  "agencyID": "ABS",
+                  "version": "2.0.0",
+                  "name": "Consumer Price Index",
+                  "updated": "2026-04-28T00:00:00Z",
+                  "links": [
+                    { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0", "rel": "self" }
+                  ]
+                }]
+              }
+            }"#,
+        )
+        .expect("parse dataflow listing"),
+    )
+    .into_iter()
+    .next()
+    .expect("one CPI job");
+
+    au_kpis_adapter::DiscoveredJob { source_url, ..job }
+}
 
 async fn serve_artifact_once() -> (String, String) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -55,33 +85,64 @@ async fn serve_artifact_once() -> (String, String) {
     )
 }
 
+async fn serve_throttle_once() -> (String, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).await.expect("read request");
+        stream
+            .write_all(
+                b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 17\r\nx-request-id: throttle-fixture\r\ncontent-length: 0\r\n\r\n",
+            )
+            .await
+            .expect("write throttle response");
+    });
+
+    (
+        format!("http://{addr}/rest"),
+        format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
+    )
+}
+
+async fn serve_non_utf8_header_once() -> (String, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).await.expect("read request");
+        let mut response =
+            b"HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\nx-raw: ".to_vec();
+        response.extend_from_slice(&[0xff, 0xfe]);
+        response.extend_from_slice(
+            format!("\r\ncontent-length: {}\r\n\r\n", SDMX_FIXTURE.len()).as_bytes(),
+        );
+        stream
+            .write_all(&response)
+            .await
+            .expect("write response headers");
+        stream.write_all(SDMX_FIXTURE).await.expect("write body");
+    });
+
+    (
+        format!("http://{addr}/rest"),
+        format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
-    let job = AbsAdapter::current_jobs(
-        &AbsAdapter::parse_dataflow_listing(
-            r#"{
-              "data": {
-                "dataflows": [{
-                  "id": "CPI",
-                  "agencyID": "ABS",
-                  "version": "2.0.0",
-                  "name": "Consumer Price Index",
-                  "updated": "2026-04-28T00:00:00Z",
-                  "links": [
-                    { "href": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI/2.0.0", "rel": "self" }
-                  ]
-                }]
-              }
-            }"#,
-        )
-        .expect("parse dataflow listing"),
-    )
-    .into_iter()
-    .next()
-    .expect("one CPI job");
-    let job = au_kpis_adapter::DiscoveredJob { source_url, ..job };
+    let job = cpi_job(source_url);
     let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let blob_store = BlobStore::new(InMemory::new());
@@ -124,6 +185,57 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
         bytes.extend_from_slice(&chunk.expect("stored chunk"));
     }
     assert_eq!(bytes, SDMX_FIXTURE);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_preserves_retry_after_on_upstream_throttle() {
+    let (base_url, source_url) = serve_throttle_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let err = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                BlobStore::new(InMemory::new()),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+            ),
+        )
+        .await
+        .expect_err("429 should surface structured upstream status");
+
+    assert_eq!(err.class(), ErrorClass::Transient);
+    assert_eq!(err.retry_after(), Some(Duration::from_secs(17)));
+    match err {
+        AdapterError::UpstreamStatus {
+            status,
+            response_headers,
+            ..
+        } => {
+            assert_eq!(status.as_u16(), 429);
+            assert_eq!(response_headers["retry-after"], ["17"]);
+            assert_eq!(response_headers["x-request-id"], ["throttle-fixture"]);
+        }
+        other => panic!("expected upstream status, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_encodes_non_utf8_response_headers_losslessly() {
+    let (base_url, source_url) = serve_non_utf8_header_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                BlobStore::new(InMemory::new()),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+            ),
+        )
+        .await
+        .expect("fetch artifact with non-UTF8 response header");
+
+    assert_eq!(artifact.response_headers["x-raw"], ["hex:fffe"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

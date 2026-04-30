@@ -16,8 +16,9 @@ use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterManifest, ArtifactRef, DiscoveredJob, DiscoveryCtx, FetchCtx,
     ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
+    capture_response_headers, retry_after_delta,
 };
-use au_kpis_domain::{DataflowId, ResponseHeaders, SourceId};
+use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::CoreError;
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, stream};
@@ -165,22 +166,21 @@ impl SourceAdapter for AbsAdapter {
                     .header("user-agent", USER_AGENT)
                     .header("accept", DATA_JSON_ACCEPT),
             )
-            .await?
-            .error_for_status()?;
+            .await?;
+        let response_headers = capture_response_headers(response.headers());
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AdapterError::UpstreamStatus {
+                status,
+                retry_after: retry_after_delta(&response_headers),
+                response_headers,
+            });
+        }
         let content_type = response
             .headers()
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .map_or_else(|| DATA_JSON_ACCEPT.to_string(), str::to_string);
-        let mut response_headers = ResponseHeaders::new();
-        for (name, value) in response.headers() {
-            if let Ok(value) = value.to_str() {
-                response_headers
-                    .entry(name.as_str().to_string())
-                    .or_default()
-                    .push(value.to_string());
-            }
-        }
 
         let size_bytes = Arc::new(AtomicU64::new(0));
         let counted = {
