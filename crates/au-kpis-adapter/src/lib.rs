@@ -21,6 +21,7 @@ use au_kpis_domain::{
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ pub type ArtifactRecorderRef = Arc<dyn ArtifactRecorder>;
 #[async_trait]
 pub trait ArtifactRecorder: fmt::Debug + Send + Sync + 'static {
     /// Persist one fetched artifact row.
-    async fn record(&self, artifact: &Artifact) -> Result<(), AdapterError>;
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError>;
 }
 
 /// Artifact recorder for tests or intentionally non-persistent callers.
@@ -47,8 +48,8 @@ pub struct NoopArtifactRecorder;
 
 #[async_trait]
 impl ArtifactRecorder for NoopArtifactRecorder {
-    async fn record(&self, _artifact: &Artifact) -> Result<(), AdapterError> {
-        Ok(())
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
     }
 }
 
@@ -356,14 +357,21 @@ impl FetchCtx {
 
     /// Persist fetched artifact provenance, then return the parse reference.
     pub async fn persist_artifact(&self, artifact: Artifact) -> Result<ArtifactRef, AdapterError> {
-        self.artifact_recorder.record(&artifact).await?;
-        Ok(artifact.into())
+        Ok(self.artifact_recorder.record(&artifact).await?.into())
     }
 
-    /// Delete a just-written artifact after a provenance persistence failure.
-    pub async fn delete_artifact(&self, storage_key: &str) -> Result<(), AdapterError> {
+    /// Persist a sidecar provenance record when the primary recorder is unavailable.
+    pub async fn record_artifact_provenance_fallback(
+        &self,
+        artifact: &Artifact,
+    ) -> Result<(), AdapterError> {
+        let storage_key = format!("artifact-provenance-failures/{}.json", artifact.id.to_hex());
+        let content = serde_json::to_vec(artifact).map_err(CoreError::from)?;
         self.blob_store
-            .delete(&StorageKey::from_persisted(storage_key))
+            .put_bytes(
+                &StorageKey::from_persisted(storage_key),
+                Bytes::from(content),
+            )
             .await?;
         Ok(())
     }

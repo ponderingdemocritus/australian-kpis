@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use au_kpis_config::DatabaseConfig;
-use au_kpis_db::{connect, get_artifact, migrate, upsert_artifact};
+use au_kpis_db::{connect, get_artifact, migrate, upsert_artifact, upsert_artifact_record};
 use au_kpis_domain::{Artifact, ArtifactId, SourceId};
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{TimeZone, Utc};
@@ -90,6 +90,9 @@ async fn upsert_artifact_persists_first_seen_provenance() {
     upsert_artifact(&pool, &later_duplicate)
         .await
         .expect("duplicate artifact insert is a no-op");
+    let returned = upsert_artifact_record(&pool, &later_duplicate)
+        .await
+        .expect("duplicate artifact returns durable row");
 
     let stored = get_artifact(&pool, id)
         .await
@@ -97,4 +100,5 @@ async fn upsert_artifact_persists_first_seen_provenance() {
         .expect("artifact row exists");
 
     assert_eq!(stored, artifact);
+    assert_eq!(returned, artifact);
 }

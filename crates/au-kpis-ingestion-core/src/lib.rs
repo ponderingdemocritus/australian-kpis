@@ -37,8 +37,8 @@ impl DbArtifactRecorder {
 
 #[async_trait]
 impl ArtifactRecorder for DbArtifactRecorder {
-    async fn record(&self, artifact: &Artifact) -> Result<(), AdapterError> {
-        au_kpis_db::upsert_artifact(&self.pool, artifact)
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        au_kpis_db::upsert_artifact_record(&self.pool, artifact)
             .await
             .map_err(|err| AdapterError::artifact_record(err.to_string(), err.class()))
     }

@@ -196,11 +196,7 @@ impl SourceAdapter for AbsAdapter {
                 chunk
             })
         };
-        let write = ctx
-            .blob_store
-            .put_artifact_stream_with_outcome(counted.boxed())
-            .await?;
-        let id = write.id;
+        let id = ctx.blob_store.put_artifact_stream(counted.boxed()).await?;
         let fetched_at = Utc::now();
         let storage_key = format!("artifacts/{}", id.to_hex());
 
@@ -215,13 +211,10 @@ impl SourceAdapter for AbsAdapter {
             fetched_at,
         };
 
-        match ctx.persist_artifact(artifact).await {
+        match ctx.persist_artifact(artifact.clone()).await {
             Ok(reference) => Ok(reference),
             Err(err) => {
-                if write.created {
-                    ctx.delete_artifact(&format!("artifacts/{}", id.to_hex()))
-                        .await?;
-                }
+                ctx.record_artifact_provenance_fallback(&artifact).await?;
                 Err(err)
             }
         }

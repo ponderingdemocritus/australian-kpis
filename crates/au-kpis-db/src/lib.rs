@@ -93,6 +93,19 @@ impl Classify for DbError {
 /// unchanged.
 #[instrument(skip(pool, artifact))]
 pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), DbError> {
+    upsert_artifact_record(pool, artifact).await?;
+    Ok(())
+}
+
+/// Insert a raw source artifact row and return the durable row.
+///
+/// Duplicate content is a no-op at the database layer, so callers receive the
+/// already-persisted provenance instead of their candidate metadata.
+#[instrument(skip(pool, artifact))]
+pub async fn upsert_artifact_record(
+    pool: &PgPool,
+    artifact: &Artifact,
+) -> Result<Artifact, DbError> {
     let size_bytes = i64::try_from(artifact.size_bytes).map_err(|_| {
         CoreError::Validation(format!(
             "artifact `{}` size {} exceeds BIGINT",
@@ -122,7 +135,9 @@ pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), D
     .await
     .map_err(DbError::Query)?;
 
-    Ok(())
+    get_artifact(pool, artifact.id)
+        .await?
+        .ok_or_else(|| DbError::Core(CoreError::NotFound(format!("artifact `{}`", artifact.id))))
 }
 
 /// Load a raw source artifact row by content hash.

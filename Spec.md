@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.2` |
+| **Version** | `v0.1.3` |
 | **Status** | Approved |
-| **Last updated** | 2026-04-28 |
+| **Last updated** | 2026-05-01 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 

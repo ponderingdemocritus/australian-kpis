@@ -29,15 +29,15 @@ struct FailingArtifactRecorder;
 
 #[async_trait]
 impl ArtifactRecorder for RecordingArtifactRecorder {
-    async fn record(&self, artifact: &Artifact) -> Result<(), AdapterError> {
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
         self.artifacts.lock().await.push(artifact.clone());
-        Ok(())
+        Ok(artifact.clone())
     }
 }
 
 #[async_trait]
 impl ArtifactRecorder for FailingArtifactRecorder {
-    async fn record(&self, _artifact: &Artifact) -> Result<(), AdapterError> {
+    async fn record(&self, _artifact: &Artifact) -> Result<Artifact, AdapterError> {
         Err(AdapterError::artifact_record(
             "db unavailable",
             ErrorClass::Transient,
@@ -228,7 +228,7 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_deletes_new_blob_when_artifact_provenance_record_fails() {
+async fn fetch_writes_provenance_sidecar_when_primary_record_fails() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let blob_store = BlobStore::new(InMemory::new());
@@ -249,11 +249,21 @@ async fn fetch_deletes_new_blob_when_artifact_provenance_record_fails() {
 
     assert_eq!(err.class(), ErrorClass::Transient);
     assert!(
-        !blob_store
+        blob_store
             .exists(&StorageKey::canonical_for(&expected_id))
             .await
-            .expect("check blob cleanup"),
-        "newly written blob should be deleted when provenance cannot be recorded"
+            .expect("check blob"),
+        "raw blob remains available for retry/reconciliation"
+    );
+    assert!(
+        blob_store
+            .exists(&StorageKey::from_persisted(format!(
+                "artifact-provenance-failures/{}.json",
+                expected_id.to_hex()
+            )))
+            .await
+            .expect("check provenance sidecar"),
+        "fallback provenance sidecar should be durable when the DB recorder fails"
     );
 }
 
