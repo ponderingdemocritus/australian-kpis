@@ -1,5 +1,7 @@
 //! Artifact — raw upstream file, content-addressed by SHA-256.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -20,6 +22,8 @@ pub struct Artifact {
     /// Canonical URL the artifact was fetched from.
     pub source_url: String,
     pub content_type: ContentType,
+    /// HTTP response headers captured when the artifact was fetched.
+    pub response_headers: BTreeMap<String, String>,
     /// Size in bytes as stored in R2 — equals the hashed byte stream length.
     pub size_bytes: u64,
     /// R2 object key; equal to `artifacts/<id.to_hex()>` by convention but
@@ -40,6 +44,7 @@ mod tests {
             source_id: SourceId::new("abs").unwrap(),
             source_url: "https://data.api.abs.gov.au/rest/data/CPI".into(),
             content_type: "application/vnd.sdmx.data+json".into(),
+            response_headers: BTreeMap::from([("etag".to_string(), "\"abc\"".to_string())]),
             size_bytes: 12,
             storage_key: format!("artifacts/{}", id.to_hex()),
             fetched_at: DateTime::parse_from_rfc3339("2024-04-30T12:00:00Z")

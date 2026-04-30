@@ -1,0 +1,83 @@
+use std::{collections::BTreeMap, time::Duration};
+
+use au_kpis_config::DatabaseConfig;
+use au_kpis_db::{connect, get_artifact, migrate, upsert_artifact};
+use au_kpis_domain::{Artifact, ArtifactId, SourceId};
+use au_kpis_testing::timescale::start_timescale;
+use chrono::{TimeZone, Utc};
+use sqlx::PgPool;
+
+async fn connect_with_retry(cfg: &DatabaseConfig) -> PgPool {
+    let mut last_err = None;
+    for _ in 0..10 {
+        match connect(cfg).await {
+            Ok(pool) => return pool,
+            Err(err) => {
+                last_err = Some(err);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+    panic!("timescaledb did not accept connections: {last_err:?}");
+}
+
+async fn seed_abs_source(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO sources (id, name, homepage, description)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind("abs")
+    .bind("Australian Bureau of Statistics")
+    .bind("https://data.api.abs.gov.au")
+    .bind("Official Australian statistical agency")
+    .execute(pool)
+    .await
+    .expect("seed ABS source");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn upsert_artifact_persists_content_hash_and_response_headers() {
+    let timescale = start_timescale("au_kpis_test")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    seed_abs_source(&pool).await;
+
+    let id = ArtifactId::of_content(b"sdmx-json");
+    let fetched_at = Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap();
+    let artifact = Artifact {
+        id,
+        source_id: SourceId::new("abs").unwrap(),
+        source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all".into(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::from([
+            ("etag".to_string(), "\"fixture-etag\"".to_string()),
+            (
+                "last-modified".to_string(),
+                "Wed, 29 Apr 2026 00:00:00 GMT".to_string(),
+            ),
+        ]),
+        size_bytes: 9,
+        storage_key: format!("artifacts/{}", id.to_hex()),
+        fetched_at,
+    };
+
+    upsert_artifact(&pool, &artifact)
+        .await
+        .expect("upsert artifact");
+    upsert_artifact(&pool, &artifact)
+        .await
+        .expect("idempotent artifact upsert");
+
+    let stored = get_artifact(&pool, id)
+        .await
+        .expect("load artifact")
+        .expect("artifact row exists");
+
+    assert_eq!(stored, artifact);
+}

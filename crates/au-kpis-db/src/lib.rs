@@ -34,8 +34,9 @@
 use std::time::Duration;
 
 use au_kpis_config::DatabaseConfig;
-use au_kpis_error::{Classify, ErrorClass};
-use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
+use au_kpis_domain::{Artifact, SourceId, ids::ArtifactId};
+use au_kpis_error::{Classify, CoreError, ErrorClass};
+use sqlx::{PgPool, Row, migrate::Migrator, postgres::PgPoolOptions};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -49,6 +50,10 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("../../infra/migrations");
 /// Errors returned by this crate.
 #[derive(Debug, Error)]
 pub enum DbError {
+    /// Shared validation or JSON failure.
+    #[error(transparent)]
+    Core(#[from] CoreError),
+
     /// Establishing (or growing) the pool failed.
     #[error("db connect: {0}")]
     Connect(#[source] sqlx::Error),
@@ -65,6 +70,7 @@ pub enum DbError {
 impl Classify for DbError {
     fn class(&self) -> ErrorClass {
         match self {
+            DbError::Core(err) => err.class(),
             // Connect/query failures are usually transient (restart,
             // lock contention, network); retrying with backoff is the
             // right default. Callers that know otherwise wrap in a
@@ -75,6 +81,101 @@ impl Classify for DbError {
             DbError::Migrate(_) => ErrorClass::Permanent,
         }
     }
+}
+
+/// Insert or update a raw source artifact row.
+///
+/// The artifact id is the SHA-256 digest of the stored bytes; using it as
+/// the primary key makes repeated fetches of identical upstream content
+/// idempotent while still allowing metadata such as response headers to be
+/// refreshed.
+#[instrument(skip(pool, artifact))]
+pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), DbError> {
+    let size_bytes = i64::try_from(artifact.size_bytes).map_err(|_| {
+        CoreError::Validation(format!(
+            "artifact `{}` size {} exceeds BIGINT",
+            artifact.id, artifact.size_bytes
+        ))
+    })?;
+    let response_headers =
+        serde_json::to_value(&artifact.response_headers).map_err(CoreError::from)?;
+
+    sqlx::query(
+        "INSERT INTO artifacts (
+             id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET
+             source_id = EXCLUDED.source_id,
+             source_url = EXCLUDED.source_url,
+             content_type = EXCLUDED.content_type,
+             response_headers = EXCLUDED.response_headers,
+             size_bytes = EXCLUDED.size_bytes,
+             storage_key = EXCLUDED.storage_key,
+             fetched_at = EXCLUDED.fetched_at",
+    )
+    .bind(artifact.id.digest().as_bytes().as_slice())
+    .bind(artifact.source_id.as_str())
+    .bind(&artifact.source_url)
+    .bind(&artifact.content_type)
+    .bind(response_headers)
+    .bind(size_bytes)
+    .bind(&artifact.storage_key)
+    .bind(artifact.fetched_at)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+
+    Ok(())
+}
+
+/// Load a raw source artifact row by content hash.
+#[instrument(skip(pool))]
+pub async fn get_artifact(pool: &PgPool, id: ArtifactId) -> Result<Option<Artifact>, DbError> {
+    let row = sqlx::query(
+        "SELECT id, source_id, source_url, content_type, response_headers,
+                size_bytes, storage_key, fetched_at
+         FROM artifacts
+         WHERE id = $1",
+    )
+    .bind(id.digest().as_bytes().as_slice())
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::Query)?;
+
+    row.map(row_to_artifact).transpose()
+}
+
+fn row_to_artifact(row: sqlx::postgres::PgRow) -> Result<Artifact, DbError> {
+    let id_bytes = row.get::<Vec<u8>, _>("id");
+    let id_array: [u8; 32] = id_bytes.try_into().map_err(|bytes: Vec<u8>| {
+        CoreError::Validation(format!(
+            "artifact id from database has {} bytes, expected 32",
+            bytes.len()
+        ))
+    })?;
+    let source_id = SourceId::new(row.get::<String, _>("source_id"))
+        .map_err(|err| CoreError::Validation(err.to_string()))?;
+    let response_headers =
+        serde_json::from_value(row.get("response_headers")).map_err(CoreError::from)?;
+    let size_bytes = row.get::<i64, _>("size_bytes");
+    let size_bytes = u64::try_from(size_bytes).map_err(|_| {
+        CoreError::Validation(format!(
+            "artifact size from database is negative: {size_bytes}"
+        ))
+    })?;
+
+    Ok(Artifact {
+        id: ArtifactId::from_digest(au_kpis_domain::ids::Sha256Digest::from_bytes(id_array)),
+        source_id,
+        source_url: row.get("source_url"),
+        content_type: row.get("content_type"),
+        response_headers,
+        size_bytes,
+        storage_key: row.get("storage_key"),
+        fetched_at: row.get("fetched_at"),
+    })
 }
 
 /// Tunables for [`connect_with`]. Defaults suit a single API binary; workers
@@ -180,6 +281,12 @@ mod tests {
     fn connect_error_is_transient() {
         let err = DbError::Connect(sqlx::Error::PoolClosed);
         assert_eq!(err.class(), ErrorClass::Transient);
+    }
+
+    #[test]
+    fn core_error_classification_flows_through() {
+        let err = DbError::Core(CoreError::Validation("bad artifact".into()));
+        assert_eq!(err.class(), ErrorClass::Validation);
     }
 
     #[test]

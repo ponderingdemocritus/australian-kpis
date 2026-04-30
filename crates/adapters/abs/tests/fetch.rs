@@ -39,7 +39,7 @@ async fn serve_artifact_once() -> String {
         );
 
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\ncontent-length: {}\r\n\r\n",
+            "HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\netag: \"fixture-etag\"\r\nlast-modified: Wed, 29 Apr 2026 00:00:00 GMT\r\ncontent-length: {}\r\n\r\n",
             SDMX_FIXTURE.len(),
         );
         stream
@@ -96,6 +96,11 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
     assert_eq!(artifact.source_id.as_str(), "abs");
     assert_eq!(artifact.source_url, job.source_url);
     assert_eq!(artifact.content_type, "application/vnd.sdmx.data+json");
+    assert_eq!(artifact.response_headers["etag"], "\"fixture-etag\"");
+    assert_eq!(
+        artifact.response_headers["last-modified"],
+        "Wed, 29 Apr 2026 00:00:00 GMT"
+    );
     assert_eq!(artifact.size_bytes, SDMX_FIXTURE.len() as u64);
     assert_eq!(artifact.fetched_at, started_at);
     assert_eq!(

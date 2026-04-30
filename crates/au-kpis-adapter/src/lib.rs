@@ -310,6 +310,8 @@ pub struct ArtifactRef {
     pub source_url: String,
     /// MIME-style content type.
     pub content_type: String,
+    /// HTTP response headers captured when the artifact was fetched.
+    pub response_headers: BTreeMap<String, String>,
     /// Persisted storage key.
     pub storage_key: String,
     /// On-wire size in bytes.
@@ -325,6 +327,7 @@ impl From<Artifact> for ArtifactRef {
             source_id: artifact.source_id,
             source_url: artifact.source_url,
             content_type: artifact.content_type,
+            response_headers: artifact.response_headers,
             size_bytes: artifact.size_bytes,
             storage_key: artifact.storage_key,
             fetched_at: artifact.fetched_at,
@@ -339,6 +342,7 @@ impl From<ArtifactRef> for Artifact {
             source_id: reference.source_id,
             source_url: reference.source_url,
             content_type: reference.content_type,
+            response_headers: reference.response_headers,
             size_bytes: reference.size_bytes,
             storage_key: reference.storage_key,
             fetched_at: reference.fetched_at,

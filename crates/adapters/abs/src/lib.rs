@@ -147,6 +147,16 @@ impl SourceAdapter for AbsAdapter {
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .map_or_else(|| DATA_JSON_ACCEPT.to_string(), str::to_string);
+        let response_headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_string(), value.to_string()))
+            })
+            .collect();
 
         let size_bytes = Arc::new(AtomicU64::new(0));
         let counted = {
@@ -163,6 +173,7 @@ impl SourceAdapter for AbsAdapter {
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
+            response_headers,
             storage_key: format!("artifacts/{}", id.to_hex()),
             size_bytes: size_bytes.load(Ordering::Relaxed),
             fetched_at: ctx.started_at,
