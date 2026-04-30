@@ -12,18 +12,17 @@ async-trait = "0.1"
 au-kpis-domain = { workspace = true }
 au-kpis-error = { workspace = true }
 au-kpis-storage = { workspace = true }
-bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 futures = "0.3"
 httpdate = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "brotli", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
+bytes = "1"
 object_store = "0.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 

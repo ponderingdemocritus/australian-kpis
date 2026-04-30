@@ -37,8 +37,27 @@ impl DbArtifactRecorder {
 
 #[async_trait]
 impl ArtifactRecorder for DbArtifactRecorder {
+    async fn get(
+        &self,
+        id: au_kpis_domain::ids::ArtifactId,
+    ) -> Result<Option<Artifact>, AdapterError> {
+        au_kpis_db::get_artifact(&self.pool, id)
+            .await
+            .map_err(|err| AdapterError::artifact_record(err.to_string(), err.class()))
+    }
+
     async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
         au_kpis_db::upsert_artifact_record(&self.pool, artifact)
+            .await
+            .map_err(|err| AdapterError::artifact_record(err.to_string(), err.class()))
+    }
+
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        au_kpis_db::repair_artifact_storage_key(&self.pool, artifact, observed_storage_key)
             .await
             .map_err(|err| AdapterError::artifact_record(err.to_string(), err.class()))
     }

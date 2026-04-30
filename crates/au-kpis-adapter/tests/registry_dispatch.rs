@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
-    AdapterError, AdapterHttpClient, AdapterManifest, Adapters, ArtifactRef, DiscoveredJob,
-    DiscoveryCtx, FetchCtx, NoopArtifactRecorder, ObservationStream, ParseCtx, RateLimit,
-    SourceAdapter, retry_after_delta,
+    AdapterError, AdapterHttpClient, AdapterManifest, Adapters, ArtifactRecorder, ArtifactRef,
+    DiscoveredJob, DiscoveryCtx, FetchCtx, ObservationStream, ParseCtx, RateLimit, SourceAdapter,
+    retry_after_delta,
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor,
@@ -22,6 +22,28 @@ use object_store::memory::InMemory;
 #[derive(Debug)]
 struct StubAdapter {
     manifest: AdapterManifest,
+}
+
+#[derive(Debug, Default)]
+struct RecordingArtifactRecorder;
+
+#[async_trait]
+impl ArtifactRecorder for RecordingArtifactRecorder {
+    async fn get(&self, _id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok(None)
+    }
+
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
 }
 
 impl StubAdapter {
@@ -63,7 +85,7 @@ impl SourceAdapter for StubAdapter {
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
         let bytes = Bytes::from_static(br#"{"value": 123.4}"#);
         let id = ctx.blob_store.put_artifact(bytes.clone()).await?;
-        Ok(ArtifactRef {
+        let artifact = Artifact {
             id,
             source_id: job.source_id,
             source_url: job.source_url,
@@ -75,7 +97,8 @@ impl SourceAdapter for StubAdapter {
             storage_key: format!("artifacts/{}", id.to_hex()),
             size_bytes: bytes.len() as u64,
             fetched_at: ctx.started_at,
-        })
+        };
+        ctx.persist_artifact(artifact).await
     }
 
     fn parse<'a>(&'a self, artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
@@ -138,7 +161,7 @@ async fn registry_dispatches_discover_fetch_and_parse() {
                 http.clone(),
                 blob_store.clone(),
                 started_at,
-                Arc::new(NoopArtifactRecorder),
+                Arc::new(RecordingArtifactRecorder),
             ),
         )
         .await

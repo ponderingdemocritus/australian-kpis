@@ -2,11 +2,12 @@
 
 use std::{collections::BTreeMap, fmt, io, sync::Arc};
 
+use async_trait::async_trait;
 use au_kpis_adapter::{
-    AdapterHttpClient, DiscoveredJob, FetchCtx, NoopArtifactRecorder, SourceAdapter,
+    AdapterError, AdapterHttpClient, ArtifactRecorder, DiscoveredJob, FetchCtx, SourceAdapter,
 };
 use au_kpis_adapter_abs::AbsAdapter;
-use au_kpis_domain::{DataflowId, SourceId};
+use au_kpis_domain::{Artifact, ArtifactId, DataflowId, SourceId};
 use au_kpis_storage::BlobStore;
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream::BoxStream};
@@ -26,6 +27,28 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 const PAYLOAD_BYTES: usize = 500 * 1024 * 1024;
 const CHUNK_BYTES: usize = 256 * 1024;
 const MAX_HEAP_BYTES: usize = 50 * 1024 * 1024;
+
+#[derive(Debug, Default)]
+struct RecordingArtifactRecorder;
+
+#[async_trait]
+impl ArtifactRecorder for RecordingArtifactRecorder {
+    async fn get(&self, _id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok(None)
+    }
+
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
+}
 
 async fn serve_large_artifact_once() -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -93,7 +116,7 @@ async fn fetch_500mb_stays_below_50mb_peak_heap_under_dhat() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(NullObjectStore),
                 Utc::now(),
-                Arc::new(NoopArtifactRecorder),
+                Arc::new(RecordingArtifactRecorder),
             ),
         )
         .await

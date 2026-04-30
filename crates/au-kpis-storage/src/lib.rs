@@ -184,6 +184,28 @@ pub struct BlobStore {
     inner: Arc<dyn ObjectStore>,
 }
 
+/// A completed streaming upload that is still parked under the staging prefix.
+#[derive(Debug)]
+pub struct StagedArtifact {
+    id: ArtifactId,
+    size_bytes: u64,
+    staging_path: Option<ObjectPath>,
+}
+
+impl StagedArtifact {
+    /// Content-addressed id computed while streaming to staging.
+    #[must_use]
+    pub fn id(&self) -> ArtifactId {
+        self.id
+    }
+
+    /// Number of bytes streamed from the source.
+    #[must_use]
+    pub fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+}
+
 impl fmt::Debug for BlobStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BlobStore").finish_non_exhaustive()
@@ -207,16 +229,6 @@ impl BlobStore {
     #[must_use]
     pub fn from_arc(inner: Arc<dyn ObjectStore>) -> Self {
         Self { inner }
-    }
-
-    /// Write bytes to an explicit storage key.
-    #[tracing::instrument(skip(self, content), fields(key = %key, len = content.len()))]
-    pub async fn put_bytes(&self, key: &StorageKey, content: Bytes) -> Result<(), StorageError> {
-        self.inner
-            .put(&key.as_object_path(), content.into())
-            .await
-            .map_err(StorageError::from_object_store)?;
-        Ok(())
     }
 
     /// Write `content` under its content-addressed key.
@@ -248,22 +260,19 @@ impl BlobStore {
         Ok(id)
     }
 
-    /// Stream `chunks` to the backend while hashing on the fly, then
-    /// land the content under the canonical `artifacts/<hex>` key.
+    /// Stream `chunks` to backend staging while hashing on the fly.
     ///
     /// Writes are performed via `put_multipart` to a staging key so the
-    /// backend never has to see the whole body at once. The sha256 is
-    /// only known after the stream drains, so once it does the method
-    /// server-side copies the staged object to its canonical key (no
-    /// client round-trip of the bytes) and deletes the stage. A stream
-    /// error or a backend error during upload aborts the multipart,
-    /// leaving no partial object behind.
-    ///
-    /// Returns the canonical [`ArtifactId`] regardless of whether the
-    /// canonical key already existed — matching [`put_artifact`]'s
-    /// idempotency contract.
+    /// backend never has to see the whole body at once. Callers that
+    /// need to consult durable provenance before creating a canonical
+    /// hot copy can inspect the returned id and then either
+    /// [`commit_staged_artifact`](Self::commit_staged_artifact) or
+    /// [`discard_staged_artifact`](Self::discard_staged_artifact).
     #[tracing::instrument(skip(self, chunks))]
-    pub async fn put_artifact_stream<S, E>(&self, mut chunks: S) -> Result<ArtifactId, StorageError>
+    pub async fn stage_artifact_stream<S, E>(
+        &self,
+        mut chunks: S,
+    ) -> Result<StagedArtifact, StorageError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
         E: fmt::Display,
@@ -283,6 +292,7 @@ impl BlobStore {
         let mut write = WriteMultipart::new(upload);
         let mut hasher = Sha256::new();
         let mut wrote_any = false;
+        let mut size_bytes = 0_u64;
 
         while let Some(next) = chunks.next().await {
             let chunk = match next {
@@ -302,6 +312,9 @@ impl BlobStore {
                 // drop them and keep draining the stream.
                 continue;
             }
+            size_bytes = size_bytes
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| CoreError::Validation("artifact exceeds u64 bytes".into()))?;
             hasher.update(&chunk);
             wrote_any = true;
             // Cap in-flight part uploads so a fast producer can't run
@@ -317,13 +330,16 @@ impl BlobStore {
 
         // Zero-byte streams are legal upstream payloads (an API that
         // returns an empty body, a 0-byte XLSX) but S3 rejects
-        // `CompleteMultipartUpload` with zero parts. Abort the
-        // multipart and fall through to the single-shot `put_artifact`
-        // path, which hits the canonical key directly via `put()` and
-        // reuses the same head-first idempotency guard.
+        // `CompleteMultipartUpload` with zero parts. Abort the empty
+        // multipart and return a stage-less handle that commit can
+        // materialise through the single-shot path if needed.
         if !wrote_any {
             let _ = write.abort().await;
-            return self.put_artifact(Bytes::new()).await;
+            return Ok(StagedArtifact {
+                id: ArtifactId::of_content(&[]),
+                size_bytes,
+                staging_path: None,
+            });
         }
 
         if let Err(err) = write.finish().await {
@@ -333,18 +349,39 @@ impl BlobStore {
         }
 
         let id = ArtifactId::from_digest(Sha256Digest::from_bytes(hasher.finalize().into()));
-        let canonical = canonical_object_path(&id);
+        Ok(StagedArtifact {
+            id,
+            size_bytes,
+            staging_path: Some(staging_path),
+        })
+    }
+
+    /// Commit a staged artifact to its canonical content-addressed key.
+    ///
+    /// Returns the canonical [`ArtifactId`] regardless of whether the
+    /// canonical key already existed — matching [`put_artifact`]'s
+    /// idempotency contract. The copy is server-side; bytes do not
+    /// travel back through this process.
+    #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
+    pub async fn commit_staged_artifact(
+        &self,
+        staged: &StagedArtifact,
+    ) -> Result<ArtifactId, StorageError> {
+        let Some(staging_path) = &staged.staging_path else {
+            return self.put_artifact(Bytes::new()).await;
+        };
+        let canonical = canonical_object_path(&staged.id);
 
         // Canonical key already present → discard the stage; caller
         // still gets the deterministic id.
         match self.inner.head(&canonical).await {
             Ok(_) => {
-                self.best_effort_delete_staging(&staging_path).await;
-                return Ok(id);
+                self.best_effort_delete_staging(staging_path).await;
+                return Ok(staged.id);
             }
             Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => {
-                self.best_effort_delete_staging(&staging_path).await;
+                self.best_effort_delete_staging(staging_path).await;
                 return Err(StorageError::from_object_store(err));
             }
         }
@@ -353,12 +390,40 @@ impl BlobStore {
         // process. `copy` overwrites on S3/R2/MinIO, which is fine:
         // content-addressed means "same bytes" even if a concurrent
         // writer got there first.
-        if let Err(err) = self.inner.copy(&staging_path, &canonical).await {
-            self.best_effort_delete_staging(&staging_path).await;
+        if let Err(err) = self.inner.copy(staging_path, &canonical).await {
+            self.best_effort_delete_staging(staging_path).await;
             return Err(StorageError::from_object_store(err));
         }
-        self.best_effort_delete_staging(&staging_path).await;
-        Ok(id)
+        self.best_effort_delete_staging(staging_path).await;
+        Ok(staged.id)
+    }
+
+    /// Discard a staged artifact without creating a canonical hot copy.
+    #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
+    pub async fn discard_staged_artifact(
+        &self,
+        staged: &StagedArtifact,
+    ) -> Result<(), StorageError> {
+        if let Some(staging_path) = &staged.staging_path {
+            self.best_effort_delete_staging(staging_path).await;
+        }
+        Ok(())
+    }
+
+    /// Stream `chunks` to the backend while hashing on the fly, then
+    /// land the content under the canonical `artifacts/<hex>` key.
+    ///
+    /// Writes are staged first because the sha256 is only known after
+    /// the stream drains. Once known, the staged object is server-side
+    /// copied to the canonical key and deleted.
+    #[tracing::instrument(skip(self, chunks))]
+    pub async fn put_artifact_stream<S, E>(&self, chunks: S) -> Result<ArtifactId, StorageError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: fmt::Display,
+    {
+        let staged = self.stage_artifact_stream(chunks).await?;
+        self.commit_staged_artifact(&staged).await
     }
 
     /// Return a streaming reader of the artifact at `key`.
@@ -389,6 +454,26 @@ impl BlobStore {
             Err(ObjectStoreError::NotFound { .. }) => Ok(false),
             Err(err) => Err(StorageError::Backend(err)),
         }
+    }
+
+    /// Return `true` when `key` exists and streams back to `id`.
+    #[tracing::instrument(skip(self))]
+    pub async fn matches_artifact_id(
+        &self,
+        key: &StorageKey,
+        id: ArtifactId,
+    ) -> Result<bool, StorageError> {
+        let mut stream = match self.get(key).await {
+            Ok(stream) => stream,
+            Err(StorageError::NotFound(_)) => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        let mut hasher = Sha256::new();
+        while let Some(chunk) = stream.next().await {
+            hasher.update(&chunk?);
+        }
+        let actual = ArtifactId::from_digest(Sha256Digest::from_bytes(hasher.finalize().into()));
+        Ok(actual == id)
     }
 
     /// Delete the object at `key`.

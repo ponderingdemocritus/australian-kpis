@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use au_kpis_config::DatabaseConfig;
-use au_kpis_db::{connect, get_artifact, migrate, upsert_artifact, upsert_artifact_record};
+use au_kpis_db::{
+    connect, get_artifact, migrate, repair_artifact_storage_key, upsert_artifact,
+    upsert_artifact_record,
+};
 use au_kpis_domain::{Artifact, ArtifactId, SourceId};
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{TimeZone, Utc};
@@ -101,4 +104,49 @@ async fn upsert_artifact_persists_first_seen_provenance() {
 
     assert_eq!(stored, artifact);
     assert_eq!(returned, artifact);
+
+    let repaired = Artifact {
+        storage_key: format!("artifacts/repaired-{}", id.to_hex()),
+        ..stored.clone()
+    };
+    let returned = repair_artifact_storage_key(&pool, &repaired, &stored.storage_key)
+        .await
+        .expect("repair storage key");
+    let stored = get_artifact(&pool, id)
+        .await
+        .expect("load repaired artifact")
+        .expect("artifact row exists");
+    assert_eq!(stored.storage_key, repaired.storage_key);
+    assert_eq!(returned.storage_key, repaired.storage_key);
+
+    let stale_repair = Artifact {
+        storage_key: "artifacts/stale-repair".into(),
+        ..stored.clone()
+    };
+    let returned = repair_artifact_storage_key(&pool, &stale_repair, "artifacts/missing-cold")
+        .await
+        .expect("stale repair is ignored");
+    assert_eq!(returned.storage_key, repaired.storage_key);
+
+    let legacy_id = ArtifactId::of_content(b"legacy-sdmx-json");
+    let legacy = Artifact {
+        id: legacy_id,
+        response_headers: BTreeMap::new(),
+        storage_key: format!("artifacts/{}", legacy_id.to_hex()),
+        ..artifact.clone()
+    };
+    upsert_artifact_record(&pool, &legacy)
+        .await
+        .expect("insert legacy artifact");
+    let legacy_refetch = Artifact {
+        response_headers: BTreeMap::from([(
+            "etag".to_string(),
+            vec!["\"legacy-etag\"".to_string()],
+        )]),
+        ..legacy.clone()
+    };
+    let returned = upsert_artifact_record(&pool, &legacy_refetch)
+        .await
+        .expect("backfill empty response headers on duplicate");
+    assert_eq!(returned.response_headers, legacy_refetch.response_headers);
 }

@@ -12,6 +12,7 @@ async-trait = "0.1"
 au-kpis-adapter = { workspace = true }
 au-kpis-domain = { workspace = true }
 au-kpis-error = { workspace = true }
+au-kpis-storage = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 dhat = { version = "0.3", optional = true }
 futures = "0.3"
@@ -23,8 +24,8 @@ tracing = "0.1"
 dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
-au-kpis-storage = { workspace = true }
+bytes = "1"
 insta = { version = "1", features = ["json"] }
 object_store = "0.11"
 proptest = "1"
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread"] }

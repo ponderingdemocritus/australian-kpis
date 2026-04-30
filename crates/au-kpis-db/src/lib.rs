@@ -121,7 +121,10 @@ pub async fn upsert_artifact_record(
              size_bytes, storage_key, fetched_at
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (id) DO NOTHING"#,
+        ON CONFLICT (id) DO UPDATE
+        SET response_headers = EXCLUDED.response_headers
+        WHERE artifacts.response_headers = '{}'::jsonb
+          AND EXCLUDED.response_headers <> '{}'::jsonb"#,
         artifact.id.digest().as_bytes().as_slice(),
         artifact.source_id.as_str(),
         &artifact.source_url,
@@ -130,6 +133,31 @@ pub async fn upsert_artifact_record(
         size_bytes,
         &artifact.storage_key,
         artifact.fetched_at,
+    )
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+
+    get_artifact(pool, artifact.id)
+        .await?
+        .ok_or_else(|| DbError::Core(CoreError::NotFound(format!("artifact `{}`", artifact.id))))
+}
+
+/// Update an existing artifact row to a verified replacement storage key.
+#[instrument(skip(pool, artifact))]
+pub async fn repair_artifact_storage_key(
+    pool: &PgPool,
+    artifact: &Artifact,
+    observed_storage_key: &str,
+) -> Result<Artifact, DbError> {
+    sqlx::query!(
+        r#"UPDATE artifacts
+           SET storage_key = $2
+           WHERE id = $1
+             AND storage_key = $3"#,
+        artifact.id.digest().as_bytes().as_slice(),
+        &artifact.storage_key,
+        observed_storage_key,
     )
     .execute(pool)
     .await

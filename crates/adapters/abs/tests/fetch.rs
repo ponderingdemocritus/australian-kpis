@@ -1,17 +1,15 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use au_kpis_adapter::{
-    AdapterError, AdapterHttpClient, ArtifactRecorder, FetchCtx, NoopArtifactRecorder,
-    SourceAdapter,
-};
+use au_kpis_adapter::{AdapterError, AdapterHttpClient, ArtifactRecorder, FetchCtx, SourceAdapter};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_domain::{Artifact, ArtifactId};
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageKey};
+use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::StreamExt;
-use object_store::memory::InMemory;
+use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -29,30 +27,102 @@ struct FailingArtifactRecorder;
 
 #[derive(Debug)]
 struct ExistingColdArtifactRecorder {
-    storage_key: String,
+    artifact: Artifact,
+}
+
+#[derive(Debug)]
+struct RacingColdArtifactRecorder {
+    artifact: Artifact,
 }
 
 #[async_trait]
 impl ArtifactRecorder for RecordingArtifactRecorder {
+    async fn get(&self, id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok(self
+            .artifacts
+            .lock()
+            .await
+            .iter()
+            .find(|artifact| artifact.id == id)
+            .cloned())
+    }
+
     async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
         self.artifacts.lock().await.push(artifact.clone());
+        Ok(artifact.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        let mut artifacts = self.artifacts.lock().await;
+        if let Some(stored) = artifacts.iter_mut().find(|stored| stored.id == artifact.id) {
+            stored.storage_key.clone_from(&artifact.storage_key);
+            return Ok(stored.clone());
+        }
+        artifacts.push(artifact.clone());
         Ok(artifact.clone())
     }
 }
 
 #[async_trait]
 impl ArtifactRecorder for ExistingColdArtifactRecorder {
-    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
-        Ok(Artifact {
-            storage_key: self.storage_key.clone(),
-            ..artifact.clone()
-        })
+    async fn get(&self, id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok((self.artifact.id == id).then(|| self.artifact.clone()))
+    }
+
+    async fn record(&self, _artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(self.artifact.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
+}
+
+#[async_trait]
+impl ArtifactRecorder for RacingColdArtifactRecorder {
+    async fn get(&self, _id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok(None)
+    }
+
+    async fn record(&self, _artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(self.artifact.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        _artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        panic!("durable cold blob exists, so repair should not run")
     }
 }
 
 #[async_trait]
 impl ArtifactRecorder for FailingArtifactRecorder {
+    async fn get(&self, _id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok(None)
+    }
+
     async fn record(&self, _artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Err(AdapterError::artifact_record(
+            "db unavailable",
+            ErrorClass::Transient,
+        ))
+    }
+
+    async fn repair_storage_key(
+        &self,
+        _artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
         Err(AdapterError::artifact_record(
             "db unavailable",
             ErrorClass::Transient,
@@ -60,8 +130,8 @@ impl ArtifactRecorder for FailingArtifactRecorder {
     }
 }
 
-fn noop_recorder() -> Arc<NoopArtifactRecorder> {
-    Arc::new(NoopArtifactRecorder)
+fn recording_recorder() -> Arc<RecordingArtifactRecorder> {
+    Arc::new(RecordingArtifactRecorder::default())
 }
 
 fn cpi_job(source_url: String) -> au_kpis_adapter::DiscoveredJob {
@@ -243,7 +313,7 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_writes_provenance_sidecar_when_primary_record_fails() {
+async fn fetch_keeps_canonical_blob_for_retry_when_primary_record_fails() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let blob_store = BlobStore::new(InMemory::new());
@@ -270,25 +340,33 @@ async fn fetch_writes_provenance_sidecar_when_primary_record_fails() {
             .expect("check blob"),
         "raw blob remains available for retry/reconciliation"
     );
-    assert!(
-        blob_store
-            .exists(&StorageKey::from_persisted(format!(
-                "artifact-provenance-failures/{}.json",
-                expected_id.to_hex()
-            )))
-            .await
-            .expect("check provenance sidecar"),
-        "fallback provenance sidecar should be durable when the DB recorder fails"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_removes_hot_copy_when_durable_row_uses_rewritten_storage_key() {
+async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
-    let blob_store = BlobStore::new(InMemory::new());
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let cold_key = format!("cold/{}", expected_id.to_hex());
+    let backend = Arc::new(InMemory::new());
+    backend
+        .put(
+            &ObjectPath::from(cold_key.clone()),
+            Bytes::from_static(SDMX_FIXTURE).into(),
+        )
+        .await
+        .expect("seed durable cold artifact");
+    let blob_store = BlobStore::from_arc(backend);
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: cold_key.clone(),
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
 
     let artifact = adapter
         .fetch(
@@ -297,9 +375,7 @@ async fn fetch_removes_hot_copy_when_durable_row_uses_rewritten_storage_key() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 blob_store.clone(),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-                Arc::new(ExistingColdArtifactRecorder {
-                    storage_key: cold_key.clone(),
-                }),
+                Arc::new(ExistingColdArtifactRecorder { artifact: existing }),
             ),
         )
         .await
@@ -311,7 +387,152 @@ async fn fetch_removes_hot_copy_when_durable_row_uses_rewritten_storage_key() {
             .exists(&StorageKey::canonical_for(&expected_id))
             .await
             .expect("check hot canonical copy"),
-        "hot canonical copy should be removed when the durable row points elsewhere"
+        "duplicate fetch should not create a hot canonical copy when durable row points elsewhere"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_removes_hot_copy_when_rewrite_races_after_lookup() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let cold_key = format!("cold/{}", expected_id.to_hex());
+    let backend = Arc::new(InMemory::new());
+    backend
+        .put(
+            &ObjectPath::from(cold_key.clone()),
+            Bytes::from_static(SDMX_FIXTURE).into(),
+        )
+        .await
+        .expect("seed durable cold artifact");
+    let blob_store = BlobStore::from_arc(backend);
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: cold_key.clone(),
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
+
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(RacingColdArtifactRecorder { artifact: existing }),
+            ),
+        )
+        .await
+        .expect("fetch handles cold rewrite race");
+
+    assert_eq!(artifact.storage_key, cold_key);
+    assert!(
+        !blob_store
+            .exists(&StorageKey::canonical_for(&expected_id))
+            .await
+            .expect("check hot canonical copy"),
+        "race cleanup should remove the unreferenced canonical copy"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let blob_store = BlobStore::new(InMemory::new());
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let missing_key = format!("cold/{}", expected_id.to_hex());
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: missing_key,
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
+
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(ExistingColdArtifactRecorder { artifact: existing }),
+            ),
+        )
+        .await
+        .expect("fetch repairs missing durable storage key");
+
+    assert_eq!(
+        artifact.storage_key,
+        format!("artifacts/{}", expected_id.to_hex())
+    );
+    assert!(
+        blob_store
+            .exists(&StorageKey::canonical_for(&expected_id))
+            .await
+            .expect("check repaired canonical copy"),
+        "repair should keep the streamed canonical blob durable"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let cold_key = format!("cold/{}", expected_id.to_hex());
+    let backend = Arc::new(InMemory::new());
+    backend
+        .put(
+            &ObjectPath::from(cold_key.clone()),
+            Bytes::from_static(b"not the ABS artifact").into(),
+        )
+        .await
+        .expect("seed corrupt cold artifact");
+    let blob_store = BlobStore::from_arc(backend);
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: cold_key,
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
+
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(ExistingColdArtifactRecorder { artifact: existing }),
+            ),
+        )
+        .await
+        .expect("fetch repairs corrupt durable storage key");
+
+    assert_eq!(
+        artifact.storage_key,
+        format!("artifacts/{}", expected_id.to_hex())
+    );
+    assert!(
+        blob_store
+            .matches_artifact_id(&StorageKey::canonical_for(&expected_id), expected_id)
+            .await
+            .expect("hash repaired canonical copy"),
+        "repair should preserve a canonical blob matching the artifact id"
     );
 }
 
@@ -326,7 +547,7 @@ async fn fetch_preserves_retry_after_on_upstream_throttle() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-                noop_recorder(),
+                recording_recorder(),
             ),
         )
         .await
@@ -359,7 +580,7 @@ async fn fetch_encodes_non_utf8_response_headers_losslessly() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-                noop_recorder(),
+                recording_recorder(),
             ),
         )
         .await
@@ -385,7 +606,7 @@ async fn fetch_rejects_abs_metadata_that_conflicts_with_typed_dataflow() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-                noop_recorder(),
+                recording_recorder(),
             ),
         )
         .await
@@ -415,7 +636,7 @@ async fn fetch_rejects_jobs_for_other_sources() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-                noop_recorder(),
+                recording_recorder(),
             ),
         )
         .await
@@ -445,7 +666,7 @@ async fn fetch_rejects_non_canonical_source_urls() {
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
                 Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
-                noop_recorder(),
+                recording_recorder(),
             ),
         )
         .await

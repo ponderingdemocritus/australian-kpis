@@ -3,14 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -20,8 +13,9 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{Artifact, DataflowId, SourceId};
 use au_kpis_error::CoreError;
+use au_kpis_storage::StorageKey;
 use chrono::Utc;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, stream};
 use serde::Deserialize;
 
 const DEFAULT_BASE_URL: &str = "https://data.api.abs.gov.au/rest";
@@ -188,17 +182,29 @@ impl SourceAdapter for AbsAdapter {
             .and_then(|value| value.to_str().ok())
             .map_or_else(|| DATA_JSON_ACCEPT.to_string(), str::to_string);
 
-        let size_bytes = Arc::new(AtomicU64::new(0));
-        let counted = {
-            let size_bytes = Arc::clone(&size_bytes);
-            response.bytes_stream().map_ok(move |chunk| {
-                size_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-                chunk
-            })
-        };
-        let id = ctx.blob_store.put_artifact_stream(counted.boxed()).await?;
-        let fetched_at = Utc::now();
+        let staged = ctx
+            .blob_store
+            .stage_artifact_stream(response.bytes_stream().boxed())
+            .await?;
+        let id = staged.id();
         let storage_key = format!("artifacts/{}", id.to_hex());
+
+        if let Some(existing) = ctx.get_artifact(id).await? {
+            let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
+            if (existing.storage_key == storage_key && ctx.blob_store.exists(&existing_key).await?)
+                || (existing.storage_key != storage_key
+                    && ctx
+                        .blob_store
+                        .matches_artifact_id(&existing_key, id)
+                        .await?)
+            {
+                ctx.blob_store.discard_staged_artifact(&staged).await?;
+                return Ok(existing);
+            }
+        }
+
+        ctx.blob_store.commit_staged_artifact(&staged).await?;
+        let fetched_at = Utc::now();
 
         let artifact = Artifact {
             id,
@@ -207,22 +213,23 @@ impl SourceAdapter for AbsAdapter {
             content_type,
             response_headers,
             storage_key,
-            size_bytes: size_bytes.load(Ordering::Relaxed),
+            size_bytes: staged.size_bytes(),
             fetched_at,
         };
 
-        match ctx.persist_artifact(artifact.clone()).await {
-            Ok(reference) => {
-                if reference.storage_key != artifact.storage_key {
-                    ctx.delete_artifact(&artifact.storage_key).await?;
-                }
-                Ok(reference)
-            }
-            Err(err) => {
-                ctx.record_artifact_provenance_fallback(&artifact).await?;
-                Err(err)
-            }
+        let reference = ctx.persist_artifact(artifact.clone()).await?;
+        if reference.storage_key == artifact.storage_key {
+            return Ok(reference);
         }
+
+        let durable_key = StorageKey::from_persisted(reference.storage_key.clone());
+        if ctx.blob_store.matches_artifact_id(&durable_key, id).await? {
+            ctx.delete_artifact(&artifact.storage_key).await?;
+            return Ok(reference);
+        }
+
+        ctx.repair_artifact_storage_key(artifact, &reference.storage_key)
+            .await
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {

@@ -21,7 +21,6 @@ use au_kpis_domain::{
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -38,19 +37,18 @@ pub type ArtifactRecorderRef = Arc<dyn ArtifactRecorder>;
 /// Persists artifact provenance after a fetch stores raw bytes.
 #[async_trait]
 pub trait ArtifactRecorder: fmt::Debug + Send + Sync + 'static {
+    /// Load a durable artifact row by content id, when one already exists.
+    async fn get(&self, id: ArtifactId) -> Result<Option<Artifact>, AdapterError>;
+
     /// Persist one fetched artifact row.
     async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError>;
-}
 
-/// Artifact recorder for tests or intentionally non-persistent callers.
-#[derive(Debug, Default)]
-pub struct NoopArtifactRecorder;
-
-#[async_trait]
-impl ArtifactRecorder for NoopArtifactRecorder {
-    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
-        Ok(artifact.clone())
-    }
+    /// Repair a durable row whose storage key no longer points at an object.
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError>;
 }
 
 /// Capture an HTTP header map for artifact provenance without silently
@@ -360,20 +358,22 @@ impl FetchCtx {
         Ok(self.artifact_recorder.record(&artifact).await?.into())
     }
 
-    /// Persist a sidecar provenance record when the primary recorder is unavailable.
-    pub async fn record_artifact_provenance_fallback(
+    /// Load durable artifact provenance for a content id, if present.
+    pub async fn get_artifact(&self, id: ArtifactId) -> Result<Option<ArtifactRef>, AdapterError> {
+        Ok(self.artifact_recorder.get(id).await?.map(Into::into))
+    }
+
+    /// Point durable provenance back at a known-good storage key.
+    pub async fn repair_artifact_storage_key(
         &self,
-        artifact: &Artifact,
-    ) -> Result<(), AdapterError> {
-        let storage_key = format!("artifact-provenance-failures/{}.json", artifact.id.to_hex());
-        let content = serde_json::to_vec(artifact).map_err(CoreError::from)?;
-        self.blob_store
-            .put_bytes(
-                &StorageKey::from_persisted(storage_key),
-                Bytes::from(content),
-            )
-            .await?;
-        Ok(())
+        artifact: Artifact,
+        observed_storage_key: &str,
+    ) -> Result<ArtifactRef, AdapterError> {
+        Ok(self
+            .artifact_recorder
+            .repair_storage_key(&artifact, observed_storage_key)
+            .await?
+            .into())
     }
 
     /// Delete a storage key that is known not to be the durable artifact row.
