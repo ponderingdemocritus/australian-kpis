@@ -85,6 +85,12 @@ impl AbsAdapter {
         let agency_id = required_metadata(job, "agency_id")?;
         let dataflow_id = required_metadata(job, "abs_dataflow_id")?;
         let version = required_metadata(job, "version")?;
+        if job.dataflow_id.as_str() != "abs.cpi" || agency_id != "ABS" || dataflow_id != "CPI" {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch metadata `{agency_id}:{dataflow_id}` does not match dataflow `{}`",
+                job.dataflow_id.as_str()
+            )));
+        }
         let expected = data_url_from_base(&self.base_url, agency_id, dataflow_id, version);
 
         if job.source_url != expected {

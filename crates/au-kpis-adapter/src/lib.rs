@@ -35,7 +35,9 @@ pub type ObservationStream<'a> =
 /// dropping non-visible-ASCII values.
 ///
 /// Values that cannot be represented as `HeaderValue::to_str()` are encoded as
-/// lower-case hex with a `hex:` prefix so the original bytes remain recoverable.
+/// lower-case hex with a `bytes:hex:` prefix so the original bytes remain
+/// recoverable. Text values that would collide with that reserved prefix are
+/// escaped with `text:`.
 #[must_use]
 pub fn capture_response_headers(headers: &reqwest::header::HeaderMap) -> ResponseHeaders {
     let mut captured = ResponseHeaders::new();
@@ -60,8 +62,14 @@ pub fn retry_after_delta(headers: &ResponseHeaders) -> Option<Duration> {
 
 fn header_value_for_audit(value: &reqwest::header::HeaderValue) -> String {
     value.to_str().map_or_else(
-        |_| format!("hex:{}", hex_lower(value.as_bytes())),
-        str::to_string,
+        |_| format!("bytes:hex:{}", hex_lower(value.as_bytes())),
+        |text| {
+            if text.starts_with("bytes:") || text.starts_with("text:") {
+                format!("text:{text}")
+            } else {
+                text.to_string()
+            }
+        },
     )
 }
 

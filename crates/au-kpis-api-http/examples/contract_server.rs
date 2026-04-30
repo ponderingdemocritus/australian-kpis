@@ -81,6 +81,13 @@ async fn main() {
     let listener = TcpListener::bind(&addr)
         .await
         .expect("bind contract server listener");
+    let actual_addr = listener
+        .local_addr()
+        .expect("read contract server listener address");
+    if let Ok(path) = std::env::var("AU_KPIS_CONTRACT_ADDR_FILE") {
+        std::fs::write(path, actual_addr.to_string()).expect("write contract server address");
+    }
+    println!("contract server listening on {actual_addr}");
     let app = router(state).expect("router");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.cancelled_owned())

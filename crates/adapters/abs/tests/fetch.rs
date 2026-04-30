@@ -122,6 +122,7 @@ async fn serve_non_utf8_header_once() -> (String, String) {
         let mut response =
             b"HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\nx-raw: ".to_vec();
         response.extend_from_slice(&[0xff, 0xfe]);
+        response.extend_from_slice(b"\r\nx-text: bytes:hex:fffe");
         response.extend_from_slice(
             format!("\r\ncontent-length: {}\r\n\r\n", SDMX_FIXTURE.len()).as_bytes(),
         );
@@ -235,7 +236,32 @@ async fn fetch_encodes_non_utf8_response_headers_losslessly() {
         .await
         .expect("fetch artifact with non-UTF8 response header");
 
-    assert_eq!(artifact.response_headers["x-raw"], ["hex:fffe"]);
+    assert_eq!(artifact.response_headers["x-raw"], ["bytes:hex:fffe"]);
+    assert_eq!(artifact.response_headers["x-text"], ["text:bytes:hex:fffe"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_rejects_abs_metadata_that_conflicts_with_typed_dataflow() {
+    let adapter = AbsAdapter::default();
+    let mut job = cpi_job(
+        "https://data.api.abs.gov.au/rest/data/ABS,WPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"
+            .into(),
+    );
+    job.metadata.insert("abs_dataflow_id".into(), "WPI".into());
+
+    let err = adapter
+        .fetch(
+            job,
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                BlobStore::new(InMemory::new()),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+            ),
+        )
+        .await
+        .expect_err("metadata conflict should fail before HTTP");
+
+    assert!(err.to_string().contains("does not match dataflow"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

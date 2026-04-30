@@ -442,19 +442,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/contract
-          port="$(python - <<'PY'
-          import socket
-
-          with socket.socket() as sock:
-              sock.bind(("127.0.0.1", 0))
-              print(sock.getsockname()[1])
-          PY
-          )"
-          export AU_KPIS_CONTRACT_ADDR="127.0.0.1:${port}"
-          echo "AU_KPIS_CONTRACT_ADDR=${AU_KPIS_CONTRACT_ADDR}" >> "$GITHUB_ENV"
           cargo build -p au-kpis-api-http --example contract_server --locked
-          ./target/debug/examples/contract_server > target/contract/server.log 2>&1 &
+          AU_KPIS_CONTRACT_ADDR="127.0.0.1:0" \
+          AU_KPIS_CONTRACT_ADDR_FILE="target/contract/server.addr" \
+            ./target/debug/examples/contract_server > target/contract/server.log 2>&1 &
           echo $! > target/contract/server.pid
+          for _ in $(seq 1 120); do
+            if [ -s target/contract/server.addr ]; then
+              export AU_KPIS_CONTRACT_ADDR="$(cat target/contract/server.addr)"
+              echo "AU_KPIS_CONTRACT_ADDR=${AU_KPIS_CONTRACT_ADDR}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Contract server did not report its bound address" >&2
+          cat target/contract/server.log >&2 || true
+          exit 1
 
       - name: Wait for API readiness
         shell: bash
