@@ -4,7 +4,15 @@
   "describe": {
     "columns": [],
     "parameters": {
-      "Left": ["Int8", "Text", "Jsonb", "Int4", "Text", "Text", "Text"]
+      "Left": [
+        "Int8",
+        "Text",
+        "Jsonb",
+        "Int4",
+        "Text",
+        "Text",
+        "Text"
+      ]
     },
     "nullable": []
   },

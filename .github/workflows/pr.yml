@@ -335,6 +335,13 @@ jobs:
             exit 1
           fi
 
+      - name: Enforce ABS fetch streaming memory budget
+        run: |
+          cargo test -p au-kpis-adapter-abs \
+            --features dhat-heap \
+            --test fetch_memory \
+            -- --ignored --nocapture
+
   coverage:
     name: Rust Coverage
     runs-on: ubuntu-latest

@@ -19,6 +19,7 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::CoreError;
+use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::Deserialize;
 
@@ -167,6 +168,7 @@ impl SourceAdapter for AbsAdapter {
             })
         };
         let id = ctx.blob_store.put_artifact_stream(counted.boxed()).await?;
+        let fetched_at = Utc::now();
 
         Ok(ArtifactRef {
             id,
@@ -176,7 +178,7 @@ impl SourceAdapter for AbsAdapter {
             response_headers,
             storage_key: format!("artifacts/{}", id.to_hex()),
             size_bytes: size_bytes.load(Ordering::Relaxed),
-            fetched_at: ctx.started_at,
+            fetched_at,
         })
     }
 

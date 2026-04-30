@@ -37,7 +37,7 @@ async fn seed_abs_source(pool: &PgPool) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn upsert_artifact_persists_content_hash_and_response_headers() {
+async fn upsert_artifact_persists_first_seen_provenance() {
     let timescale = start_timescale("au_kpis_test")
         .await
         .expect("start timescaledb container");
@@ -70,9 +70,19 @@ async fn upsert_artifact_persists_content_hash_and_response_headers() {
     upsert_artifact(&pool, &artifact)
         .await
         .expect("upsert artifact");
-    upsert_artifact(&pool, &artifact)
+
+    let later_duplicate = Artifact {
+        source_url: "https://mirror.example.invalid/rest/data/ABS,CPI,2.0.0/all".into(),
+        content_type: "application/octet-stream".into(),
+        response_headers: BTreeMap::from([("etag".to_string(), "\"mirror-etag\"".to_string())]),
+        size_bytes: 99,
+        storage_key: "artifacts/mirror-copy".into(),
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 30, 0, 0, 0).unwrap(),
+        ..artifact.clone()
+    };
+    upsert_artifact(&pool, &later_duplicate)
         .await
-        .expect("idempotent artifact upsert");
+        .expect("duplicate artifact insert is a no-op");
 
     let stored = get_artifact(&pool, id)
         .await

@@ -102,7 +102,10 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
         "Wed, 29 Apr 2026 00:00:00 GMT"
     );
     assert_eq!(artifact.size_bytes, SDMX_FIXTURE.len() as u64);
-    assert_eq!(artifact.fetched_at, started_at);
+    assert!(
+        artifact.fetched_at > started_at,
+        "fetched_at should be captured after the streamed write completes"
+    );
     assert_eq!(
         artifact.storage_key,
         format!("artifacts/{}", expected_id.to_hex())

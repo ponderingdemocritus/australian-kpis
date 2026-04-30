@@ -36,7 +36,7 @@ use std::time::Duration;
 use au_kpis_config::DatabaseConfig;
 use au_kpis_domain::{Artifact, SourceId, ids::ArtifactId};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
-use sqlx::{PgPool, Row, migrate::Migrator, postgres::PgPoolOptions};
+use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -83,12 +83,12 @@ impl Classify for DbError {
     }
 }
 
-/// Insert or update a raw source artifact row.
+/// Insert a raw source artifact row.
 ///
 /// The artifact id is the SHA-256 digest of the stored bytes; using it as
 /// the primary key makes repeated fetches of identical upstream content
-/// idempotent while still allowing metadata such as response headers to be
-/// refreshed.
+/// idempotent. On duplicate content the original provenance row is preserved
+/// unchanged.
 #[instrument(skip(pool, artifact))]
 pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), DbError> {
     let size_bytes = i64::try_from(artifact.size_bytes).map_err(|_| {
@@ -100,29 +100,22 @@ pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), D
     let response_headers =
         serde_json::to_value(&artifact.response_headers).map_err(CoreError::from)?;
 
-    sqlx::query(
-        "INSERT INTO artifacts (
+    sqlx::query!(
+        r#"INSERT INTO artifacts (
              id, source_id, source_url, content_type, response_headers,
              size_bytes, storage_key, fetched_at
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (id) DO UPDATE SET
-             source_id = EXCLUDED.source_id,
-             source_url = EXCLUDED.source_url,
-             content_type = EXCLUDED.content_type,
-             response_headers = EXCLUDED.response_headers,
-             size_bytes = EXCLUDED.size_bytes,
-             storage_key = EXCLUDED.storage_key,
-             fetched_at = EXCLUDED.fetched_at",
+        ON CONFLICT (id) DO NOTHING"#,
+        artifact.id.digest().as_bytes().as_slice(),
+        artifact.source_id.as_str(),
+        &artifact.source_url,
+        &artifact.content_type,
+        response_headers,
+        size_bytes,
+        &artifact.storage_key,
+        artifact.fetched_at,
     )
-    .bind(artifact.id.digest().as_bytes().as_slice())
-    .bind(artifact.source_id.as_str())
-    .bind(&artifact.source_url)
-    .bind(&artifact.content_type)
-    .bind(response_headers)
-    .bind(size_bytes)
-    .bind(&artifact.storage_key)
-    .bind(artifact.fetched_at)
     .execute(pool)
     .await
     .map_err(DbError::Query)?;
@@ -133,49 +126,60 @@ pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), D
 /// Load a raw source artifact row by content hash.
 #[instrument(skip(pool))]
 pub async fn get_artifact(pool: &PgPool, id: ArtifactId) -> Result<Option<Artifact>, DbError> {
-    let row = sqlx::query(
-        "SELECT id, source_id, source_url, content_type, response_headers,
-                size_bytes, storage_key, fetched_at
+    let row = sqlx::query!(
+        r#"SELECT id,
+                  source_id,
+                  source_url,
+                  content_type,
+                  response_headers AS "response_headers!: serde_json::Value",
+                  size_bytes,
+                  storage_key,
+                  fetched_at
          FROM artifacts
-         WHERE id = $1",
+         WHERE id = $1"#,
+        id.digest().as_bytes().as_slice(),
     )
-    .bind(id.digest().as_bytes().as_slice())
     .fetch_optional(pool)
     .await
     .map_err(DbError::Query)?;
 
-    row.map(row_to_artifact).transpose()
+    row.map(|row| {
+        let id_array = artifact_id_bytes(row.id)?;
+        let source_id =
+            SourceId::new(row.source_id).map_err(|err| CoreError::Validation(err.to_string()))?;
+        let response_headers =
+            serde_json::from_value(row.response_headers).map_err(CoreError::from)?;
+        let size_bytes = u64::try_from(row.size_bytes).map_err(|_| {
+            CoreError::Validation(format!(
+                "artifact size from database is negative: {}",
+                row.size_bytes
+            ))
+        })?;
+
+        Ok(Artifact {
+            id: ArtifactId::from_digest(au_kpis_domain::ids::Sha256Digest::from_bytes(id_array)),
+            source_id,
+            source_url: row.source_url,
+            content_type: row.content_type,
+            response_headers,
+            size_bytes,
+            storage_key: row.storage_key,
+            fetched_at: row.fetched_at,
+        })
+    })
+    .transpose()
 }
 
-fn row_to_artifact(row: sqlx::postgres::PgRow) -> Result<Artifact, DbError> {
-    let id_bytes = row.get::<Vec<u8>, _>("id");
-    let id_array: [u8; 32] = id_bytes.try_into().map_err(|bytes: Vec<u8>| {
-        CoreError::Validation(format!(
-            "artifact id from database has {} bytes, expected 32",
-            bytes.len()
-        ))
-    })?;
-    let source_id = SourceId::new(row.get::<String, _>("source_id"))
-        .map_err(|err| CoreError::Validation(err.to_string()))?;
-    let response_headers =
-        serde_json::from_value(row.get("response_headers")).map_err(CoreError::from)?;
-    let size_bytes = row.get::<i64, _>("size_bytes");
-    let size_bytes = u64::try_from(size_bytes).map_err(|_| {
-        CoreError::Validation(format!(
-            "artifact size from database is negative: {size_bytes}"
-        ))
-    })?;
-
-    Ok(Artifact {
-        id: ArtifactId::from_digest(au_kpis_domain::ids::Sha256Digest::from_bytes(id_array)),
-        source_id,
-        source_url: row.get("source_url"),
-        content_type: row.get("content_type"),
-        response_headers,
-        size_bytes,
-        storage_key: row.get("storage_key"),
-        fetched_at: row.get("fetched_at"),
-    })
+fn artifact_id_bytes(id_bytes: Vec<u8>) -> Result<[u8; 32], DbError> {
+    id_bytes
+        .try_into()
+        .map_err(|bytes: Vec<u8>| {
+            CoreError::Validation(format!(
+                "artifact id from database has {} bytes, expected 32",
+                bytes.len()
+            ))
+        })
+        .map_err(DbError::Core)
 }
 
 /// Tunables for [`connect_with`]. Defaults suit a single API binary; workers
