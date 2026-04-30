@@ -6,6 +6,7 @@
 use std::{
     collections::BTreeMap,
     fmt,
+    future::Future,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -74,6 +75,7 @@ impl PdfClient {
             response
                 .bytes_stream()
                 .map(|chunk| chunk.map_err(PdfClientError::Http)),
+            self.request_timeout,
         ))
     }
 
@@ -190,15 +192,21 @@ impl PdfClient {
 /// Streaming byte response from the PDF sidecar.
 pub struct ExtractionStream {
     inner: Pin<Box<dyn Stream<Item = Result<Bytes, PdfClientError>> + Send + 'static>>,
+    timeout: Duration,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    finished: bool,
 }
 
 impl ExtractionStream {
-    fn new<S>(stream: S) -> Self
+    fn new<S>(stream: S, timeout: Duration) -> Self
     where
         S: Stream<Item = Result<Bytes, PdfClientError>> + Send + 'static,
     {
         Self {
             inner: Box::pin(stream),
+            timeout,
+            deadline: None,
+            finished: false,
         }
     }
 }
@@ -213,7 +221,38 @@ impl Stream for ExtractionStream {
     type Item = Result<Bytes, PdfClientError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.get_mut().inner.as_mut().poll_next(cx)
+        let this = self.get_mut();
+        if this.finished {
+            return Poll::Ready(None);
+        }
+        if this.deadline.is_none() {
+            this.deadline = Some(Box::pin(tokio::time::sleep(this.timeout)));
+        }
+
+        match this.inner.as_mut().poll_next(cx) {
+            Poll::Ready(item) => {
+                this.deadline = None;
+                if item.is_none() {
+                    this.finished = true;
+                }
+                Poll::Ready(item)
+            }
+            Poll::Pending => {
+                let timed_out = this
+                    .deadline
+                    .as_mut()
+                    .is_some_and(|deadline| deadline.as_mut().poll(cx).is_ready());
+                if timed_out {
+                    this.deadline = None;
+                    this.finished = true;
+                    Poll::Ready(Some(Err(PdfClientError::Timeout {
+                        timeout: this.timeout,
+                    })))
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
     }
 }
 
@@ -390,9 +429,9 @@ pub enum ExtractionStrategy {
 
 /// Response body returned by the PDF sidecar.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExtractionResponse {
     /// Artifact key extracted by the sidecar.
-    #[serde(alias = "s3_key")]
     pub artifact_key: String,
     /// Backend that produced table candidates.
     pub backend: BackendInfo,
@@ -402,6 +441,7 @@ pub struct ExtractionResponse {
 
 /// Backend metadata for extraction.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackendInfo {
     /// Backend kind.
     pub kind: ExtractionBackendKind,
@@ -425,6 +465,7 @@ pub enum ExtractionBackendKind {
 
 /// Extracted table candidate.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TableCandidate {
     /// 1-indexed page number.
     pub page: u32,
@@ -433,7 +474,7 @@ pub struct TableCandidate {
     /// Raw table cells, preserving sidecar row/column structure.
     pub cells: Vec<Vec<String>>,
     /// Row/column span metadata for merged cells when available.
-    #[serde(default, alias = "cell_spans")]
+    #[serde(default)]
     pub spans: Vec<CellSpan>,
     /// Backend diagnostics such as confidence.
     #[serde(default)]
@@ -442,6 +483,7 @@ pub struct TableCandidate {
 
 /// Row/column span metadata for a table cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CellSpan {
     /// Zero-indexed cell row.
     pub row: u32,
@@ -618,9 +660,9 @@ mod tests {
     }
 
     #[test]
-    fn extraction_response_accepts_s3_key_alias_and_requires_tables() {
+    fn extraction_response_requires_contract_fields() {
         let response: ExtractionResponse = serde_json::from_value(serde_json::json!({
-            "s3_key": "raw/report.pdf",
+            "artifact_key": "raw/report.pdf",
             "backend": {
                 "kind": "model",
                 "name": "layoutlm",
@@ -638,6 +680,19 @@ mod tests {
 
         let err = serde_json::from_value::<ExtractionResponse>(serde_json::json!({
             "s3_key": "raw/report.pdf",
+            "backend": {
+                "kind": "model",
+                "name": "layoutlm",
+                "version": "1.0.0",
+                "model_sha256": "abc123"
+            },
+            "tables": []
+        }))
+        .expect_err("s3_key is a request field, not a response field");
+        assert!(err.to_string().contains("artifact_key"));
+
+        let err = serde_json::from_value::<ExtractionResponse>(serde_json::json!({
+            "artifact_key": "raw/report.pdf",
             "backend": {
                 "kind": "model",
                 "name": "layoutlm",
@@ -681,6 +736,33 @@ mod tests {
         assert_eq!(response.tables[0].spans[0].column, 0);
         assert_eq!(response.tables[0].spans[0].row_span, 1);
         assert_eq!(response.tables[0].spans[0].column_span, 2);
+
+        let err = serde_json::from_value::<ExtractionResponse>(serde_json::json!({
+            "artifact_key": "raw/report.pdf",
+            "backend": {
+                "kind": "deterministic",
+                "name": "camelot",
+                "version": "1.0.0",
+                "model_sha256": null
+            },
+            "tables": [
+                {
+                    "page": 3,
+                    "bbox": [10.0, 20.0, 30.0, 40.0],
+                    "cells": [["Year", "Revenue"]],
+                    "cell_spans": [
+                        {
+                            "row": 0,
+                            "column": 0,
+                            "row_span": 1,
+                            "column_span": 2
+                        }
+                    ]
+                }
+            ]
+        }))
+        .expect_err("cell_spans is not part of the sidecar response contract");
+        assert!(err.to_string().contains("cell_spans"));
     }
 
     #[test]

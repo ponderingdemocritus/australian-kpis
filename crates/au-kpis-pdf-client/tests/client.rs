@@ -28,7 +28,7 @@ use tracing_subscriber::{
 #[derive(Debug, Clone)]
 struct SpanCounter {
     name: &'static str,
-    count: &'static AtomicUsize,
+    count: Arc<AtomicUsize>,
 }
 
 impl<S> Layer<S> for SpanCounter
@@ -202,7 +202,7 @@ async fn extract_posts_typed_request_and_parses_tables() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extract_retries_5xx_with_backoff() {
     let success = r#"{
-      "s3_key": "artifacts/abc123",
+      "artifact_key": "artifacts/abc123",
       "backend": {
         "kind": "deterministic",
         "name": "pdfplumber",
@@ -229,7 +229,7 @@ async fn extract_retries_5xx_with_backoff() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extract_retries_429_with_retry_after() {
     let success = r#"{
-      "s3_key": "artifacts/abc123",
+      "artifact_key": "artifacts/abc123",
       "backend": {
         "kind": "deterministic",
         "name": "pdfplumber",
@@ -334,10 +334,59 @@ async fn extract_stream_yields_body_before_full_response_arrives() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extract_stream_timeout_bounds_incomplete_response_body() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+    let addr = listener.local_addr().expect("server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let request = read_http_request(&mut stream).await;
+        assert!(request.starts_with("POST /extract HTTP/1.1"));
+
+        let first = br#"{"artifact_key":"artifacts/abc123","#;
+        let headers = format!(
+            "HTTP/1.1 200 test\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+            first.len() + 128
+        );
+        stream
+            .write_all(headers.as_bytes())
+            .await
+            .expect("write headers");
+        stream.write_all(first).await.expect("write first chunk");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    });
+
+    let client = PdfClient::builder()
+        .base_url(format!("http://{addr}"))
+        .http_client(reqwest::Client::new())
+        .timeout(Duration::from_millis(20))
+        .retry_policy(RetryPolicy::none())
+        .build()
+        .unwrap();
+
+    let mut stream = client
+        .extract_stream(request())
+        .await
+        .expect("stream response");
+    stream
+        .next()
+        .await
+        .expect("first body chunk")
+        .expect("first body chunk succeeds");
+    let err = stream
+        .next()
+        .await
+        .expect("timeout chunk")
+        .expect_err("incomplete streamed body should time out");
+
+    assert!(matches!(err, PdfClientError::Timeout { .. }));
+    assert_eq!(err.class(), ErrorClass::Transient);
+    assert!(stream.next().await.is_none());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn extract_emits_outbound_http_span() {
-    static SPAN_COUNT: AtomicUsize = AtomicUsize::new(0);
-
     let body = r#"{
       "artifact_key": "artifacts/abc123",
       "backend": {
@@ -354,16 +403,16 @@ async fn extract_emits_outbound_http_span() {
         .retry_policy(RetryPolicy::none())
         .build()
         .unwrap();
-    SPAN_COUNT.store(0, Ordering::SeqCst);
+    let span_count = Arc::new(AtomicUsize::new(0));
     let subscriber = tracing_subscriber::registry().with(SpanCounter {
         name: "HTTP request",
-        count: &SPAN_COUNT,
+        count: Arc::clone(&span_count),
     });
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    let _guard = tracing::subscriber::set_default(subscriber);
 
     client.extract(request()).await.expect("extract");
 
-    assert!(SPAN_COUNT.load(Ordering::SeqCst) >= 1);
+    assert_eq!(span_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
