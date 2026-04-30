@@ -3,10 +3,21 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use au_kpis_error::{Classify, ErrorClass};
-use reqwest::{StatusCode, Url};
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
+use reqwest::{
+    StatusCode, Url,
+    header::{HeaderMap, RETRY_AFTER},
+};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::{OtelName, TracingMiddleware};
 use serde::{Deserialize, Serialize};
@@ -45,11 +56,69 @@ impl PdfClient {
             .base_url
             .join("extract")
             .map_err(|err| PdfClientError::InvalidUrl(err.to_string()))?;
+        self.extract_with_retries(&url, &request).await
+    }
+
+    /// Request table extraction and return the sidecar response body as a byte stream.
+    #[tracing::instrument(skip(self, request), fields(s3_key = %request.s3_key))]
+    pub async fn extract_stream(
+        &self,
+        request: ExtractRequest,
+    ) -> Result<ExtractionStream, PdfClientError> {
+        let url = self
+            .base_url
+            .join("extract")
+            .map_err(|err| PdfClientError::InvalidUrl(err.to_string()))?;
+        let response = self.send_extract_with_retries(&url, &request).await?;
+        Ok(ExtractionStream::new(
+            response
+                .bytes_stream()
+                .map(|chunk| chunk.map_err(PdfClientError::Http)),
+        ))
+    }
+
+    async fn send_extract_with_retries(
+        &self,
+        url: &Url,
+        request: &ExtractRequest,
+    ) -> Result<reqwest::Response, PdfClientError> {
+        let mut attempt = 1;
+
+        loop {
+            let result = match tokio::time::timeout(
+                self.request_timeout,
+                self.send_extract_once(url, request),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(PdfClientError::Timeout {
+                    timeout: self.request_timeout,
+                }),
+            };
+            match result {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    let Some(delay) = self.retry_delay(attempt, &err) else {
+                        return Err(err);
+                    };
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    async fn extract_with_retries(
+        &self,
+        url: &Url,
+        request: &ExtractRequest,
+    ) -> Result<ExtractionResponse, PdfClientError> {
         let mut attempt = 1;
 
         loop {
             let result =
-                match tokio::time::timeout(self.request_timeout, self.post_extract(&url, &request))
+                match tokio::time::timeout(self.request_timeout, self.extract_once(url, request))
                     .await
                 {
                     Ok(result) => result,
@@ -59,22 +128,43 @@ impl PdfClient {
                 };
             match result {
                 Ok(response) => return Ok(response),
-                Err(err)
-                    if attempt < self.retry_policy.max_attempts && err.class().is_retryable() =>
-                {
-                    tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
+                Err(err) => {
+                    let Some(delay) = self.retry_delay(attempt, &err) else {
+                        return Err(err);
+                    };
+                    tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
-                Err(err) => return Err(err),
             }
         }
     }
 
-    async fn post_extract(
+    async fn extract_once(
         &self,
         url: &Url,
         request: &ExtractRequest,
     ) -> Result<ExtractionResponse, PdfClientError> {
+        let response = self.send_extract_once(url, request).await?;
+        let body = response.bytes().await?;
+        Ok(serde_json::from_slice(&body)?)
+    }
+
+    fn retry_delay(&self, attempt: u32, err: &PdfClientError) -> Option<Duration> {
+        if attempt < self.retry_policy.max_attempts && err.class().is_retryable() {
+            Some(
+                err.retry_after()
+                    .unwrap_or_else(|| self.retry_policy.delay_for_attempt(attempt)),
+            )
+        } else {
+            None
+        }
+    }
+
+    async fn send_extract_once(
+        &self,
+        url: &Url,
+        request: &ExtractRequest,
+    ) -> Result<reqwest::Response, PdfClientError> {
         let response = self
             .client
             .post(url.clone())
@@ -84,11 +174,46 @@ impl PdfClient {
             .await?;
         let status = response.status();
         if status.is_success() {
-            return Ok(response.json().await?);
+            return Ok(response);
         }
 
+        let retry_after = retry_after_header(response.headers());
         let body = response.text().await.unwrap_or_default();
-        Err(PdfClientError::Status { status, body })
+        Err(PdfClientError::Status {
+            status,
+            body,
+            retry_after,
+        })
+    }
+}
+
+/// Streaming byte response from the PDF sidecar.
+pub struct ExtractionStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, PdfClientError>> + Send + 'static>>,
+}
+
+impl ExtractionStream {
+    fn new<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<Bytes, PdfClientError>> + Send + 'static,
+    {
+        Self {
+            inner: Box::pin(stream),
+        }
+    }
+}
+
+impl fmt::Debug for ExtractionStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtractionStream").finish_non_exhaustive()
+    }
+}
+
+impl Stream for ExtractionStream {
+    type Item = Result<Bytes, PdfClientError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().inner.as_mut().poll_next(cx)
     }
 }
 
@@ -354,6 +479,8 @@ pub enum PdfClientError {
         status: StatusCode,
         /// Response body, if available.
         body: String,
+        /// Parsed `Retry-After` hint when the sidecar supplied one.
+        retry_after: Option<Duration>,
     },
 
     /// Sidecar request exceeded the configured timeout.
@@ -366,6 +493,10 @@ pub enum PdfClientError {
     /// Caller supplied invalid configuration.
     #[error("validation: {0}")]
     Validation(String),
+
+    /// Sidecar response body did not match the expected response shape.
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 impl Classify for PdfClientError {
@@ -374,6 +505,7 @@ impl Classify for PdfClientError {
             Self::MissingBaseUrl | Self::InvalidUrl(_) | Self::Validation(_) => {
                 ErrorClass::Validation
             }
+            Self::Json(_) => ErrorClass::Permanent,
             Self::Http(err) => {
                 if err.is_decode() {
                     ErrorClass::Permanent
@@ -389,7 +521,7 @@ impl Classify for PdfClientError {
                 }
             }
             Self::Status { status, .. } => {
-                if status.is_server_error() {
+                if *status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
                     ErrorClass::Transient
                 } else {
                     ErrorClass::Permanent
@@ -398,6 +530,23 @@ impl Classify for PdfClientError {
             Self::Timeout { .. } => ErrorClass::Transient,
         }
     }
+
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Status { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
+}
+
+fn retry_after_header(headers: &HeaderMap) -> Option<Duration> {
+    headers
+        .get(RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
 }
 
 #[cfg(test)]
@@ -539,7 +688,8 @@ mod tests {
         assert_eq!(
             PdfClientError::Status {
                 status: StatusCode::BAD_REQUEST,
-                body: "bad request".to_string()
+                body: "bad request".to_string(),
+                retry_after: None,
             }
             .class(),
             ErrorClass::Permanent
@@ -547,10 +697,18 @@ mod tests {
         assert_eq!(
             PdfClientError::Status {
                 status: StatusCode::SERVICE_UNAVAILABLE,
-                body: "busy".to_string()
+                body: "busy".to_string(),
+                retry_after: None,
             }
             .class(),
             ErrorClass::Transient
         );
+        let rate_limited = PdfClientError::Status {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "rate limited".to_string(),
+            retry_after: Some(Duration::from_secs(7)),
+        };
+        assert_eq!(rate_limited.class(), ErrorClass::Transient);
+        assert_eq!(rate_limited.retry_after(), Some(Duration::from_secs(7)));
     }
 }

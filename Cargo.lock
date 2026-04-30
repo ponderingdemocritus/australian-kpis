@@ -363,6 +363,8 @@ name = "au-kpis-pdf-client"
 version = "0.1.0"
 dependencies = [
  "au-kpis-error",
+ "bytes",
+ "futures",
  "reqwest",
  "reqwest-middleware",
  "reqwest-tracing",
