@@ -415,8 +415,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      AU_KPIS_CONTRACT_ADDR: 127.0.0.1:38080
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -437,6 +435,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/contract
+          port="$(python - <<'PY'
+          import socket
+
+          with socket.socket() as sock:
+              sock.bind(("127.0.0.1", 0))
+              print(sock.getsockname()[1])
+          PY
+          )"
+          export AU_KPIS_CONTRACT_ADDR="127.0.0.1:${port}"
+          echo "AU_KPIS_CONTRACT_ADDR=${AU_KPIS_CONTRACT_ADDR}" >> "$GITHUB_ENV"
           cargo build -p au-kpis-api-http --example contract_server --locked
           ./target/debug/examples/contract_server > target/contract/server.log 2>&1 &
           echo $! > target/contract/server.pid

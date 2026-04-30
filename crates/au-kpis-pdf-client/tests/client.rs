@@ -405,7 +405,7 @@ async fn extract_emits_outbound_http_span() {
         .unwrap();
     let span_count = Arc::new(AtomicUsize::new(0));
     let subscriber = tracing_subscriber::registry().with(SpanCounter {
-        name: "HTTP request",
+        name: "pdf.extract.http",
         count: Arc::clone(&span_count),
     });
     let _guard = tracing::subscriber::set_default(subscriber);
