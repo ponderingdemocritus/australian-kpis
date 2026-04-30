@@ -4,16 +4,7 @@
   "describe": {
     "columns": [],
     "parameters": {
-      "Left": [
-        "Bytea",
-        "Text",
-        "Text",
-        "Text",
-        "Jsonb",
-        "Int8",
-        "Text",
-        "Timestamptz"
-      ]
+      "Left": ["Bytea", "Text", "Text", "Text", "Jsonb", "Int8", "Text", "Timestamptz"]
     },
     "nullable": []
   },

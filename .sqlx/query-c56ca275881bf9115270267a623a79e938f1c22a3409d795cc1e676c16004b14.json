@@ -45,20 +45,9 @@
       }
     ],
     "parameters": {
-      "Left": [
-        "Bytea"
-      ]
+      "Left": ["Bytea"]
     },
-    "nullable": [
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false
-    ]
+    "nullable": [false, false, false, false, false, false, false, false]
   },
   "hash": "c56ca275881bf9115270267a623a79e938f1c22a3409d795cc1e676c16004b14"
 }
