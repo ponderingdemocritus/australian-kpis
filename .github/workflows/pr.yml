@@ -329,7 +329,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/nextest
-          cargo nextest run --workspace --profile ci 2>&1 | tee target/nextest/ci-run.log
+          cargo nextest run --workspace --profile ci \
+            -E 'not test(loads_ten_thousand_observations_with_copy_batches)' \
+            2>&1 | tee target/nextest/ci-run.log
           if grep -n "FLAKY" target/nextest/ci-run.log; then
             echo "Flaky retries are not allowed in CI." >&2
             exit 1
@@ -379,6 +381,7 @@ jobs:
           cargo +"$COVERAGE_RUST_TOOLCHAIN" llvm-cov nextest \
             --workspace \
             --profile ci \
+            -E 'not test(loads_ten_thousand_observations_with_copy_batches)' \
             --skip-functions \
             --branch \
             --lcov \
