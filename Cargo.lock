@@ -390,6 +390,18 @@ dependencies = [
 [[package]]
 name = "au-kpis-loader"
 version = "0.1.0"
+dependencies = [
+ "au-kpis-config",
+ "au-kpis-db",
+ "au-kpis-domain",
+ "au-kpis-testing",
+ "chrono",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "au-kpis-openapi"

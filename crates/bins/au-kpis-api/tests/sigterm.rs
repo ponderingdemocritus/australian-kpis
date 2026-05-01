@@ -3,6 +3,7 @@ use std::{
     net::TcpStream,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::LazyLock,
     thread,
     time::{Duration, Instant},
 };
@@ -13,8 +14,12 @@ use au_kpis_testing::{
     timescale::{TimescaleHarness, start_timescale},
 };
 
+static API_PROCESS_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 #[tokio::test(flavor = "multi_thread")]
 async fn api_binary_honors_sigterm() {
+    let _guard = API_PROCESS_TEST_LOCK.lock().await;
     let mut harness = ApiProcess::start("au_kpis_api_sigterm", None).await;
     let addr = harness.addr.clone();
 
@@ -29,6 +34,7 @@ async fn api_binary_honors_sigterm() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn api_binary_serves_health_route() {
+    let _guard = API_PROCESS_TEST_LOCK.lock().await;
     let _harness = ApiProcess::start("au_kpis_api_health", None).await;
     let response = http_get(&(_harness.addr), "/v1/health");
 
@@ -44,6 +50,7 @@ async fn api_binary_serves_health_route() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn api_binary_honors_configured_shutdown_grace_period() {
+    let _guard = API_PROCESS_TEST_LOCK.lock().await;
     let mut harness = ApiProcess::start("au_kpis_api_sigterm_drain", Some(1)).await;
     let mut stream = TcpStream::connect(&harness.addr).expect("open in-flight request connection");
     stream
