@@ -214,7 +214,7 @@ impl SourceAdapter for AbsAdapter {
             }
             if ctx
                 .blob_store
-                .matches_artifact_id(&existing_key, id)
+                .exists_with_size(&existing_key, staged.size_bytes())
                 .await?
             {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;

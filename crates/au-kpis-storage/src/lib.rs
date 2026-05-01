@@ -372,14 +372,12 @@ impl BlobStore {
         };
         let canonical = canonical_object_path(&staged.id);
 
-        // Canonical key already present with matching bytes -> discard the
-        // stage; if the key is missing or corrupt, the staged stream repairs it.
+        // Canonical key already present with the expected size -> discard the
+        // stage. Avoid a full GET+hash here: duplicate fetches are the common
+        // path, and explicit repair callers can use `replace_staged_artifact`.
         match self.inner.head(&canonical).await {
-            Ok(_) => {
-                if self
-                    .matches_artifact_id(&StorageKey::canonical_for(&staged.id), staged.id)
-                    .await?
-                {
+            Ok(meta) => {
+                if size_matches(meta.size, staged.size_bytes) {
                     self.best_effort_delete_staging(staging_path).await;
                     return Ok(staged.id);
                 }
@@ -487,6 +485,20 @@ impl BlobStore {
         }
     }
 
+    /// Return `true` when an object exists at `key` with the expected size.
+    #[tracing::instrument(skip(self))]
+    pub async fn exists_with_size(
+        &self,
+        key: &StorageKey,
+        size_bytes: u64,
+    ) -> Result<bool, StorageError> {
+        match self.inner.head(&key.as_object_path()).await {
+            Ok(meta) => Ok(size_matches(meta.size, size_bytes)),
+            Err(ObjectStoreError::NotFound { .. }) => Ok(false),
+            Err(err) => Err(StorageError::from_object_store(err)),
+        }
+    }
+
     /// Return `true` when `key` exists and streams back to `id`.
     #[tracing::instrument(skip(self))]
     pub async fn matches_artifact_id(
@@ -553,6 +565,13 @@ impl BlobStore {
              the bucket lifecycle rule on `{STAGING_PREFIX}/` will sweep it eventually",
         );
     }
+}
+
+fn size_matches(actual: usize, expected: u64) -> bool {
+    let Ok(expected) = usize::try_from(expected) else {
+        return false;
+    };
+    actual == expected
 }
 
 /// Internal helper: object-store path for the canonical write target.
@@ -687,7 +706,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_staged_artifact_repairs_canonical_mismatch() {
+    async fn commit_staged_artifact_repairs_canonical_size_mismatch() {
         let store = BlobStore::new(object_store::memory::InMemory::new());
         let id = ArtifactId::of_content(b"correct bytes");
         let key = StorageKey::canonical_for(&id);

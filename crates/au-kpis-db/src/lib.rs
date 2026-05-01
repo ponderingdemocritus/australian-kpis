@@ -164,6 +164,12 @@ pub async fn repair_artifact_storage_key(
     .map_err(DbError::Query)?;
 
     if result.rows_affected() == 0 {
+        let current = get_artifact(pool, artifact.id).await?.ok_or_else(|| {
+            DbError::Core(CoreError::NotFound(format!("artifact `{}`", artifact.id)))
+        })?;
+        if current.storage_key == artifact.storage_key {
+            return Ok(current);
+        }
         return Err(DbError::Core(CoreError::Validation(format!(
             "artifact `{}` storage_key changed before repair from `{observed_storage_key}`",
             artifact.id

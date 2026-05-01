@@ -645,7 +645,7 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches() {
+async fn fetch_repairs_rewritten_storage_key_when_durable_blob_size_mismatches() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);

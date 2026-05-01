@@ -120,6 +120,11 @@ async fn upsert_artifact_persists_first_seen_provenance() {
     assert_eq!(stored.storage_key, repaired.storage_key);
     assert_eq!(returned.storage_key, repaired.storage_key);
 
+    let returned = repair_artifact_storage_key(&pool, &repaired, &artifact.storage_key)
+        .await
+        .expect("already repaired storage key is idempotent");
+    assert_eq!(returned.storage_key, repaired.storage_key);
+
     let stale_repair = Artifact {
         storage_key: "artifacts/stale-repair".into(),
         ..stored.clone()
