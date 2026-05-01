@@ -348,6 +348,10 @@ Every PR must add/update tests at the appropriate layer:
 8. **Don't bypass pre-commit hooks** with `--no-verify`. If a hook fails, fix the underlying issue.
 9. **Don't commit secrets, `.env`, production fixtures, or large binaries.** Fixtures >5 MB go to R2 with a reference in-repo.
 10. **When unsure about architecture**, open a draft PR with a `Spec.md` amendment — don't guess.
+11. **Validate artifact provenance in parsers.** If parsed observations carry `source_artifact_id`, verify the artifact id, persisted storage key, and parsed bytes are consistent before emitting rows. Do not trust an `ArtifactRef` whose fields could point at different blobs.
+12. **Reject ambiguous source/dataflow provenance.** Source-specific parsers must fail fast when the artifact cannot be tied to the expected upstream dataflow. Do not infer CPI/WPI/etc. only from payload shape or a mirrored filename.
+13. **Keep streaming fixes on the hot path.** Handling harmless format variations, such as JSON key reordering, should not introduce extra full-artifact scans unless the issue explicitly accepts that cost and tests cover it.
+14. **Make performance fixtures production-shaped.** Large-memory and streaming tests should use valid content-addressed artifact ids and storage keys so they exercise the same validation path as production parsing.
 
 ## 13. When stuck
 

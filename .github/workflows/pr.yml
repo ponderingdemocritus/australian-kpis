@@ -335,11 +335,15 @@ jobs:
             exit 1
           fi
 
-      - name: Enforce ABS fetch streaming memory budget
+      - name: Enforce ABS streaming memory budgets
         run: |
           cargo test -p au-kpis-adapter-abs \
             --features dhat-heap \
             --test fetch_memory \
+            -- --ignored --nocapture
+          cargo test -p au-kpis-adapter-abs \
+            --features dhat-heap \
+            --test parse_memory \
             -- --ignored --nocapture
 
   coverage:

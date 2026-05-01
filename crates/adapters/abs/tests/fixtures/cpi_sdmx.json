@@ -1,0 +1,52 @@
+{
+  "data": {
+    "structure": {
+      "dimensions": {
+        "series": [
+          {
+            "id": "REGION",
+            "values": [{ "id": "AUS" }, { "id": "VIC" }]
+          },
+          {
+            "id": "MEASURE",
+            "values": [{ "id": "INDEX" }]
+          }
+        ],
+        "observation": [
+          {
+            "id": "TIME_PERIOD",
+            "values": [{ "id": "2023-Q4" }, { "id": "2024-Q1" }, { "id": "2024-02" }]
+          }
+        ]
+      },
+      "attributes": {
+        "observation": [
+          {
+            "id": "OBS_STATUS",
+            "values": [{ "id": "A" }, { "id": "M" }]
+          }
+        ]
+      }
+    },
+    "dataSets": [
+      {
+        "series": {
+          "0:0": {
+            "observations": {
+              "0": [136.1, 0],
+              "1": [137.4, 0],
+              "2": [138.0, 0]
+            }
+          },
+          "1:0": {
+            "observations": {
+              "0": [135.6, 0],
+              "1": [null, 1],
+              "2": [136.2, 0]
+            }
+          }
+        }
+      }
+    ]
+  }
+}
