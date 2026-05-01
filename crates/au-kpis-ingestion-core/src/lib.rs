@@ -17,13 +17,14 @@ use au_kpis_error::Classify;
 use au_kpis_loader::{LoadItem, LoadOptions, LoadStats};
 use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 64;
+const DEFAULT_STAGE_CONCURRENCY: usize = 4;
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// DB-backed artifact provenance recorder for fetch workers.
@@ -95,6 +96,10 @@ pub fn fetch_ctx(
 pub struct PipelineOptions {
     /// Capacity for each bounded stage channel.
     pub channel_capacity: usize,
+    /// Maximum concurrent fetch jobs inside one source run.
+    pub fetch_concurrency: usize,
+    /// Maximum concurrent parse jobs inside one source run.
+    pub parse_concurrency: usize,
     /// Maximum observations passed to the loader in one transaction.
     pub load_max_rows: usize,
     /// Maximum approximate COPY payload bytes passed to the loader.
@@ -108,6 +113,8 @@ impl Default for PipelineOptions {
         let load = LoadOptions::default();
         Self {
             channel_capacity: DEFAULT_CHANNEL_CAPACITY,
+            fetch_concurrency: DEFAULT_STAGE_CONCURRENCY,
+            parse_concurrency: DEFAULT_STAGE_CONCURRENCY,
             load_max_rows: load.max_rows,
             load_max_bytes: load.max_bytes,
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
@@ -274,6 +281,7 @@ impl IngestionPipeline {
                 artifact_tx,
                 source_id.clone(),
                 pipeline_token.clone(),
+                self.options.fetch_concurrency,
             )
             .instrument(info_span!("ingestion_fetch", source = %source)),
         );
@@ -285,6 +293,7 @@ impl IngestionPipeline {
                 load_tx,
                 source_id.clone(),
                 pipeline_token.clone(),
+                self.options.parse_concurrency,
             )
             .instrument(info_span!("ingestion_parse", source = %source)),
         );
@@ -309,6 +318,16 @@ impl IngestionPipeline {
         if self.options.channel_capacity == 0 {
             return Err(IngestionError::Config(
                 "channel_capacity must be greater than 0".into(),
+            ));
+        }
+        if self.options.fetch_concurrency == 0 {
+            return Err(IngestionError::Config(
+                "fetch_concurrency must be greater than 0".into(),
+            ));
+        }
+        if self.options.parse_concurrency == 0 {
+            return Err(IngestionError::Config(
+                "parse_concurrency must be greater than 0".into(),
             ));
         }
         if self.options.load_max_rows == 0 {
@@ -434,8 +453,11 @@ async fn discover_stage(
     };
     let discovered = jobs.len() as u64;
     for job in jobs {
+        if cancellation.is_cancelled() {
+            return Err(IngestionError::Cancelled);
+        }
         validate_source_id("discover", &source_id, &job.source_id)?;
-        send_or_cancel(&tx, job, &cancellation).await?;
+        send_produced(&tx, job).await?;
     }
     Ok(PipelineRunStats {
         discovered,
@@ -450,29 +472,38 @@ async fn fetch_stage(
     tx: mpsc::Sender<FetchedArtifact>,
     source_id: SourceId,
     cancellation: CancellationToken,
+    concurrency: usize,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut fetched = 0;
-    while let Some(job) = recv_or_cancel(&mut rx, &cancellation).await? {
-        validate_source_id("fetch", &source_id, &job.source_id)?;
-        let dataflow_id = job.dataflow_id.clone();
-        let metadata = job.metadata.clone();
-        let artifact = tokio::select! {
-            () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
-            artifact = adapters.fetch(source_id.as_str(), job, &ctx) => artifact?,
-        };
-        validate_source_id("fetch", &source_id, &artifact.source_id)?;
-        send_or_cancel(
-            &tx,
-            FetchedArtifact {
-                artifact,
-                dataflow_id,
-                metadata,
-            },
-            &cancellation,
-        )
-        .await?;
+    let mut draining = false;
+    let mut input_closed = false;
+    let mut in_flight = FuturesUnordered::new();
+
+    loop {
+        while !input_closed && in_flight.len() < concurrency {
+            let Some(job) = recv_or_drain_on_cancel(&mut rx, &cancellation, &mut draining).await
+            else {
+                input_closed = true;
+                break;
+            };
+            validate_source_id("fetch", &source_id, &job.source_id)?;
+            in_flight.push(fetch_one(
+                adapters.clone(),
+                source_id.clone(),
+                ctx.clone(),
+                job,
+            ));
+        }
+
+        if in_flight.is_empty() {
+            break;
+        }
+
+        let fetched_artifact = in_flight.next().await.expect("in_flight is not empty")?;
+        send_produced(&tx, fetched_artifact).await?;
         fetched += 1;
     }
+
     Ok(PipelineRunStats {
         fetched,
         ..PipelineRunStats::default()
@@ -486,73 +517,141 @@ async fn parse_stage(
     tx: mpsc::Sender<LoadStageItem>,
     source_id: SourceId,
     cancellation: CancellationToken,
+    concurrency: usize,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut parsed = 0;
-    while let Some(fetched) = recv_or_cancel(&mut rx, &cancellation).await? {
-        validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
-        let artifact_id = fetched.artifact.id;
-        let parse_ctx = ctx
-            .clone()
-            .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata);
-        let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
-        loop {
-            let row = tokio::select! {
-                () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
-                row = observations.next() => row,
-            };
-            let Some(row) = row else {
+    let mut draining = false;
+    let mut input_closed = false;
+    let mut in_flight = FuturesUnordered::new();
+
+    loop {
+        while !input_closed && in_flight.len() < concurrency {
+            let Some(fetched) =
+                recv_or_drain_on_cancel(&mut rx, &cancellation, &mut draining).await
+            else {
+                input_closed = true;
                 break;
             };
-            let (series, observation) = match row {
-                Ok(row) => row,
-                Err(err) => {
-                    send_or_cancel(
-                        &tx,
-                        LoadStageItem::ParseError(ParseErrorRecord {
-                            artifact_id,
-                            error_kind: "adapter_parse",
-                            error_message: err.to_string(),
-                            row_context: Some(serde_json::json!({
-                                "dataflow_id": fetched.dataflow_id,
-                                "source_id": source_id,
-                                "artifact_id": artifact_id,
-                                "error_class": format!("{:?}", err.class()),
-                            })),
-                        }),
-                        &cancellation,
-                    )
-                    .await?;
-                    continue;
-                }
-            };
-            if series.dataflow_id != fetched.dataflow_id {
-                return Err(IngestionError::DataflowMismatch {
-                    expected: fetched.dataflow_id.to_string(),
-                    actual: series.dataflow_id.to_string(),
-                });
-            }
-            if observation.source_artifact_id != artifact_id {
-                return Err(IngestionError::ArtifactMismatch {
-                    expected: artifact_id.to_string(),
-                    actual: observation.source_artifact_id.to_string(),
-                });
-            }
-            send_or_cancel(
-                &tx,
-                LoadStageItem::Observation(LoadItem {
-                    series,
-                    observation,
-                }),
-                &cancellation,
-            )
-            .await?;
-            parsed += 1;
+            validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
+            let parse_ctx = ctx
+                .clone()
+                .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone());
+            in_flight.push(parse_one_artifact(
+                adapters.clone(),
+                source_id.clone(),
+                parse_ctx,
+                tx.clone(),
+                fetched,
+            ));
         }
+
+        if in_flight.is_empty() {
+            break;
+        }
+
+        parsed += in_flight.next().await.expect("in_flight is not empty")?;
     }
+
     Ok(PipelineRunStats {
         parsed,
         ..PipelineRunStats::default()
     })
+}
+
+async fn fetch_one(
+    adapters: Adapters,
+    source_id: SourceId,
+    ctx: FetchCtx,
+    job: au_kpis_adapter::DiscoveredJob,
+) -> Result<FetchedArtifact, IngestionError> {
+    let dataflow_id = job.dataflow_id.clone();
+    let metadata = job.metadata.clone();
+    let artifact = adapters.fetch(source_id.as_str(), job, &ctx).await?;
+    validate_source_id("fetch", &source_id, &artifact.source_id)?;
+    Ok(FetchedArtifact {
+        artifact,
+        dataflow_id,
+        metadata,
+    })
+}
+
+async fn parse_one_artifact(
+    adapters: Adapters,
+    source_id: SourceId,
+    parse_ctx: ParseCtx,
+    tx: mpsc::Sender<LoadStageItem>,
+    fetched: FetchedArtifact,
+) -> Result<u64, IngestionError> {
+    let artifact_id = fetched.artifact.id;
+    let mut parsed = 0;
+    let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
+
+    while let Some(row) = observations.next().await {
+        let (series, observation) = match row {
+            Ok(row) => row,
+            Err(err) => {
+                send_produced(
+                    &tx,
+                    LoadStageItem::ParseError(parse_error_record(
+                        artifact_id,
+                        &fetched.dataflow_id,
+                        &source_id,
+                        &err,
+                        parsed == 0,
+                    )),
+                )
+                .await?;
+                if parsed == 0 {
+                    return Err(IngestionError::Adapter(err));
+                }
+                continue;
+            }
+        };
+        if series.dataflow_id != fetched.dataflow_id {
+            return Err(IngestionError::DataflowMismatch {
+                expected: fetched.dataflow_id.to_string(),
+                actual: series.dataflow_id.to_string(),
+            });
+        }
+        if observation.source_artifact_id != artifact_id {
+            return Err(IngestionError::ArtifactMismatch {
+                expected: artifact_id.to_string(),
+                actual: observation.source_artifact_id.to_string(),
+            });
+        }
+        send_produced(
+            &tx,
+            LoadStageItem::Observation(LoadItem {
+                series,
+                observation,
+            }),
+        )
+        .await?;
+        parsed += 1;
+    }
+
+    Ok(parsed)
+}
+
+fn parse_error_record(
+    artifact_id: ArtifactId,
+    dataflow_id: &DataflowId,
+    source_id: &SourceId,
+    err: &AdapterError,
+    fatal: bool,
+) -> ParseErrorRecord {
+    ParseErrorRecord {
+        artifact_id,
+        error_kind: "adapter_parse",
+        error_message: err.to_string(),
+        row_context: Some(serde_json::json!({
+            "dataflow_id": dataflow_id,
+            "source_id": source_id,
+            "artifact_id": artifact_id,
+            "error_class": format!("{:?}", err.class()),
+            "fatal": fatal,
+        })),
+    }
 }
 
 async fn load_stage(
@@ -687,24 +786,26 @@ fn estimate_load_item_bytes(item: &LoadItem) -> usize {
             .sum::<usize>()
 }
 
-async fn send_or_cancel<T>(
-    tx: &mpsc::Sender<T>,
-    value: T,
-    cancellation: &CancellationToken,
-) -> Result<(), IngestionError> {
-    tokio::select! {
-        () = cancellation.cancelled() => Err(IngestionError::Cancelled),
-        result = tx.send(value) => result.map_err(|_| IngestionError::DownstreamClosed),
-    }
+async fn send_produced<T>(tx: &mpsc::Sender<T>, value: T) -> Result<(), IngestionError> {
+    tx.send(value)
+        .await
+        .map_err(|_| IngestionError::DownstreamClosed)
 }
 
-async fn recv_or_cancel<T>(
+async fn recv_or_drain_on_cancel<T>(
     rx: &mut mpsc::Receiver<T>,
     cancellation: &CancellationToken,
-) -> Result<Option<T>, IngestionError> {
-    tokio::select! {
-        () = cancellation.cancelled() => Err(IngestionError::Cancelled),
-        value = rx.recv() => Ok(value),
+    draining: &mut bool,
+) -> Option<T> {
+    loop {
+        if *draining {
+            return rx.recv().await;
+        }
+
+        tokio::select! {
+            () = cancellation.cancelled() => *draining = true,
+            value = rx.recv() => return value,
+        }
     }
 }
 
@@ -750,6 +851,21 @@ mod tests {
         };
 
         assert!(!should_flush_load_batch(&[], 0, item_bytes, options));
+    }
+
+    #[tokio::test]
+    async fn produced_handoff_waits_for_capacity_instead_of_dropping_item() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(1).await.expect("seed full channel");
+
+        let sender = tokio::spawn(async move { send_produced(&tx, 2).await });
+
+        assert_eq!(rx.recv().await, Some(1));
+        sender
+            .await
+            .expect("handoff task should not panic")
+            .expect("handoff should complete once capacity is available");
+        assert_eq!(rx.recv().await, Some(2));
     }
 
     fn load_item_with_attribute_bytes(attribute_bytes: usize) -> LoadItem {

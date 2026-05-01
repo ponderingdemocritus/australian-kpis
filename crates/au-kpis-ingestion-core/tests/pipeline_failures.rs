@@ -32,6 +32,8 @@ enum StubMode {
     CancelAfterFirstParse,
     WrongArtifactId,
     ParseErrorAfterRow,
+    FatalParseError,
+    TwoArtifactsCancelAfterFirstParse,
 }
 
 #[derive(Debug)]
@@ -97,16 +99,30 @@ impl SourceAdapter for StubAdapter {
             | StubMode::RequireParseDataflow
             | StubMode::CancelAfterFirstParse
             | StubMode::WrongArtifactId
-            | StubMode::ParseErrorAfterRow => self.manifest.source_id.clone(),
+            | StubMode::ParseErrorAfterRow
+            | StubMode::FatalParseError
+            | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
         };
 
-        Ok(vec![DiscoveredJob {
+        let mut jobs = vec![DiscoveredJob {
             id: "job-1".into(),
-            source_id,
+            source_id: source_id.clone(),
             dataflow_id: self.manifest.dataflows[0].clone(),
             source_url: "https://example.test/cpi.json".into(),
             metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
-        }])
+        }];
+
+        if matches!(self.mode, StubMode::TwoArtifactsCancelAfterFirstParse) {
+            jobs.push(DiscoveredJob {
+                id: "job-2".into(),
+                source_id,
+                dataflow_id: self.manifest.dataflows[0].clone(),
+                source_url: "https://example.test/cpi-2.json".into(),
+                metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
+            });
+        }
+
+        Ok(jobs)
     }
 
     async fn fetch(
@@ -146,12 +162,14 @@ impl SourceAdapter for StubAdapter {
         let row = load_row(artifact.id);
         match self.mode {
             StubMode::ManyRows => Box::pin(stream::iter([Ok(row.clone()), Ok(row)])),
-            StubMode::CancelAfterFirstParse => cancel_after_first_row(
-                row,
-                self.cancel_on_second_parse_poll
-                    .clone()
-                    .expect("cancel token configured"),
-            ),
+            StubMode::CancelAfterFirstParse => {
+                cancel_after_first_row(row, self.cancel_token().expect("cancel token configured"))
+            }
+            StubMode::TwoArtifactsCancelAfterFirstParse
+                if artifact.id == ArtifactId::of_content(b"job-1") =>
+            {
+                cancel_after_first_row(row, self.cancel_token().expect("cancel token configured"))
+            }
             StubMode::WrongArtifactId => {
                 let (series, mut observation) = row;
                 observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
@@ -161,11 +179,27 @@ impl SourceAdapter for StubAdapter {
                 Ok(row),
                 Err(AdapterError::FormatDrift("bad row shape".into())),
             ])),
+            StubMode::FatalParseError => Box::pin(stream::iter([Err(AdapterError::FormatDrift(
+                "artifact-level schema drift".into(),
+            ))])),
+            StubMode::TwoArtifactsCancelAfterFirstParse => {
+                let (series, mut observation) = row;
+                if artifact.id == ArtifactId::of_content(b"job-2") {
+                    observation.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                }
+                Box::pin(stream::iter([Ok((series, observation))]))
+            }
             StubMode::SlowFetch | StubMode::WrongDiscoveredSource => {
                 Box::pin(stream::iter([Ok(row)]))
             }
             StubMode::RequireParseDataflow => unreachable!("handled above"),
         }
+    }
+}
+
+impl StubAdapter {
+    fn cancel_token(&self) -> Option<CancellationToken> {
+        self.cancel_on_second_parse_poll.clone()
     }
 }
 
@@ -336,8 +370,25 @@ async fn seed_stub_reference_data(pool: &PgPool, artifact_id: ArtifactId) {
     .expect("insert artifact");
 }
 
+async fn seed_stub_artifact(pool: &PgPool, artifact_id: ArtifactId, source_url: &str) {
+    sqlx::query(
+        "INSERT INTO artifacts (
+             id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         )
+         VALUES ($1, 'stub', $2, 'application/json',
+                 '{}'::jsonb, 2, 'artifacts/stub', $3)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(source_url)
+    .bind(Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap())
+    .execute(pool)
+    .await
+    .expect("insert artifact");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_reaches_busy_fetch_stage() {
+async fn cancellation_bounds_busy_fetch_stage_by_shutdown_grace() {
     let cancellation = CancellationToken::new();
     let cancel = cancellation.clone();
     tokio::spawn(async move {
@@ -354,9 +405,15 @@ async fn cancellation_reaches_busy_fetch_stage() {
         ),
     )
     .await
-    .expect("pipeline should honor cancellation promptly");
+    .expect("pipeline should honor the shutdown grace");
 
-    assert!(matches!(result, Err(IngestionError::Cancelled)));
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::Cancelled | IngestionError::ShutdownTimeout(_))
+        ),
+        "{result:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -437,6 +494,52 @@ async fn parse_rejects_observations_for_the_wrong_artifact() {
         ),
         "{result:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fatal_parse_error_before_any_rows_is_audited_and_fails_pipeline() {
+    let timescale = start_timescale("au_kpis_pipeline_fatal_parse_error")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::FatalParseError,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::Adapter(AdapterError::FormatDrift(_)))
+        ),
+        "{result:?}"
+    );
+
+    let parse_error_count: i64 = sqlx::query_scalar("SELECT count(*) FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("count parse errors");
+    assert_eq!(parse_error_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -525,4 +628,48 @@ async fn cancellation_flushes_partial_load_batch() {
         .await
         .expect("count observations");
     assert_eq!(observation_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_drains_already_handed_off_artifacts() {
+    let timescale = start_timescale("au_kpis_pipeline_cancel_artifact_drain")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let first_artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
+    seed_stub_reference_data(&pool, first_artifact_id).await;
+    seed_stub_artifact(&pool, second_artifact_id, "https://example.test/cpi-2.json").await;
+
+    let cancellation = CancellationToken::new();
+    let result = pipeline_with_pool(
+        StubMode::TwoArtifactsCancelAfterFirstParse,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 2,
+            parse_concurrency: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        Some(cancellation.clone()),
+    )
+    .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
+    .await;
+
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 2);
 }
