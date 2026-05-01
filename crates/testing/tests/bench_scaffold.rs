@@ -72,6 +72,11 @@ fn contract_workflow_builds_server_before_readiness_polling() {
         ),
         "contract workflow should start the prebuilt contract server binary"
     );
+    assert!(
+        pr_workflow.contains("AU_KPIS_CONTRACT_ADDR=\"127.0.0.1:0\"")
+            && pr_workflow.contains("AU_KPIS_CONTRACT_ADDR_FILE=\"target/contract/server.addr\""),
+        "contract workflow should let the server bind port 0 and report the selected address"
+    );
 }
 
 #[test]

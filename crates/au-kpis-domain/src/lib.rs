@@ -20,7 +20,7 @@ pub mod observation;
 pub mod series;
 pub mod source;
 
-pub use artifact::{Artifact, ContentType};
+pub use artifact::{Artifact, ContentType, ResponseHeaders};
 pub use codelist::{Code, Codelist};
 pub use dataflow::{Dataflow, Frequency, License};
 pub use dimension::Dimension;

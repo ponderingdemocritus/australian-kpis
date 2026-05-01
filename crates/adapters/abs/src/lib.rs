@@ -9,14 +9,18 @@ use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterManifest, ArtifactRef, DiscoveredJob, DiscoveryCtx, FetchCtx,
     ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
+    capture_response_headers, retry_after_delta,
 };
-use au_kpis_domain::{DataflowId, SourceId};
+use au_kpis_domain::{Artifact, DataflowId, SourceId};
 use au_kpis_error::CoreError;
-use futures::stream;
+use au_kpis_storage::StorageKey;
+use chrono::Utc;
+use futures::{StreamExt, stream};
 use serde::Deserialize;
 
 const DEFAULT_BASE_URL: &str = "https://data.api.abs.gov.au/rest";
 const STRUCTURE_JSON_ACCEPT: &str = "application/vnd.sdmx.structure+json";
+const DATA_JSON_ACCEPT: &str = "application/vnd.sdmx.data+json";
 const CPI_DATAFLOW_ID: &str = "CPI";
 const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
@@ -71,9 +75,38 @@ impl AbsAdapter {
             .collect()
     }
 
+    fn validated_fetch_url(&self, job: &DiscoveredJob) -> Result<String, AdapterError> {
+        let agency_id = required_metadata(job, "agency_id")?;
+        let dataflow_id = required_metadata(job, "abs_dataflow_id")?;
+        let version = required_metadata(job, "version")?;
+        if job.dataflow_id.as_str() != "abs.cpi" || agency_id != "ABS" || dataflow_id != "CPI" {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch metadata `{agency_id}:{dataflow_id}` does not match dataflow `{}`",
+                job.dataflow_id.as_str()
+            )));
+        }
+        let expected = data_url_from_base(&self.base_url, agency_id, dataflow_id, version);
+
+        if job.source_url != expected {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch URL `{}` does not match canonical URL `{expected}`",
+                job.source_url
+            )));
+        }
+
+        Ok(expected)
+    }
+
     fn dataflow_url(&self) -> String {
         format!("{}/dataflow/ABS/CPI?detail=allstubs", self.base_url)
     }
+}
+
+fn required_metadata<'a>(job: &'a DiscoveredJob, key: &str) -> Result<&'a str, AdapterError> {
+    job.metadata
+        .get(key)
+        .map(String::as_str)
+        .ok_or_else(|| AdapterError::Validation(format!("ABS fetch job is missing `{key}`")))
 }
 
 #[async_trait]
@@ -104,14 +137,123 @@ impl SourceAdapter for AbsAdapter {
         Ok(Self::discoverable_jobs(&dataflows, ctx.known_revisions()))
     }
 
-    async fn fetch(
-        &self,
-        _job: DiscoveredJob,
-        _ctx: &FetchCtx,
-    ) -> Result<ArtifactRef, AdapterError> {
-        Err(AdapterError::Validation(
-            "ABS fetch is implemented in issue #25".to_string(),
-        ))
+    async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
+        if job.source_id != self.manifest.source_id {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch received job for source `{}`",
+                job.source_id.as_str()
+            )));
+        }
+        if !self
+            .manifest
+            .dataflows
+            .iter()
+            .any(|dataflow_id| dataflow_id == &job.dataflow_id)
+        {
+            return Err(AdapterError::Validation(format!(
+                "ABS fetch received unsupported dataflow `{}`",
+                job.dataflow_id.as_str()
+            )));
+        }
+
+        let fetch_url = self.validated_fetch_url(&job)?;
+        let response = ctx
+            .http
+            .execute(
+                ctx.http
+                    .raw_artifact()
+                    .get(&fetch_url)
+                    .header("user-agent", USER_AGENT)
+                    .header("accept", DATA_JSON_ACCEPT),
+            )
+            .await?;
+        let response_headers = capture_response_headers(response.headers());
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AdapterError::UpstreamStatus {
+                status,
+                retry_after: retry_after_delta(&response_headers),
+                response_headers,
+            });
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map_or_else(|| DATA_JSON_ACCEPT.to_string(), str::to_string);
+
+        let staged = ctx
+            .blob_store
+            .stage_artifact_stream(response.bytes_stream().boxed())
+            .await?;
+        let id = staged.id();
+        let storage_key = format!("artifacts/{}", id.to_hex());
+        let fetched_at = Utc::now();
+        let artifact = Artifact {
+            id,
+            source_id: job.source_id,
+            source_url: fetch_url,
+            content_type,
+            response_headers,
+            storage_key: storage_key.clone(),
+            size_bytes: staged.size_bytes(),
+            fetched_at,
+        };
+
+        let existing = match ctx.get_artifact(id).await {
+            Ok(existing) => existing,
+            Err(err) => {
+                ctx.blob_store.discard_staged_artifact(&staged).await?;
+                return Err(err);
+            }
+        };
+
+        let mut needs_canonical_repair = false;
+        if let Some(existing) = existing {
+            let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
+            if existing.storage_key == storage_key {
+                ctx.blob_store.commit_staged_artifact(&staged).await?;
+                let expected_storage_key = existing.storage_key.clone();
+                let duplicate = Artifact {
+                    storage_key: existing.storage_key,
+                    ..artifact
+                };
+                return persist_expected_artifact(
+                    ctx,
+                    duplicate,
+                    &expected_storage_key,
+                    Some(&storage_key),
+                )
+                .await;
+            }
+            let existing_key_matches =
+                match ctx.blob_store.matches_artifact_id(&existing_key, id).await {
+                    Ok(matches) => matches,
+                    Err(err) => {
+                        ctx.blob_store.discard_staged_artifact(&staged).await?;
+                        return Err(err.into());
+                    }
+                };
+            if existing_key_matches {
+                ctx.blob_store.discard_staged_artifact(&staged).await?;
+                let expected_storage_key = existing.storage_key.clone();
+                let duplicate = Artifact {
+                    storage_key: existing.storage_key,
+                    ..artifact
+                };
+                return persist_expected_artifact(ctx, duplicate, &expected_storage_key, None)
+                    .await;
+            }
+            needs_canonical_repair = true;
+        }
+
+        if needs_canonical_repair {
+            ctx.blob_store.replace_staged_artifact(&staged).await?;
+        } else {
+            ctx.blob_store.commit_staged_artifact(&staged).await?;
+        }
+
+        persist_expected_artifact(ctx, artifact, &storage_key, Some(&storage_key)).await
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {
@@ -121,6 +263,35 @@ impl SourceAdapter for AbsAdapter {
             ))
         }))
     }
+}
+
+async fn persist_expected_artifact(
+    ctx: &FetchCtx,
+    artifact: Artifact,
+    expected_storage_key: &str,
+    cleanup_untracked_storage_key: Option<&str>,
+) -> Result<ArtifactRef, AdapterError> {
+    let reference = ctx.persist_artifact(artifact.clone()).await?;
+    if reference.storage_key == expected_storage_key {
+        return Ok(reference);
+    }
+    let reference_key = StorageKey::from_persisted(reference.storage_key.clone());
+    if ctx
+        .blob_store
+        .matches_artifact_id(&reference_key, artifact.id)
+        .await?
+    {
+        if let Some(cleanup_key) = cleanup_untracked_storage_key {
+            if cleanup_key != reference.storage_key {
+                ctx.blob_store
+                    .delete(&StorageKey::from_persisted(cleanup_key))
+                    .await?;
+            }
+        }
+        return Ok(reference);
+    }
+    ctx.repair_artifact_storage_key(artifact, &reference.storage_key)
+        .await
 }
 
 /// Builder for [`AbsAdapter`].

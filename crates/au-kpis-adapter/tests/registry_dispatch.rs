@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
-    AdapterError, AdapterHttpClient, AdapterManifest, Adapters, ArtifactRef, DiscoveredJob,
-    DiscoveryCtx, FetchCtx, ObservationStream, ParseCtx, RateLimit, SourceAdapter,
+    AdapterError, AdapterHttpClient, AdapterManifest, Adapters, ArtifactRecorder, ArtifactRef,
+    DiscoveredJob, DiscoveryCtx, FetchCtx, ObservationStream, ParseCtx, RateLimit, SourceAdapter,
+    retry_after_delta,
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor,
@@ -21,6 +22,28 @@ use object_store::memory::InMemory;
 #[derive(Debug)]
 struct StubAdapter {
     manifest: AdapterManifest,
+}
+
+#[derive(Debug, Default)]
+struct RecordingArtifactRecorder;
+
+#[async_trait]
+impl ArtifactRecorder for RecordingArtifactRecorder {
+    async fn get(&self, _id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Ok(None)
+    }
+
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        Ok(artifact.clone())
+    }
 }
 
 impl StubAdapter {
@@ -62,15 +85,20 @@ impl SourceAdapter for StubAdapter {
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
         let bytes = Bytes::from_static(br#"{"value": 123.4}"#);
         let id = ctx.blob_store.put_artifact(bytes.clone()).await?;
-        Ok(ArtifactRef {
+        let artifact = Artifact {
             id,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type: "application/json".into(),
+            response_headers: BTreeMap::from([(
+                "content-type".into(),
+                vec!["application/json".into()],
+            )]),
             storage_key: format!("artifacts/{}", id.to_hex()),
             size_bytes: bytes.len() as u64,
             fetched_at: ctx.started_at,
-        })
+        };
+        ctx.persist_artifact(artifact).await
     }
 
     fn parse<'a>(&'a self, artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
@@ -129,7 +157,12 @@ async fn registry_dispatches_discover_fetch_and_parse() {
         .fetch(
             "stub",
             jobs[0].clone(),
-            &FetchCtx::new(http.clone(), blob_store.clone(), started_at),
+            &FetchCtx::new(
+                http.clone(),
+                blob_store.clone(),
+                started_at,
+                Arc::new(RecordingArtifactRecorder),
+            ),
         )
         .await
         .unwrap();
@@ -250,6 +283,35 @@ fn adapter_error_classification_matches_retry_policy() {
         AdapterError::Validation("missing source_url".into()).class(),
         ErrorClass::Validation
     );
+    assert_eq!(
+        AdapterError::UpstreamStatus {
+            status: reqwest::StatusCode::REQUEST_TIMEOUT,
+            retry_after: None,
+            response_headers: BTreeMap::new(),
+        }
+        .class(),
+        ErrorClass::Transient
+    );
+    assert_eq!(
+        AdapterError::UpstreamStatus {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            retry_after: None,
+            response_headers: BTreeMap::new(),
+        }
+        .class(),
+        ErrorClass::Permanent
+    );
+}
+
+#[test]
+fn retry_after_delta_accepts_http_date_values() {
+    let retry_after = retry_after_delta(&BTreeMap::from([(
+        "retry-after".into(),
+        vec!["Fri, 01 Jan 2100 00:00:00 GMT".into()],
+    )]))
+    .expect("parse HTTP-date Retry-After");
+
+    assert!(retry_after > Duration::from_secs(24 * 60 * 60));
 }
 
 #[test]
@@ -260,6 +322,7 @@ fn artifact_ref_roundtrips_domain_artifact() {
         source_id: SourceId::new("stub").unwrap(),
         source_url: "https://example.test/fixture.json".into(),
         content_type: "application/json".into(),
+        response_headers: BTreeMap::from([("etag".into(), vec!["\"fixture\"".into()])]),
         size_bytes: 7,
         storage_key: "artifacts/fixture".into(),
         fetched_at,
@@ -283,6 +346,7 @@ fn empty_registry_reports_empty_and_parse_unknown_adapter() {
         source_id: SourceId::new("stub").unwrap(),
         source_url: "https://example.test/fixture.json".into(),
         content_type: "application/json".into(),
+        response_headers: BTreeMap::new(),
         storage_key: "artifacts/fixture".into(),
         size_bytes: 7,
         fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 1, 2, 3).unwrap(),

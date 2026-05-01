@@ -184,6 +184,28 @@ pub struct BlobStore {
     inner: Arc<dyn ObjectStore>,
 }
 
+/// A completed streaming upload that is still parked under the staging prefix.
+#[derive(Debug)]
+pub struct StagedArtifact {
+    id: ArtifactId,
+    size_bytes: u64,
+    staging_path: Option<ObjectPath>,
+}
+
+impl StagedArtifact {
+    /// Content-addressed id computed while streaming to staging.
+    #[must_use]
+    pub fn id(&self) -> ArtifactId {
+        self.id
+    }
+
+    /// Number of bytes streamed from the source.
+    #[must_use]
+    pub fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+}
+
 impl fmt::Debug for BlobStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BlobStore").finish_non_exhaustive()
@@ -238,22 +260,19 @@ impl BlobStore {
         Ok(id)
     }
 
-    /// Stream `chunks` to the backend while hashing on the fly, then
-    /// land the content under the canonical `artifacts/<hex>` key.
+    /// Stream `chunks` to backend staging while hashing on the fly.
     ///
     /// Writes are performed via `put_multipart` to a staging key so the
-    /// backend never has to see the whole body at once. The sha256 is
-    /// only known after the stream drains, so once it does the method
-    /// server-side copies the staged object to its canonical key (no
-    /// client round-trip of the bytes) and deletes the stage. A stream
-    /// error or a backend error during upload aborts the multipart,
-    /// leaving no partial object behind.
-    ///
-    /// Returns the canonical [`ArtifactId`] regardless of whether the
-    /// canonical key already existed — matching [`put_artifact`]'s
-    /// idempotency contract.
+    /// backend never has to see the whole body at once. Callers that
+    /// need to consult durable provenance before creating a canonical
+    /// hot copy can inspect the returned id and then either
+    /// [`commit_staged_artifact`](Self::commit_staged_artifact) or
+    /// [`discard_staged_artifact`](Self::discard_staged_artifact).
     #[tracing::instrument(skip(self, chunks))]
-    pub async fn put_artifact_stream<S, E>(&self, mut chunks: S) -> Result<ArtifactId, StorageError>
+    pub async fn stage_artifact_stream<S, E>(
+        &self,
+        mut chunks: S,
+    ) -> Result<StagedArtifact, StorageError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
         E: fmt::Display,
@@ -273,6 +292,7 @@ impl BlobStore {
         let mut write = WriteMultipart::new(upload);
         let mut hasher = Sha256::new();
         let mut wrote_any = false;
+        let mut size_bytes = 0_u64;
 
         while let Some(next) = chunks.next().await {
             let chunk = match next {
@@ -292,6 +312,9 @@ impl BlobStore {
                 // drop them and keep draining the stream.
                 continue;
             }
+            size_bytes = size_bytes
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| CoreError::Validation("artifact exceeds u64 bytes".into()))?;
             hasher.update(&chunk);
             wrote_any = true;
             // Cap in-flight part uploads so a fast producer can't run
@@ -307,13 +330,16 @@ impl BlobStore {
 
         // Zero-byte streams are legal upstream payloads (an API that
         // returns an empty body, a 0-byte XLSX) but S3 rejects
-        // `CompleteMultipartUpload` with zero parts. Abort the
-        // multipart and fall through to the single-shot `put_artifact`
-        // path, which hits the canonical key directly via `put()` and
-        // reuses the same head-first idempotency guard.
+        // `CompleteMultipartUpload` with zero parts. Abort the empty
+        // multipart and return a stage-less handle that commit can
+        // materialise through the single-shot path if needed.
         if !wrote_any {
             let _ = write.abort().await;
-            return self.put_artifact(Bytes::new()).await;
+            return Ok(StagedArtifact {
+                id: ArtifactId::of_content(&[]),
+                size_bytes,
+                staging_path: None,
+            });
         }
 
         if let Err(err) = write.finish().await {
@@ -323,18 +349,63 @@ impl BlobStore {
         }
 
         let id = ArtifactId::from_digest(Sha256Digest::from_bytes(hasher.finalize().into()));
-        let canonical = canonical_object_path(&id);
+        Ok(StagedArtifact {
+            id,
+            size_bytes,
+            staging_path: Some(staging_path),
+        })
+    }
 
-        // Canonical key already present → discard the stage; caller
-        // still gets the deterministic id.
+    /// Commit a staged artifact to its canonical content-addressed key.
+    ///
+    /// Returns the canonical [`ArtifactId`] regardless of whether the
+    /// canonical key already existed with the same size — matching
+    /// [`put_artifact`]'s idempotency contract. The copy is server-side;
+    /// bytes do not travel back through this process.
+    #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
+    pub async fn commit_staged_artifact(
+        &self,
+        staged: &StagedArtifact,
+    ) -> Result<ArtifactId, StorageError> {
+        let canonical = canonical_object_path(&staged.id);
+        let Some(staging_path) = &staged.staging_path else {
+            return self.commit_empty_artifact(staged.id, &canonical).await;
+        };
+
+        // Canonical key already present with matching size and the same
+        // backend validator -> discard the stage. If the validator is
+        // absent or differs, hash the canonical object before deciding
+        // whether to no-op or repair; this keeps the common duplicate path
+        // metadata-only while still catching same-size corruption.
         match self.inner.head(&canonical).await {
-            Ok(_) => {
-                self.best_effort_delete_staging(&staging_path).await;
-                return Ok(id);
+            Ok(meta) if u64::try_from(meta.size).is_ok_and(|size| size == staged.size_bytes) => {
+                let staged_meta = match self.inner.head(staging_path).await {
+                    Ok(staged_meta) => staged_meta,
+                    Err(err) => {
+                        self.best_effort_delete_staging(staging_path).await;
+                        return Err(StorageError::from_object_store(err));
+                    }
+                };
+                if meta.e_tag.is_some() && meta.e_tag == staged_meta.e_tag {
+                    self.best_effort_delete_staging(staging_path).await;
+                    return Ok(staged.id);
+                }
+                let canonical_key = StorageKey::canonical_for(&staged.id);
+                match self.matches_artifact_id(&canonical_key, staged.id).await {
+                    Ok(true) => {
+                        self.best_effort_delete_staging(staging_path).await;
+                        return Ok(staged.id);
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        self.best_effort_delete_staging(staging_path).await;
+                        return Err(err);
+                    }
+                }
             }
-            Err(ObjectStoreError::NotFound { .. }) => {}
+            Ok(_) | Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => {
-                self.best_effort_delete_staging(&staging_path).await;
+                self.best_effort_delete_staging(staging_path).await;
                 return Err(StorageError::from_object_store(err));
             }
         }
@@ -343,12 +414,84 @@ impl BlobStore {
         // process. `copy` overwrites on S3/R2/MinIO, which is fine:
         // content-addressed means "same bytes" even if a concurrent
         // writer got there first.
-        if let Err(err) = self.inner.copy(&staging_path, &canonical).await {
-            self.best_effort_delete_staging(&staging_path).await;
+        if let Err(err) = self.inner.copy(staging_path, &canonical).await {
+            self.best_effort_delete_staging(staging_path).await;
             return Err(StorageError::from_object_store(err));
         }
-        self.best_effort_delete_staging(&staging_path).await;
+        self.best_effort_delete_staging(staging_path).await;
+        Ok(staged.id)
+    }
+
+    async fn commit_empty_artifact(
+        &self,
+        id: ArtifactId,
+        canonical: &ObjectPath,
+    ) -> Result<ArtifactId, StorageError> {
+        match self.inner.head(canonical).await {
+            Ok(meta) if meta.size == 0 => return Ok(id),
+            Ok(_) | Err(ObjectStoreError::NotFound { .. }) => {}
+            Err(err) => return Err(StorageError::from_object_store(err)),
+        }
+
+        self.inner
+            .put(canonical, Bytes::new().into())
+            .await
+            .map_err(StorageError::from_object_store)?;
         Ok(id)
+    }
+
+    /// Replace the canonical key with a staged artifact.
+    ///
+    /// This is reserved for repair paths that have already proven the
+    /// existing durable object is missing or does not hash to the artifact id.
+    #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
+    pub async fn replace_staged_artifact(
+        &self,
+        staged: &StagedArtifact,
+    ) -> Result<ArtifactId, StorageError> {
+        let canonical = canonical_object_path(&staged.id);
+        let Some(staging_path) = &staged.staging_path else {
+            self.inner
+                .put(&canonical, Bytes::new().into())
+                .await
+                .map_err(StorageError::from_object_store)?;
+            return Ok(staged.id);
+        };
+
+        if let Err(err) = self.inner.copy(staging_path, &canonical).await {
+            self.best_effort_delete_staging(staging_path).await;
+            return Err(StorageError::from_object_store(err));
+        }
+        self.best_effort_delete_staging(staging_path).await;
+        Ok(staged.id)
+    }
+
+    /// Discard a staged artifact without creating a canonical hot copy.
+    #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
+    pub async fn discard_staged_artifact(
+        &self,
+        staged: &StagedArtifact,
+    ) -> Result<(), StorageError> {
+        if let Some(staging_path) = &staged.staging_path {
+            self.best_effort_delete_staging(staging_path).await;
+        }
+        Ok(())
+    }
+
+    /// Stream `chunks` to the backend while hashing on the fly, then
+    /// land the content under the canonical `artifacts/<hex>` key.
+    ///
+    /// Writes are staged first because the sha256 is only known after
+    /// the stream drains. Once known, the staged object is server-side
+    /// copied to the canonical key and deleted.
+    #[tracing::instrument(skip(self, chunks))]
+    pub async fn put_artifact_stream<S, E>(&self, chunks: S) -> Result<ArtifactId, StorageError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: fmt::Display,
+    {
+        let staged = self.stage_artifact_stream(chunks).await?;
+        self.commit_staged_artifact(&staged).await
     }
 
     /// Return a streaming reader of the artifact at `key`.
@@ -378,6 +521,38 @@ impl BlobStore {
             Ok(_) => Ok(true),
             Err(ObjectStoreError::NotFound { .. }) => Ok(false),
             Err(err) => Err(StorageError::Backend(err)),
+        }
+    }
+
+    /// Return `true` when `key` exists and streams back to `id`.
+    #[tracing::instrument(skip(self))]
+    pub async fn matches_artifact_id(
+        &self,
+        key: &StorageKey,
+        id: ArtifactId,
+    ) -> Result<bool, StorageError> {
+        let mut stream = match self.get(key).await {
+            Ok(stream) => stream,
+            Err(StorageError::NotFound(_)) => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        let mut hasher = Sha256::new();
+        while let Some(chunk) = stream.next().await {
+            hasher.update(&chunk?);
+        }
+        let actual = ArtifactId::from_digest(Sha256Digest::from_bytes(hasher.finalize().into()));
+        Ok(actual == id)
+    }
+
+    /// Delete the object at `key`.
+    ///
+    /// Missing objects are treated as success so orphan cleanup can be retried
+    /// safely.
+    #[tracing::instrument(skip(self))]
+    pub async fn delete(&self, key: &StorageKey) -> Result<(), StorageError> {
+        match self.inner.delete(&key.as_object_path()).await {
+            Ok(()) | Err(ObjectStoreError::NotFound { .. }) => Ok(()),
+            Err(err) => Err(StorageError::from_object_store(err)),
         }
     }
 
@@ -516,5 +691,97 @@ mod tests {
             StorageError::NotFound(p) => assert_eq!(p, "artifacts/abc"),
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn replace_staged_artifact_overwrites_canonical_mismatch() {
+        let store = BlobStore::new(object_store::memory::InMemory::new());
+        let id = ArtifactId::of_content(b"correct bytes");
+        let key = StorageKey::canonical_for(&id);
+        store
+            .inner
+            .put(&key.as_object_path(), Bytes::from_static(b"corrupt").into())
+            .await
+            .expect("seed corrupt canonical object");
+
+        let staged = store
+            .stage_artifact_stream(futures::stream::iter([Ok::<_, std::io::Error>(
+                Bytes::from_static(b"correct bytes"),
+            )]))
+            .await
+            .expect("stage replacement");
+        store
+            .replace_staged_artifact(&staged)
+            .await
+            .expect("replace canonical object");
+
+        assert!(
+            store
+                .matches_artifact_id(&key, id)
+                .await
+                .expect("hash replacement")
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_staged_artifact_repairs_canonical_hash_mismatch() {
+        let store = BlobStore::new(object_store::memory::InMemory::new());
+        let id = ArtifactId::of_content(b"correct bytes");
+        let key = StorageKey::canonical_for(&id);
+        let mut corrupt = b"correct bytes".to_vec();
+        corrupt[0] = b'X';
+        store
+            .inner
+            .put(&key.as_object_path(), Bytes::from(corrupt).into())
+            .await
+            .expect("seed corrupt canonical object");
+
+        let staged = store
+            .stage_artifact_stream(futures::stream::iter([Ok::<_, std::io::Error>(
+                Bytes::from_static(b"correct bytes"),
+            )]))
+            .await
+            .expect("stage replacement");
+        store
+            .commit_staged_artifact(&staged)
+            .await
+            .expect("commit repairs canonical object");
+
+        assert!(
+            store
+                .matches_artifact_id(&key, id)
+                .await
+                .expect("hash committed replacement")
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_staged_artifact_repairs_empty_canonical_size_mismatch() {
+        let store = BlobStore::new(object_store::memory::InMemory::new());
+        let id = ArtifactId::of_content(b"");
+        let key = StorageKey::canonical_for(&id);
+        store
+            .inner
+            .put(&key.as_object_path(), Bytes::from_static(b"corrupt").into())
+            .await
+            .expect("seed corrupt empty canonical object");
+
+        let staged = store
+            .stage_artifact_stream(futures::stream::iter(
+                Vec::<Result<Bytes, std::io::Error>>::new(),
+            ))
+            .await
+            .expect("stage empty replacement");
+        store
+            .commit_staged_artifact(&staged)
+            .await
+            .expect("commit repairs empty canonical object");
+
+        assert!(
+            store
+                .matches_artifact_id(&key, id)
+                .await
+                .expect("hash committed empty replacement")
+        );
     }
 }

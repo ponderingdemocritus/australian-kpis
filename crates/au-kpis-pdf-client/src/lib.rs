@@ -23,6 +23,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::{OtelName, TracingMiddleware};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::Instrument;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -167,13 +168,17 @@ impl PdfClient {
         url: &Url,
         request: &ExtractRequest,
     ) -> Result<reqwest::Response, PdfClientError> {
-        let response = self
-            .client
-            .post(url.clone())
-            .with_extension(OtelName("pdf.extract".into()))
-            .json(request)
-            .send()
-            .await?;
+        let span = tracing::info_span!("pdf.extract.http", method = "POST", url = %url);
+        let response = async {
+            self.client
+                .post(url.clone())
+                .with_extension(OtelName("pdf.extract".into()))
+                .json(request)
+                .send()
+                .await
+        }
+        .instrument(span)
+        .await?;
         let status = response.status();
         if status.is_success() {
             return Ok(response);

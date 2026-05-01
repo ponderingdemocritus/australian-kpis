@@ -14,6 +14,7 @@ au-kpis-error = { workspace = true }
 au-kpis-storage = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 futures = "0.3"
+httpdate = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "brotli", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

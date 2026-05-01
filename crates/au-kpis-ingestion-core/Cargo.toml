@@ -8,3 +8,30 @@ repository.workspace = true
 description = "Ingestion orchestration (discover -> fetch -> parse -> load)."
 
 [dependencies]
+async-trait = "0.1"
+au-kpis-adapter = { workspace = true }
+au-kpis-db = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-error = { workspace = true }
+au-kpis-storage = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+
+[dev-dependencies]
+au-kpis-adapter-abs = { path = "../adapters/abs" }
+au-kpis-config = { workspace = true }
+au-kpis-testing = { workspace = true }
+object_store = "0.11"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "uuid",
+    "json",
+    "macros",
+    "migrate",
+] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.1` |
+| **Version** | `v0.1.3` |
 | **Status** | Approved |
-| **Last updated** | 2026-04-28 |
+| **Last updated** | 2026-05-01 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -479,7 +479,7 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 - **Compression** on chunks >7 days old (90%+ savings on numeric data).
 - **Continuous aggregates** for weekly/monthly/quarterly rollups per series, refreshed by policy.
 - `sources`, `dataflows`, `dimensions`, `codelists`, `codes`, `measures` — vanilla relational tables.
-- `artifacts` — content-addressed (sha256) → S3 key; dedup on hash so refetching same file is a no-op.
+- `artifacts` — content-addressed (sha256) → S3 key plus captured HTTP response headers, including repeated values for the same header name; dedup on hash so refetching same file is a no-op.
 - `parse_errors` — rows that failed validation, keyed to artifact for re-processing.
 - `api_keys` — hashed (argon2id), scopes, rate-limit tier.
 
@@ -510,7 +510,8 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 ### Guardrails
 
 - Every adapter has a **golden-file test** (insta snapshot): fixture → expected observations.
-- Adapters **never** touch DB. They emit `Observation` into a stream; `au-kpis-loader` handles persistence.
+- Adapters **never** depend on `au-kpis-db` or `au-kpis-loader`. Fetch implementations may use the orchestration-owned `FetchCtx` artifact recorder to load, record, or repair raw-artifact provenance, but the concrete recorder is supplied by `au-kpis-ingestion-core`; adapters do not issue SQL or choose database transactions.
+- Parse implementations emit `Observation` into a stream; `au-kpis-loader` handles observation/series persistence.
 - **Rate limits** declared in `AdapterManifest`, enforced by `RateLimitLayer` on the shared HTTP client.
 - **Versioned parsers**: `parse_v1`, `parse_v2` alongside; feature-flag by artifact date range. Re-ingest of old files stays correct.
 
@@ -981,7 +982,7 @@ parallel:
   - typecheck       (cargo check + tsc)
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
-  - test            (nextest + vitest, testcontainers)
+  - test            (nextest + vitest, testcontainers, source-specific streaming memory guardrails such as the ABS DHAT fetch profile)
   - coverage        (clean cargo-llvm-cov profile data with pinned nightly coverage toolchain → LCOV line/branch coverage → Codecov PR comment)
   - snapshot        (insta check)
   - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
@@ -996,6 +997,11 @@ All gates from the table above run here. Blocking for merge.
 The coverage job blocks on local `cargo-llvm-cov` line and branch thresholds.
 The Codecov upload/reporting step is advisory so third-party ingest outages do
 not fail an otherwise valid PR gate.
+
+Source-specific memory guardrails may run as explicit PR blockers when they
+protect a pass requirement that normal unit/integration tests cannot observe;
+for example, the ABS fetch path runs its DHAT profile to enforce the streaming
+heap budget.
 
 Codex review is an additional review signal, not part of the 14 blocking gates by default. It runs only when `OPENAI_API_KEY` is configured for the repository and the PR originates from the same repository (not a fork). Default model: `gpt-5.5`; allow `CODEX_MODEL`, `CODEX_REVIEW_EFFORT`, and `CODEX_REVIEW_BLOCK_ON_INCORRECT` as repository variables for tuning.
 
@@ -1382,7 +1388,7 @@ All confirmed 2026-04-23:
 | **Hypertable** | TimescaleDB-partitioned table. `observations` is partitioned by `time` (monthly chunks) + space-partitioned by `series_key` hash. |
 | **Continuous aggregate** | TimescaleDB materialized view that incrementally maintains aggregates (e.g. monthly averages) as new data arrives. |
 | **Adapter** | A crate implementing `SourceAdapter` for one upstream source (e.g. ABS). |
-| **Artifact** | Raw upstream file (SDMX-JSON, XLS, PDF) persisted in R2, content-addressed by `sha256`. |
+| **Artifact** | Raw upstream file (SDMX-JSON, XLS, PDF) persisted in R2, content-addressed by `sha256`, with fetch response headers retained for audit/re-ingest, including repeated values for the same header name. |
 | **SLO** | Service Level Objective — committed performance/availability target; measured from real traffic. |
 | **Burn rate** | Rate at which error budget is consumed; fast/slow window alerts are the Google SRE pattern. |
 | **DLQ** | Dead-letter queue — jobs that exhausted retries; reviewed manually. |
@@ -1426,5 +1432,7 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v0.1.3 (2026-05-01)** — Clarified repeated artifact response-header retention and source-specific streaming memory guardrails in PR CI.
+- **v0.1.2 (2026-04-30)** — Clarified that artifact records retain upstream fetch response headers alongside the content-addressed storage key.
 - **v0.1.1 (2026-04-28)** — Clarified PDF extraction architecture: deterministic `pdfplumber`/`camelot` remains the baseline, with optional pinned local document-model backends for fallback/comparison. Added validation, provenance, testing, and model-governance requirements.
 - **v0.1.0 (2026-04-23)** — Initial spec approved. Rust API (Cargo workspace, ~20 crates), TypeScript SDK + client, Python PDF sidecar, Timescale Cloud, Fly.io. Full testing + CI + benchmarking baked in. 65 issues across 5 milestones tracked in GitHub.

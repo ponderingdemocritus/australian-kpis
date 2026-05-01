@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE artifacts\n           SET storage_key = $2\n           WHERE id = $1\n             AND storage_key = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": ["Bytea", "Text", "Text"]
+    },
+    "nullable": []
+  },
+  "hash": "5d1764174068a9f6d836a9663996e9d5520d1a93dc834f78cb00bf5a9ac56825"
+}
