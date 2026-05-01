@@ -185,24 +185,32 @@ impl fmt::Debug for AdapterHttpClient {
 impl AdapterHttpClient {
     /// Build a client with the source's declared rate limit.
     ///
-    /// The default client does not follow redirects; source adapters validate
-    /// canonical upstream URLs before issuing requests.
+    /// The default client keeps reqwest's ordinary redirect and decompression
+    /// behaviour for discovery and metadata requests.
     pub fn new(rate_limit: RateLimit) -> Self {
         let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("static reqwest client configuration is valid");
-        Self::from_client(client, rate_limit)
-    }
-
-    /// Wrap an existing `reqwest` client with the source's declared rate limit.
-    pub fn from_client(client: reqwest::Client, rate_limit: RateLimit) -> Self {
         let raw_artifact_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_gzip()
             .no_brotli()
             .build()
             .expect("static reqwest client configuration is valid");
+        Self::from_clients(client, raw_artifact_client, rate_limit)
+    }
+
+    /// Wrap an existing `reqwest` client with the source's declared rate limit.
+    pub fn from_client(client: reqwest::Client, rate_limit: RateLimit) -> Self {
+        Self::from_clients(client.clone(), client, rate_limit)
+    }
+
+    /// Wrap separate clients for ordinary requests and raw artifact fetches.
+    pub fn from_clients(
+        client: reqwest::Client,
+        raw_artifact_client: reqwest::Client,
+        rate_limit: RateLimit,
+    ) -> Self {
         Self {
             client,
             raw_artifact_client,

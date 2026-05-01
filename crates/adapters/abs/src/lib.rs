@@ -255,6 +255,16 @@ async fn persist_expected_artifact(
     if reference.storage_key == expected_storage_key {
         return Ok(reference);
     }
+    if ctx
+        .blob_store
+        .matches_artifact_id(
+            &StorageKey::from_persisted(reference.storage_key.clone()),
+            artifact.id,
+        )
+        .await?
+    {
+        return Ok(reference);
+    }
     ctx.repair_artifact_storage_key(artifact, &reference.storage_key)
         .await
 }

@@ -672,7 +672,7 @@ async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_repairs_to_canonical_when_rewrite_races_after_lookup() {
+async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
@@ -710,17 +710,14 @@ async fn fetch_repairs_to_canonical_when_rewrite_races_after_lookup() {
         .await
         .expect("fetch handles cold rewrite race");
 
-    assert_eq!(
-        artifact.storage_key,
-        format!("artifacts/{}", expected_id.to_hex())
-    );
     assert!(
         blob_store
-            .exists(&StorageKey::canonical_for(&expected_id))
+            .matches_artifact_id(&StorageKey::from_persisted(&cold_key), expected_id)
             .await
-            .expect("check hot canonical copy"),
-        "race handling should return the refreshed canonical artifact"
+            .expect("hash cold artifact"),
+        "valid durable rewrite should remain authoritative"
     );
+    assert_eq!(artifact.storage_key, cold_key);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
