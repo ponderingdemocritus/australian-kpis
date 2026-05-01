@@ -372,12 +372,14 @@ impl BlobStore {
         };
         let canonical = canonical_object_path(&staged.id);
 
-        // Canonical key already present with the expected size -> discard the
-        // stage. Avoid a full GET+hash here: duplicate fetches are the common
-        // path, and explicit repair callers can use `replace_staged_artifact`.
+        // Canonical key already present with matching bytes -> discard the
+        // stage; if the key is missing or corrupt, the staged stream repairs it.
         match self.inner.head(&canonical).await {
-            Ok(meta) => {
-                if size_matches(meta.size, staged.size_bytes) {
+            Ok(_) => {
+                if self
+                    .matches_artifact_id(&StorageKey::canonical_for(&staged.id), staged.id)
+                    .await?
+                {
                     self.best_effort_delete_staging(staging_path).await;
                     return Ok(staged.id);
                 }
@@ -553,13 +555,6 @@ impl BlobStore {
     }
 }
 
-fn size_matches(actual: usize, expected: u64) -> bool {
-    let Ok(expected) = usize::try_from(expected) else {
-        return false;
-    };
-    actual == expected
-}
-
 /// Internal helper: object-store path for the canonical write target.
 /// Kept private so callers cannot accidentally bypass `StorageKey`
 /// when reading.
@@ -692,13 +687,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_staged_artifact_repairs_canonical_size_mismatch() {
+    async fn commit_staged_artifact_repairs_canonical_hash_mismatch() {
         let store = BlobStore::new(object_store::memory::InMemory::new());
         let id = ArtifactId::of_content(b"correct bytes");
         let key = StorageKey::canonical_for(&id);
+        let mut corrupt = b"correct bytes".to_vec();
+        corrupt[0] = b'X';
         store
             .inner
-            .put(&key.as_object_path(), Bytes::from_static(b"corrupt").into())
+            .put(&key.as_object_path(), Bytes::from(corrupt).into())
             .await
             .expect("seed corrupt canonical object");
 

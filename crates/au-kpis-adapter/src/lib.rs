@@ -170,6 +170,7 @@ pub struct AdapterManifest {
 #[derive(Clone)]
 pub struct AdapterHttpClient {
     client: reqwest::Client,
+    raw_artifact_client: reqwest::Client,
     limiter: Arc<RateLimiter>,
 }
 
@@ -189,8 +190,6 @@ impl AdapterHttpClient {
     pub fn new(rate_limit: RateLimit) -> Self {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .no_gzip()
-            .no_brotli()
             .build()
             .expect("static reqwest client configuration is valid");
         Self::from_client(client, rate_limit)
@@ -198,8 +197,15 @@ impl AdapterHttpClient {
 
     /// Wrap an existing `reqwest` client with the source's declared rate limit.
     pub fn from_client(client: reqwest::Client, rate_limit: RateLimit) -> Self {
+        let raw_artifact_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_gzip()
+            .no_brotli()
+            .build()
+            .expect("static reqwest client configuration is valid");
         Self {
             client,
+            raw_artifact_client,
             limiter: Arc::new(RateLimiter::new(rate_limit)),
         }
     }
@@ -208,6 +214,12 @@ impl AdapterHttpClient {
     #[must_use]
     pub fn raw(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    /// Borrow the non-decompressing client for raw artifact persistence.
+    #[must_use]
+    pub fn raw_artifact(&self) -> &reqwest::Client {
+        &self.raw_artifact_client
     }
 
     /// Send a request after waiting for a rate-limit permit.

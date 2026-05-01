@@ -622,6 +622,56 @@ async fn fetch_keeps_canonical_duplicate_as_storage_noop() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let storage_key = format!("artifacts/{}", expected_id.to_hex());
+    let backend = Arc::new(InMemory::new());
+    let mut corrupt = SDMX_FIXTURE.to_vec();
+    corrupt[0] = b'X';
+    backend
+        .put(
+            &ObjectPath::from(storage_key.clone()),
+            Bytes::from(corrupt).into(),
+        )
+        .await
+        .expect("seed same-size corrupt canonical artifact");
+    let blob_store = BlobStore::from_arc(backend);
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key,
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
+
+    adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(ExistingColdArtifactRecorder { artifact: existing }),
+            ),
+        )
+        .await
+        .expect("fetch repairs canonical hash mismatch");
+
+    assert!(
+        blob_store
+            .matches_artifact_id(&StorageKey::canonical_for(&expected_id), expected_id)
+            .await
+            .expect("hash repaired canonical copy"),
+        "canonical duplicate repair should preserve content-addressed bytes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_repairs_to_canonical_when_rewrite_races_after_lookup() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();

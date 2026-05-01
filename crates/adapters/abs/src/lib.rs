@@ -161,7 +161,7 @@ impl SourceAdapter for AbsAdapter {
             .http
             .execute(
                 ctx.http
-                    .raw()
+                    .raw_artifact()
                     .get(&fetch_url)
                     .header("user-agent", USER_AGENT)
                     .header("accept", DATA_JSON_ACCEPT),
