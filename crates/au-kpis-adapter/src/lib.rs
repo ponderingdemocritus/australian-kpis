@@ -189,6 +189,8 @@ impl AdapterHttpClient {
     pub fn new(rate_limit: RateLimit) -> Self {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_gzip()
+            .no_brotli()
             .build()
             .expect("static reqwest client configuration is valid");
         Self::from_client(client, rate_limit)

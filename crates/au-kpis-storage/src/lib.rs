@@ -485,20 +485,6 @@ impl BlobStore {
         }
     }
 
-    /// Return `true` when an object exists at `key` with the expected size.
-    #[tracing::instrument(skip(self))]
-    pub async fn exists_with_size(
-        &self,
-        key: &StorageKey,
-        size_bytes: u64,
-    ) -> Result<bool, StorageError> {
-        match self.inner.head(&key.as_object_path()).await {
-            Ok(meta) => Ok(size_matches(meta.size, size_bytes)),
-            Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-            Err(err) => Err(StorageError::from_object_store(err)),
-        }
-    }
-
     /// Return `true` when `key` exists and streams back to `id`.
     #[tracing::instrument(skip(self))]
     pub async fn matches_artifact_id(

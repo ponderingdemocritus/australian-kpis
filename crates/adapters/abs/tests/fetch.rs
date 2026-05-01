@@ -16,6 +16,13 @@ use tokio::{
 };
 
 const SDMX_FIXTURE: &[u8] = br#"{"data":{"dataSets":[{"observations":{"0:0":[123.4]}}]}}"#;
+const GZIP_SDMX_FIXTURE: &[u8] = &[
+    0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xab, 0x56, 0x4a, 0x49, 0x2c, 0x49,
+    0x54, 0xb2, 0xaa, 0x06, 0xd3, 0xc1, 0xa9, 0x25, 0xc5, 0x4a, 0x56, 0xd1, 0xd5, 0x4a, 0xf9, 0x49,
+    0xc5, 0xa9, 0x45, 0x65, 0x89, 0x25, 0x99, 0xf9, 0x79, 0xc5, 0x20, 0x49, 0x03, 0x2b, 0x03, 0xa0,
+    0xb8, 0xa1, 0x91, 0xb1, 0x9e, 0x49, 0x6c, 0x6d, 0x2d, 0x10, 0x01, 0x00, 0x45, 0x07, 0x0d, 0x1a,
+    0x38, 0x00, 0x00, 0x00,
+];
 
 #[derive(Debug, Default)]
 struct RecordingArtifactRecorder {
@@ -235,6 +242,37 @@ async fn serve_artifact_once() -> (String, String) {
     )
 }
 
+async fn serve_gzip_artifact_once() -> (String, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).await.expect("read request");
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/vnd.sdmx.data+json\r\ncontent-encoding: gzip\r\ncontent-length: {}\r\n\r\n",
+            GZIP_SDMX_FIXTURE.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write gzip headers");
+        stream
+            .write_all(GZIP_SDMX_FIXTURE)
+            .await
+            .expect("write gzip body");
+    });
+
+    (
+        format!("http://{addr}/rest"),
+        format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
+    )
+}
+
 async fn serve_throttle_once() -> (String, String) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -365,6 +403,41 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
         bytes.extend_from_slice(&chunk.expect("stored chunk"));
     }
     assert_eq!(bytes, SDMX_FIXTURE);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_stores_compressed_response_as_raw_artifact() {
+    let (base_url, source_url) = serve_gzip_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let blob_store = BlobStore::new(InMemory::new());
+
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                recording_recorder(),
+            ),
+        )
+        .await
+        .expect("fetch gzip artifact");
+
+    let expected_id = ArtifactId::of_content(GZIP_SDMX_FIXTURE);
+    assert_eq!(artifact.id, expected_id);
+    assert_eq!(artifact.size_bytes, GZIP_SDMX_FIXTURE.len() as u64);
+    assert_eq!(artifact.response_headers["content-encoding"], ["gzip"]);
+
+    let mut stored = blob_store
+        .get(&StorageKey::from_persisted(&artifact.storage_key))
+        .await
+        .expect("read stored compressed artifact");
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stored.next().await {
+        bytes.extend_from_slice(&chunk.expect("stored chunk"));
+    }
+    assert_eq!(bytes, GZIP_SDMX_FIXTURE);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -645,16 +718,18 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_repairs_rewritten_storage_key_when_durable_blob_size_mismatches() {
+async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let cold_key = format!("cold/{}", expected_id.to_hex());
     let backend = Arc::new(InMemory::new());
+    let mut corrupt = SDMX_FIXTURE.to_vec();
+    corrupt[0] = b'X';
     backend
         .put(
             &ObjectPath::from(cold_key.clone()),
-            Bytes::from_static(b"not the ABS artifact").into(),
+            Bytes::from(corrupt).into(),
         )
         .await
         .expect("seed corrupt cold artifact");
