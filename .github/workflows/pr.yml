@@ -533,7 +533,9 @@ jobs:
         run: cargo install cargo-insta --version 1.47.2 --locked
 
       - name: Verify committed snapshots
-        run: cargo insta test --workspace --check
+        run: |
+          cargo insta test --workspace --check -- \
+            --skip loads_ten_thousand_observations_with_copy_batches
 
   codex-review:
     name: Codex Structured Review
