@@ -211,6 +211,18 @@ impl AdapterHttpClient {
         Ok(request.send().await?)
     }
 
+    /// Send a request with redirects disabled while preserving rate limiting.
+    #[tracing::instrument(skip(self, build_request))]
+    pub async fn execute_without_redirects(
+        &self,
+        build_request: impl FnOnce(&reqwest::Client) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, AdapterError> {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        self.execute(build_request(&client)).await
+    }
+
     /// Convenience `GET` helper using the shared rate limiter.
     #[tracing::instrument(skip(self), fields(url = %url))]
     pub async fn get(&self, url: &str) -> Result<reqwest::Response, AdapterError> {

@@ -159,13 +159,12 @@ impl SourceAdapter for AbsAdapter {
         let fetch_url = self.validated_fetch_url(&job)?;
         let response = ctx
             .http
-            .execute(
-                ctx.http
-                    .raw()
+            .execute_without_redirects(|client| {
+                client
                     .get(&fetch_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", DATA_JSON_ACCEPT),
-            )
+                    .header("accept", DATA_JSON_ACCEPT)
+            })
             .await?;
         let response_headers = capture_response_headers(response.headers());
         let status = response.status();
@@ -188,6 +187,17 @@ impl SourceAdapter for AbsAdapter {
             .await?;
         let id = staged.id();
         let storage_key = format!("artifacts/{}", id.to_hex());
+        let fetched_at = Utc::now();
+        let artifact = Artifact {
+            id,
+            source_id: job.source_id,
+            source_url: fetch_url,
+            content_type,
+            response_headers,
+            storage_key: storage_key.clone(),
+            size_bytes: staged.size_bytes(),
+            fetched_at,
+        };
 
         if let Some(existing) = ctx.get_artifact(id).await? {
             let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
@@ -199,23 +209,15 @@ impl SourceAdapter for AbsAdapter {
                         .await?)
             {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;
-                return Ok(existing);
+                let duplicate = Artifact {
+                    storage_key: existing.storage_key,
+                    ..artifact
+                };
+                return ctx.persist_artifact(duplicate).await;
             }
         }
 
         ctx.blob_store.commit_staged_artifact(&staged).await?;
-        let fetched_at = Utc::now();
-
-        let artifact = Artifact {
-            id,
-            source_id: job.source_id,
-            source_url: fetch_url,
-            content_type,
-            response_headers,
-            storage_key,
-            size_bytes: staged.size_bytes(),
-            fetched_at,
-        };
 
         let reference = ctx.persist_artifact(artifact.clone()).await?;
         if reference.storage_key == artifact.storage_key {

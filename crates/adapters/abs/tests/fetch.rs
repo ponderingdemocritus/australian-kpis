@@ -31,6 +31,12 @@ struct ExistingColdArtifactRecorder {
 }
 
 #[derive(Debug)]
+struct BackfillingExistingArtifactRecorder {
+    artifact: tokio::sync::Mutex<Artifact>,
+    record_calls: tokio::sync::Mutex<usize>,
+}
+
+#[derive(Debug)]
 struct RacingColdArtifactRecorder {
     artifact: Artifact,
 }
@@ -83,6 +89,31 @@ impl ArtifactRecorder for ExistingColdArtifactRecorder {
         _observed_storage_key: &str,
     ) -> Result<Artifact, AdapterError> {
         Ok(artifact.clone())
+    }
+}
+
+#[async_trait]
+impl ArtifactRecorder for BackfillingExistingArtifactRecorder {
+    async fn get(&self, id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        let artifact = self.artifact.lock().await;
+        Ok((artifact.id == id).then(|| artifact.clone()))
+    }
+
+    async fn record(&self, artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        *self.record_calls.lock().await += 1;
+        let mut stored = self.artifact.lock().await;
+        if stored.response_headers.is_empty() && !artifact.response_headers.is_empty() {
+            stored.response_headers = artifact.response_headers.clone();
+        }
+        Ok(stored.clone())
+    }
+
+    async fn repair_storage_key(
+        &self,
+        _artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        panic!("verified duplicate artifact should backfill with record, not repair")
     }
 }
 
@@ -220,6 +251,30 @@ async fn serve_throttle_once() -> (String, String) {
             )
             .await
             .expect("write throttle response");
+    });
+
+    (
+        format!("http://{addr}/rest"),
+        format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
+    )
+}
+
+async fn serve_redirect_once() -> (String, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).await.expect("read request");
+        stream
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nlocation: http://169.254.169.254/latest/meta-data\r\ncontent-length: 0\r\n\r\n",
+            )
+            .await
+            .expect("write redirect response");
     });
 
     (
@@ -389,6 +444,55 @@ async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
             .expect("check hot canonical copy"),
         "duplicate fetch should not create a hot canonical copy when durable row points elsewhere"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_backfills_headers_for_duplicate_durable_artifact() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let storage_key = format!("artifacts/{}", expected_id.to_hex());
+    let backend = Arc::new(InMemory::new());
+    backend
+        .put(
+            &ObjectPath::from(storage_key.clone()),
+            Bytes::from_static(SDMX_FIXTURE).into(),
+        )
+        .await
+        .expect("seed durable canonical artifact");
+    let blob_store = BlobStore::from_arc(backend);
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: storage_key.clone(),
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
+    let recorder = Arc::new(BackfillingExistingArtifactRecorder {
+        artifact: tokio::sync::Mutex::new(existing),
+        record_calls: tokio::sync::Mutex::new(0),
+    });
+
+    let artifact = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                recorder.clone(),
+            ),
+        )
+        .await
+        .expect("fetch duplicate artifact and backfill headers");
+
+    assert_eq!(artifact.storage_key, storage_key);
+    assert_eq!(artifact.response_headers["etag"], ["\"fixture-etag\""]);
+    assert_eq!(artifact.response_headers["x-audit"], ["first", "second"]);
+    assert_eq!(*recorder.record_calls.lock().await, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -566,6 +670,39 @@ async fn fetch_preserves_retry_after_on_upstream_throttle() {
             assert_eq!(response_headers["x-request-id"], ["throttle-fixture"]);
         }
         other => panic!("expected upstream status, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_rejects_upstream_redirect_without_following_location() {
+    let (base_url, source_url) = serve_redirect_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let err = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                BlobStore::new(InMemory::new()),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                recording_recorder(),
+            ),
+        )
+        .await
+        .expect_err("redirect should be surfaced instead of followed");
+
+    match err {
+        AdapterError::UpstreamStatus {
+            status,
+            response_headers,
+            ..
+        } => {
+            assert_eq!(status.as_u16(), 302);
+            assert_eq!(
+                response_headers["location"],
+                ["http://169.254.169.254/latest/meta-data"]
+            );
+        }
+        other => panic!("expected redirect upstream status, got {other:?}"),
     }
 }
 
