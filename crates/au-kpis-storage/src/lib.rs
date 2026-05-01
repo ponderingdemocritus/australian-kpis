@@ -372,18 +372,14 @@ impl BlobStore {
         };
         let canonical = canonical_object_path(&staged.id);
 
-        // Canonical key already present → discard the stage; caller
-        // still gets the deterministic id.
-        match self.inner.head(&canonical).await {
-            Ok(_) => {
-                self.best_effort_delete_staging(staging_path).await;
-                return Ok(staged.id);
-            }
-            Err(ObjectStoreError::NotFound { .. }) => {}
-            Err(err) => {
-                self.best_effort_delete_staging(staging_path).await;
-                return Err(StorageError::from_object_store(err));
-            }
+        // Canonical key already present with matching bytes -> discard the
+        // stage; if the key is missing or corrupt, the staged stream repairs it.
+        if self
+            .matches_artifact_id(&StorageKey::canonical_for(&staged.id), staged.id)
+            .await?
+        {
+            self.best_effort_delete_staging(staging_path).await;
+            return Ok(staged.id);
         }
 
         // Server-side copy; the bytes never travel back through this
@@ -678,6 +674,36 @@ mod tests {
                 .matches_artifact_id(&key, id)
                 .await
                 .expect("hash replacement")
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_staged_artifact_repairs_canonical_mismatch() {
+        let store = BlobStore::new(object_store::memory::InMemory::new());
+        let id = ArtifactId::of_content(b"correct bytes");
+        let key = StorageKey::canonical_for(&id);
+        store
+            .inner
+            .put(&key.as_object_path(), Bytes::from_static(b"corrupt").into())
+            .await
+            .expect("seed corrupt canonical object");
+
+        let staged = store
+            .stage_artifact_stream(futures::stream::iter([Ok::<_, std::io::Error>(
+                Bytes::from_static(b"correct bytes"),
+            )]))
+            .await
+            .expect("stage replacement");
+        store
+            .commit_staged_artifact(&staged)
+            .await
+            .expect("commit repairs canonical object");
+
+        assert!(
+            store
+                .matches_artifact_id(&key, id)
+                .await
+                .expect("hash committed replacement")
         );
     }
 }

@@ -150,7 +150,7 @@ pub async fn repair_artifact_storage_key(
     artifact: &Artifact,
     observed_storage_key: &str,
 ) -> Result<Artifact, DbError> {
-    sqlx::query!(
+    let result = sqlx::query!(
         r#"UPDATE artifacts
            SET storage_key = $2
            WHERE id = $1
@@ -162,6 +162,13 @@ pub async fn repair_artifact_storage_key(
     .execute(pool)
     .await
     .map_err(DbError::Query)?;
+
+    if result.rows_affected() == 0 {
+        return Err(DbError::Core(CoreError::Validation(format!(
+            "artifact `{}` storage_key changed before repair from `{observed_storage_key}`",
+            artifact.id
+        ))));
+    }
 
     get_artifact(pool, artifact.id)
         .await?

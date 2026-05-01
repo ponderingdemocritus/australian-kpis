@@ -6,6 +6,7 @@ use au_kpis_db::{
     upsert_artifact_record,
 };
 use au_kpis_domain::{Artifact, ArtifactId, SourceId};
+use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
@@ -123,10 +124,10 @@ async fn upsert_artifact_persists_first_seen_provenance() {
         storage_key: "artifacts/stale-repair".into(),
         ..stored.clone()
     };
-    let returned = repair_artifact_storage_key(&pool, &stale_repair, "artifacts/missing-cold")
+    let err = repair_artifact_storage_key(&pool, &stale_repair, "artifacts/missing-cold")
         .await
-        .expect("stale repair is ignored");
-    assert_eq!(returned.storage_key, repaired.storage_key);
+        .expect_err("stale compare-and-set repair should fail");
+    assert_eq!(err.class(), ErrorClass::Validation);
 
     let legacy_id = ArtifactId::of_content(b"legacy-sdmx-json");
     let legacy = Artifact {
