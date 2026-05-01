@@ -496,6 +496,54 @@ async fn fetch_backfills_headers_for_duplicate_durable_artifact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_repairs_canonical_duplicate_when_stored_blob_hash_mismatches() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
+    let storage_key = format!("artifacts/{}", expected_id.to_hex());
+    let backend = Arc::new(InMemory::new());
+    backend
+        .put(
+            &ObjectPath::from(storage_key.clone()),
+            Bytes::from_static(b"corrupt canonical artifact").into(),
+        )
+        .await
+        .expect("seed corrupt canonical artifact");
+    let blob_store = BlobStore::from_arc(backend);
+    let existing = Artifact {
+        id: expected_id,
+        source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
+        source_url: source_url.clone(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key,
+        size_bytes: SDMX_FIXTURE.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
+    };
+
+    adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store.clone(),
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(ExistingColdArtifactRecorder { artifact: existing }),
+            ),
+        )
+        .await
+        .expect("fetch repairs corrupt canonical duplicate");
+
+    assert!(
+        blob_store
+            .matches_artifact_id(&StorageKey::canonical_for(&expected_id), expected_id)
+            .await
+            .expect("hash repaired canonical blob"),
+        "refetch should replace a corrupt canonical object with the streamed bytes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_removes_hot_copy_when_rewrite_races_after_lookup() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();

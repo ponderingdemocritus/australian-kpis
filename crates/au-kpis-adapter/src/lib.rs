@@ -183,8 +183,15 @@ impl fmt::Debug for AdapterHttpClient {
 
 impl AdapterHttpClient {
     /// Build a client with the source's declared rate limit.
+    ///
+    /// The default client does not follow redirects; source adapters validate
+    /// canonical upstream URLs before issuing requests.
     pub fn new(rate_limit: RateLimit) -> Self {
-        Self::from_client(reqwest::Client::new(), rate_limit)
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("static reqwest client configuration is valid");
+        Self::from_client(client, rate_limit)
     }
 
     /// Wrap an existing `reqwest` client with the source's declared rate limit.
@@ -209,18 +216,6 @@ impl AdapterHttpClient {
     ) -> Result<reqwest::Response, AdapterError> {
         self.limiter.wait_for_permit().await;
         Ok(request.send().await?)
-    }
-
-    /// Send a request with redirects disabled while preserving rate limiting.
-    #[tracing::instrument(skip(self, build_request))]
-    pub async fn execute_without_redirects(
-        &self,
-        build_request: impl FnOnce(&reqwest::Client) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, AdapterError> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        self.execute(build_request(&client)).await
     }
 
     /// Convenience `GET` helper using the shared rate limiter.

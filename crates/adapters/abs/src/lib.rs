@@ -159,12 +159,13 @@ impl SourceAdapter for AbsAdapter {
         let fetch_url = self.validated_fetch_url(&job)?;
         let response = ctx
             .http
-            .execute_without_redirects(|client| {
-                client
+            .execute(
+                ctx.http
+                    .raw()
                     .get(&fetch_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", DATA_JSON_ACCEPT)
-            })
+                    .header("accept", DATA_JSON_ACCEPT),
+            )
             .await?;
         let response_headers = capture_response_headers(response.headers());
         let status = response.status();
@@ -199,14 +200,13 @@ impl SourceAdapter for AbsAdapter {
             fetched_at,
         };
 
+        let mut needs_canonical_repair = false;
         if let Some(existing) = ctx.get_artifact(id).await? {
             let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
-            if (existing.storage_key == storage_key && ctx.blob_store.exists(&existing_key).await?)
-                || (existing.storage_key != storage_key
-                    && ctx
-                        .blob_store
-                        .matches_artifact_id(&existing_key, id)
-                        .await?)
+            if ctx
+                .blob_store
+                .matches_artifact_id(&existing_key, id)
+                .await?
             {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;
                 let duplicate = Artifact {
@@ -215,9 +215,14 @@ impl SourceAdapter for AbsAdapter {
                 };
                 return ctx.persist_artifact(duplicate).await;
             }
+            needs_canonical_repair = true;
         }
 
-        ctx.blob_store.commit_staged_artifact(&staged).await?;
+        if needs_canonical_repair {
+            ctx.blob_store.replace_staged_artifact(&staged).await?;
+        } else {
+            ctx.blob_store.commit_staged_artifact(&staged).await?;
+        }
 
         let reference = ctx.persist_artifact(artifact.clone()).await?;
         if reference.storage_key == artifact.storage_key {

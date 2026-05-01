@@ -398,6 +398,32 @@ impl BlobStore {
         Ok(staged.id)
     }
 
+    /// Replace the canonical key with a staged artifact.
+    ///
+    /// This is reserved for repair paths that have already proven the
+    /// existing durable object is missing or does not hash to the artifact id.
+    #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
+    pub async fn replace_staged_artifact(
+        &self,
+        staged: &StagedArtifact,
+    ) -> Result<ArtifactId, StorageError> {
+        let canonical = canonical_object_path(&staged.id);
+        let Some(staging_path) = &staged.staging_path else {
+            self.inner
+                .put(&canonical, Bytes::new().into())
+                .await
+                .map_err(StorageError::from_object_store)?;
+            return Ok(staged.id);
+        };
+
+        if let Err(err) = self.inner.copy(staging_path, &canonical).await {
+            self.best_effort_delete_staging(staging_path).await;
+            return Err(StorageError::from_object_store(err));
+        }
+        self.best_effort_delete_staging(staging_path).await;
+        Ok(staged.id)
+    }
+
     /// Discard a staged artifact without creating a canonical hot copy.
     #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
     pub async fn discard_staged_artifact(
@@ -623,5 +649,35 @@ mod tests {
             StorageError::NotFound(p) => assert_eq!(p, "artifacts/abc"),
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn replace_staged_artifact_overwrites_canonical_mismatch() {
+        let store = BlobStore::new(object_store::memory::InMemory::new());
+        let id = ArtifactId::of_content(b"correct bytes");
+        let key = StorageKey::canonical_for(&id);
+        store
+            .inner
+            .put(&key.as_object_path(), Bytes::from_static(b"corrupt").into())
+            .await
+            .expect("seed corrupt canonical object");
+
+        let staged = store
+            .stage_artifact_stream(futures::stream::iter([Ok::<_, std::io::Error>(
+                Bytes::from_static(b"correct bytes"),
+            )]))
+            .await
+            .expect("stage replacement");
+        store
+            .replace_staged_artifact(&staged)
+            .await
+            .expect("replace canonical object");
+
+        assert!(
+            store
+                .matches_artifact_id(&key, id)
+                .await
+                .expect("hash replacement")
+        );
     }
 }
