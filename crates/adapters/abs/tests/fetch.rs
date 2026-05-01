@@ -32,6 +32,9 @@ struct RecordingArtifactRecorder {
 #[derive(Debug, Default)]
 struct FailingArtifactRecorder;
 
+#[derive(Debug, Default)]
+struct FailingGetArtifactRecorder;
+
 #[derive(Debug)]
 struct ExistingColdArtifactRecorder {
     artifact: Artifact,
@@ -165,6 +168,28 @@ impl ArtifactRecorder for FailingArtifactRecorder {
             "db unavailable",
             ErrorClass::Transient,
         ))
+    }
+}
+
+#[async_trait]
+impl ArtifactRecorder for FailingGetArtifactRecorder {
+    async fn get(&self, _id: ArtifactId) -> Result<Option<Artifact>, AdapterError> {
+        Err(AdapterError::artifact_record(
+            "db unavailable during lookup",
+            ErrorClass::Transient,
+        ))
+    }
+
+    async fn record(&self, _artifact: &Artifact) -> Result<Artifact, AdapterError> {
+        panic!("record should not run when lookup fails")
+    }
+
+    async fn repair_storage_key(
+        &self,
+        _artifact: &Artifact,
+        _observed_storage_key: &str,
+    ) -> Result<Artifact, AdapterError> {
+        panic!("repair should not run when lookup fails")
     }
 }
 
@@ -471,6 +496,34 @@ async fn fetch_keeps_canonical_blob_for_retry_when_primary_record_fails() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_discards_staged_blob_when_artifact_lookup_fails() {
+    let (base_url, source_url) = serve_artifact_once().await;
+    let adapter = AbsAdapter::builder().base_url(&base_url).build();
+    let backend = Arc::new(InMemory::new());
+    let blob_store = BlobStore::from_arc(backend.clone());
+
+    let err = adapter
+        .fetch(
+            cpi_job(source_url),
+            &FetchCtx::new(
+                AdapterHttpClient::new(adapter.manifest().rate_limit),
+                blob_store,
+                Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
+                Arc::new(FailingGetArtifactRecorder),
+            ),
+        )
+        .await
+        .expect_err("artifact lookup failure should fail fetch");
+
+    assert_eq!(err.class(), ErrorClass::Transient);
+    let mut staged = backend.list(Some(&ObjectPath::from("artifacts-staging")));
+    assert!(
+        staged.next().await.is_none(),
+        "failed lookup should not leak staged artifact objects"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
@@ -716,13 +769,6 @@ async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
             .await
             .expect("hash cold artifact"),
         "valid durable rewrite should remain authoritative"
-    );
-    assert!(
-        !blob_store
-            .exists(&StorageKey::canonical_for(&expected_id))
-            .await
-            .expect("check canonical cleanup"),
-        "fetch should not leave an unreferenced canonical hot copy"
     );
     assert_eq!(artifact.storage_key, cold_key);
 }

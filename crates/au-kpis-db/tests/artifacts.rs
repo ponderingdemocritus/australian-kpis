@@ -155,4 +155,16 @@ async fn upsert_artifact_persists_first_seen_provenance() {
         .await
         .expect("backfill empty response headers on duplicate");
     assert_eq!(returned.response_headers, legacy_refetch.response_headers);
+
+    let missing_source_id = ArtifactId::of_content(b"missing-source-sdmx-json");
+    let missing_source = Artifact {
+        id: missing_source_id,
+        source_id: SourceId::new("missing-source").unwrap(),
+        storage_key: format!("artifacts/{}", missing_source_id.to_hex()),
+        ..artifact
+    };
+    let err = upsert_artifact_record(&pool, &missing_source)
+        .await
+        .expect_err("missing source attribution should fail permanently");
+    assert_eq!(err.class(), ErrorClass::Validation);
 }

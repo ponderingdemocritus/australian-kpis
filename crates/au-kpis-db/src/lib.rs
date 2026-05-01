@@ -136,11 +136,23 @@ pub async fn upsert_artifact_record(
     )
     .execute(pool)
     .await
-    .map_err(DbError::Query)?;
+    .map_err(classify_artifact_write_error)?;
 
     get_artifact(pool, artifact.id)
         .await?
         .ok_or_else(|| DbError::Core(CoreError::NotFound(format!("artifact `{}`", artifact.id))))
+}
+
+fn classify_artifact_write_error(err: sqlx::Error) -> DbError {
+    if let sqlx::Error::Database(db_err) = &err {
+        if db_err.code().as_deref() == Some("23503") {
+            return DbError::Core(CoreError::Validation(format!(
+                "artifact violates foreign-key attribution: {}",
+                db_err.message()
+            )));
+        }
+    }
+    DbError::Query(err)
 }
 
 /// Update an existing artifact row to a verified replacement storage key.

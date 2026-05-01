@@ -200,8 +200,16 @@ impl SourceAdapter for AbsAdapter {
             fetched_at,
         };
 
+        let existing = match ctx.get_artifact(id).await {
+            Ok(existing) => existing,
+            Err(err) => {
+                ctx.blob_store.discard_staged_artifact(&staged).await?;
+                return Err(err);
+            }
+        };
+
         let mut needs_canonical_repair = false;
-        if let Some(existing) = ctx.get_artifact(id).await? {
+        if let Some(existing) = existing {
             let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
             if existing.storage_key == storage_key {
                 ctx.blob_store.commit_staged_artifact(&staged).await?;
@@ -212,11 +220,15 @@ impl SourceAdapter for AbsAdapter {
                 };
                 return persist_expected_artifact(ctx, duplicate, &expected_storage_key).await;
             }
-            if ctx
-                .blob_store
-                .matches_artifact_id(&existing_key, id)
-                .await?
-            {
+            let existing_key_matches =
+                match ctx.blob_store.matches_artifact_id(&existing_key, id).await {
+                    Ok(matches) => matches,
+                    Err(err) => {
+                        ctx.blob_store.discard_staged_artifact(&staged).await?;
+                        return Err(err.into());
+                    }
+                };
+            if existing_key_matches {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;
                 let expected_storage_key = existing.storage_key.clone();
                 let duplicate = Artifact {
@@ -256,15 +268,11 @@ async fn persist_expected_artifact(
         return Ok(reference);
     }
     let reference_key = StorageKey::from_persisted(reference.storage_key.clone());
-    let canonical_key = StorageKey::canonical_for(&artifact.id);
     if ctx
         .blob_store
         .matches_artifact_id(&reference_key, artifact.id)
         .await?
     {
-        if reference_key != canonical_key {
-            ctx.blob_store.delete(&canonical_key).await?;
-        }
         return Ok(reference);
     }
     ctx.repair_artifact_storage_key(artifact, &reference.storage_key)
