@@ -218,7 +218,13 @@ impl SourceAdapter for AbsAdapter {
                     storage_key: existing.storage_key,
                     ..artifact
                 };
-                return persist_expected_artifact(ctx, duplicate, &expected_storage_key).await;
+                return persist_expected_artifact(
+                    ctx,
+                    duplicate,
+                    &expected_storage_key,
+                    Some(&storage_key),
+                )
+                .await;
             }
             let existing_key_matches =
                 match ctx.blob_store.matches_artifact_id(&existing_key, id).await {
@@ -235,7 +241,8 @@ impl SourceAdapter for AbsAdapter {
                     storage_key: existing.storage_key,
                     ..artifact
                 };
-                return persist_expected_artifact(ctx, duplicate, &expected_storage_key).await;
+                return persist_expected_artifact(ctx, duplicate, &expected_storage_key, None)
+                    .await;
             }
             needs_canonical_repair = true;
         }
@@ -246,7 +253,7 @@ impl SourceAdapter for AbsAdapter {
             ctx.blob_store.commit_staged_artifact(&staged).await?;
         }
 
-        persist_expected_artifact(ctx, artifact, &storage_key).await
+        persist_expected_artifact(ctx, artifact, &storage_key, Some(&storage_key)).await
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {
@@ -262,6 +269,7 @@ async fn persist_expected_artifact(
     ctx: &FetchCtx,
     artifact: Artifact,
     expected_storage_key: &str,
+    cleanup_untracked_storage_key: Option<&str>,
 ) -> Result<ArtifactRef, AdapterError> {
     let reference = ctx.persist_artifact(artifact.clone()).await?;
     if reference.storage_key == expected_storage_key {
@@ -273,6 +281,13 @@ async fn persist_expected_artifact(
         .matches_artifact_id(&reference_key, artifact.id)
         .await?
     {
+        if let Some(cleanup_key) = cleanup_untracked_storage_key {
+            if cleanup_key != reference.storage_key {
+                ctx.blob_store
+                    .delete(&StorageKey::from_persisted(cleanup_key))
+                    .await?;
+            }
+        }
         return Ok(reference);
     }
     ctx.repair_artifact_storage_key(artifact, &reference.storage_key)

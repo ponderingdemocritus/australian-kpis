@@ -675,19 +675,21 @@ async fn fetch_keeps_canonical_duplicate_as_storage_noop() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_repairs_canonical_duplicate_when_blob_size_mismatches() {
+async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let storage_key = format!("artifacts/{}", expected_id.to_hex());
     let backend = Arc::new(InMemory::new());
+    let mut corrupt = SDMX_FIXTURE.to_vec();
+    corrupt[0] = b'X';
     backend
         .put(
             &ObjectPath::from(storage_key.clone()),
-            Bytes::from_static(b"truncated").into(),
+            Bytes::from(corrupt).into(),
         )
         .await
-        .expect("seed size-mismatched canonical artifact");
+        .expect("seed same-size corrupt canonical artifact");
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
@@ -711,7 +713,7 @@ async fn fetch_repairs_canonical_duplicate_when_blob_size_mismatches() {
             ),
         )
         .await
-        .expect("fetch repairs canonical size mismatch");
+        .expect("fetch repairs canonical hash mismatch");
 
     assert!(
         blob_store
@@ -769,6 +771,13 @@ async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
         "valid durable rewrite should remain authoritative"
     );
     assert_eq!(artifact.storage_key, cold_key);
+    assert!(
+        !blob_store
+            .exists(&StorageKey::canonical_for(&expected_id))
+            .await
+            .expect("probe untracked canonical hot copy"),
+        "raced cold storage key should not leave an untracked canonical hot copy"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

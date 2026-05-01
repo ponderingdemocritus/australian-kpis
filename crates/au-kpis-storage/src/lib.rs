@@ -372,13 +372,36 @@ impl BlobStore {
             return self.commit_empty_artifact(staged.id, &canonical).await;
         };
 
-        // Canonical key already present with matching size -> discard the
-        // stage. If the key is missing or size-mismatched, the staged stream
-        // repairs it without rereading the durable object on the hot duplicate path.
+        // Canonical key already present with matching size and the same
+        // backend validator -> discard the stage. If the validator is
+        // absent or differs, hash the canonical object before deciding
+        // whether to no-op or repair; this keeps the common duplicate path
+        // metadata-only while still catching same-size corruption.
         match self.inner.head(&canonical).await {
             Ok(meta) if u64::try_from(meta.size).is_ok_and(|size| size == staged.size_bytes) => {
-                self.best_effort_delete_staging(staging_path).await;
-                return Ok(staged.id);
+                let staged_meta = match self.inner.head(staging_path).await {
+                    Ok(staged_meta) => staged_meta,
+                    Err(err) => {
+                        self.best_effort_delete_staging(staging_path).await;
+                        return Err(StorageError::from_object_store(err));
+                    }
+                };
+                if meta.e_tag.is_some() && meta.e_tag == staged_meta.e_tag {
+                    self.best_effort_delete_staging(staging_path).await;
+                    return Ok(staged.id);
+                }
+                let canonical_key = StorageKey::canonical_for(&staged.id);
+                match self.matches_artifact_id(&canonical_key, staged.id).await {
+                    Ok(true) => {
+                        self.best_effort_delete_staging(staging_path).await;
+                        return Ok(staged.id);
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        self.best_effort_delete_staging(staging_path).await;
+                        return Err(err);
+                    }
+                }
             }
             Ok(_) | Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => {
@@ -701,16 +724,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_staged_artifact_repairs_canonical_size_mismatch() {
+    async fn commit_staged_artifact_repairs_canonical_hash_mismatch() {
         let store = BlobStore::new(object_store::memory::InMemory::new());
         let id = ArtifactId::of_content(b"correct bytes");
         let key = StorageKey::canonical_for(&id);
+        let mut corrupt = b"correct bytes".to_vec();
+        corrupt[0] = b'X';
         store
             .inner
-            .put(
-                &key.as_object_path(),
-                Bytes::from_static(b"truncated").into(),
-            )
+            .put(&key.as_object_path(), Bytes::from(corrupt).into())
             .await
             .expect("seed corrupt canonical object");
 
