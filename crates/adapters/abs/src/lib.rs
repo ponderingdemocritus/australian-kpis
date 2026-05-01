@@ -203,11 +203,16 @@ impl SourceAdapter for AbsAdapter {
         let mut needs_canonical_repair = false;
         if let Some(existing) = ctx.get_artifact(id).await? {
             let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
-            if ctx
-                .blob_store
-                .matches_artifact_id(&existing_key, id)
-                .await?
-            {
+            let durable_matches = if existing.storage_key == storage_key {
+                ctx.blob_store
+                    .exists_with_size(&existing_key, staged.size_bytes())
+                    .await?
+            } else {
+                ctx.blob_store
+                    .matches_artifact_id(&existing_key, id)
+                    .await?
+            };
+            if durable_matches {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;
                 let duplicate = Artifact {
                     storage_key: existing.storage_key,
@@ -231,7 +236,6 @@ impl SourceAdapter for AbsAdapter {
 
         let durable_key = StorageKey::from_persisted(reference.storage_key.clone());
         if ctx.blob_store.matches_artifact_id(&durable_key, id).await? {
-            ctx.delete_artifact(&artifact.storage_key).await?;
             return Ok(reference);
         }
 

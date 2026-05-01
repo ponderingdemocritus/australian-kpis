@@ -544,7 +544,7 @@ async fn fetch_repairs_canonical_duplicate_when_stored_blob_hash_mismatches() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_removes_hot_copy_when_rewrite_races_after_lookup() {
+async fn fetch_preserves_hot_copy_when_rewrite_races_after_lookup() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
@@ -584,11 +584,11 @@ async fn fetch_removes_hot_copy_when_rewrite_races_after_lookup() {
 
     assert_eq!(artifact.storage_key, cold_key);
     assert!(
-        !blob_store
+        blob_store
             .exists(&StorageKey::canonical_for(&expected_id))
             .await
             .expect("check hot canonical copy"),
-        "race cleanup should remove the unreferenced canonical copy"
+        "race handling should preserve canonical refs returned to concurrent workers"
     );
 }
 
