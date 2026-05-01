@@ -374,12 +374,21 @@ impl BlobStore {
 
         // Canonical key already present with matching bytes -> discard the
         // stage; if the key is missing or corrupt, the staged stream repairs it.
-        if self
-            .matches_artifact_id(&StorageKey::canonical_for(&staged.id), staged.id)
-            .await?
-        {
-            self.best_effort_delete_staging(staging_path).await;
-            return Ok(staged.id);
+        match self.inner.head(&canonical).await {
+            Ok(_) => {
+                if self
+                    .matches_artifact_id(&StorageKey::canonical_for(&staged.id), staged.id)
+                    .await?
+                {
+                    self.best_effort_delete_staging(staging_path).await;
+                    return Ok(staged.id);
+                }
+            }
+            Err(ObjectStoreError::NotFound { .. }) => {}
+            Err(err) => {
+                self.best_effort_delete_staging(staging_path).await;
+                return Err(StorageError::from_object_store(err));
+            }
         }
 
         // Server-side copy; the bytes never travel back through this
