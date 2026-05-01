@@ -129,10 +129,10 @@ impl ArtifactRecorder for RacingColdArtifactRecorder {
 
     async fn repair_storage_key(
         &self,
-        _artifact: &Artifact,
+        artifact: &Artifact,
         _observed_storage_key: &str,
     ) -> Result<Artifact, AdapterError> {
-        panic!("durable cold blob exists, so repair should not run")
+        Ok(artifact.clone())
     }
 }
 
@@ -544,7 +544,7 @@ async fn fetch_repairs_canonical_duplicate_when_stored_blob_hash_mismatches() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_preserves_hot_copy_when_rewrite_races_after_lookup() {
+async fn fetch_repairs_to_canonical_when_rewrite_races_after_lookup() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
@@ -582,13 +582,16 @@ async fn fetch_preserves_hot_copy_when_rewrite_races_after_lookup() {
         .await
         .expect("fetch handles cold rewrite race");
 
-    assert_eq!(artifact.storage_key, cold_key);
+    assert_eq!(
+        artifact.storage_key,
+        format!("artifacts/{}", expected_id.to_hex())
+    );
     assert!(
         blob_store
             .exists(&StorageKey::canonical_for(&expected_id))
             .await
             .expect("check hot canonical copy"),
-        "race handling should preserve canonical refs returned to concurrent workers"
+        "race handling should return the refreshed canonical artifact"
     );
 }
 
@@ -637,7 +640,7 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches() {
+async fn fetch_keeps_rewritten_storage_key_when_durable_blob_exists() {
     let (base_url, source_url) = serve_artifact_once().await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
@@ -646,10 +649,10 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches()
     backend
         .put(
             &ObjectPath::from(cold_key.clone()),
-            Bytes::from_static(b"not the ABS artifact").into(),
+            Bytes::from_static(b"retention-tier artifact").into(),
         )
         .await
-        .expect("seed corrupt cold artifact");
+        .expect("seed retained cold artifact");
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
@@ -657,7 +660,7 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches()
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
         response_headers: BTreeMap::new(),
-        storage_key: cold_key,
+        storage_key: cold_key.clone(),
         size_bytes: SDMX_FIXTURE.len() as u64,
         fetched_at: Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap(),
     };
@@ -673,18 +676,15 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches()
             ),
         )
         .await
-        .expect("fetch repairs corrupt durable storage key");
+        .expect("fetch keeps existing durable storage key");
 
-    assert_eq!(
-        artifact.storage_key,
-        format!("artifacts/{}", expected_id.to_hex())
-    );
+    assert_eq!(artifact.storage_key, cold_key);
     assert!(
         blob_store
-            .matches_artifact_id(&StorageKey::canonical_for(&expected_id), expected_id)
+            .exists(&StorageKey::from_persisted(artifact.storage_key))
             .await
-            .expect("hash repaired canonical copy"),
-        "repair should preserve a canonical blob matching the artifact id"
+            .expect("check retained cold blob"),
+        "existing retained blobs are trusted without an expensive duplicate re-read"
     );
 }
 

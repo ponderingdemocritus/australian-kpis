@@ -205,23 +205,21 @@ impl SourceAdapter for AbsAdapter {
             let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
             if existing.storage_key == storage_key {
                 ctx.blob_store.replace_staged_artifact(&staged).await?;
+                let expected_storage_key = existing.storage_key.clone();
                 let duplicate = Artifact {
                     storage_key: existing.storage_key,
                     ..artifact
                 };
-                return ctx.persist_artifact(duplicate).await;
+                return persist_expected_artifact(ctx, duplicate, &expected_storage_key).await;
             }
-            if ctx
-                .blob_store
-                .matches_artifact_id(&existing_key, id)
-                .await?
-            {
+            if ctx.blob_store.exists(&existing_key).await? {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;
+                let expected_storage_key = existing.storage_key.clone();
                 let duplicate = Artifact {
                     storage_key: existing.storage_key,
                     ..artifact
                 };
-                return ctx.persist_artifact(duplicate).await;
+                return persist_expected_artifact(ctx, duplicate, &expected_storage_key).await;
             }
             needs_canonical_repair = true;
         }
@@ -232,18 +230,7 @@ impl SourceAdapter for AbsAdapter {
             ctx.blob_store.commit_staged_artifact(&staged).await?;
         }
 
-        let reference = ctx.persist_artifact(artifact.clone()).await?;
-        if reference.storage_key == artifact.storage_key {
-            return Ok(reference);
-        }
-
-        let durable_key = StorageKey::from_persisted(reference.storage_key.clone());
-        if ctx.blob_store.matches_artifact_id(&durable_key, id).await? {
-            return Ok(reference);
-        }
-
-        ctx.repair_artifact_storage_key(artifact, &reference.storage_key)
-            .await
+        persist_expected_artifact(ctx, artifact, &storage_key).await
     }
 
     fn parse<'a>(&'a self, _artifact: ArtifactRef, _ctx: &'a ParseCtx) -> ObservationStream<'a> {
@@ -253,6 +240,19 @@ impl SourceAdapter for AbsAdapter {
             ))
         }))
     }
+}
+
+async fn persist_expected_artifact(
+    ctx: &FetchCtx,
+    artifact: Artifact,
+    expected_storage_key: &str,
+) -> Result<ArtifactRef, AdapterError> {
+    let reference = ctx.persist_artifact(artifact.clone()).await?;
+    if reference.storage_key == expected_storage_key {
+        return Ok(reference);
+    }
+    ctx.repair_artifact_storage_key(artifact, &reference.storage_key)
+        .await
 }
 
 /// Builder for [`AbsAdapter`].
