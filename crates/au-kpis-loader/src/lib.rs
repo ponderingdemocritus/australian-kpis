@@ -8,6 +8,7 @@ use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
     ids::{ArtifactId, SeriesKey},
 };
+use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 use thiserror::Error;
 use tracing::instrument;
@@ -104,8 +105,13 @@ pub async fn load_batch_with_options(
                 valid_items.push(item);
             }
             Err(message) => {
-                record_parse_error(pool, item.observation.source_artifact_id, &message, &item)
-                    .await?;
+                record_loader_validation_error(
+                    pool,
+                    item.observation.source_artifact_id,
+                    &message,
+                    &item,
+                )
+                .await?;
                 stats.parse_errors += 1;
             }
         }
@@ -372,7 +378,29 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
     Ok(result.rows_affected())
 }
 
-async fn record_parse_error(
+/// Record a parser failure against the source artifact for audit and reprocessing.
+pub async fn record_parse_error(
+    pool: &PgPool,
+    artifact_id: ArtifactId,
+    error_kind: &str,
+    error_message: &str,
+    row_context: Option<Value>,
+) -> Result<(), LoadError> {
+    sqlx::query(
+        "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(error_kind)
+    .bind(error_message)
+    .bind(row_context)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn record_loader_validation_error(
     pool: &PgPool,
     artifact_id: ArtifactId,
     message: &str,
@@ -385,17 +413,14 @@ async fn record_parse_error(
         "revision_no": item.observation.revision_no,
     });
 
-    sqlx::query(
-        "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
-         VALUES ($1, 'loader_validation', $2, $3)",
+    record_parse_error(
+        pool,
+        artifact_id,
+        "loader_validation",
+        message,
+        Some(row_context),
     )
-    .bind(artifact_id.digest().as_bytes().as_slice())
-    .bind(message)
-    .bind(row_context)
-    .execute(pool)
-    .await?;
-
-    Ok(())
+    .await
 }
 
 #[derive(Debug)]

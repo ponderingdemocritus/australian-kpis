@@ -379,12 +379,18 @@ dependencies = [
  "au-kpis-db",
  "au-kpis-domain",
  "au-kpis-error",
+ "au-kpis-loader",
  "au-kpis-storage",
  "au-kpis-testing",
  "chrono",
+ "futures",
  "object_store",
+ "serde_json",
  "sqlx",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
