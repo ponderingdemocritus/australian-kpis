@@ -505,7 +505,7 @@ async fn fetch_repairs_canonical_duplicate_when_stored_blob_hash_mismatches() {
     backend
         .put(
             &ObjectPath::from(storage_key.clone()),
-            Bytes::from_static(b"corrupt canonical artifact").into(),
+            Bytes::from(vec![b'X'; SDMX_FIXTURE.len()]).into(),
         )
         .await
         .expect("seed corrupt canonical artifact");

@@ -482,22 +482,6 @@ impl BlobStore {
         }
     }
 
-    /// Return `true` when an object exists at `key` with the expected size.
-    #[tracing::instrument(skip(self))]
-    pub async fn exists_with_size(
-        &self,
-        key: &StorageKey,
-        size_bytes: u64,
-    ) -> Result<bool, StorageError> {
-        match self.inner.head(&key.as_object_path()).await {
-            Ok(meta) => {
-                Ok(u64::try_from(meta.size).is_ok_and(|actual_size| actual_size == size_bytes))
-            }
-            Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-            Err(err) => Err(StorageError::Backend(err)),
-        }
-    }
-
     /// Return `true` when `key` exists and streams back to `id`.
     #[tracing::instrument(skip(self))]
     pub async fn matches_artifact_id(
@@ -694,29 +678,6 @@ mod tests {
                 .matches_artifact_id(&key, id)
                 .await
                 .expect("hash replacement")
-        );
-    }
-
-    #[tokio::test]
-    async fn exists_with_size_checks_head_metadata_without_streaming() {
-        let store = BlobStore::new(object_store::memory::InMemory::new());
-        let id = store
-            .put_artifact(Bytes::from_static(b"sized payload"))
-            .await
-            .expect("put artifact");
-        let key = StorageKey::canonical_for(&id);
-
-        assert!(
-            store
-                .exists_with_size(&key, 13)
-                .await
-                .expect("matching head")
-        );
-        assert!(
-            !store
-                .exists_with_size(&key, 12)
-                .await
-                .expect("mismatching head")
         );
     }
 }

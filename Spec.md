@@ -510,7 +510,8 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 ### Guardrails
 
 - Every adapter has a **golden-file test** (insta snapshot): fixture → expected observations.
-- Adapters **never** touch DB. They emit `Observation` into a stream; `au-kpis-loader` handles persistence.
+- Adapters **never** depend on `au-kpis-db` or `au-kpis-loader`. Fetch implementations may use the orchestration-owned `FetchCtx` artifact recorder to load, record, or repair raw-artifact provenance, but the concrete recorder is supplied by `au-kpis-ingestion-core`; adapters do not issue SQL or choose database transactions.
+- Parse implementations emit `Observation` into a stream; `au-kpis-loader` handles observation/series persistence.
 - **Rate limits** declared in `AdapterManifest`, enforced by `RateLimitLayer` on the shared HTTP client.
 - **Versioned parsers**: `parse_v1`, `parse_v2` alongside; feature-flag by artifact date range. Re-ingest of old files stays correct.
 
