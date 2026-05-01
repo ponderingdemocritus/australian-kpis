@@ -204,7 +204,7 @@ impl SourceAdapter for AbsAdapter {
         if let Some(existing) = ctx.get_artifact(id).await? {
             let existing_key = StorageKey::from_persisted(existing.storage_key.clone());
             if existing.storage_key == storage_key {
-                ctx.blob_store.replace_staged_artifact(&staged).await?;
+                ctx.blob_store.commit_staged_artifact(&staged).await?;
                 let expected_storage_key = existing.storage_key.clone();
                 let duplicate = Artifact {
                     storage_key: existing.storage_key,
@@ -212,7 +212,11 @@ impl SourceAdapter for AbsAdapter {
                 };
                 return persist_expected_artifact(ctx, duplicate, &expected_storage_key).await;
             }
-            if ctx.blob_store.exists(&existing_key).await? {
+            if ctx
+                .blob_store
+                .matches_artifact_id(&existing_key, id)
+                .await?
+            {
                 ctx.blob_store.discard_staged_artifact(&staged).await?;
                 let expected_storage_key = existing.storage_key.clone();
                 let duplicate = Artifact {
