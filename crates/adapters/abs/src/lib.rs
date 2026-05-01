@@ -255,14 +255,16 @@ async fn persist_expected_artifact(
     if reference.storage_key == expected_storage_key {
         return Ok(reference);
     }
+    let reference_key = StorageKey::from_persisted(reference.storage_key.clone());
+    let canonical_key = StorageKey::canonical_for(&artifact.id);
     if ctx
         .blob_store
-        .matches_artifact_id(
-            &StorageKey::from_persisted(reference.storage_key.clone()),
-            artifact.id,
-        )
+        .matches_artifact_id(&reference_key, artifact.id)
         .await?
     {
+        if reference_key != canonical_key {
+            ctx.blob_store.delete(&canonical_key).await?;
+        }
         return Ok(reference);
     }
     ctx.repair_artifact_storage_key(artifact, &reference.storage_key)

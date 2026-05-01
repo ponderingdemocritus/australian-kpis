@@ -717,6 +717,13 @@ async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
             .expect("hash cold artifact"),
         "valid durable rewrite should remain authoritative"
     );
+    assert!(
+        !blob_store
+            .exists(&StorageKey::canonical_for(&expected_id))
+            .await
+            .expect("check canonical cleanup"),
+        "fetch should not leave an unreferenced canonical hot copy"
+    );
     assert_eq!(artifact.storage_key, cold_key);
 }
 

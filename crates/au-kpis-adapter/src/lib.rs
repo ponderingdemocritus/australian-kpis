@@ -197,20 +197,6 @@ impl AdapterHttpClient {
             .no_brotli()
             .build()
             .expect("static reqwest client configuration is valid");
-        Self::from_clients(client, raw_artifact_client, rate_limit)
-    }
-
-    /// Wrap an existing `reqwest` client with the source's declared rate limit.
-    pub fn from_client(client: reqwest::Client, rate_limit: RateLimit) -> Self {
-        Self::from_clients(client.clone(), client, rate_limit)
-    }
-
-    /// Wrap separate clients for ordinary requests and raw artifact fetches.
-    pub fn from_clients(
-        client: reqwest::Client,
-        raw_artifact_client: reqwest::Client,
-        rate_limit: RateLimit,
-    ) -> Self {
         Self {
             client,
             raw_artifact_client,
