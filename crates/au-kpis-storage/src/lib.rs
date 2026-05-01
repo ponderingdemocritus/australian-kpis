@@ -359,32 +359,28 @@ impl BlobStore {
     /// Commit a staged artifact to its canonical content-addressed key.
     ///
     /// Returns the canonical [`ArtifactId`] regardless of whether the
-    /// canonical key already existed — matching [`put_artifact`]'s
-    /// idempotency contract. The copy is server-side; bytes do not
-    /// travel back through this process.
+    /// canonical key already existed with the same size — matching
+    /// [`put_artifact`]'s idempotency contract. The copy is server-side;
+    /// bytes do not travel back through this process.
     #[tracing::instrument(skip(self, staged), fields(id = %staged.id))]
     pub async fn commit_staged_artifact(
         &self,
         staged: &StagedArtifact,
     ) -> Result<ArtifactId, StorageError> {
-        let Some(staging_path) = &staged.staging_path else {
-            return self.put_artifact(Bytes::new()).await;
-        };
         let canonical = canonical_object_path(&staged.id);
+        let Some(staging_path) = &staged.staging_path else {
+            return self.commit_empty_artifact(staged.id, &canonical).await;
+        };
 
-        // Canonical key already present with matching bytes -> discard the
-        // stage; if the key is missing or corrupt, the staged stream repairs it.
+        // Canonical key already present with matching size -> discard the
+        // stage. If the key is missing or size-mismatched, the staged stream
+        // repairs it without rereading the durable object on the hot duplicate path.
         match self.inner.head(&canonical).await {
-            Ok(_) => {
-                if self
-                    .matches_artifact_id(&StorageKey::canonical_for(&staged.id), staged.id)
-                    .await?
-                {
-                    self.best_effort_delete_staging(staging_path).await;
-                    return Ok(staged.id);
-                }
+            Ok(meta) if u64::try_from(meta.size).is_ok_and(|size| size == staged.size_bytes) => {
+                self.best_effort_delete_staging(staging_path).await;
+                return Ok(staged.id);
             }
-            Err(ObjectStoreError::NotFound { .. }) => {}
+            Ok(_) | Err(ObjectStoreError::NotFound { .. }) => {}
             Err(err) => {
                 self.best_effort_delete_staging(staging_path).await;
                 return Err(StorageError::from_object_store(err));
@@ -401,6 +397,24 @@ impl BlobStore {
         }
         self.best_effort_delete_staging(staging_path).await;
         Ok(staged.id)
+    }
+
+    async fn commit_empty_artifact(
+        &self,
+        id: ArtifactId,
+        canonical: &ObjectPath,
+    ) -> Result<ArtifactId, StorageError> {
+        match self.inner.head(canonical).await {
+            Ok(meta) if meta.size == 0 => return Ok(id),
+            Ok(_) | Err(ObjectStoreError::NotFound { .. }) => {}
+            Err(err) => return Err(StorageError::from_object_store(err)),
+        }
+
+        self.inner
+            .put(canonical, Bytes::new().into())
+            .await
+            .map_err(StorageError::from_object_store)?;
+        Ok(id)
     }
 
     /// Replace the canonical key with a staged artifact.
@@ -687,15 +701,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_staged_artifact_repairs_canonical_hash_mismatch() {
+    async fn commit_staged_artifact_repairs_canonical_size_mismatch() {
         let store = BlobStore::new(object_store::memory::InMemory::new());
         let id = ArtifactId::of_content(b"correct bytes");
         let key = StorageKey::canonical_for(&id);
-        let mut corrupt = b"correct bytes".to_vec();
-        corrupt[0] = b'X';
         store
             .inner
-            .put(&key.as_object_path(), Bytes::from(corrupt).into())
+            .put(
+                &key.as_object_path(),
+                Bytes::from_static(b"truncated").into(),
+            )
             .await
             .expect("seed corrupt canonical object");
 
@@ -715,6 +730,36 @@ mod tests {
                 .matches_artifact_id(&key, id)
                 .await
                 .expect("hash committed replacement")
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_staged_artifact_repairs_empty_canonical_size_mismatch() {
+        let store = BlobStore::new(object_store::memory::InMemory::new());
+        let id = ArtifactId::of_content(b"");
+        let key = StorageKey::canonical_for(&id);
+        store
+            .inner
+            .put(&key.as_object_path(), Bytes::from_static(b"corrupt").into())
+            .await
+            .expect("seed corrupt empty canonical object");
+
+        let staged = store
+            .stage_artifact_stream(futures::stream::iter(
+                Vec::<Result<Bytes, std::io::Error>>::new(),
+            ))
+            .await
+            .expect("stage empty replacement");
+        store
+            .commit_staged_artifact(&staged)
+            .await
+            .expect("commit repairs empty canonical object");
+
+        assert!(
+            store
+                .matches_artifact_id(&key, id)
+                .await
+                .expect("hash committed empty replacement")
         );
     }
 }
