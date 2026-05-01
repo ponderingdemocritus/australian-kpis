@@ -1,0 +1,102 @@
+---
+source: crates/adapters/abs/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "series_key": "214d5af143911f8196e7b803a6a735e84f5964dd3cc8bfa7f6aedaf845aa2c8e",
+    "dataflow_id": "abs.cpi",
+    "measure_id": "index",
+    "dimensions": {
+      "measure": "index",
+      "region": "AUS"
+    },
+    "time": "2023-10-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 136.1,
+    "status": "normal",
+    "attributes": {
+      "OBS_STATUS": "A"
+    }
+  },
+  {
+    "series_key": "214d5af143911f8196e7b803a6a735e84f5964dd3cc8bfa7f6aedaf845aa2c8e",
+    "dataflow_id": "abs.cpi",
+    "measure_id": "index",
+    "dimensions": {
+      "measure": "index",
+      "region": "AUS"
+    },
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 137.4,
+    "status": "normal",
+    "attributes": {
+      "OBS_STATUS": "A"
+    }
+  },
+  {
+    "series_key": "214d5af143911f8196e7b803a6a735e84f5964dd3cc8bfa7f6aedaf845aa2c8e",
+    "dataflow_id": "abs.cpi",
+    "measure_id": "index",
+    "dimensions": {
+      "measure": "index",
+      "region": "AUS"
+    },
+    "time": "2024-02-01T00:00:00+00:00",
+    "time_precision": "month",
+    "value": 138.0,
+    "status": "normal",
+    "attributes": {
+      "OBS_STATUS": "A"
+    }
+  },
+  {
+    "series_key": "140f81487a04649b0284511b2f820989271a16005bfd62ecb93d1e9a4f4d759d",
+    "dataflow_id": "abs.cpi",
+    "measure_id": "index",
+    "dimensions": {
+      "measure": "index",
+      "region": "VIC"
+    },
+    "time": "2023-10-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 135.6,
+    "status": "normal",
+    "attributes": {
+      "OBS_STATUS": "A"
+    }
+  },
+  {
+    "series_key": "140f81487a04649b0284511b2f820989271a16005bfd62ecb93d1e9a4f4d759d",
+    "dataflow_id": "abs.cpi",
+    "measure_id": "index",
+    "dimensions": {
+      "measure": "index",
+      "region": "VIC"
+    },
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": null,
+    "status": "missing",
+    "attributes": {
+      "OBS_STATUS": "M"
+    }
+  },
+  {
+    "series_key": "140f81487a04649b0284511b2f820989271a16005bfd62ecb93d1e9a4f4d759d",
+    "dataflow_id": "abs.cpi",
+    "measure_id": "index",
+    "dimensions": {
+      "measure": "index",
+      "region": "VIC"
+    },
+    "time": "2024-02-01T00:00:00+00:00",
+    "time_precision": "month",
+    "value": 136.2,
+    "status": "normal",
+    "attributes": {
+      "OBS_STATUS": "A"
+    }
+  }
+]
