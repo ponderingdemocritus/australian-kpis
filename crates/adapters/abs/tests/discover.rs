@@ -11,6 +11,8 @@ use tokio::{
     net::TcpListener,
 };
 
+const TRACE_PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
 const DATAFLOW_FIXTURE: &str = r#"{
   "data": {
     "dataflows": [
@@ -187,7 +189,8 @@ async fn discover_fetches_abs_dataflow_listing_over_http() {
     let base_url = serve_once(DATAFLOW_FIXTURE).await;
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
-    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap());
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap())
+        .with_trace_parent(TRACE_PARENT);
 
     let jobs = adapter.discover(&ctx).await.expect("discover CPI");
 
@@ -197,6 +200,7 @@ async fn discover_fetches_abs_dataflow_listing_over_http() {
         jobs[0].source_url,
         format!("{base_url}/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD")
     );
+    assert_eq!(jobs[0].trace_parent.as_deref(), Some(TRACE_PARENT));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

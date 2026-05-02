@@ -25,6 +25,24 @@ pub struct LoadItem {
     pub observation: Observation,
 }
 
+/// Loader item plus optional audit fields to merge into validation errors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadItemAudit {
+    /// Parsed row to validate and load.
+    pub item: LoadItem,
+    /// Extra row-level audit context for `parse_errors.row_context`.
+    pub row_context: Option<Value>,
+}
+
+impl From<LoadItem> for LoadItemAudit {
+    fn from(item: LoadItem) -> Self {
+        Self {
+            item,
+            row_context: None,
+        }
+    }
+}
+
 /// Aggregate result for a loader run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LoadStats {
@@ -85,6 +103,21 @@ pub async fn load_batch_with_options(
     items: Vec<LoadItem>,
     options: LoadOptions,
 ) -> Result<LoadStats, LoadError> {
+    load_batch_with_options_and_audit_context(
+        pool,
+        items.into_iter().map(Into::into).collect(),
+        options,
+    )
+    .await
+}
+
+/// Load observations using explicit batch limits and audit context for rejected rows.
+#[instrument(skip(pool, items))]
+pub async fn load_batch_with_options_and_audit_context(
+    pool: &PgPool,
+    items: Vec<LoadItemAudit>,
+    options: LoadOptions,
+) -> Result<LoadStats, LoadError> {
     if options.max_rows == 0 {
         return Err(LoadError::Validation(
             "max_rows must be greater than 0".into(),
@@ -99,17 +132,18 @@ pub async fn load_batch_with_options(
     let mut stats = LoadStats::default();
     let mut valid_items = Vec::with_capacity(items.len());
 
-    for item in items {
-        match validate_item(&item) {
+    for audited in items {
+        match validate_item(&audited.item) {
             Ok(()) => {
-                valid_items.push(item);
+                valid_items.push(audited.item);
             }
             Err(message) => {
                 record_loader_validation_error(
                     pool,
-                    item.observation.source_artifact_id,
+                    audited.item.observation.source_artifact_id,
                     &message,
-                    &item,
+                    &audited.item,
+                    audited.row_context,
                 )
                 .await?;
                 stats.parse_errors += 1;
@@ -405,13 +439,15 @@ async fn record_loader_validation_error(
     artifact_id: ArtifactId,
     message: &str,
     item: &LoadItem,
+    audit_context: Option<Value>,
 ) -> Result<(), LoadError> {
-    let row_context = serde_json::json!({
+    let base_context = serde_json::json!({
         "dataflow_id": item.series.dataflow_id,
         "series_key": item.series.series_key,
         "observation_time": item.observation.time,
         "revision_no": item.observation.revision_no,
     });
+    let row_context = merge_row_context(base_context, audit_context);
 
     record_parse_error(
         pool,
@@ -421,6 +457,25 @@ async fn record_loader_validation_error(
         Some(row_context),
     )
     .await
+}
+
+fn merge_row_context(mut base: Value, extra: Option<Value>) -> Value {
+    if let Some(extra) = extra {
+        match (&mut base, extra) {
+            (Value::Object(base), Value::Object(extra)) => {
+                for (key, value) in extra {
+                    base.insert(key, value);
+                }
+            }
+            (Value::Object(base), extra) => {
+                base.insert("audit_context".to_string(), extra);
+            }
+            (_, extra) => {
+                base = extra;
+            }
+        }
+    }
+    base
 }
 
 #[derive(Debug)]

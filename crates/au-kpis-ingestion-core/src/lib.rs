@@ -14,7 +14,7 @@ use au_kpis_adapter::{
 use au_kpis_db::PgPool;
 use au_kpis_domain::{Artifact, ids::ArtifactId, ids::DataflowId, ids::SourceId};
 use au_kpis_error::Classify;
-use au_kpis_loader::{LoadItem, LoadOptions, LoadStats};
+use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats};
 use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -415,6 +415,15 @@ struct JobCorrelation {
     trace_parent: Option<String>,
 }
 
+impl JobCorrelation {
+    fn row_context(&self) -> serde_json::Value {
+        serde_json::json!({
+            "job_id": self.job_id.as_str(),
+            "trace_parent": self.trace_parent.as_deref(),
+        })
+    }
+}
+
 #[derive(Debug)]
 enum LoadStageItem {
     Observation {
@@ -559,7 +568,7 @@ async fn parse_stage(
         if cancellation.is_cancelled() {
             cancelled = true;
         }
-        if (input_closed || cancelled) && in_flight.is_empty() {
+        if input_closed && in_flight.is_empty() {
             break;
         }
 
@@ -567,12 +576,17 @@ async fn parse_stage(
             () = cancellation.cancelled(), if !cancelled => {
                 cancelled = true;
             }
-            fetched = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
+            fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
                 let Some(fetched) = fetched else {
                     input_closed = true;
                     continue;
                 };
                 validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
+                let parse_cancellation = if cancelled || cancellation.is_cancelled() {
+                    CancellationToken::new()
+                } else {
+                    cancellation.clone()
+                };
                 let parse_ctx = ctx.clone()
                     .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone())
                     .with_job_correlation(
@@ -585,11 +599,15 @@ async fn parse_stage(
                     parse_ctx,
                     tx.clone(),
                     fetched,
-                    cancellation.clone(),
+                    parse_cancellation,
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
-                parsed += result.expect("in_flight is not empty")?;
+                match result.expect("in_flight is not empty") {
+                    Ok(count) => parsed += count,
+                    Err(IngestionError::Cancelled) => cancelled = true,
+                    Err(err) => return Err(err),
+                }
             }
         }
     }
@@ -869,8 +887,21 @@ async fn flush_load_batch(
             .filter_map(|correlation| correlation.trace_parent.as_deref()),
     );
     let items = std::mem::take(batch);
-    correlations.clear();
-    au_kpis_loader::load_batch_with_options(pool, items, options)
+    let correlations = std::mem::take(correlations);
+    if items.len() != correlations.len() {
+        return Err(au_kpis_loader::LoadError::Validation(
+            "load batch item/correlation count mismatch".into(),
+        ));
+    }
+    let items = items
+        .into_iter()
+        .zip(correlations)
+        .map(|(item, correlation)| LoadItemAudit {
+            item,
+            row_context: Some(correlation.row_context()),
+        })
+        .collect();
+    au_kpis_loader::load_batch_with_options_and_audit_context(pool, items, options)
         .instrument(info_span!(
             "ingestion_load_batch",
             job_ids = %job_ids,

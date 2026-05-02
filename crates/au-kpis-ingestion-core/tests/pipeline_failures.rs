@@ -36,6 +36,7 @@ enum StubMode {
     WrongArtifactId,
     ParseErrorAfterRow,
     FatalParseError,
+    LoaderValidationError,
     TwoArtifactsCancelAfterFirstParse,
 }
 
@@ -105,6 +106,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::WrongArtifactId
             | StubMode::ParseErrorAfterRow
             | StubMode::FatalParseError
+            | StubMode::LoaderValidationError
             | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
         };
 
@@ -193,6 +195,9 @@ impl SourceAdapter for StubAdapter {
             StubMode::FatalParseError => Box::pin(stream::iter([Err(AdapterError::FormatDrift(
                 "artifact-level schema drift".into(),
             ))])),
+            StubMode::LoaderValidationError => {
+                Box::pin(stream::iter([Ok(loader_validation_error_row(artifact.id))]))
+            }
             StubMode::TwoArtifactsCancelAfterFirstParse => {
                 let (series, mut observation) = row;
                 if artifact.id == ArtifactId::of_content(b"job-2") {
@@ -273,6 +278,14 @@ fn load_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
         ingested_at: Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap(),
         source_artifact_id: artifact_id,
     };
+    (descriptor, observation)
+}
+
+fn loader_validation_error_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
+    let (mut descriptor, mut observation) = load_row(artifact_id);
+    descriptor.series_key =
+        SeriesKey::derive(&descriptor.dataflow_id, std::iter::once(("region", "NZ")));
+    observation.series_key = descriptor.series_key;
     (descriptor, observation)
 }
 
@@ -671,6 +684,51 @@ async fn midstream_parse_errors_are_recorded_while_valid_rows_load() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loader_validation_errors_preserve_job_and_trace_correlation() {
+    let timescale = start_timescale("au_kpis_pipeline_loader_validation_trace")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::LoaderValidationError,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("loader validation should be audited without failing the pipeline");
+
+    assert_eq!(stats.loaded.observations_loaded, 0);
+    assert_eq!(stats.loaded.parse_errors, 1);
+
+    let (error_kind, row_context): (String, serde_json::Value) =
+        sqlx::query_as("SELECT error_kind, row_context FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("read loader validation audit row");
+    assert_eq!(error_kind, "loader_validation");
+    assert_eq!(row_context["job_id"], "job-1");
+    assert_eq!(row_context["trace_parent"], TRACE_PARENT);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancellation_flushes_partial_load_batch() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_flush")
         .await
@@ -711,7 +769,7 @@ async fn cancellation_flushes_partial_load_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_stops_buffered_artifacts_that_are_not_parse_started() {
+async fn cancellation_drains_buffered_artifacts_that_are_not_parse_started() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_artifact_drain")
         .await
         .expect("start timescaledb container");
@@ -751,5 +809,5 @@ async fn cancellation_stops_buffered_artifacts_that_are_not_parse_started() {
         .fetch_one(&pool)
         .await
         .expect("count observations");
-    assert_eq!(observation_count, 1);
+    assert_eq!(observation_count, 2);
 }

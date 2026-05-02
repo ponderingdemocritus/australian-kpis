@@ -67,6 +67,14 @@ impl AbsAdapter {
         current: &[AbsDataflow],
         known_revisions: &BTreeMap<String, UpstreamRevision>,
     ) -> Vec<DiscoveredJob> {
+        Self::discoverable_jobs_with_trace_parent(current, known_revisions, None)
+    }
+
+    fn discoverable_jobs_with_trace_parent(
+        current: &[AbsDataflow],
+        known_revisions: &BTreeMap<String, UpstreamRevision>,
+        trace_parent: Option<&str>,
+    ) -> Vec<DiscoveredJob> {
         latest_dataflow_revisions(current)
             .into_values()
             .filter(|flow| {
@@ -74,7 +82,7 @@ impl AbsAdapter {
                     .get(&flow.revision_key())
                     .is_none_or(|known| known != &flow.revision())
             })
-            .map(AbsDataflow::to_discovered_job)
+            .map(|flow| flow.to_discovered_job(trace_parent))
             .collect()
     }
 
@@ -83,7 +91,7 @@ impl AbsAdapter {
     pub fn current_jobs(current: &[AbsDataflow]) -> Vec<DiscoveredJob> {
         latest_dataflow_revisions(current)
             .into_values()
-            .map(AbsDataflow::to_discovered_job)
+            .map(|flow| flow.to_discovered_job(None))
             .collect()
     }
 
@@ -146,7 +154,11 @@ impl SourceAdapter for AbsAdapter {
             .error_for_status()?;
         let body = response.text().await?;
         let dataflows = parse_dataflow_listing_with_base(&body, &self.base_url)?;
-        Ok(Self::discoverable_jobs(&dataflows, ctx.known_revisions()))
+        Ok(Self::discoverable_jobs_with_trace_parent(
+            &dataflows,
+            ctx.known_revisions(),
+            ctx.trace_parent(),
+        ))
     }
 
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
@@ -1625,7 +1637,7 @@ impl AbsDataflow {
         format!("{}:{}", self.agency_id, self.id)
     }
 
-    fn to_discovered_job(&self) -> DiscoveredJob {
+    fn to_discovered_job(&self, trace_parent: Option<&str>) -> DiscoveredJob {
         let mut metadata = BTreeMap::from([
             ("abs_dataflow_id".to_string(), self.id.clone()),
             ("agency_id".to_string(), self.agency_id.clone()),
@@ -1648,7 +1660,7 @@ impl AbsDataflow {
             source_id: SourceId::new("abs").expect("static source id is valid"),
             dataflow_id: DataflowId::new("abs.cpi").expect("static dataflow id is valid"),
             source_url: self.source_url.clone(),
-            trace_parent: None,
+            trace_parent: trace_parent.map(ToOwned::to_owned),
             metadata,
         }
     }

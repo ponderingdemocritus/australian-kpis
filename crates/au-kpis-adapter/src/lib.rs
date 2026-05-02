@@ -278,6 +278,8 @@ pub struct DiscoveryCtx {
     pub started_at: DateTime<Utc>,
     /// Stored upstream revisions for this discovery run, keyed by adapter-defined upstream identity.
     pub known_revisions: BTreeMap<String, UpstreamRevision>,
+    /// W3C trace-parent tying discovery output to downstream fetch, parse, and load work.
+    trace_parent: Option<String>,
 }
 
 impl DiscoveryCtx {
@@ -288,6 +290,7 @@ impl DiscoveryCtx {
             http,
             started_at,
             known_revisions: BTreeMap::new(),
+            trace_parent: None,
         }
     }
 
@@ -302,10 +305,23 @@ impl DiscoveryCtx {
         self
     }
 
+    /// Return a context annotated with the run-level trace parent.
+    #[must_use]
+    pub fn with_trace_parent(mut self, trace_parent: impl Into<String>) -> Self {
+        self.trace_parent = Some(trace_parent.into());
+        self
+    }
+
     /// Borrow the stored upstream revisions for this discovery run.
     #[must_use]
     pub const fn known_revisions(&self) -> &BTreeMap<String, UpstreamRevision> {
         &self.known_revisions
+    }
+
+    /// W3C trace-parent carried by jobs emitted from this discovery run.
+    #[must_use]
+    pub fn trace_parent(&self) -> Option<&str> {
+        self.trace_parent.as_deref()
     }
 }
 
