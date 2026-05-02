@@ -31,6 +31,7 @@ enum StubMode {
     WrongDiscoveredSource,
     ManyRows,
     RequireParseDataflow,
+    RequireDiscoveryTraceParent,
     CancelAfterFirstParse,
     SlowParse,
     WrongArtifactId,
@@ -95,12 +96,13 @@ impl SourceAdapter for StubAdapter {
         &self.manifest
     }
 
-    async fn discover(&self, _ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+    async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
         let source_id = match self.mode {
             StubMode::WrongDiscoveredSource => SourceId::new("other").unwrap(),
             StubMode::SlowFetch
             | StubMode::ManyRows
             | StubMode::RequireParseDataflow
+            | StubMode::RequireDiscoveryTraceParent
             | StubMode::CancelAfterFirstParse
             | StubMode::SlowParse
             | StubMode::WrongArtifactId
@@ -110,12 +112,18 @@ impl SourceAdapter for StubAdapter {
             | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
         };
 
+        let trace_parent = if matches!(self.mode, StubMode::RequireDiscoveryTraceParent) {
+            ctx.trace_parent().map(ToOwned::to_owned)
+        } else {
+            Some(TRACE_PARENT.into())
+        };
+
         let mut jobs = vec![DiscoveredJob {
             id: "job-1".into(),
             source_id: source_id.clone(),
             dataflow_id: self.manifest.dataflows[0].clone(),
             source_url: "https://example.test/cpi.json".into(),
-            trace_parent: Some(TRACE_PARENT.into()),
+            trace_parent,
             metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
         }];
 
@@ -166,6 +174,14 @@ impl SourceAdapter for StubAdapter {
             }
             return Box::pin(stream::empty());
         }
+        if matches!(self.mode, StubMode::RequireDiscoveryTraceParent) {
+            if ctx.job_id() != Some("job-1") || ctx.trace_parent().is_none() {
+                return Box::pin(stream::iter([Err(AdapterError::Validation(
+                    "missing discovery trace correlation".into(),
+                ))]));
+            }
+            return Box::pin(stream::empty());
+        }
 
         let row = load_row(artifact.id);
         match self.mode {
@@ -209,6 +225,7 @@ impl SourceAdapter for StubAdapter {
                 Box::pin(stream::iter([Ok(row)]))
             }
             StubMode::RequireParseDataflow => unreachable!("handled above"),
+            StubMode::RequireDiscoveryTraceParent => unreachable!("handled above"),
         }
     }
 }
@@ -534,6 +551,22 @@ async fn parse_receives_discovery_dataflow_provenance() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_source_seeds_trace_parent_when_discovery_context_has_none() {
+    let stats = pipeline(StubMode::RequireDiscoveryTraceParent)
+        .run_source(
+            SourceId::new("stub").unwrap(),
+            contexts(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("pipeline should seed discovery trace correlation");
+
+    assert_eq!(stats.discovered, 1);
+    assert_eq!(stats.fetched, 1);
+    assert_eq!(stats.parsed, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_rejects_observations_for_the_wrong_artifact_and_audits_error() {
     let timescale = start_timescale("au_kpis_pipeline_artifact_mismatch")
         .await
@@ -724,6 +757,7 @@ async fn loader_validation_errors_preserve_job_and_trace_correlation() {
             .await
             .expect("read loader validation audit row");
     assert_eq!(error_kind, "loader_validation");
+    assert_eq!(row_context["source_id"], "stub");
     assert_eq!(row_context["job_id"], "job-1");
     assert_eq!(row_context["trace_parent"], TRACE_PARENT);
 }

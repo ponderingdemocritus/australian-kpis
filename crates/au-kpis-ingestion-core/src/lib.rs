@@ -3,7 +3,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -26,6 +29,7 @@ use tracing::{Instrument, info_span};
 const DEFAULT_CHANNEL_CAPACITY: usize = 64;
 const DEFAULT_STAGE_CONCURRENCY: usize = 4;
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+static TRACE_PARENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// DB-backed artifact provenance recorder for fetch workers.
 #[derive(Debug, Clone)]
@@ -250,10 +254,15 @@ impl IngestionPipeline {
     pub async fn run_source(
         &self,
         source_id: SourceId,
-        contexts: PipelineContexts,
+        mut contexts: PipelineContexts,
         cancellation: CancellationToken,
     ) -> Result<PipelineRunStats, IngestionError> {
         self.validate_options()?;
+
+        if contexts.discovery.trace_parent().is_none() {
+            let trace_parent = generated_trace_parent(&source_id, contexts.discovery.started_at);
+            contexts.discovery = contexts.discovery.with_trace_parent(trace_parent);
+        }
 
         let (discovered_tx, discovered_rx) = mpsc::channel(self.options.channel_capacity);
         let (artifact_tx, artifact_rx) = mpsc::channel(self.options.channel_capacity);
@@ -360,23 +369,24 @@ async fn collect_stage_stats(
         tokio::select! {
             () = cancellation.cancelled() => {
                 pipeline_token.cancel();
-                let errors = timeout(shutdown_grace, drain_task_errors(tasks))
+                let (drained_stats, errors) = timeout(shutdown_grace, drain_task_results(tasks))
                     .await
                     .map_err(|_| IngestionError::ShutdownTimeout(shutdown_grace))?;
+                stats.add(drained_stats);
+                if errors.is_empty() {
+                    return Ok(stats);
+                }
                 return Err(preferred_error(IngestionError::Cancelled, errors));
             }
             result = tasks.join_next() => {
                 let Some(result) = result else {
-                    if cancellation.is_cancelled() {
-                        return Err(IngestionError::Cancelled);
-                    }
                     return Ok(stats);
                 };
                 match result? {
                     Ok(stage_stats) => stats.add(stage_stats),
                     Err(err) => {
                         pipeline_token.cancel();
-                        let errors = timeout(shutdown_grace, drain_task_errors(tasks))
+                        let (_, errors) = timeout(shutdown_grace, drain_task_results(tasks))
                             .await
                             .map_err(|_| IngestionError::ShutdownTimeout(shutdown_grace))?;
                         return Err(preferred_error(err, errors));
@@ -387,18 +397,19 @@ async fn collect_stage_stats(
     }
 }
 
-async fn drain_task_errors(
+async fn drain_task_results(
     mut tasks: JoinSet<Result<PipelineRunStats, IngestionError>>,
-) -> Vec<IngestionError> {
+) -> (PipelineRunStats, Vec<IngestionError>) {
+    let mut stats = PipelineRunStats::default();
     let mut errors = Vec::new();
     while let Some(result) = tasks.join_next().await {
         match result {
-            Ok(Ok(_)) => {}
+            Ok(Ok(stage_stats)) => stats.add(stage_stats),
             Ok(Err(err)) => errors.push(err),
             Err(err) => errors.push(IngestionError::Join(err)),
         }
     }
-    errors
+    (stats, errors)
 }
 
 #[derive(Debug)]
@@ -411,6 +422,7 @@ struct FetchedArtifact {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct JobCorrelation {
+    source_id: String,
     job_id: String,
     trace_parent: Option<String>,
 }
@@ -418,10 +430,24 @@ struct JobCorrelation {
 impl JobCorrelation {
     fn row_context(&self) -> serde_json::Value {
         serde_json::json!({
+            "source_id": self.source_id.as_str(),
             "job_id": self.job_id.as_str(),
             "trace_parent": self.trace_parent.as_deref(),
         })
     }
+}
+
+fn generated_trace_parent(source_id: &SourceId, started_at: DateTime<Utc>) -> String {
+    let sequence = TRACE_PARENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let seed = format!(
+        "ingestion:{}:{}:{}:{}",
+        source_id.as_str(),
+        started_at.to_rfc3339(),
+        Utc::now().to_rfc3339(),
+        sequence
+    );
+    let hex = ArtifactId::of_content(seed.as_bytes()).to_hex();
+    format!("00-{}-{}-01", &hex[..32], &hex[32..48])
 }
 
 #[derive(Debug)]
@@ -630,6 +656,7 @@ async fn fetch_one(
     cancellation: CancellationToken,
 ) -> Result<FetchedArtifact, IngestionError> {
     let correlation = JobCorrelation {
+        source_id: job.source_id.as_str().to_string(),
         job_id: job.id.clone(),
         trace_parent: job.trace_parent.clone(),
     };
@@ -1029,6 +1056,40 @@ mod tests {
         };
 
         assert!(!should_flush_load_batch(&[], 0, item_bytes, options));
+    }
+
+    #[tokio::test]
+    async fn late_cancellation_after_stage_completion_keeps_success_stats() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async {
+            Ok(PipelineRunStats {
+                discovered: 1,
+                ..PipelineRunStats::default()
+            })
+        });
+        tasks.spawn(async {
+            Ok(PipelineRunStats {
+                fetched: 1,
+                ..PipelineRunStats::default()
+            })
+        });
+        tokio::task::yield_now().await;
+
+        let cancellation = CancellationToken::new();
+        let pipeline_token = cancellation.child_token();
+        cancellation.cancel();
+
+        let stats = collect_stage_stats(
+            tasks,
+            cancellation,
+            pipeline_token,
+            Duration::from_millis(100),
+        )
+        .await
+        .expect("completed stages should not be reclassified as cancelled");
+
+        assert_eq!(stats.discovered, 1);
+        assert_eq!(stats.fetched, 1);
     }
 
     #[tokio::test]
