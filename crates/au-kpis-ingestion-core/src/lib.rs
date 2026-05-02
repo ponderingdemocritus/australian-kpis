@@ -19,11 +19,7 @@ use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
-use tokio::{
-    sync::{mpsc, mpsc::error::TryRecvError},
-    task::JoinSet,
-    time::timeout,
-};
+use tokio::{sync::mpsc, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
@@ -482,33 +478,48 @@ async fn fetch_stage(
     concurrency: usize,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut fetched = 0;
-    let mut draining = false;
     let mut input_closed = false;
+    let mut cancelled = false;
     let mut in_flight = FuturesUnordered::new();
 
     loop {
-        while !input_closed && in_flight.len() < concurrency {
-            let Some(job) = recv_or_stop_on_cancel(&mut rx, &cancellation, &mut draining).await
-            else {
-                input_closed = true;
-                break;
-            };
-            validate_source_id("fetch", &source_id, &job.source_id)?;
-            in_flight.push(fetch_one(
-                adapters.clone(),
-                source_id.clone(),
-                ctx.clone(),
-                job,
-            ));
-        }
-
-        if in_flight.is_empty() {
+        if (input_closed || cancelled) && in_flight.is_empty() {
             break;
         }
 
-        let fetched_artifact = in_flight.next().await.expect("in_flight is not empty")?;
-        send_produced(&tx, fetched_artifact).await?;
-        fetched += 1;
+        tokio::select! {
+            () = cancellation.cancelled(), if !cancelled => {
+                cancelled = true;
+            }
+            job = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
+                let Some(job) = job else {
+                    input_closed = true;
+                    continue;
+                };
+                validate_source_id("fetch", &source_id, &job.source_id)?;
+                in_flight.push(fetch_one(
+                    adapters.clone(),
+                    source_id.clone(),
+                    ctx.clone(),
+                    job,
+                    cancellation.clone(),
+                ));
+            }
+            result = in_flight.next(), if !in_flight.is_empty() => {
+                match result.expect("in_flight is not empty") {
+                    Ok(fetched_artifact) => {
+                        send_produced(&tx, fetched_artifact).await?;
+                        fetched += 1;
+                    }
+                    Err(IngestionError::Cancelled) => cancelled = true,
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+    }
+
+    if cancelled || cancellation.is_cancelled() {
+        return Err(IngestionError::Cancelled);
     }
 
     Ok(PipelineRunStats {
@@ -527,35 +538,44 @@ async fn parse_stage(
     concurrency: usize,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut parsed = 0;
-    let mut draining = false;
     let mut input_closed = false;
+    let mut cancelled = false;
     let mut in_flight = FuturesUnordered::new();
 
     loop {
-        while !input_closed && in_flight.len() < concurrency {
-            let Some(fetched) = recv_or_stop_on_cancel(&mut rx, &cancellation, &mut draining).await
-            else {
-                input_closed = true;
-                break;
-            };
-            validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
-            let parse_ctx = ctx
-                .clone()
-                .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone());
-            in_flight.push(parse_one_artifact(
-                adapters.clone(),
-                source_id.clone(),
-                parse_ctx,
-                tx.clone(),
-                fetched,
-            ));
-        }
-
-        if in_flight.is_empty() {
+        if input_closed && in_flight.is_empty() {
             break;
         }
 
-        parsed += in_flight.next().await.expect("in_flight is not empty")?;
+        tokio::select! {
+            () = cancellation.cancelled(), if !cancelled => {
+                cancelled = true;
+            }
+            fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
+                let Some(fetched) = fetched else {
+                    input_closed = true;
+                    continue;
+                };
+                validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
+                let parse_ctx = ctx
+                    .clone()
+                    .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone());
+                in_flight.push(parse_one_artifact(
+                    adapters.clone(),
+                    source_id.clone(),
+                    parse_ctx,
+                    tx.clone(),
+                    fetched,
+                ));
+            }
+            result = in_flight.next(), if !in_flight.is_empty() => {
+                parsed += result.expect("in_flight is not empty")?;
+            }
+        }
+    }
+
+    if cancelled || cancellation.is_cancelled() {
+        return Err(IngestionError::Cancelled);
     }
 
     Ok(PipelineRunStats {
@@ -569,10 +589,14 @@ async fn fetch_one(
     source_id: SourceId,
     ctx: FetchCtx,
     job: au_kpis_adapter::DiscoveredJob,
+    cancellation: CancellationToken,
 ) -> Result<FetchedArtifact, IngestionError> {
     let dataflow_id = job.dataflow_id.clone();
     let metadata = job.metadata.clone();
-    let artifact = adapters.fetch(source_id.as_str(), job, &ctx).await?;
+    let artifact = tokio::select! {
+        () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+        artifact = adapters.fetch(source_id.as_str(), job, &ctx) => artifact?,
+    };
     validate_source_id("fetch", &source_id, &artifact.source_id)?;
     Ok(FetchedArtifact {
         artifact,
@@ -796,26 +820,6 @@ async fn send_produced<T>(tx: &mpsc::Sender<T>, value: T) -> Result<(), Ingestio
     tx.send(value)
         .await
         .map_err(|_| IngestionError::DownstreamClosed)
-}
-
-async fn recv_or_stop_on_cancel<T>(
-    rx: &mut mpsc::Receiver<T>,
-    cancellation: &CancellationToken,
-    draining: &mut bool,
-) -> Option<T> {
-    loop {
-        if *draining {
-            return match rx.try_recv() {
-                Ok(value) => Some(value),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-            };
-        }
-
-        tokio::select! {
-            () = cancellation.cancelled() => *draining = true,
-            value = rx.recv() => return value,
-        }
-    }
 }
 
 #[cfg(test)]
