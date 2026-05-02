@@ -614,6 +614,16 @@ jobs:
           changed_files="$(git --no-pager diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
           guide_list_file="$(mktemp)"
 
+          print_agents_section() {
+            local start_regex="$1"
+            local end_regex="$2"
+            awk -v start="$start_regex" -v end="$end_regex" '
+              $0 ~ end { printing = 0 }
+              $0 ~ start { printing = 1 }
+              printing { print }
+            ' AGENTS.md
+          }
+
           review_lenses=""
           case "$changed_files" in
             *crates/au-kpis-db/*|*infra/migrations/*)
@@ -693,6 +703,15 @@ jobs:
             echo ""
             echo "Changed files:"
             git --no-pager diff --name-status "${BASE_SHA}" "${HEAD_SHA}"
+            echo ""
+            echo "Repository policy excerpts from AGENTS.md:"
+            echo "--- BEGIN AGENTS.md: PR rules ---"
+            print_agents_section '^## 7\. PR rules' '^## 8\. CI rules'
+            echo "--- END AGENTS.md: PR rules ---"
+            echo ""
+            echo "--- BEGIN AGENTS.md: testing expectations and agent pitfalls ---"
+            print_agents_section '^## 11\. Testing expectations' '^## 13\. When stuck'
+            echo "--- END AGENTS.md: testing expectations and agent pitfalls ---"
             echo ""
             if [ -s "$guide_list_file" ]; then
               while IFS= read -r guide_path; do
