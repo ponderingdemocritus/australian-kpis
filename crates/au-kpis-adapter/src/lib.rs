@@ -409,6 +409,8 @@ pub struct ParseCtx {
     pub blob_store: BlobStore,
     /// Timestamp captured by the worker when parse started.
     pub started_at: DateTime<Utc>,
+    expected_dataflow_id: Option<DataflowId>,
+    metadata: BTreeMap<String, String>,
 }
 
 impl ParseCtx {
@@ -419,7 +421,33 @@ impl ParseCtx {
             http,
             blob_store,
             started_at,
+            expected_dataflow_id: None,
+            metadata: BTreeMap::new(),
         }
+    }
+
+    /// Return a context annotated with discovery-time dataflow provenance.
+    #[must_use]
+    pub fn with_expected_dataflow(
+        mut self,
+        dataflow_id: DataflowId,
+        metadata: BTreeMap<String, String>,
+    ) -> Self {
+        self.expected_dataflow_id = Some(dataflow_id);
+        self.metadata = metadata;
+        self
+    }
+
+    /// Expected dataflow carried from the discovered job, when available.
+    #[must_use]
+    pub fn expected_dataflow_id(&self) -> Option<&DataflowId> {
+        self.expected_dataflow_id.as_ref()
+    }
+
+    /// Adapter metadata carried from the discovered job.
+    #[must_use]
+    pub const fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
     }
 }
 
