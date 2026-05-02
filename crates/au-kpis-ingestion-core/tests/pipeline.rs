@@ -184,4 +184,10 @@ async fn pipeline_discovers_fetches_parses_and_loads_cpi_fixture() {
         .await
         .expect("count observations");
     assert_eq!(observation_count, 6);
+
+    let latest_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations_latest")
+        .fetch_one(&pool)
+        .await
+        .expect("count latest observations");
+    assert_eq!(latest_count, 6);
 }

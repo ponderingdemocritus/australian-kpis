@@ -488,14 +488,35 @@ async fn parse_receives_discovery_dataflow_provenance() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parse_rejects_observations_for_the_wrong_artifact() {
-    let result = pipeline(StubMode::WrongArtifactId)
-        .run_source(
-            SourceId::new("stub").unwrap(),
-            contexts(),
-            CancellationToken::new(),
-        )
-        .await;
+async fn parse_rejects_observations_for_the_wrong_artifact_and_audits_error() {
+    let timescale = start_timescale("au_kpis_pipeline_artifact_mismatch")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::WrongArtifactId,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
 
     assert!(
         matches!(
@@ -507,6 +528,12 @@ async fn parse_rejects_observations_for_the_wrong_artifact() {
         ),
         "{result:?}"
     );
+
+    let parse_error_count: i64 = sqlx::query_scalar("SELECT count(*) FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("count parse errors");
+    assert_eq!(parse_error_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -644,7 +671,7 @@ async fn cancellation_flushes_partial_load_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_drains_already_handed_off_artifacts() {
+async fn cancellation_stops_buffered_artifacts_that_are_not_parse_started() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_artifact_drain")
         .await
         .expect("start timescaledb container");
@@ -684,5 +711,5 @@ async fn cancellation_drains_already_handed_off_artifacts() {
         .fetch_one(&pool)
         .await
         .expect("count observations");
-    assert_eq!(observation_count, 2);
+    assert_eq!(observation_count, 1);
 }

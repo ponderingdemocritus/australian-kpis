@@ -483,6 +483,9 @@ async fn fetch_stage(
     let mut in_flight = FuturesUnordered::new();
 
     loop {
+        if cancellation.is_cancelled() {
+            cancelled = true;
+        }
         if (input_closed || cancelled) && in_flight.is_empty() {
             break;
         }
@@ -543,7 +546,10 @@ async fn parse_stage(
     let mut in_flight = FuturesUnordered::new();
 
     loop {
-        if input_closed && in_flight.is_empty() {
+        if cancellation.is_cancelled() {
+            cancelled = true;
+        }
+        if (input_closed || cancelled) && in_flight.is_empty() {
             break;
         }
 
@@ -551,7 +557,7 @@ async fn parse_stage(
             () = cancellation.cancelled(), if !cancelled => {
                 cancelled = true;
             }
-            fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
+            fetched = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
                 let Some(fetched) = fetched else {
                     input_closed = true;
                     continue;
@@ -638,16 +644,36 @@ async fn parse_one_artifact(
             }
         };
         if series.dataflow_id != fetched.dataflow_id {
-            return Err(IngestionError::DataflowMismatch {
-                expected: fetched.dataflow_id.to_string(),
-                actual: series.dataflow_id.to_string(),
-            });
+            let expected = fetched.dataflow_id.to_string();
+            let actual = series.dataflow_id.to_string();
+            send_produced(
+                &tx,
+                LoadStageItem::ParseError(provenance_error_record(
+                    artifact_id,
+                    &fetched.dataflow_id,
+                    &source_id,
+                    "dataflow_mismatch",
+                    &format!("dataflow mismatch: expected `{expected}`, got `{actual}`"),
+                )),
+            )
+            .await?;
+            return Err(IngestionError::DataflowMismatch { expected, actual });
         }
         if observation.source_artifact_id != artifact_id {
-            return Err(IngestionError::ArtifactMismatch {
-                expected: artifact_id.to_string(),
-                actual: observation.source_artifact_id.to_string(),
-            });
+            let expected = artifact_id.to_string();
+            let actual = observation.source_artifact_id.to_string();
+            send_produced(
+                &tx,
+                LoadStageItem::ParseError(provenance_error_record(
+                    artifact_id,
+                    &fetched.dataflow_id,
+                    &source_id,
+                    "artifact_mismatch",
+                    &format!("artifact mismatch: expected `{expected}`, got `{actual}`"),
+                )),
+            )
+            .await?;
+            return Err(IngestionError::ArtifactMismatch { expected, actual });
         }
         send_produced(
             &tx,
@@ -680,6 +706,26 @@ fn parse_error_record(
             "artifact_id": artifact_id,
             "error_class": format!("{:?}", err.class()),
             "fatal": fatal,
+        })),
+    }
+}
+
+fn provenance_error_record(
+    artifact_id: ArtifactId,
+    dataflow_id: &DataflowId,
+    source_id: &SourceId,
+    error_kind: &'static str,
+    error_message: &str,
+) -> ParseErrorRecord {
+    ParseErrorRecord {
+        artifact_id,
+        error_kind,
+        error_message: error_message.to_string(),
+        row_context: Some(serde_json::json!({
+            "dataflow_id": dataflow_id,
+            "source_id": source_id,
+            "artifact_id": artifact_id,
+            "fatal": true,
         })),
     }
 }
