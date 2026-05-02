@@ -352,6 +352,8 @@ Every PR must add/update tests at the appropriate layer:
 12. **Reject ambiguous source/dataflow provenance.** Source-specific parsers must fail fast when the artifact cannot be tied to the expected upstream dataflow. Do not infer CPI/WPI/etc. only from payload shape or a mirrored filename.
 13. **Keep streaming fixes on the hot path.** Handling harmless format variations, such as JSON key reordering, should not introduce extra full-artifact scans unless the issue explicitly accepts that cost and tests cover it.
 14. **Make performance fixtures production-shaped.** Large-memory and streaming tests should use valid content-addressed artifact ids and storage keys so they exercise the same validation path as production parsing.
+15. **Do not confuse cancellation with permission to drop produced work.** In bounded pipelines, cancellation should stop admitting new work and bound shutdown, but already-produced artifacts, observations, and audit records must drain through downstream handoffs unless the configured shutdown grace expires. Add backpressure tests where a full channel is cancelled after the item is produced.
+16. **Preserve job correlation across every stage.** Discovery job id, trace context, source id, dataflow id, and artifact id are part of the work item contract. Carry them through fetch, parse, load, logs/spans, and `parse_errors`; do not collapse them to only the fields needed for the next happy-path function call.
 
 ## 13. When stuck
 
