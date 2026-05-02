@@ -609,10 +609,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          cp .github/codex/review_prompt.md codex-prompt.md
+          base_file() {
+            local path="$1"
+            git show "${BASE_SHA}:${path}"
+          }
+
+          base_file ".github/codex/review_prompt.md" >codex-prompt.md
+          base_file ".github/codex/output-schema.json" >codex-output-schema.json
 
           changed_files="$(git --no-pager diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
           guide_list_file="$(mktemp)"
+          base_agents_file="$(mktemp)"
+          base_file "AGENTS.md" >"$base_agents_file"
 
           print_agents_section() {
             local start_regex="$1"
@@ -621,7 +629,7 @@ jobs:
               $0 ~ end { printing = 0 }
               $0 ~ start { printing = 1 }
               printing { print }
-            ' AGENTS.md
+            ' "$base_agents_file"
           }
 
           review_lenses=""
@@ -704,7 +712,7 @@ jobs:
             echo "Changed files:"
             git --no-pager diff --name-status "${BASE_SHA}" "${HEAD_SHA}"
             echo ""
-            echo "Repository policy excerpts from AGENTS.md:"
+            echo "Repository policy excerpts from AGENTS.md at base commit ${BASE_SHA}:"
             echo "--- BEGIN AGENTS.md: PR rules ---"
             print_agents_section '^## 7\. PR rules' '^## 8\. CI rules'
             echo "--- END AGENTS.md: PR rules ---"
@@ -717,7 +725,7 @@ jobs:
               while IFS= read -r guide_path; do
                 echo ""
                 echo "--- BEGIN GUIDE: ${guide_path} ---"
-                cat "$guide_path"
+                base_file "$guide_path"
                 echo "--- END GUIDE: ${guide_path} ---"
               done <"$guide_list_file"
               echo ""
@@ -730,7 +738,7 @@ jobs:
             cat /tmp/full.diff
           } >>codex-prompt.md
 
-          rm -f "$guide_list_file"
+          rm -f "$guide_list_file" "$base_agents_file"
         shell: bash
 
       - name: Run Codex structured review
@@ -741,7 +749,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: codex-prompt.md
-          output-schema-file: .github/codex/output-schema.json
+          output-schema-file: codex-output-schema.json
           output-file: codex-output.json
           model: ${{ env.CODEX_MODEL }}
           effort: ${{ env.CODEX_REVIEW_EFFORT }}

@@ -578,7 +578,7 @@ async fn fetch_stage(
         if cancellation.is_cancelled() {
             cancelled = true;
         }
-        if input_closed && in_flight.is_empty() {
+        if (input_closed || cancelled) && in_flight.is_empty() {
             break;
         }
 
@@ -586,23 +586,22 @@ async fn fetch_stage(
             () = cancellation.cancelled(), if !cancelled => {
                 cancelled = true;
             }
-            job = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
+            job = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
                 let Some(job) = job else {
                     input_closed = true;
                     continue;
                 };
+                if cancellation.is_cancelled() {
+                    cancelled = true;
+                    continue;
+                }
                 validate_source_id("fetch", &source_id, &job.source_id)?;
-                let fetch_cancellation = if cancelled || cancellation.is_cancelled() {
-                    CancellationToken::new()
-                } else {
-                    cancellation.clone()
-                };
                 in_flight.push(fetch_one(
                     adapters.clone(),
                     source_id.clone(),
                     ctx.clone(),
                     job,
-                    fetch_cancellation,
+                    cancellation.clone(),
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
@@ -646,7 +645,7 @@ async fn parse_stage(
         if cancellation.is_cancelled() {
             cancelled = true;
         }
-        if input_closed && in_flight.is_empty() {
+        if (input_closed || cancelled) && in_flight.is_empty() {
             break;
         }
 
@@ -654,17 +653,16 @@ async fn parse_stage(
             () = cancellation.cancelled(), if !cancelled => {
                 cancelled = true;
             }
-            fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
+            fetched = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
                 let Some(fetched) = fetched else {
                     input_closed = true;
                     continue;
                 };
+                if cancellation.is_cancelled() {
+                    cancelled = true;
+                    continue;
+                }
                 validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
-                let parse_cancellation = if cancelled || cancellation.is_cancelled() {
-                    CancellationToken::new()
-                } else {
-                    cancellation.clone()
-                };
                 let parse_ctx = ctx.clone()
                     .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone())
                     .with_job_correlation(
@@ -677,7 +675,7 @@ async fn parse_stage(
                     parse_ctx,
                     tx.clone(),
                     fetched,
-                    parse_cancellation,
+                    cancellation.clone(),
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
