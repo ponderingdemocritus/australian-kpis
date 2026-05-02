@@ -38,6 +38,8 @@ enum StubMode {
     ParseErrorAfterRow,
     FatalParseError,
     LoaderValidationError,
+    RevisionRows,
+    TwoJobsCancelAfterFirstFetch,
     TwoArtifactsCancelAfterFirstParse,
 }
 
@@ -109,6 +111,8 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ParseErrorAfterRow
             | StubMode::FatalParseError
             | StubMode::LoaderValidationError
+            | StubMode::RevisionRows
+            | StubMode::TwoJobsCancelAfterFirstFetch
             | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
         };
 
@@ -127,7 +131,10 @@ impl SourceAdapter for StubAdapter {
             metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
         }];
 
-        if matches!(self.mode, StubMode::TwoArtifactsCancelAfterFirstParse) {
+        if matches!(
+            self.mode,
+            StubMode::TwoArtifactsCancelAfterFirstParse | StubMode::TwoJobsCancelAfterFirstFetch
+        ) {
             jobs.push(DiscoveredJob {
                 id: "job-2".into(),
                 source_id,
@@ -148,6 +155,11 @@ impl SourceAdapter for StubAdapter {
     ) -> Result<ArtifactRef, AdapterError> {
         if matches!(self.mode, StubMode::SlowFetch) {
             tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+        if matches!(self.mode, StubMode::TwoJobsCancelAfterFirstFetch) && job.id == "job-1" {
+            self.cancel_token()
+                .expect("cancel token configured")
+                .cancel();
         }
 
         Ok(ArtifactRef {
@@ -214,7 +226,24 @@ impl SourceAdapter for StubAdapter {
             StubMode::LoaderValidationError => {
                 Box::pin(stream::iter([Ok(loader_validation_error_row(artifact.id))]))
             }
+            StubMode::RevisionRows => {
+                let (series, revision_0) = row;
+                let mut revision_1 = revision_0.clone();
+                revision_1.revision_no = 1;
+                revision_1.value = Some(456.7);
+                Box::pin(stream::iter([
+                    Ok((series.clone(), revision_0)),
+                    Ok((series, revision_1)),
+                ]))
+            }
             StubMode::TwoArtifactsCancelAfterFirstParse => {
+                let (series, mut observation) = row;
+                if artifact.id == ArtifactId::of_content(b"job-2") {
+                    observation.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                }
+                Box::pin(stream::iter([Ok((series, observation))]))
+            }
+            StubMode::TwoJobsCancelAfterFirstFetch => {
                 let (series, mut observation) = row;
                 if artifact.id == ArtifactId::of_content(b"job-2") {
                     observation.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
@@ -763,6 +792,60 @@ async fn loader_validation_errors_preserve_job_and_trace_correlation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipeline_preserves_revision_chain_and_latest_view_selects_highest_revision() {
+    let timescale = start_timescale("au_kpis_pipeline_revision_latest")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::RevisionRows,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("pipeline should load both revisions");
+
+    assert_eq!(stats.loaded.observations_loaded, 2);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    let latest_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations_latest")
+        .fetch_one(&pool)
+        .await
+        .expect("count latest observations");
+    let (revision_no, value): (i32, Option<f64>) =
+        sqlx::query_as("SELECT revision_no, value FROM observations_latest")
+            .fetch_one(&pool)
+            .await
+            .expect("read latest observation");
+
+    assert_eq!(observation_count, 2);
+    assert_eq!(latest_count, 1);
+    assert_eq!(revision_no, 1);
+    assert_eq!(value, Some(456.7));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancellation_flushes_partial_load_batch() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_flush")
         .await
@@ -800,6 +883,50 @@ async fn cancellation_flushes_partial_load_batch() {
         .await
         .expect("count observations");
     assert_eq!(observation_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_drains_discovered_jobs_that_are_not_fetch_started() {
+    let timescale = start_timescale("au_kpis_pipeline_cancel_discovery_drain")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let first_artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
+    seed_stub_reference_data(&pool, first_artifact_id).await;
+    seed_stub_artifact(&pool, second_artifact_id, "https://example.test/cpi-2.json").await;
+
+    let cancellation = CancellationToken::new();
+    let result = pipeline_with_pool(
+        StubMode::TwoJobsCancelAfterFirstFetch,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 1,
+            parse_concurrency: 2,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        Some(cancellation.clone()),
+    )
+    .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
+    .await;
+
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

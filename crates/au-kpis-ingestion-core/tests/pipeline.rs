@@ -190,4 +190,19 @@ async fn pipeline_discovers_fetches_parses_and_loads_cpi_fixture() {
         .await
         .expect("count latest observations");
     assert_eq!(latest_count, 6);
+
+    let stale_latest_count: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM observations_latest latest
+         WHERE latest.revision_no <> (
+             SELECT max(observation.revision_no)
+             FROM observations observation
+             WHERE observation.series_key = latest.series_key
+               AND observation.time = latest.time
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count stale latest rows");
+    assert_eq!(stale_latest_count, 0);
 }

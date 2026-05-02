@@ -3,11 +3,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
 use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -21,10 +24,15 @@ use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats};
 use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
+use opentelemetry::{
+    Context as OtelContext, propagation::TextMapPropagator, trace::TraceContextExt,
+};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, Span, info_span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 64;
 const DEFAULT_STAGE_CONCURRENCY: usize = 4;
@@ -271,7 +279,14 @@ impl IngestionPipeline {
         let mut tasks = JoinSet::new();
         let source = source_id.as_str().to_string();
         let pipeline_token = cancellation.child_token();
+        let trace_parent = contexts.discovery.trace_parent().map(str::to_owned);
 
+        let discover_span = info_span!(
+            "ingestion_discover",
+            source = %source,
+            trace_parent = trace_parent.as_deref().unwrap_or("")
+        );
+        restore_trace_parent(&discover_span, trace_parent.as_deref());
         tasks.spawn(
             discover_stage(
                 self.adapters.clone(),
@@ -280,8 +295,14 @@ impl IngestionPipeline {
                 discovered_tx,
                 pipeline_token.clone(),
             )
-            .instrument(info_span!("ingestion_discover", source = %source)),
+            .instrument(discover_span),
         );
+        let fetch_span = info_span!(
+            "ingestion_fetch",
+            source = %source,
+            trace_parent = trace_parent.as_deref().unwrap_or("")
+        );
+        restore_trace_parent(&fetch_span, trace_parent.as_deref());
         tasks.spawn(
             fetch_stage(
                 self.adapters.clone(),
@@ -292,8 +313,14 @@ impl IngestionPipeline {
                 pipeline_token.clone(),
                 self.options.fetch_concurrency,
             )
-            .instrument(info_span!("ingestion_fetch", source = %source)),
+            .instrument(fetch_span),
         );
+        let parse_span = info_span!(
+            "ingestion_parse",
+            source = %source,
+            trace_parent = trace_parent.as_deref().unwrap_or("")
+        );
+        restore_trace_parent(&parse_span, trace_parent.as_deref());
         tasks.spawn(
             parse_stage(
                 self.adapters.clone(),
@@ -304,8 +331,14 @@ impl IngestionPipeline {
                 pipeline_token.clone(),
                 self.options.parse_concurrency,
             )
-            .instrument(info_span!("ingestion_parse", source = %source)),
+            .instrument(parse_span),
         );
+        let load_span = info_span!(
+            "ingestion_load",
+            source = %source,
+            trace_parent = trace_parent.as_deref().unwrap_or("")
+        );
+        restore_trace_parent(&load_span, trace_parent.as_deref());
         tasks.spawn(
             load_stage(
                 self.pool.clone(),
@@ -316,7 +349,7 @@ impl IngestionPipeline {
                 },
                 pipeline_token.clone(),
             )
-            .instrument(info_span!("ingestion_load", source = %source)),
+            .instrument(load_span),
         );
 
         let shutdown_grace = self.options.shutdown_grace;
@@ -450,6 +483,20 @@ fn generated_trace_parent(source_id: &SourceId, started_at: DateTime<Utc>) -> St
     format!("00-{}-{}-01", &hex[..32], &hex[32..48])
 }
 
+fn trace_context_from_trace_parent(trace_parent: &str) -> Option<OtelContext> {
+    let carrier = HashMap::from([("traceparent".to_string(), trace_parent.to_string())]);
+    let propagator = TraceContextPropagator::new();
+    let context = propagator.extract(&carrier);
+    context.span().span_context().is_valid().then_some(context)
+}
+
+fn restore_trace_parent(span: &Span, trace_parent: Option<&str>) {
+    let Some(context) = trace_parent.and_then(trace_context_from_trace_parent) else {
+        return;
+    };
+    span.set_parent(context);
+}
+
 #[derive(Debug)]
 enum LoadStageItem {
     Observation {
@@ -531,7 +578,7 @@ async fn fetch_stage(
         if cancellation.is_cancelled() {
             cancelled = true;
         }
-        if (input_closed || cancelled) && in_flight.is_empty() {
+        if input_closed && in_flight.is_empty() {
             break;
         }
 
@@ -539,18 +586,23 @@ async fn fetch_stage(
             () = cancellation.cancelled(), if !cancelled => {
                 cancelled = true;
             }
-            job = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
+            job = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
                 let Some(job) = job else {
                     input_closed = true;
                     continue;
                 };
                 validate_source_id("fetch", &source_id, &job.source_id)?;
+                let fetch_cancellation = if cancelled || cancellation.is_cancelled() {
+                    CancellationToken::new()
+                } else {
+                    cancellation.clone()
+                };
                 in_flight.push(fetch_one(
                     adapters.clone(),
                     source_id.clone(),
                     ctx.clone(),
                     job,
-                    cancellation.clone(),
+                    fetch_cancellation,
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
@@ -1023,8 +1075,11 @@ mod tests {
         ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
     };
     use chrono::{TimeZone, Utc};
+    use opentelemetry::trace::TraceContextExt;
 
     use super::*;
+
+    const TRACE_PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
     #[test]
     fn load_stage_flushes_before_next_item_exceeds_byte_cap() {
@@ -1090,6 +1145,20 @@ mod tests {
 
         assert_eq!(stats.discovered, 1);
         assert_eq!(stats.fetched, 1);
+    }
+
+    #[test]
+    fn trace_parent_context_extracts_w3c_parent_ids() {
+        let context =
+            trace_context_from_trace_parent(TRACE_PARENT).expect("trace parent should parse");
+        let span_context = context.span().span_context().clone();
+
+        assert!(span_context.is_valid());
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+        assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
     }
 
     #[tokio::test]
