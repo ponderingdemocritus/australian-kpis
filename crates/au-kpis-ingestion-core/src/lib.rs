@@ -19,7 +19,11 @@ use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
-use tokio::{sync::mpsc, task::JoinSet, time::timeout};
+use tokio::{
+    sync::mpsc::{self, error::TrySendError},
+    task::JoinSet,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
@@ -460,7 +464,7 @@ async fn discover_stage(
             return Err(IngestionError::Cancelled);
         }
         validate_source_id("discover", &source_id, &job.source_id)?;
-        send_produced(&tx, job).await?;
+        send_produced(&tx, job, &cancellation).await?;
     }
     Ok(PipelineRunStats {
         discovered,
@@ -511,7 +515,7 @@ async fn fetch_stage(
             result = in_flight.next(), if !in_flight.is_empty() => {
                 match result.expect("in_flight is not empty") {
                     Ok(fetched_artifact) => {
-                        send_produced(&tx, fetched_artifact).await?;
+                        send_produced(&tx, fetched_artifact, &cancellation).await?;
                         fetched += 1;
                     }
                     Err(IngestionError::Cancelled) => cancelled = true,
@@ -572,6 +576,7 @@ async fn parse_stage(
                     parse_ctx,
                     tx.clone(),
                     fetched,
+                    cancellation.clone(),
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
@@ -617,12 +622,21 @@ async fn parse_one_artifact(
     parse_ctx: ParseCtx,
     tx: mpsc::Sender<LoadStageItem>,
     fetched: FetchedArtifact,
+    cancellation: CancellationToken,
 ) -> Result<u64, IngestionError> {
     let artifact_id = fetched.artifact.id;
     let mut parsed = 0;
     let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
 
-    while let Some(row) = observations.next().await {
+    loop {
+        let row = tokio::select! {
+            () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+            row = observations.next() => row,
+        };
+        let Some(row) = row else {
+            break;
+        };
+
         let (series, observation) = match row {
             Ok(row) => row,
             Err(err) => {
@@ -635,6 +649,7 @@ async fn parse_one_artifact(
                         &err,
                         parsed == 0,
                     )),
+                    &cancellation,
                 )
                 .await?;
                 if parsed == 0 {
@@ -655,6 +670,7 @@ async fn parse_one_artifact(
                     "dataflow_mismatch",
                     &format!("dataflow mismatch: expected `{expected}`, got `{actual}`"),
                 )),
+                &cancellation,
             )
             .await?;
             return Err(IngestionError::DataflowMismatch { expected, actual });
@@ -671,6 +687,7 @@ async fn parse_one_artifact(
                     "artifact_mismatch",
                     &format!("artifact mismatch: expected `{expected}`, got `{actual}`"),
                 )),
+                &cancellation,
             )
             .await?;
             return Err(IngestionError::ArtifactMismatch { expected, actual });
@@ -681,6 +698,7 @@ async fn parse_one_artifact(
                 series,
                 observation,
             }),
+            &cancellation,
         )
         .await?;
         parsed += 1;
@@ -862,10 +880,26 @@ fn estimate_load_item_bytes(item: &LoadItem) -> usize {
             .sum::<usize>()
 }
 
-async fn send_produced<T>(tx: &mpsc::Sender<T>, value: T) -> Result<(), IngestionError> {
-    tx.send(value)
-        .await
-        .map_err(|_| IngestionError::DownstreamClosed)
+async fn send_produced<T>(
+    tx: &mpsc::Sender<T>,
+    value: T,
+    cancellation: &CancellationToken,
+) -> Result<(), IngestionError> {
+    tokio::select! {
+        () = cancellation.cancelled() => {
+            match tx.try_send(value) {
+                Ok(()) => Ok(()),
+                Err(TrySendError::Full(_)) => Err(IngestionError::Cancelled),
+                Err(TrySendError::Closed(_)) => Err(IngestionError::DownstreamClosed),
+            }
+        }
+        permit = tx.reserve() => {
+            permit
+                .map_err(|_| IngestionError::DownstreamClosed)?
+                .send(value);
+            Ok(())
+        },
+    }
 }
 
 #[cfg(test)]
@@ -916,8 +950,9 @@ mod tests {
     async fn produced_handoff_waits_for_capacity_instead_of_dropping_item() {
         let (tx, mut rx) = mpsc::channel(1);
         tx.send(1).await.expect("seed full channel");
+        let cancellation = CancellationToken::new();
 
-        let sender = tokio::spawn(async move { send_produced(&tx, 2).await });
+        let sender = tokio::spawn(async move { send_produced(&tx, 2, &cancellation).await });
 
         assert_eq!(rx.recv().await, Some(1));
         sender
@@ -925,6 +960,23 @@ mod tests {
             .expect("handoff task should not panic")
             .expect("handoff should complete once capacity is available");
         assert_eq!(rx.recv().await, Some(2));
+    }
+
+    #[tokio::test]
+    async fn produced_handoff_returns_cancelled_when_full_and_cancelled() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(1).await.expect("seed full channel");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let result = send_produced(&tx, 2, &cancellation).await;
+
+        assert!(
+            matches!(result, Err(IngestionError::Cancelled)),
+            "{result:?}"
+        );
+        assert_eq!(rx.recv().await, Some(1));
+        assert!(rx.try_recv().is_err());
     }
 
     fn load_item_with_attribute_bytes(attribute_bytes: usize) -> LoadItem {

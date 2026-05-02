@@ -30,6 +30,7 @@ enum StubMode {
     ManyRows,
     RequireParseDataflow,
     CancelAfterFirstParse,
+    SlowParse,
     WrongArtifactId,
     ParseErrorAfterRow,
     FatalParseError,
@@ -98,6 +99,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ManyRows
             | StubMode::RequireParseDataflow
             | StubMode::CancelAfterFirstParse
+            | StubMode::SlowParse
             | StubMode::WrongArtifactId
             | StubMode::ParseErrorAfterRow
             | StubMode::FatalParseError
@@ -165,6 +167,7 @@ impl SourceAdapter for StubAdapter {
             StubMode::CancelAfterFirstParse => {
                 cancel_after_first_row(row, self.cancel_token().expect("cancel token configured"))
             }
+            StubMode::SlowParse => Box::pin(stream::pending()),
             StubMode::TwoArtifactsCancelAfterFirstParse
                 if artifact.id == ArtifactId::of_content(b"job-1") =>
             {
@@ -425,6 +428,32 @@ async fn cancellation_bounds_busy_fetch_stage_by_shutdown_grace() {
             result,
             Err(IngestionError::Cancelled | IngestionError::ShutdownTimeout(_))
         ),
+        "{result:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_reaches_already_started_parse_jobs() {
+    let cancellation = CancellationToken::new();
+    let cancel = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+    });
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        pipeline(StubMode::SlowParse).run_source(
+            SourceId::new("stub").unwrap(),
+            contexts(),
+            cancellation,
+        ),
+    )
+    .await
+    .expect("pipeline should not wait for a wedged parser stream");
+
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
         "{result:?}"
     );
 }
