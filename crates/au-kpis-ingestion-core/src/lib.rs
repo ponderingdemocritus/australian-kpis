@@ -19,7 +19,11 @@ use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
-use tokio::{sync::mpsc, task::JoinSet, time::timeout};
+use tokio::{
+    sync::{mpsc, mpsc::error::TryRecvError},
+    task::JoinSet,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
@@ -367,6 +371,9 @@ async fn collect_stage_stats(
             }
             result = tasks.join_next() => {
                 let Some(result) = result else {
+                    if cancellation.is_cancelled() {
+                        return Err(IngestionError::Cancelled);
+                    }
                     return Ok(stats);
                 };
                 match result? {
@@ -481,7 +488,7 @@ async fn fetch_stage(
 
     loop {
         while !input_closed && in_flight.len() < concurrency {
-            let Some(job) = recv_or_drain_on_cancel(&mut rx, &cancellation, &mut draining).await
+            let Some(job) = recv_or_stop_on_cancel(&mut rx, &cancellation, &mut draining).await
             else {
                 input_closed = true;
                 break;
@@ -526,8 +533,7 @@ async fn parse_stage(
 
     loop {
         while !input_closed && in_flight.len() < concurrency {
-            let Some(fetched) =
-                recv_or_drain_on_cancel(&mut rx, &cancellation, &mut draining).await
+            let Some(fetched) = recv_or_stop_on_cancel(&mut rx, &cancellation, &mut draining).await
             else {
                 input_closed = true;
                 break;
@@ -792,14 +798,17 @@ async fn send_produced<T>(tx: &mpsc::Sender<T>, value: T) -> Result<(), Ingestio
         .map_err(|_| IngestionError::DownstreamClosed)
 }
 
-async fn recv_or_drain_on_cancel<T>(
+async fn recv_or_stop_on_cancel<T>(
     rx: &mut mpsc::Receiver<T>,
     cancellation: &CancellationToken,
     draining: &mut bool,
 ) -> Option<T> {
     loop {
         if *draining {
-            return rx.recv().await;
+            return match rx.try_recv() {
+                Ok(value) => Some(value),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+            };
         }
 
         tokio::select! {
