@@ -168,7 +168,11 @@ impl SourceAdapter for StubAdapter {
             StubMode::TwoArtifactsCancelAfterFirstParse
                 if artifact.id == ArtifactId::of_content(b"job-1") =>
             {
-                cancel_after_first_row(row, self.cancel_token().expect("cancel token configured"))
+                cancel_after_first_row_after_delay(
+                    row,
+                    self.cancel_token().expect("cancel token configured"),
+                    Duration::from_millis(100),
+                )
             }
             StubMode::WrongArtifactId => {
                 let (series, mut observation) = row;
@@ -207,6 +211,14 @@ fn cancel_after_first_row(
     row: (SeriesDescriptor, Observation),
     cancellation: CancellationToken,
 ) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    cancel_after_first_row_after_delay(row, cancellation, Duration::ZERO)
+}
+
+fn cancel_after_first_row_after_delay(
+    row: (SeriesDescriptor, Observation),
+    cancellation: CancellationToken,
+    delay: Duration,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
     Box::pin(stream::unfold(0_u8, move |state| {
         let row = row.clone();
         let cancellation = cancellation.clone();
@@ -214,6 +226,7 @@ fn cancel_after_first_row(
             match state {
                 0 => Some((Ok(row), 1)),
                 1 => {
+                    tokio::time::sleep(delay).await;
                     cancellation.cancel();
                     None
                 }
