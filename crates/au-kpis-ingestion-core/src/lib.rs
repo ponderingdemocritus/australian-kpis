@@ -19,11 +19,7 @@ use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
-use tokio::{
-    sync::mpsc::{self, error::TrySendError},
-    task::JoinSet,
-    time::timeout,
-};
+use tokio::{sync::mpsc, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
@@ -409,12 +405,22 @@ async fn drain_task_errors(
 struct FetchedArtifact {
     artifact: au_kpis_adapter::ArtifactRef,
     dataflow_id: DataflowId,
+    correlation: JobCorrelation,
     metadata: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct JobCorrelation {
+    job_id: String,
+    trace_parent: Option<String>,
 }
 
 #[derive(Debug)]
 enum LoadStageItem {
-    Observation(LoadItem),
+    Observation {
+        item: LoadItem,
+        correlation: JobCorrelation,
+    },
     ParseError(ParseErrorRecord),
 }
 
@@ -567,9 +573,12 @@ async fn parse_stage(
                     continue;
                 };
                 validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
-                let parse_ctx = ctx
-                    .clone()
-                    .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone());
+                let parse_ctx = ctx.clone()
+                    .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone())
+                    .with_job_correlation(
+                        fetched.correlation.job_id.clone(),
+                        fetched.correlation.trace_parent.clone(),
+                    );
                 in_flight.push(parse_one_artifact(
                     adapters.clone(),
                     source_id.clone(),
@@ -602,6 +611,10 @@ async fn fetch_one(
     job: au_kpis_adapter::DiscoveredJob,
     cancellation: CancellationToken,
 ) -> Result<FetchedArtifact, IngestionError> {
+    let correlation = JobCorrelation {
+        job_id: job.id.clone(),
+        trace_parent: job.trace_parent.clone(),
+    };
     let dataflow_id = job.dataflow_id.clone();
     let metadata = job.metadata.clone();
     let artifact = tokio::select! {
@@ -612,6 +625,7 @@ async fn fetch_one(
     Ok(FetchedArtifact {
         artifact,
         dataflow_id,
+        correlation,
         metadata,
     })
 }
@@ -646,6 +660,7 @@ async fn parse_one_artifact(
                         artifact_id,
                         &fetched.dataflow_id,
                         &source_id,
+                        &fetched.correlation,
                         &err,
                         parsed == 0,
                     )),
@@ -667,6 +682,7 @@ async fn parse_one_artifact(
                     artifact_id,
                     &fetched.dataflow_id,
                     &source_id,
+                    &fetched.correlation,
                     "dataflow_mismatch",
                     &format!("dataflow mismatch: expected `{expected}`, got `{actual}`"),
                 )),
@@ -684,6 +700,7 @@ async fn parse_one_artifact(
                     artifact_id,
                     &fetched.dataflow_id,
                     &source_id,
+                    &fetched.correlation,
                     "artifact_mismatch",
                     &format!("artifact mismatch: expected `{expected}`, got `{actual}`"),
                 )),
@@ -694,10 +711,13 @@ async fn parse_one_artifact(
         }
         send_produced(
             &tx,
-            LoadStageItem::Observation(LoadItem {
-                series,
-                observation,
-            }),
+            LoadStageItem::Observation {
+                item: LoadItem {
+                    series,
+                    observation,
+                },
+                correlation: fetched.correlation.clone(),
+            },
             &cancellation,
         )
         .await?;
@@ -711,6 +731,7 @@ fn parse_error_record(
     artifact_id: ArtifactId,
     dataflow_id: &DataflowId,
     source_id: &SourceId,
+    correlation: &JobCorrelation,
     err: &AdapterError,
     fatal: bool,
 ) -> ParseErrorRecord {
@@ -722,6 +743,8 @@ fn parse_error_record(
             "dataflow_id": dataflow_id,
             "source_id": source_id,
             "artifact_id": artifact_id,
+            "job_id": correlation.job_id.as_str(),
+            "trace_parent": correlation.trace_parent.as_deref(),
             "error_class": format!("{:?}", err.class()),
             "fatal": fatal,
         })),
@@ -732,6 +755,7 @@ fn provenance_error_record(
     artifact_id: ArtifactId,
     dataflow_id: &DataflowId,
     source_id: &SourceId,
+    correlation: &JobCorrelation,
     error_kind: &'static str,
     error_message: &str,
 ) -> ParseErrorRecord {
@@ -743,6 +767,8 @@ fn provenance_error_record(
             "dataflow_id": dataflow_id,
             "source_id": source_id,
             "artifact_id": artifact_id,
+            "job_id": correlation.job_id.as_str(),
+            "trace_parent": correlation.trace_parent.as_deref(),
             "fatal": true,
         })),
     }
@@ -756,6 +782,7 @@ async fn load_stage(
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut loaded = LoadStats::default();
     let mut batch = Vec::with_capacity(options.max_rows.min(1024));
+    let mut batch_correlations = Vec::with_capacity(options.max_rows.min(1024));
     let mut batch_bytes = 0usize;
     let mut draining = false;
 
@@ -776,8 +803,8 @@ async fn load_stage(
             break;
         };
 
-        let item = match item {
-            LoadStageItem::Observation(item) => item,
+        let (item, correlation) = match item {
+            LoadStageItem::Observation { item, correlation } => (item, correlation),
             LoadStageItem::ParseError(record) => {
                 au_kpis_loader::record_parse_error(
                     &pool,
@@ -796,20 +823,19 @@ async fn load_stage(
         if should_flush_load_batch(&batch, batch_bytes, item_bytes, options) {
             add_load_stats(
                 &mut loaded,
-                au_kpis_loader::load_batch_with_options(&pool, std::mem::take(&mut batch), options)
-                    .await?,
+                flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
             );
             batch_bytes = 0;
         }
 
         batch_bytes += item_bytes;
         batch.push(item);
+        batch_correlations.push(correlation);
 
         if batch.len() >= options.max_rows || batch_bytes >= options.max_bytes {
             add_load_stats(
                 &mut loaded,
-                au_kpis_loader::load_batch_with_options(&pool, std::mem::take(&mut batch), options)
-                    .await?,
+                flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
             );
             batch_bytes = 0;
         }
@@ -817,13 +843,48 @@ async fn load_stage(
     if !batch.is_empty() {
         add_load_stats(
             &mut loaded,
-            au_kpis_loader::load_batch_with_options(&pool, batch, options).await?,
+            flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
         );
     }
     Ok(PipelineRunStats {
         loaded,
         ..PipelineRunStats::default()
     })
+}
+
+async fn flush_load_batch(
+    pool: &PgPool,
+    batch: &mut Vec<LoadItem>,
+    correlations: &mut Vec<JobCorrelation>,
+    options: LoadOptions,
+) -> Result<LoadStats, au_kpis_loader::LoadError> {
+    let job_ids = joined_unique(
+        correlations
+            .iter()
+            .map(|correlation| correlation.job_id.as_str()),
+    );
+    let trace_parents = joined_unique(
+        correlations
+            .iter()
+            .filter_map(|correlation| correlation.trace_parent.as_deref()),
+    );
+    let items = std::mem::take(batch);
+    correlations.clear();
+    au_kpis_loader::load_batch_with_options(pool, items, options)
+        .instrument(info_span!(
+            "ingestion_load_batch",
+            job_ids = %job_ids,
+            trace_parents = %trace_parents,
+        ))
+        .await
+}
+
+fn joined_unique<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    values
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn add_load_stats(total: &mut LoadStats, batch: LoadStats) {
@@ -883,23 +944,16 @@ fn estimate_load_item_bytes(item: &LoadItem) -> usize {
 async fn send_produced<T>(
     tx: &mpsc::Sender<T>,
     value: T,
-    cancellation: &CancellationToken,
+    _cancellation: &CancellationToken,
 ) -> Result<(), IngestionError> {
-    tokio::select! {
-        () = cancellation.cancelled() => {
-            match tx.try_send(value) {
-                Ok(()) => Ok(()),
-                Err(TrySendError::Full(_)) => Err(IngestionError::Cancelled),
-                Err(TrySendError::Closed(_)) => Err(IngestionError::DownstreamClosed),
-            }
-        }
-        permit = tx.reserve() => {
-            permit
-                .map_err(|_| IngestionError::DownstreamClosed)?
-                .send(value);
-            Ok(())
-        },
-    }
+    // Produced values are part of graceful drain; the run-level shutdown_grace
+    // bounds this await instead of letting cancellation discard the value.
+    let permit = tx
+        .reserve()
+        .await
+        .map_err(|_| IngestionError::DownstreamClosed)?;
+    permit.send(value);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -963,20 +1017,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn produced_handoff_returns_cancelled_when_full_and_cancelled() {
+    async fn produced_handoff_does_not_drop_item_when_full_and_cancelled() {
         let (tx, mut rx) = mpsc::channel(1);
         tx.send(1).await.expect("seed full channel");
         let cancellation = CancellationToken::new();
         cancellation.cancel();
 
-        let result = send_produced(&tx, 2, &cancellation).await;
+        let mut sender = tokio::spawn(async move { send_produced(&tx, 2, &cancellation).await });
 
         assert!(
-            matches!(result, Err(IngestionError::Cancelled)),
-            "{result:?}"
+            tokio::time::timeout(Duration::from_millis(50), &mut sender)
+                .await
+                .is_err(),
+            "handoff must wait for downstream capacity instead of dropping the item"
         );
         assert_eq!(rx.recv().await, Some(1));
-        assert!(rx.try_recv().is_err());
+        sender
+            .await
+            .expect("handoff task should not panic")
+            .expect("handoff should complete once capacity is available");
+        assert_eq!(rx.recv().await, Some(2));
     }
 
     fn load_item_with_attribute_bytes(attribute_bytes: usize) -> LoadItem {

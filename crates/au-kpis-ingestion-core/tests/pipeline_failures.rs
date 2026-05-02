@@ -23,6 +23,8 @@ use object_store::memory::InMemory;
 use sqlx::postgres::PgPoolOptions;
 use tokio_util::sync::CancellationToken;
 
+const TRACE_PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
 #[derive(Debug, Clone, Copy)]
 enum StubMode {
     SlowFetch,
@@ -111,6 +113,7 @@ impl SourceAdapter for StubAdapter {
             source_id: source_id.clone(),
             dataflow_id: self.manifest.dataflows[0].clone(),
             source_url: "https://example.test/cpi.json".into(),
+            trace_parent: Some(TRACE_PARENT.into()),
             metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
         }];
 
@@ -120,6 +123,7 @@ impl SourceAdapter for StubAdapter {
                 source_id,
                 dataflow_id: self.manifest.dataflows[0].clone(),
                 source_url: "https://example.test/cpi-2.json".into(),
+                trace_parent: Some(TRACE_PARENT.into()),
                 metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
             });
         }
@@ -563,6 +567,13 @@ async fn parse_rejects_observations_for_the_wrong_artifact_and_audits_error() {
         .await
         .expect("count parse errors");
     assert_eq!(parse_error_count, 1);
+
+    let row_context: serde_json::Value = sqlx::query_scalar("SELECT row_context FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("read parse error row context");
+    assert_eq!(row_context["job_id"], "job-1");
+    assert_eq!(row_context["trace_parent"], TRACE_PARENT);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1648,6 +1648,7 @@ impl AbsDataflow {
             source_id: SourceId::new("abs").expect("static source id is valid"),
             dataflow_id: DataflowId::new("abs.cpi").expect("static dataflow id is valid"),
             source_url: self.source_url.clone(),
+            trace_parent: None,
             metadata,
         }
     }

@@ -77,6 +77,7 @@ impl SourceAdapter for StubAdapter {
             source_id: self.manifest.source_id.clone(),
             dataflow_id: self.manifest.dataflows[0].clone(),
             source_url: "https://example.test/cpi.json".into(),
+            trace_parent: None,
             metadata: BTreeMap::from([("kind".into(), "fixture".into())]),
         }])
     }

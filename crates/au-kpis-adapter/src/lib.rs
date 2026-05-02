@@ -410,6 +410,8 @@ pub struct ParseCtx {
     /// Timestamp captured by the worker when parse started.
     pub started_at: DateTime<Utc>,
     expected_dataflow_id: Option<DataflowId>,
+    job_id: Option<String>,
+    trace_parent: Option<String>,
     metadata: BTreeMap<String, String>,
 }
 
@@ -422,6 +424,8 @@ impl ParseCtx {
             blob_store,
             started_at,
             expected_dataflow_id: None,
+            job_id: None,
+            trace_parent: None,
             metadata: BTreeMap::new(),
         }
     }
@@ -438,10 +442,34 @@ impl ParseCtx {
         self
     }
 
+    /// Return a context annotated with discovery-time job correlation.
+    #[must_use]
+    pub fn with_job_correlation(
+        mut self,
+        job_id: impl Into<String>,
+        trace_parent: Option<String>,
+    ) -> Self {
+        self.job_id = Some(job_id.into());
+        self.trace_parent = trace_parent;
+        self
+    }
+
     /// Expected dataflow carried from the discovered job, when available.
     #[must_use]
     pub fn expected_dataflow_id(&self) -> Option<&DataflowId> {
         self.expected_dataflow_id.as_ref()
+    }
+
+    /// Source-local discovered job id carried through fetch and parse.
+    #[must_use]
+    pub fn job_id(&self) -> Option<&str> {
+        self.job_id.as_deref()
+    }
+
+    /// W3C trace-parent carried from discovery, when available.
+    #[must_use]
+    pub fn trace_parent(&self) -> Option<&str> {
+        self.trace_parent.as_deref()
     }
 
     /// Adapter metadata carried from the discovered job.
@@ -462,6 +490,8 @@ pub struct DiscoveredJob {
     pub dataflow_id: DataflowId,
     /// Canonical upstream URL or locator.
     pub source_url: String,
+    /// W3C trace-parent tying discovery, fetch, parse, and load spans together.
+    pub trace_parent: Option<String>,
     /// Adapter-specific metadata needed by fetch/parse.
     pub metadata: BTreeMap<String, String>,
 }
