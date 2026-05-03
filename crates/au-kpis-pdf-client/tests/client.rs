@@ -18,7 +18,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
-use tracing::{Id, Subscriber, span::Attributes};
+use tracing::{Id, Subscriber, instrument::WithSubscriber, span::Attributes};
 use tracing_subscriber::{
     Layer,
     layer::{Context, SubscriberExt},
@@ -410,7 +410,11 @@ async fn extract_emits_outbound_http_span() {
     });
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    client.extract(request()).await.expect("extract");
+    client
+        .extract(request())
+        .with_current_subscriber()
+        .await
+        .expect("extract");
 
     assert_eq!(span_count.load(Ordering::SeqCst), 1);
 }
