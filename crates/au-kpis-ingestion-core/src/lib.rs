@@ -31,7 +31,7 @@ use opentelemetry_sdk::propagation::TraceContextPropagator;
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, info_span, instrument::WithSubscriber};
+use tracing::{Instrument, Level, Span, info_span, instrument::WithSubscriber, trace_span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 64;
@@ -787,6 +787,9 @@ async fn parse_one_artifact(
         loop {
             let row = if cancellation.is_cancelled() {
                 if admitted_post_cancel_item {
+                    if matches!(observations.next().now_or_never(), Some(None)) {
+                        break;
+                    }
                     finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed).await?;
                     return Err(IngestionError::Cancelled);
                 }
@@ -804,6 +807,9 @@ async fn parse_one_artifact(
                     biased;
                     () = cancellation.cancelled() => {
                         if admitted_post_cancel_item {
+                            if matches!(observations.next().now_or_never(), Some(None)) {
+                                break;
+                            }
                             finish_cancelled_parse(
                                 &tx,
                                 &audit,
@@ -1012,7 +1018,13 @@ async fn finish_cancelled_parse(
     if parsed > 0 {
         send_produced(
             tx,
-            LoadStageItem::AcceptArtifact(audit.artifact_id),
+            LoadStageItem::ParseError(parse_cancelled_error_record(audit, parsed)),
+            audit.cancellation,
+        )
+        .await?;
+        send_produced(
+            tx,
+            LoadStageItem::RejectArtifact(audit.artifact_id),
             audit.cancellation,
         )
         .await?;
@@ -1040,6 +1052,23 @@ fn parse_error_record(
             "trace_parent": correlation.trace_parent.as_deref(),
             "error_class": format!("{:?}", err.class()),
             "fatal": fatal,
+        })),
+    }
+}
+
+fn parse_cancelled_error_record(audit: &ParseErrorAudit<'_>, parsed: u64) -> ParseErrorRecord {
+    ParseErrorRecord {
+        artifact_id: audit.artifact_id,
+        error_kind: "parse_cancelled",
+        error_message: "parser cancelled before artifact stream was exhausted".to_string(),
+        row_context: Some(serde_json::json!({
+            "dataflow_id": audit.dataflow_id,
+            "source_id": audit.source_id,
+            "artifact_id": audit.artifact_id,
+            "job_id": audit.correlation.job_id.as_str(),
+            "trace_parent": audit.correlation.trace_parent.as_deref(),
+            "rows_parsed": parsed,
+            "fatal": true,
         })),
     }
 }
@@ -1327,21 +1356,7 @@ impl PendingArtifactLoad {
         };
         let items = audited_load_items(&mut self.batch, &mut self.correlations)?;
         emit_load_correlation_spans(&items);
-        let job_ids = joined_unique(
-            items
-                .iter()
-                .map(|(_, correlation)| correlation.job_id.as_str()),
-        );
-        let trace_parents = joined_unique(
-            items
-                .iter()
-                .filter_map(|(_, correlation)| correlation.trace_parent.as_deref()),
-        );
-        let span = info_span!(
-            "ingestion_load_stage_batch",
-            job_ids = %job_ids,
-            trace_parents = %trace_parents,
-        );
+        let span = info_span!("ingestion_load_stage_batch", rows = items.len(),);
         staged
             .stage(
                 items
@@ -1384,6 +1399,10 @@ fn audited_load_items(
 }
 
 fn emit_load_correlation_spans(items: &[(LoadItem, JobCorrelation)]) {
+    if !tracing::enabled!(Level::TRACE) {
+        return;
+    }
+
     let mut row_counts = BTreeMap::<(String, Option<String>), u64>::new();
     for (_, correlation) in items {
         *row_counts
@@ -1391,7 +1410,7 @@ fn emit_load_correlation_spans(items: &[(LoadItem, JobCorrelation)]) {
             .or_default() += 1;
     }
     for ((job_id, trace_parent), rows) in row_counts {
-        let span = info_span!(
+        let span = trace_span!(
             "ingestion_load_batch",
             job_id = %job_id,
             trace_parent = trace_parent.as_deref().unwrap_or(""),
@@ -1411,21 +1430,7 @@ async fn flush_accepted_load_batch(
     let items = audited_load_items(&mut accepted.batch, &mut accepted.correlations)?;
     accepted.batch_bytes = 0;
     emit_load_correlation_spans(&items);
-    let job_ids = joined_unique(
-        items
-            .iter()
-            .map(|(_, correlation)| correlation.job_id.as_str()),
-    );
-    let trace_parents = joined_unique(
-        items
-            .iter()
-            .filter_map(|(_, correlation)| correlation.trace_parent.as_deref()),
-    );
-    let span = info_span!(
-        "ingestion_load_commit_batch",
-        job_ids = %job_ids,
-        trace_parents = %trace_parents,
-    );
+    let span = info_span!("ingestion_load_commit_batch", rows = items.len(),);
     au_kpis_loader::load_batch_with_options_and_audit_context(
         pool,
         items
@@ -1447,14 +1452,6 @@ fn parse_error_trace_parent(record: &ParseErrorRecord) -> Option<&str> {
         .as_ref()
         .and_then(|context| context.get("trace_parent"))
         .and_then(serde_json::Value::as_str)
-}
-
-fn joined_unique<'a>(values: impl Iterator<Item = &'a str>) -> String {
-    values
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 fn add_load_stats(total: &mut LoadStats, batch: LoadStats) {

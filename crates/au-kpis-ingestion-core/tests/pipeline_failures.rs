@@ -1326,7 +1326,7 @@ async fn cancellation_flushes_partial_load_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_stops_ready_parser_streams_after_shutdown() {
+async fn cancellation_rejects_partially_parsed_artifacts_after_shutdown() {
     let timescale = start_timescale("au_kpis_pipeline_ready_cancel")
         .await
         .expect("start timescaledb container");
@@ -1358,11 +1358,19 @@ async fn cancellation_stops_ready_parser_streams_after_shutdown() {
         "{result:?}"
     );
 
-    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+    let (observation_count, parse_error_count): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("count observations and parse errors");
+    assert_eq!(observation_count, 0);
+    assert_eq!(parse_error_count, 1);
+
+    let error_kind: String = sqlx::query_scalar("SELECT error_kind FROM parse_errors")
         .fetch_one(&pool)
         .await
-        .expect("count observations");
-    assert_eq!(observation_count, 2);
+        .expect("read parse error kind");
+    assert_eq!(error_kind, "parse_cancelled");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

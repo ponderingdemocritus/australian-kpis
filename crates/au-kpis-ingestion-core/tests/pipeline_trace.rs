@@ -189,7 +189,7 @@ async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
     let subscriber = tracing_subscriber::registry().with(
         tracing_opentelemetry::layer()
             .with_tracer(tracer)
-            .with_filter(LevelFilter::INFO),
+            .with_filter(LevelFilter::TRACE),
     );
 
     let guard = tracing::subscriber::set_default(subscriber);
@@ -251,7 +251,7 @@ async fn trace_parent_changes_do_not_fragment_load_batches() {
     let subscriber = tracing_subscriber::registry().with(
         tracing_opentelemetry::layer()
             .with_tracer(tracer)
-            .with_filter(LevelFilter::INFO),
+            .with_filter(LevelFilter::TRACE),
     );
 
     let guard = tracing::subscriber::set_default(subscriber);
@@ -286,6 +286,55 @@ async fn trace_parent_changes_do_not_fragment_load_batches() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn load_correlation_spans_are_not_emitted_at_info_level() {
+    let timescale = start_timescale("au_kpis_pipeline_trace_info_level")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    seed_stub_reference_data(&pool, ArtifactId::of_content(b"job-1")).await;
+    seed_stub_artifact(
+        &pool,
+        ArtifactId::of_content(b"job-2"),
+        "https://example.test/cpi-2.json",
+    )
+    .await;
+
+    let exporter = TestSpanExporter::default();
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let tracer = provider.tracer("ingestion-core-test");
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_filter(LevelFilter::INFO),
+    );
+
+    let guard = tracing::subscriber::set_default(subscriber);
+    let stats = pipeline(pool, TraceParentMode::ExplicitJobParents)
+        .run_source(
+            SourceId::new("stub").unwrap(),
+            contexts(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("pipeline should preserve load correlation without info-level per-job spans");
+    drop(guard);
+
+    assert_eq!(stats.loaded.observations_loaded, 2);
+    for result in provider.force_flush() {
+        result.expect("flush exported spans");
+    }
+
+    let spans = exporter.finished_spans();
+    assert!(span_parent_pairs(&spans, "ingestion_load_batch").is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn downstream_job_spans_descend_from_discovery_span() {
     let timescale = start_timescale("au_kpis_pipeline_discovery_trace_tree")
         .await
@@ -305,7 +354,7 @@ async fn downstream_job_spans_descend_from_discovery_span() {
     let subscriber = tracing_subscriber::registry().with(
         tracing_opentelemetry::layer()
             .with_tracer(tracer)
-            .with_filter(LevelFilter::INFO),
+            .with_filter(LevelFilter::TRACE),
     );
 
     let guard = tracing::subscriber::set_default(subscriber);
