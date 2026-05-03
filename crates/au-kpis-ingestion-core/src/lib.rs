@@ -645,7 +645,7 @@ async fn parse_stage(
         if cancellation.is_cancelled() {
             cancelled = true;
         }
-        if (input_closed || cancelled) && in_flight.is_empty() {
+        if input_closed && in_flight.is_empty() {
             break;
         }
 
@@ -653,15 +653,11 @@ async fn parse_stage(
             () = cancellation.cancelled(), if !cancelled => {
                 cancelled = true;
             }
-            fetched = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
+            fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
                 let Some(fetched) = fetched else {
                     input_closed = true;
                     continue;
                 };
-                if cancellation.is_cancelled() {
-                    cancelled = true;
-                    continue;
-                }
                 validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
                 let parse_ctx = ctx.clone()
                     .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone())
@@ -739,8 +735,9 @@ async fn parse_one_artifact(
 
     loop {
         let row = tokio::select! {
-            () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+            biased;
             row = observations.next() => row,
+            () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
         };
         let Some(row) = row else {
             break;

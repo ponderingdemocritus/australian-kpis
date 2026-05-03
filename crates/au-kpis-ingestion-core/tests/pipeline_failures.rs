@@ -886,7 +886,7 @@ async fn cancellation_flushes_partial_load_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_stops_discovered_jobs_that_are_not_fetch_started() {
+async fn cancellation_stops_new_discovered_jobs_but_drains_in_flight_fetch() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_discovery_drain")
         .await
         .expect("start timescaledb container");
@@ -926,11 +926,11 @@ async fn cancellation_stops_discovered_jobs_that_are_not_fetch_started() {
         .fetch_one(&pool)
         .await
         .expect("count observations");
-    assert_eq!(observation_count, 0);
+    assert_eq!(observation_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_stops_buffered_artifacts_that_are_not_parse_started() {
+async fn cancellation_drains_buffered_artifacts_that_are_already_fetched() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_artifact_drain")
         .await
         .expect("start timescaledb container");
@@ -970,5 +970,5 @@ async fn cancellation_stops_buffered_artifacts_that_are_not_parse_started() {
         .fetch_one(&pool)
         .await
         .expect("count observations");
-    assert_eq!(observation_count, 1);
+    assert_eq!(observation_count, 2);
 }
