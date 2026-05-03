@@ -44,6 +44,7 @@ enum StubMode {
     ReadyRowsAfterCancellation,
     LoaderValidationError,
     LoaderValidationThenWrongArtifact,
+    AcceptedThenStagedLoadError,
     RevisionRows,
     TwoJobsCancelAfterFirstFetch,
     TwoArtifactsCancelAfterFirstParse,
@@ -123,6 +124,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ReadyRowsAfterCancellation
             | StubMode::LoaderValidationError
             | StubMode::LoaderValidationThenWrongArtifact
+            | StubMode::AcceptedThenStagedLoadError
             | StubMode::RevisionRows
             | StubMode::TwoJobsCancelAfterFirstFetch
             | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
@@ -145,7 +147,9 @@ impl SourceAdapter for StubAdapter {
 
         if matches!(
             self.mode,
-            StubMode::TwoArtifactsCancelAfterFirstParse | StubMode::TwoJobsCancelAfterFirstFetch
+            StubMode::TwoArtifactsCancelAfterFirstParse
+                | StubMode::TwoJobsCancelAfterFirstFetch
+                | StubMode::AcceptedThenStagedLoadError
         ) {
             jobs.push(DiscoveredJob {
                 id: "job-2".into(),
@@ -262,6 +266,16 @@ impl SourceAdapter for StubAdapter {
                     Ok(loader_validation_error_row(artifact.id)),
                     Ok((series, observation)),
                 ]))
+            }
+            StubMode::AcceptedThenStagedLoadError => {
+                if artifact.id == ArtifactId::of_content(b"job-2") {
+                    let first = missing_measure_row(artifact.id);
+                    let mut second = first.clone();
+                    second.1.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                    Box::pin(stream::iter([Ok(first), Ok(second)]))
+                } else {
+                    Box::pin(stream::iter([Ok(row)]))
+                }
             }
             StubMode::RevisionRows => {
                 let (series, revision_0) = row;
@@ -435,6 +449,24 @@ fn loader_validation_error_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Ob
     let (mut descriptor, mut observation) = load_row(artifact_id);
     descriptor.series_key =
         SeriesKey::derive(&descriptor.dataflow_id, std::iter::once(("region", "NZ")));
+    observation.series_key = descriptor.series_key;
+    (descriptor, observation)
+}
+
+fn missing_measure_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
+    let (mut descriptor, mut observation) = load_row(artifact_id);
+    descriptor.dimensions = BTreeMap::from([(
+        DimensionId::new("region").unwrap(),
+        CodeId::new("NSW").unwrap(),
+    )]);
+    descriptor.series_key = SeriesKey::derive(
+        &descriptor.dataflow_id,
+        descriptor
+            .dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    descriptor.measure_id = MeasureId::new("missing").unwrap();
     observation.series_key = descriptor.series_key;
     (descriptor, observation)
 }
@@ -965,6 +997,50 @@ async fn staged_loader_validation_audit_survives_later_artifact_rejection() {
         .await
         .expect("count observations");
     assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_rows_flush_before_later_staged_load_failure() {
+    let timescale = start_timescale("au_kpis_pipeline_accepted_before_staged_failure")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let first_artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
+    seed_stub_reference_data(&pool, first_artifact_id).await;
+    seed_stub_artifact(&pool, second_artifact_id, "https://example.test/cpi-2.json").await;
+
+    let result = pipeline_with_pool(
+        StubMode::AcceptedThenStagedLoadError,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 1,
+            parse_concurrency: 1,
+            load_max_rows: 2,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

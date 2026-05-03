@@ -9,7 +9,7 @@ use au_kpis_domain::{
     ids::{ArtifactId, SeriesKey},
 };
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Acquire, PgPool, Postgres, Transaction, pool::PoolConnection};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -34,14 +34,17 @@ pub struct LoadItemAudit {
     pub row_context: Option<Value>,
 }
 
-/// Transactional loader state for one source artifact.
+/// Session-scoped loader staging state for one source artifact.
 ///
 /// Parsed rows can be staged incrementally to keep the hot path bounded, then
-/// atomically committed only after the parser accepts the full artifact.
+/// promoted only after the parser accepts the full artifact. Each staged COPY
+/// chunk uses its own transaction; the temporary staging tables live on a
+/// dedicated connection that is closed when the artifact is accepted or
+/// rejected.
 #[derive(Debug)]
 pub struct StagedLoad {
     pool: PgPool,
-    tx: Transaction<'static, Postgres>,
+    conn: PoolConnection<Postgres>,
     stats: LoadStats,
 }
 
@@ -181,7 +184,7 @@ pub async fn load_batch_with_options_and_audit_context(
     Ok(stats)
 }
 
-/// Start a staged load transaction for one artifact.
+/// Start a staged load session for one artifact.
 #[instrument(skip(pool))]
 pub async fn begin_staged_load(
     pool: &PgPool,
@@ -189,19 +192,22 @@ pub async fn begin_staged_load(
 ) -> Result<StagedLoad, LoadError> {
     validate_options(options)?;
 
-    let mut tx = pool.begin().await?;
-    create_series_staging_table(&mut tx).await?;
-    create_observation_staging_table(&mut tx).await?;
+    let mut conn = pool.acquire().await?;
+    conn.close_on_drop();
+    let mut tx = (&mut conn).begin().await?;
+    create_series_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
+    create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
+    tx.commit().await?;
 
     Ok(StagedLoad {
         pool: pool.clone(),
-        tx,
+        conn,
         stats: LoadStats::default(),
     })
 }
 
 impl StagedLoad {
-    /// Append a validated COPY chunk to this artifact's staging transaction.
+    /// Append a validated COPY chunk to this artifact's staging tables.
     pub async fn stage(&mut self, items: Vec<LoadItemAudit>) -> Result<(), LoadError> {
         let mut valid_items = Vec::with_capacity(items.len());
 
@@ -228,23 +234,27 @@ impl StagedLoad {
             return Ok(());
         }
 
-        copy_series(&mut self.tx, &valid_items).await?;
-        copy_observations(&mut self.tx, &valid_items).await?;
+        let mut tx = (&mut self.conn).begin().await?;
+        copy_series(&mut tx, &valid_items).await?;
+        copy_observations(&mut tx, &valid_items).await?;
+        tx.commit().await?;
         self.stats.batches += 1;
         Ok(())
     }
 
     /// Promote all staged rows into durable tables.
     pub async fn commit(mut self) -> Result<LoadStats, LoadError> {
-        self.stats.series_upserted += upsert_series(&mut self.tx).await?;
-        self.stats.observations_loaded += upsert_observations(&mut self.tx).await?;
-        self.tx.commit().await?;
+        let mut tx = (&mut self.conn).begin().await?;
+        self.stats.series_upserted += upsert_series(&mut tx).await?;
+        self.stats.observations_loaded += upsert_observations(&mut tx).await?;
+        tx.commit().await?;
+        self.conn.close().await?;
         Ok(self.stats)
     }
 
     /// Drop staged rows for a rejected artifact.
     pub async fn rollback(self) -> Result<(), LoadError> {
-        self.tx.rollback().await?;
+        self.conn.close().await?;
         Ok(())
     }
 }
@@ -318,7 +328,14 @@ async fn load_observation_batch(
 }
 
 async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Result<(), LoadError> {
-    sqlx::query(
+    create_series_staging_table_with_on_commit(tx, "DROP").await
+}
+
+async fn create_series_staging_table_with_on_commit(
+    tx: &mut Transaction<'_, Postgres>,
+    on_commit: &str,
+) -> Result<(), LoadError> {
+    let query = format!(
         "CREATE TEMP TABLE staging_series (
              series_key_hex TEXT NOT NULL,
              dataflow_id TEXT NOT NULL,
@@ -327,10 +344,9 @@ async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Resu
              unit TEXT NOT NULL,
              first_observed TIMESTAMPTZ NOT NULL,
              last_observed TIMESTAMPTZ NOT NULL
-         ) ON COMMIT DROP",
-    )
-    .execute(&mut **tx)
-    .await?;
+         ) ON COMMIT {on_commit}",
+    );
+    sqlx::query(&query).execute(&mut **tx).await?;
 
     Ok(())
 }
@@ -338,7 +354,14 @@ async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Resu
 async fn create_observation_staging_table(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), LoadError> {
-    sqlx::query(
+    create_observation_staging_table_with_on_commit(tx, "DROP").await
+}
+
+async fn create_observation_staging_table_with_on_commit(
+    tx: &mut Transaction<'_, Postgres>,
+    on_commit: &str,
+) -> Result<(), LoadError> {
+    let query = format!(
         "CREATE TEMP TABLE staging_observations (
              series_key_hex TEXT NOT NULL,
              time TIMESTAMPTZ NOT NULL,
@@ -349,10 +372,9 @@ async fn create_observation_staging_table(
              attributes JSONB NOT NULL,
              ingested_at TIMESTAMPTZ NOT NULL,
              source_artifact_hex TEXT NOT NULL
-         ) ON COMMIT DROP",
-    )
-    .execute(&mut **tx)
-    .await?;
+         ) ON COMMIT {on_commit}",
+    );
+    sqlx::query(&query).execute(&mut **tx).await?;
 
     Ok(())
 }

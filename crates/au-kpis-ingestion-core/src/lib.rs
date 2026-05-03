@@ -1098,24 +1098,33 @@ async fn load_stage(
         match item {
             LoadStageItem::Observation { item, correlation } => {
                 let artifact_id = item.observation.source_artifact_id;
-                pending
-                    .entry(artifact_id)
-                    .or_default()
-                    .push(&pool, options, item, correlation)
+                let item_bytes = estimate_load_item_bytes(&item);
+                let artifact = pending.entry(artifact_id).or_default();
+                if artifact.will_stage(item_bytes, options) {
+                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+                }
+                artifact
+                    .push(&pool, options, item, correlation, item_bytes)
                     .await?;
             }
             LoadStageItem::AcceptArtifact(artifact_id) => {
                 if let Some(artifact) = pending.remove(&artifact_id) {
+                    if artifact.has_staged() {
+                        flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded)
+                            .await?;
+                    }
                     accept_artifact_load(artifact, &pool, options, &mut accepted, &mut loaded)
                         .await?;
                 }
             }
             LoadStageItem::RejectArtifact(artifact_id) => {
                 if let Some(artifact) = pending.remove(&artifact_id) {
+                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
                     artifact.rollback().await?;
                 }
             }
             LoadStageItem::ParseError(record) => {
+                flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
                 let trace_parent = parse_error_trace_parent(&record).map(str::to_owned);
                 let span = info_span!(
                     "ingestion_load_parse_error",
@@ -1135,14 +1144,9 @@ async fn load_stage(
             }
         }
     }
+    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
     for (_, artifact) in pending {
         artifact.rollback().await?;
-    }
-    if !accepted.batch.is_empty() {
-        add_load_stats(
-            &mut loaded,
-            flush_accepted_load_batch(&pool, &mut accepted, options).await?,
-        );
     }
     Ok(PipelineRunStats {
         loaded,
@@ -1209,6 +1213,22 @@ async fn append_accepted_load_items(
     Ok(())
 }
 
+async fn flush_accepted_if_needed(
+    pool: &PgPool,
+    accepted: &mut AcceptedLoadBuffer,
+    options: LoadOptions,
+    loaded: &mut LoadStats,
+) -> Result<(), au_kpis_loader::LoadError> {
+    if accepted.batch.is_empty() {
+        return Ok(());
+    }
+    add_load_stats(
+        loaded,
+        flush_accepted_load_batch(pool, accepted, options).await?,
+    );
+    Ok(())
+}
+
 #[derive(Debug)]
 struct AcceptedLoadBuffer {
     batch: Vec<LoadItem>,
@@ -1241,8 +1261,8 @@ impl PendingArtifactLoad {
         options: LoadOptions,
         item: LoadItem,
         correlation: JobCorrelation,
+        item_bytes: usize,
     ) -> Result<(), au_kpis_loader::LoadError> {
-        let item_bytes = estimate_load_item_bytes(&item);
         if should_flush_load_batch(&self.batch, self.batch_bytes, item_bytes, options) {
             self.stage(pool, options).await?;
         }
@@ -1256,6 +1276,16 @@ impl PendingArtifactLoad {
         }
 
         Ok(())
+    }
+
+    fn will_stage(&self, next_item_bytes: usize, options: LoadOptions) -> bool {
+        should_flush_load_batch(&self.batch, self.batch_bytes, next_item_bytes, options)
+            || self.batch.len() + 1 >= options.max_rows
+            || self.batch_bytes.saturating_add(next_item_bytes) >= options.max_bytes
+    }
+
+    fn has_staged(&self) -> bool {
+        self.staged.is_some()
     }
 
     async fn accept(
