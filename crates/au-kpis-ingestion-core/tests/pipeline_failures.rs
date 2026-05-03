@@ -39,6 +39,7 @@ enum StubMode {
     ParseErrorBeforeRow,
     ParseErrorAfterRow,
     FatalParseError,
+    ReadyRowsAfterCancellation,
     LoaderValidationError,
     RevisionRows,
     TwoJobsCancelAfterFirstFetch,
@@ -114,6 +115,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ParseErrorBeforeRow
             | StubMode::ParseErrorAfterRow
             | StubMode::FatalParseError
+            | StubMode::ReadyRowsAfterCancellation
             | StubMode::LoaderValidationError
             | StubMode::RevisionRows
             | StubMode::TwoJobsCancelAfterFirstFetch
@@ -236,6 +238,10 @@ impl SourceAdapter for StubAdapter {
             StubMode::FatalParseError => Box::pin(stream::iter([Err(AdapterError::FormatDrift(
                 "artifact-level schema drift".into(),
             ))])),
+            StubMode::ReadyRowsAfterCancellation => ready_rows_after_cancellation(
+                row,
+                self.cancel_token().expect("cancel token configured"),
+            ),
             StubMode::LoaderValidationError => {
                 Box::pin(stream::iter([Ok(loader_validation_error_row(artifact.id))]))
             }
@@ -300,6 +306,31 @@ fn cancel_after_first_row_after_delay(
                     tokio::time::sleep(delay).await;
                     cancellation.cancel();
                     None
+                }
+                _ => None,
+            }
+        }
+    }))
+}
+
+fn ready_rows_after_cancellation(
+    row: (SeriesDescriptor, Observation),
+    cancellation: CancellationToken,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(0_u8, move |state| {
+        let mut row = row.clone();
+        let cancellation = cancellation.clone();
+        async move {
+            match state {
+                0 => Some((Ok(row), 1)),
+                1 => {
+                    cancellation.cancel();
+                    row.1.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                    Some((Ok(row), 2))
+                }
+                2 => {
+                    row.1.time = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
+                    Some((Ok(row), 3))
                 }
                 _ => None,
             }
@@ -998,6 +1029,46 @@ async fn cancellation_flushes_partial_load_batch() {
         .await
         .expect("count observations");
     assert_eq!(observation_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_stops_ready_parser_streams_after_shutdown() {
+    let timescale = start_timescale("au_kpis_pipeline_ready_cancel")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let cancellation = CancellationToken::new();
+    let result = pipeline_with_pool(
+        StubMode::ReadyRowsAfterCancellation,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        Some(cancellation.clone()),
+    )
+    .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
+    .await;
+
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

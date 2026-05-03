@@ -185,6 +185,10 @@ pub enum IngestionError {
     #[error(transparent)]
     Load(#[from] au_kpis_loader::LoadError),
 
+    /// Database cleanup or provenance repair failed.
+    #[error(transparent)]
+    Db(#[from] au_kpis_db::DbError),
+
     /// A one-source run received work for a different source.
     #[error("source mismatch in {stage}: expected `{expected}`, got `{actual}`")]
     SourceMismatch {
@@ -518,6 +522,7 @@ enum LoadStageItem {
         correlation: JobCorrelation,
     },
     ParseError(ParseErrorRecord),
+    RejectArtifact(ArtifactId),
 }
 
 #[derive(Debug)]
@@ -772,8 +777,7 @@ async fn parse_one_artifact(
     async move {
         let mut parsed = 0;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
-        let mut adapter_errors = Vec::new();
-        let mut valid_items = Vec::new();
+        let mut early_adapter_errors = Vec::new();
         let audit = ParseErrorAudit {
             artifact_id,
             dataflow_id: &fetched.dataflow_id,
@@ -783,10 +787,17 @@ async fn parse_one_artifact(
         };
 
         loop {
-            let row = tokio::select! {
-                biased;
-                row = observations.next() => row,
-                () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+            let row = if parsed == 0 && cancellation.is_cancelled() {
+                // A fetched artifact may already be queued when shutdown begins.
+                // Admit at most its first ready row, then observe cancellation
+                // before polling the parser again.
+                observations.next().await
+            } else {
+                tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+                    row = observations.next() => row,
+                }
             };
             let Some(row) = row else {
                 break;
@@ -795,14 +806,36 @@ async fn parse_one_artifact(
             let (series, observation) = match row {
                 Ok(row) => row,
                 Err(err) => {
-                    adapter_errors.push(err);
+                    if parsed == 0 {
+                        early_adapter_errors.push(err);
+                    } else {
+                        send_produced(
+                            &tx,
+                            LoadStageItem::ParseError(parse_error_record(
+                                artifact_id,
+                                &fetched.dataflow_id,
+                                &source_id,
+                                &fetched.correlation,
+                                &err,
+                                false,
+                            )),
+                            &cancellation,
+                        )
+                        .await?;
+                    }
                     continue;
                 }
             };
             if series.dataflow_id != fetched.dataflow_id {
                 let expected = fetched.dataflow_id.to_string();
                 let actual = series.dataflow_id.to_string();
-                send_adapter_parse_errors(&tx, &audit, &adapter_errors, false).await?;
+                send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, false).await?;
+                send_produced(
+                    &tx,
+                    LoadStageItem::RejectArtifact(artifact_id),
+                    &cancellation,
+                )
+                .await?;
                 send_produced(
                     &tx,
                     LoadStageItem::ParseError(provenance_error_record(
@@ -821,7 +854,13 @@ async fn parse_one_artifact(
             if observation.source_artifact_id != artifact_id {
                 let expected = artifact_id.to_string();
                 let actual = observation.source_artifact_id.to_string();
-                send_adapter_parse_errors(&tx, &audit, &adapter_errors, false).await?;
+                send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, false).await?;
+                send_produced(
+                    &tx,
+                    LoadStageItem::RejectArtifact(artifact_id),
+                    &cancellation,
+                )
+                .await?;
                 send_produced(
                     &tx,
                     LoadStageItem::ParseError(provenance_error_record(
@@ -837,40 +876,42 @@ async fn parse_one_artifact(
                 .await?;
                 return Err(IngestionError::ArtifactMismatch { expected, actual });
             }
-            valid_items.push(LoadStageItem::Observation {
-                item: LoadItem {
-                    series,
-                    observation,
+            if !early_adapter_errors.is_empty() {
+                send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, false).await?;
+                early_adapter_errors.clear();
+            }
+            send_produced(
+                &tx,
+                LoadStageItem::Observation {
+                    item: LoadItem {
+                        series,
+                        observation,
+                    },
+                    correlation: fetched.correlation.clone(),
                 },
-                correlation: fetched.correlation.clone(),
-            });
+                &cancellation,
+            )
+            .await?;
             parsed += 1;
         }
 
-        if parsed == 0 {
-            if !adapter_errors.is_empty() {
-                let first_error = adapter_errors.remove(0);
-                send_produced(
-                    &tx,
-                    LoadStageItem::ParseError(parse_error_record(
-                        artifact_id,
-                        &fetched.dataflow_id,
-                        &source_id,
-                        &fetched.correlation,
-                        &first_error,
-                        true,
-                    )),
-                    &cancellation,
-                )
-                .await?;
-                send_adapter_parse_errors(&tx, &audit, &adapter_errors, true).await?;
-                return Err(IngestionError::Adapter(first_error));
-            }
-        } else {
-            send_adapter_parse_errors(&tx, &audit, &adapter_errors, false).await?;
-            for item in valid_items {
-                send_produced(&tx, item, &cancellation).await?;
-            }
+        if parsed == 0 && !early_adapter_errors.is_empty() {
+            let first_error = early_adapter_errors.remove(0);
+            send_produced(
+                &tx,
+                LoadStageItem::ParseError(parse_error_record(
+                    artifact_id,
+                    &fetched.dataflow_id,
+                    &source_id,
+                    &fetched.correlation,
+                    &first_error,
+                    true,
+                )),
+                &cancellation,
+            )
+            .await?;
+            send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, true).await?;
+            return Err(IngestionError::Adapter(first_error));
         }
 
         Ok(parsed)
@@ -990,6 +1031,15 @@ async fn load_stage(
 
         let (item, correlation) = match item {
             LoadStageItem::Observation { item, correlation } => (item, correlation),
+            LoadStageItem::RejectArtifact(artifact_id) => {
+                batch_bytes = remove_artifact_from_load_batch(
+                    &mut batch,
+                    &mut batch_correlations,
+                    artifact_id,
+                );
+                delete_loaded_observations_for_artifact(&pool, artifact_id).await?;
+                continue;
+            }
             LoadStageItem::ParseError(record) => {
                 let trace_parent = parse_error_trace_parent(&record).map(str::to_owned);
                 let span = info_span!(
@@ -1010,19 +1060,6 @@ async fn load_stage(
                 continue;
             }
         };
-
-        if !batch.is_empty()
-            && batch_correlations
-                .first()
-                .map(|existing| existing.trace_parent.as_deref())
-                != Some(correlation.trace_parent.as_deref())
-        {
-            add_load_stats(
-                &mut loaded,
-                flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
-            );
-            batch_bytes = 0;
-        }
 
         let item_bytes = estimate_load_item_bytes(&item);
         if should_flush_load_batch(&batch, batch_bytes, item_bytes, options) {
@@ -1055,6 +1092,33 @@ async fn load_stage(
         loaded,
         ..PipelineRunStats::default()
     })
+}
+
+fn remove_artifact_from_load_batch(
+    batch: &mut Vec<LoadItem>,
+    correlations: &mut Vec<JobCorrelation>,
+    artifact_id: ArtifactId,
+) -> usize {
+    let existing_batch = std::mem::take(batch);
+    let existing_correlations = std::mem::take(correlations);
+    debug_assert_eq!(existing_batch.len(), existing_correlations.len());
+
+    for (item, correlation) in existing_batch.into_iter().zip(existing_correlations) {
+        if item.observation.source_artifact_id != artifact_id {
+            batch.push(item);
+            correlations.push(correlation);
+        }
+    }
+
+    batch.iter().map(estimate_load_item_bytes).sum()
+}
+
+async fn delete_loaded_observations_for_artifact(
+    pool: &PgPool,
+    artifact_id: ArtifactId,
+) -> Result<(), au_kpis_db::DbError> {
+    au_kpis_db::delete_observations_for_artifact(pool, artifact_id).await?;
+    Ok(())
 }
 
 async fn flush_load_batch(

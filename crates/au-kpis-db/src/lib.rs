@@ -240,6 +240,20 @@ pub async fn get_artifact(pool: &PgPool, id: ArtifactId) -> Result<Option<Artifa
     .transpose()
 }
 
+/// Delete loaded observations attributed to one source artifact.
+#[instrument(skip(pool))]
+pub async fn delete_observations_for_artifact(
+    pool: &PgPool,
+    artifact_id: ArtifactId,
+) -> Result<u64, DbError> {
+    let result = sqlx::query("DELETE FROM observations WHERE source_artifact_id = $1")
+        .bind(artifact_id.digest().as_bytes().as_slice())
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+    Ok(result.rows_affected())
+}
+
 fn artifact_id_bytes(id_bytes: Vec<u8>) -> Result<[u8; 32], DbError> {
     id_bytes
         .try_into()

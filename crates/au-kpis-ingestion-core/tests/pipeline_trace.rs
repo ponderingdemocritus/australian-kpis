@@ -193,7 +193,7 @@ async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
     );
 
     let guard = tracing::subscriber::set_default(subscriber);
-    let stats = pipeline(pool, TraceParentMode::ExplicitJobParents)
+    let stats = pipeline_with_load_max_rows(pool, TraceParentMode::ExplicitJobParents, 1)
         .run_source(
             SourceId::new("stub").unwrap(),
             contexts(),
@@ -223,6 +223,37 @@ async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
     assert_eq!(span_parent_pairs(&spans, "ingestion_fetch_job"), expected);
     assert_eq!(span_parent_pairs(&spans, "ingestion_parse_job"), expected);
     assert_eq!(span_parent_pairs(&spans, "ingestion_load_batch"), expected);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn trace_parent_changes_do_not_fragment_load_batches() {
+    let timescale = start_timescale("au_kpis_pipeline_trace_batch_size")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    seed_stub_reference_data(&pool, ArtifactId::of_content(b"job-1")).await;
+    seed_stub_artifact(
+        &pool,
+        ArtifactId::of_content(b"job-2"),
+        "https://example.test/cpi-2.json",
+    )
+    .await;
+
+    let stats = pipeline(pool, TraceParentMode::ExplicitJobParents)
+        .run_source(
+            SourceId::new("stub").unwrap(),
+            contexts(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("trace metadata must not fragment loader batches");
+
+    assert_eq!(stats.loaded.observations_loaded, 2);
+    assert_eq!(stats.loaded.batches, 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -273,13 +304,21 @@ async fn downstream_job_spans_descend_from_discovery_span() {
 }
 
 fn pipeline(pool: PgPool, mode: TraceParentMode) -> IngestionPipeline {
+    pipeline_with_load_max_rows(pool, mode, 64)
+}
+
+fn pipeline_with_load_max_rows(
+    pool: PgPool,
+    mode: TraceParentMode,
+    load_max_rows: usize,
+) -> IngestionPipeline {
     let mut builder = au_kpis_adapter::Adapters::builder();
     builder.register(TraceParentAdapter::new(mode)).unwrap();
     IngestionPipeline::new(builder.build(), pool).with_options(PipelineOptions {
         channel_capacity: 2,
         fetch_concurrency: 2,
         parse_concurrency: 2,
-        load_max_rows: 64,
+        load_max_rows,
         shutdown_grace: Duration::from_secs(5),
         ..PipelineOptions::default()
     })
