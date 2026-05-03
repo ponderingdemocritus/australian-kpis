@@ -696,7 +696,7 @@ async fn parse_rejects_observations_for_the_wrong_artifact_and_audits_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn late_artifact_mismatch_rejects_buffered_rows_and_audits_error() {
+async fn late_artifact_mismatch_rolls_back_current_rows_without_deleting_prior_observations() {
     let timescale = start_timescale("au_kpis_pipeline_late_artifact_mismatch")
         .await
         .expect("start timescaledb container");
@@ -707,13 +707,24 @@ async fn late_artifact_mismatch_rejects_buffered_rows_and_audits_error() {
     migrate(&pool).await.expect("apply migrations");
     let artifact_id = ArtifactId::of_content(b"job-1");
     seed_stub_reference_data(&pool, artifact_id).await;
+    let (series, mut observation) = load_row(artifact_id);
+    observation.value = Some(999.0);
+    au_kpis_loader::load_batch(
+        &pool,
+        vec![au_kpis_loader::LoadItem {
+            series,
+            observation,
+        }],
+    )
+    .await
+    .expect("seed prior accepted observation");
 
     let result = pipeline_with_pool(
         StubMode::WrongArtifactAfterRow,
         pool.clone(),
         PipelineOptions {
             channel_capacity: 1,
-            load_max_rows: 64,
+            load_max_rows: 1,
             shutdown_grace: Duration::from_secs(5),
             ..PipelineOptions::default()
         },
@@ -737,15 +748,17 @@ async fn late_artifact_mismatch_rejects_buffered_rows_and_audits_error() {
         "{result:?}"
     );
 
-    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
-        .fetch_one(&pool)
-        .await
-        .expect("count observations");
+    let (observation_count, value): (i64, Option<f64>) =
+        sqlx::query_as("SELECT count(*), max(value) FROM observations")
+            .fetch_one(&pool)
+            .await
+            .expect("count observations");
     let parse_error_count: i64 = sqlx::query_scalar("SELECT count(*) FROM parse_errors")
         .fetch_one(&pool)
         .await
         .expect("count parse errors");
-    assert_eq!(observation_count, 0);
+    assert_eq!(observation_count, 1);
+    assert_eq!(value, Some(999.0));
     assert_eq!(parse_error_count, 1);
 }
 

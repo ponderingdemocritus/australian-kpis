@@ -243,6 +243,18 @@ async fn trace_parent_changes_do_not_fragment_load_batches() {
     )
     .await;
 
+    let exporter = TestSpanExporter::default();
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let tracer = provider.tracer("ingestion-core-test");
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_filter(LevelFilter::INFO),
+    );
+
+    let guard = tracing::subscriber::set_default(subscriber);
     let stats = pipeline(pool, TraceParentMode::ExplicitJobParents)
         .run_source(
             SourceId::new("stub").unwrap(),
@@ -251,9 +263,26 @@ async fn trace_parent_changes_do_not_fragment_load_batches() {
         )
         .await
         .expect("trace metadata must not fragment loader batches");
+    drop(guard);
 
     assert_eq!(stats.loaded.observations_loaded, 2);
     assert_eq!(stats.loaded.batches, 1);
+    for result in provider.force_flush() {
+        result.expect("flush exported spans");
+    }
+
+    let spans = exporter.finished_spans();
+    let expected = BTreeSet::from([
+        (
+            "00f067aa0ba902b7".to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736".to_string(),
+        ),
+        (
+            "2222222222222222".to_string(),
+            "11111111111111111111111111111111".to_string(),
+        ),
+    ]);
+    assert_eq!(span_parent_pairs(&spans, "ingestion_load_batch"), expected);
 }
 
 #[tokio::test(flavor = "current_thread")]

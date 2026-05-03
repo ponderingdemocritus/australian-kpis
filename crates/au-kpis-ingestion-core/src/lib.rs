@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -20,7 +20,7 @@ use au_kpis_adapter::{
 use au_kpis_db::PgPool;
 use au_kpis_domain::{Artifact, ids::ArtifactId, ids::DataflowId, ids::SourceId};
 use au_kpis_error::Classify;
-use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats};
+use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats, StagedLoad};
 use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -184,10 +184,6 @@ pub enum IngestionError {
     /// Loading parsed observations failed.
     #[error(transparent)]
     Load(#[from] au_kpis_loader::LoadError),
-
-    /// Database cleanup or provenance repair failed.
-    #[error(transparent)]
-    Db(#[from] au_kpis_db::DbError),
 
     /// A one-source run received work for a different source.
     #[error("source mismatch in {stage}: expected `{expected}`, got `{actual}`")]
@@ -521,6 +517,7 @@ enum LoadStageItem {
         item: LoadItem,
         correlation: JobCorrelation,
     },
+    AcceptArtifact(ArtifactId),
     ParseError(ParseErrorRecord),
     RejectArtifact(ArtifactId),
 }
@@ -914,6 +911,13 @@ async fn parse_one_artifact(
             return Err(IngestionError::Adapter(first_error));
         }
 
+        send_produced(
+            &tx,
+            LoadStageItem::AcceptArtifact(artifact_id),
+            &cancellation,
+        )
+        .await?;
+
         Ok(parsed)
     }
     .instrument(span)
@@ -1006,10 +1010,8 @@ async fn load_stage(
     cancellation: CancellationToken,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut loaded = LoadStats::default();
-    let mut batch: Vec<LoadItem> = Vec::with_capacity(options.max_rows.min(1024));
-    let mut batch_correlations: Vec<JobCorrelation> =
-        Vec::with_capacity(options.max_rows.min(1024));
-    let mut batch_bytes = 0usize;
+    let mut pending = BTreeMap::<ArtifactId, PendingArtifactLoad>::new();
+    let mut accepted = AcceptedLoadBuffer::new(options);
     let mut draining = false;
 
     loop {
@@ -1029,16 +1031,25 @@ async fn load_stage(
             break;
         };
 
-        let (item, correlation) = match item {
-            LoadStageItem::Observation { item, correlation } => (item, correlation),
+        match item {
+            LoadStageItem::Observation { item, correlation } => {
+                let artifact_id = item.observation.source_artifact_id;
+                pending
+                    .entry(artifact_id)
+                    .or_default()
+                    .push(&pool, options, item, correlation)
+                    .await?;
+            }
+            LoadStageItem::AcceptArtifact(artifact_id) => {
+                if let Some(artifact) = pending.remove(&artifact_id) {
+                    accept_artifact_load(artifact, &pool, options, &mut accepted, &mut loaded)
+                        .await?;
+                }
+            }
             LoadStageItem::RejectArtifact(artifact_id) => {
-                batch_bytes = remove_artifact_from_load_batch(
-                    &mut batch,
-                    &mut batch_correlations,
-                    artifact_id,
-                );
-                delete_loaded_observations_for_artifact(&pool, artifact_id).await?;
-                continue;
+                if let Some(artifact) = pending.remove(&artifact_id) {
+                    artifact.rollback().await?;
+                }
             }
             LoadStageItem::ParseError(record) => {
                 let trace_parent = parse_error_trace_parent(&record).map(str::to_owned);
@@ -1057,35 +1068,16 @@ async fn load_stage(
                 .instrument(span)
                 .await?;
                 loaded.parse_errors += 1;
-                continue;
             }
-        };
-
-        let item_bytes = estimate_load_item_bytes(&item);
-        if should_flush_load_batch(&batch, batch_bytes, item_bytes, options) {
-            add_load_stats(
-                &mut loaded,
-                flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
-            );
-            batch_bytes = 0;
-        }
-
-        batch_bytes += item_bytes;
-        batch.push(item);
-        batch_correlations.push(correlation);
-
-        if batch.len() >= options.max_rows || batch_bytes >= options.max_bytes {
-            add_load_stats(
-                &mut loaded,
-                flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
-            );
-            batch_bytes = 0;
         }
     }
-    if !batch.is_empty() {
+    for (_, artifact) in pending {
+        accept_artifact_load(artifact, &pool, options, &mut accepted, &mut loaded).await?;
+    }
+    if !accepted.batch.is_empty() {
         add_load_stats(
             &mut loaded,
-            flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
+            flush_accepted_load_batch(&pool, &mut accepted, options).await?,
         );
     }
     Ok(PipelineRunStats {
@@ -1094,53 +1086,199 @@ async fn load_stage(
     })
 }
 
-fn remove_artifact_from_load_batch(
-    batch: &mut Vec<LoadItem>,
-    correlations: &mut Vec<JobCorrelation>,
-    artifact_id: ArtifactId,
-) -> usize {
-    let existing_batch = std::mem::take(batch);
-    let existing_correlations = std::mem::take(correlations);
-    debug_assert_eq!(existing_batch.len(), existing_correlations.len());
-
-    for (item, correlation) in existing_batch.into_iter().zip(existing_correlations) {
-        if item.observation.source_artifact_id != artifact_id {
-            batch.push(item);
-            correlations.push(correlation);
+async fn accept_artifact_load(
+    artifact: PendingArtifactLoad,
+    pool: &PgPool,
+    options: LoadOptions,
+    accepted: &mut AcceptedLoadBuffer,
+    loaded: &mut LoadStats,
+) -> Result<(), au_kpis_loader::LoadError> {
+    match artifact.accept(pool, options).await? {
+        AcceptedArtifactLoad::Buffered {
+            items,
+            correlations,
+        } => {
+            append_accepted_load_items(pool, options, accepted, loaded, items, correlations)
+                .await?;
+        }
+        AcceptedArtifactLoad::Committed(stats) => {
+            add_load_stats(loaded, stats);
         }
     }
-
-    batch.iter().map(estimate_load_item_bytes).sum()
-}
-
-async fn delete_loaded_observations_for_artifact(
-    pool: &PgPool,
-    artifact_id: ArtifactId,
-) -> Result<(), au_kpis_db::DbError> {
-    au_kpis_db::delete_observations_for_artifact(pool, artifact_id).await?;
     Ok(())
 }
 
-async fn flush_load_batch(
+async fn append_accepted_load_items(
     pool: &PgPool,
+    options: LoadOptions,
+    accepted: &mut AcceptedLoadBuffer,
+    loaded: &mut LoadStats,
+    items: Vec<LoadItem>,
+    correlations: Vec<JobCorrelation>,
+) -> Result<(), au_kpis_loader::LoadError> {
+    if items.len() != correlations.len() {
+        return Err(au_kpis_loader::LoadError::Validation(
+            "accepted load item/correlation count mismatch".into(),
+        ));
+    }
+
+    for (item, correlation) in items.into_iter().zip(correlations) {
+        let item_bytes = estimate_load_item_bytes(&item);
+        if should_flush_load_batch(&accepted.batch, accepted.batch_bytes, item_bytes, options) {
+            add_load_stats(
+                loaded,
+                flush_accepted_load_batch(pool, accepted, options).await?,
+            );
+        }
+
+        accepted.batch_bytes += item_bytes;
+        accepted.batch.push(item);
+        accepted.correlations.push(correlation);
+
+        if accepted.batch.len() >= options.max_rows || accepted.batch_bytes >= options.max_bytes {
+            add_load_stats(
+                loaded,
+                flush_accepted_load_batch(pool, accepted, options).await?,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct AcceptedLoadBuffer {
+    batch: Vec<LoadItem>,
+    correlations: Vec<JobCorrelation>,
+    batch_bytes: usize,
+}
+
+impl AcceptedLoadBuffer {
+    fn new(options: LoadOptions) -> Self {
+        Self {
+            batch: Vec::with_capacity(options.max_rows.min(1024)),
+            correlations: Vec::with_capacity(options.max_rows.min(1024)),
+            batch_bytes: 0,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PendingArtifactLoad {
+    staged: Option<StagedLoad>,
+    batch: Vec<LoadItem>,
+    correlations: Vec<JobCorrelation>,
+    batch_bytes: usize,
+}
+
+impl PendingArtifactLoad {
+    async fn push(
+        &mut self,
+        pool: &PgPool,
+        options: LoadOptions,
+        item: LoadItem,
+        correlation: JobCorrelation,
+    ) -> Result<(), au_kpis_loader::LoadError> {
+        let item_bytes = estimate_load_item_bytes(&item);
+        if should_flush_load_batch(&self.batch, self.batch_bytes, item_bytes, options) {
+            self.stage(pool, options).await?;
+        }
+
+        self.batch_bytes += item_bytes;
+        self.batch.push(item);
+        self.correlations.push(correlation);
+
+        if self.batch.len() >= options.max_rows || self.batch_bytes >= options.max_bytes {
+            self.stage(pool, options).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn accept(
+        mut self,
+        pool: &PgPool,
+        options: LoadOptions,
+    ) -> Result<AcceptedArtifactLoad, au_kpis_loader::LoadError> {
+        if self.staged.is_some() {
+            self.stage(pool, options).await?;
+            let staged = self.staged.expect("staged load remains after stage");
+            Ok(AcceptedArtifactLoad::Committed(staged.commit().await?))
+        } else {
+            Ok(AcceptedArtifactLoad::Buffered {
+                items: self.batch,
+                correlations: self.correlations,
+            })
+        }
+    }
+
+    async fn rollback(self) -> Result<(), au_kpis_loader::LoadError> {
+        if let Some(staged) = self.staged {
+            staged.rollback().await?;
+        }
+        Ok(())
+    }
+
+    async fn stage(
+        &mut self,
+        pool: &PgPool,
+        options: LoadOptions,
+    ) -> Result<(), au_kpis_loader::LoadError> {
+        if self.batch.is_empty() {
+            return Ok(());
+        }
+
+        let mut staged = match self.staged.take() {
+            Some(staged) => staged,
+            None => au_kpis_loader::begin_staged_load(pool, options).await?,
+        };
+        let items = audited_load_items(&mut self.batch, &mut self.correlations)?;
+        emit_load_correlation_spans(&items);
+        let job_ids = joined_unique(
+            items
+                .iter()
+                .map(|(_, correlation)| correlation.job_id.as_str()),
+        );
+        let trace_parents = joined_unique(
+            items
+                .iter()
+                .filter_map(|(_, correlation)| correlation.trace_parent.as_deref()),
+        );
+        let span = info_span!(
+            "ingestion_load_stage_batch",
+            job_ids = %job_ids,
+            trace_parents = %trace_parents,
+        );
+        staged
+            .stage(
+                items
+                    .into_iter()
+                    .map(|(item, correlation)| LoadItemAudit {
+                        item,
+                        row_context: Some(correlation.row_context()),
+                    })
+                    .collect(),
+            )
+            .instrument(span)
+            .await?;
+        self.staged = Some(staged);
+        self.batch_bytes = 0;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+enum AcceptedArtifactLoad {
+    Buffered {
+        items: Vec<LoadItem>,
+        correlations: Vec<JobCorrelation>,
+    },
+    Committed(LoadStats),
+}
+
+fn audited_load_items(
     batch: &mut Vec<LoadItem>,
     correlations: &mut Vec<JobCorrelation>,
-    options: LoadOptions,
-) -> Result<LoadStats, au_kpis_loader::LoadError> {
-    let job_ids = joined_unique(
-        correlations
-            .iter()
-            .map(|correlation| correlation.job_id.as_str()),
-    );
-    let trace_parents = joined_unique(
-        correlations
-            .iter()
-            .filter_map(|correlation| correlation.trace_parent.as_deref()),
-    );
-    let trace_parent = correlations
-        .first()
-        .and_then(|correlation| correlation.trace_parent.as_deref())
-        .map(str::to_owned);
+) -> Result<Vec<(LoadItem, JobCorrelation)>, au_kpis_loader::LoadError> {
     let items = std::mem::take(batch);
     let correlations = std::mem::take(correlations);
     if items.len() != correlations.len() {
@@ -1148,23 +1286,65 @@ async fn flush_load_batch(
             "load batch item/correlation count mismatch".into(),
         ));
     }
-    let items = items
-        .into_iter()
-        .zip(correlations)
-        .map(|(item, correlation)| LoadItemAudit {
-            item,
-            row_context: Some(correlation.row_context()),
-        })
-        .collect();
+    Ok(items.into_iter().zip(correlations).collect())
+}
+
+fn emit_load_correlation_spans(items: &[(LoadItem, JobCorrelation)]) {
+    let mut row_counts = BTreeMap::<(String, Option<String>), u64>::new();
+    for (_, correlation) in items {
+        *row_counts
+            .entry((correlation.job_id.clone(), correlation.trace_parent.clone()))
+            .or_default() += 1;
+    }
+    for ((job_id, trace_parent), rows) in row_counts {
+        let span = info_span!(
+            "ingestion_load_batch",
+            job_id = %job_id,
+            trace_parent = trace_parent.as_deref().unwrap_or(""),
+            rows
+        );
+        restore_trace_parent(&span, trace_parent.as_deref());
+        let _entered = span.enter();
+        tracing::info!("load batch correlation");
+    }
+}
+
+async fn flush_accepted_load_batch(
+    pool: &PgPool,
+    accepted: &mut AcceptedLoadBuffer,
+    options: LoadOptions,
+) -> Result<LoadStats, au_kpis_loader::LoadError> {
+    let items = audited_load_items(&mut accepted.batch, &mut accepted.correlations)?;
+    accepted.batch_bytes = 0;
+    emit_load_correlation_spans(&items);
+    let job_ids = joined_unique(
+        items
+            .iter()
+            .map(|(_, correlation)| correlation.job_id.as_str()),
+    );
+    let trace_parents = joined_unique(
+        items
+            .iter()
+            .filter_map(|(_, correlation)| correlation.trace_parent.as_deref()),
+    );
     let span = info_span!(
-        "ingestion_load_batch",
+        "ingestion_load_commit_batch",
         job_ids = %job_ids,
         trace_parents = %trace_parents,
     );
-    restore_trace_parent(&span, trace_parent.as_deref());
-    au_kpis_loader::load_batch_with_options_and_audit_context(pool, items, options)
-        .instrument(span)
-        .await
+    au_kpis_loader::load_batch_with_options_and_audit_context(
+        pool,
+        items
+            .into_iter()
+            .map(|(item, correlation)| LoadItemAudit {
+                item,
+                row_context: Some(correlation.row_context()),
+            })
+            .collect(),
+        options,
+    )
+    .instrument(span)
+    .await
 }
 
 fn parse_error_trace_parent(record: &ParseErrorRecord) -> Option<&str> {

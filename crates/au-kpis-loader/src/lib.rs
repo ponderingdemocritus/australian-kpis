@@ -34,6 +34,16 @@ pub struct LoadItemAudit {
     pub row_context: Option<Value>,
 }
 
+/// Transactional loader state for one source artifact.
+///
+/// Parsed rows can be staged incrementally to keep the hot path bounded, then
+/// atomically committed only after the parser accepts the full artifact.
+#[derive(Debug)]
+pub struct StagedLoad {
+    tx: Transaction<'static, Postgres>,
+    stats: LoadStats,
+}
+
 impl From<LoadItem> for LoadItemAudit {
     fn from(item: LoadItem) -> Self {
         Self {
@@ -52,7 +62,7 @@ pub struct LoadStats {
     pub series_upserted: u64,
     /// Invalid rows recorded in `parse_errors`.
     pub parse_errors: u64,
-    /// Number of database transactions used for valid batches.
+    /// Number of valid observation COPY batches.
     pub batches: u64,
 }
 
@@ -118,16 +128,7 @@ pub async fn load_batch_with_options_and_audit_context(
     items: Vec<LoadItemAudit>,
     options: LoadOptions,
 ) -> Result<LoadStats, LoadError> {
-    if options.max_rows == 0 {
-        return Err(LoadError::Validation(
-            "max_rows must be greater than 0".into(),
-        ));
-    }
-    if options.max_bytes == 0 {
-        return Err(LoadError::Validation(
-            "max_bytes must be greater than 0".into(),
-        ));
-    }
+    validate_options(options)?;
 
     let mut stats = LoadStats::default();
     let mut valid_items = Vec::with_capacity(items.len());
@@ -177,6 +178,87 @@ pub async fn load_batch_with_options_and_audit_context(
         load_observation_batch(pool, &valid_batch, &mut stats).await?;
     }
     Ok(stats)
+}
+
+/// Start a staged load transaction for one artifact.
+#[instrument(skip(pool))]
+pub async fn begin_staged_load(
+    pool: &PgPool,
+    options: LoadOptions,
+) -> Result<StagedLoad, LoadError> {
+    validate_options(options)?;
+
+    let mut tx = pool.begin().await?;
+    create_series_staging_table(&mut tx).await?;
+    create_observation_staging_table(&mut tx).await?;
+
+    Ok(StagedLoad {
+        tx,
+        stats: LoadStats::default(),
+    })
+}
+
+impl StagedLoad {
+    /// Append a validated COPY chunk to this artifact's staging transaction.
+    pub async fn stage(&mut self, items: Vec<LoadItemAudit>) -> Result<(), LoadError> {
+        let mut valid_items = Vec::with_capacity(items.len());
+
+        for audited in items {
+            match validate_item(&audited.item) {
+                Ok(()) => {
+                    valid_items.push(audited.item);
+                }
+                Err(message) => {
+                    record_loader_validation_error_in_tx(
+                        &mut self.tx,
+                        audited.item.observation.source_artifact_id,
+                        &message,
+                        &audited.item,
+                        audited.row_context,
+                    )
+                    .await?;
+                    self.stats.parse_errors += 1;
+                }
+            }
+        }
+
+        if valid_items.is_empty() {
+            return Ok(());
+        }
+
+        copy_series(&mut self.tx, &valid_items).await?;
+        copy_observations(&mut self.tx, &valid_items).await?;
+        self.stats.batches += 1;
+        Ok(())
+    }
+
+    /// Promote all staged rows into durable tables.
+    pub async fn commit(mut self) -> Result<LoadStats, LoadError> {
+        self.stats.series_upserted += upsert_series(&mut self.tx).await?;
+        self.stats.observations_loaded += upsert_observations(&mut self.tx).await?;
+        self.tx.commit().await?;
+        Ok(self.stats)
+    }
+
+    /// Drop all staged rows and validation errors for a rejected artifact.
+    pub async fn rollback(self) -> Result<(), LoadError> {
+        self.tx.rollback().await?;
+        Ok(())
+    }
+}
+
+fn validate_options(options: LoadOptions) -> Result<(), LoadError> {
+    if options.max_rows == 0 {
+        return Err(LoadError::Validation(
+            "max_rows must be greater than 0".into(),
+        ));
+    }
+    if options.max_bytes == 0 {
+        return Err(LoadError::Validation(
+            "max_bytes must be greater than 0".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_item(item: &LoadItem) -> Result<(), String> {
@@ -457,6 +539,34 @@ async fn record_loader_validation_error(
         Some(row_context),
     )
     .await
+}
+
+async fn record_loader_validation_error_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    artifact_id: ArtifactId,
+    message: &str,
+    item: &LoadItem,
+    audit_context: Option<Value>,
+) -> Result<(), LoadError> {
+    let base_context = serde_json::json!({
+        "dataflow_id": item.series.dataflow_id,
+        "series_key": item.series.series_key,
+        "observation_time": item.observation.time,
+        "revision_no": item.observation.revision_no,
+    });
+    let row_context = merge_row_context(base_context, audit_context);
+
+    sqlx::query(
+        "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
+         VALUES ($1, 'loader_validation', $2, $3)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(message)
+    .bind(Some(row_context))
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
 }
 
 fn merge_row_context(mut base: Value, extra: Option<Value>) -> Value {
