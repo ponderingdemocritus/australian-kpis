@@ -719,7 +719,8 @@ async fn parse_stage(
                     .with_job_correlation(
                         fetched.correlation.job_id.clone(),
                         fetched.correlation.trace_parent.clone(),
-                    );
+                    )
+                    .with_cancellation(cancellation.clone());
                 in_flight.push(parse_one_artifact(
                     adapters.clone(),
                     source_id.clone(),

@@ -26,6 +26,7 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::Mutex, time::sleep};
+use tokio_util::sync::CancellationToken;
 
 /// Streaming observation payload emitted by adapters during parse.
 pub type ObservationStream<'a> =
@@ -429,6 +430,7 @@ pub struct ParseCtx {
     job_id: Option<String>,
     trace_parent: Option<String>,
     metadata: BTreeMap<String, String>,
+    cancellation: CancellationToken,
 }
 
 impl ParseCtx {
@@ -443,6 +445,7 @@ impl ParseCtx {
             job_id: None,
             trace_parent: None,
             metadata: BTreeMap::new(),
+            cancellation: CancellationToken::new(),
         }
     }
 
@@ -470,6 +473,14 @@ impl ParseCtx {
         self
     }
 
+    /// Return a context bound to the orchestrator's cancellation token so the
+    /// adapter parse stage can observe shutdown end-to-end.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
     /// Expected dataflow carried from the discovered job, when available.
     #[must_use]
     pub fn expected_dataflow_id(&self) -> Option<&DataflowId> {
@@ -492,6 +503,21 @@ impl ParseCtx {
     #[must_use]
     pub const fn metadata(&self) -> &BTreeMap<String, String> {
         &self.metadata
+    }
+
+    /// Cancellation token shared with the orchestrator. Adapters that perform
+    /// long-running or CPU-heavy parse work should poll this token (or `select!`
+    /// on its `cancelled()` future) so shutdown completes within the configured
+    /// grace window.
+    #[must_use]
+    pub const fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    /// Convenience predicate equivalent to `self.cancellation().is_cancelled()`.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
     }
 }
 
