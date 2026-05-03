@@ -48,6 +48,7 @@ enum StubMode {
     RevisionRows,
     TwoJobsCancelAfterFirstFetch,
     TwoArtifactsCancelAfterFirstParse,
+    DuplicateArtifactRejectSecondJob,
 }
 
 #[derive(Debug)]
@@ -127,7 +128,8 @@ impl SourceAdapter for StubAdapter {
             | StubMode::AcceptedThenStagedLoadError
             | StubMode::RevisionRows
             | StubMode::TwoJobsCancelAfterFirstFetch
-            | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
+            | StubMode::TwoArtifactsCancelAfterFirstParse
+            | StubMode::DuplicateArtifactRejectSecondJob => self.manifest.source_id.clone(),
         };
 
         let trace_parent = if matches!(self.mode, StubMode::RequireDiscoveryTraceParent) {
@@ -150,6 +152,7 @@ impl SourceAdapter for StubAdapter {
             StubMode::TwoArtifactsCancelAfterFirstParse
                 | StubMode::TwoJobsCancelAfterFirstFetch
                 | StubMode::AcceptedThenStagedLoadError
+                | StubMode::DuplicateArtifactRejectSecondJob
         ) {
             jobs.push(DiscoveredJob {
                 id: "job-2".into(),
@@ -178,8 +181,14 @@ impl SourceAdapter for StubAdapter {
                 .cancel();
         }
 
+        let artifact_id = if matches!(self.mode, StubMode::DuplicateArtifactRejectSecondJob) {
+            ArtifactId::of_content(b"shared-artifact")
+        } else {
+            ArtifactId::of_content(job.id.as_bytes())
+        };
+
         Ok(ArtifactRef {
-            id: ArtifactId::of_content(job.id.as_bytes()),
+            id: artifact_id,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type: "application/json".into(),
@@ -301,6 +310,11 @@ impl SourceAdapter for StubAdapter {
                 }
                 Box::pin(stream::iter([Ok((series, observation))]))
             }
+            StubMode::DuplicateArtifactRejectSecondJob => match ctx.job_id() {
+                Some("job-1") => delayed_single_row(row, Duration::from_millis(20)),
+                Some("job-2") => row_then_delayed_wrong_artifact(row, Duration::from_millis(100)),
+                other => panic!("unexpected duplicate artifact job id: {other:?}"),
+            },
             StubMode::SlowFetch | StubMode::WrongDiscoveredSource => {
                 Box::pin(stream::iter([Ok(row)]))
             }
@@ -363,6 +377,50 @@ fn ready_rows_after_cancellation(
                 2 => {
                     row.1.time = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
                     Some((Ok(row), 3))
+                }
+                _ => None,
+            }
+        }
+    }))
+}
+
+fn delayed_single_row(
+    row: (SeriesDescriptor, Observation),
+    delay: Duration,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(0_u8, move |state| {
+        let row = row.clone();
+        async move {
+            match state {
+                0 => {
+                    tokio::time::sleep(delay).await;
+                    Some((Ok(row), 1))
+                }
+                _ => None,
+            }
+        }
+    }))
+}
+
+fn row_then_delayed_wrong_artifact(
+    row: (SeriesDescriptor, Observation),
+    delay: Duration,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(0_u8, move |state| {
+        let row = row.clone();
+        async move {
+            match state {
+                0 => {
+                    let (series, mut observation) = row.clone();
+                    observation.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                    Some((Ok((series, observation)), 1))
+                }
+                1 => {
+                    tokio::time::sleep(delay).await;
+                    let (series, mut observation) = row;
+                    observation.time = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
+                    observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
+                    Some((Ok((series, observation)), 2))
                 }
                 _ => None,
             }
@@ -852,6 +910,63 @@ async fn late_artifact_mismatch_rolls_back_current_rows_without_deleting_prior_o
     assert_eq!(observation_count, 1);
     assert_eq!(value, Some(999.0));
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duplicate_artifact_jobs_keep_pending_loads_separate() {
+    let timescale = start_timescale("au_kpis_pipeline_duplicate_artifact_jobs")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"shared-artifact");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::DuplicateArtifactRejectSecondJob,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 4,
+            fetch_concurrency: 2,
+            parse_concurrency: 2,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::ArtifactMismatch {
+                ref expected,
+                ref actual,
+            }) if expected != actual
+        ),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 1);
+
+    let row_context: serde_json::Value = sqlx::query_scalar("SELECT row_context FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("read parse error row context");
+    assert_eq!(row_context["job_id"], "job-2");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1357,10 +1472,7 @@ async fn cancellation_flushes_partial_load_batch() {
     .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
     .await;
 
-    assert!(
-        matches!(result, Err(IngestionError::Cancelled)),
-        "{result:?}"
-    );
+    result.expect("late cancellation after parser drain should keep committed rows");
 
     let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
         .fetch_one(&pool)

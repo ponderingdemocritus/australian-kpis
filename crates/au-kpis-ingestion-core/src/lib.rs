@@ -474,6 +474,21 @@ impl JobCorrelation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PendingLoadKey {
+    artifact_id: ArtifactId,
+    correlation: JobCorrelation,
+}
+
+impl PendingLoadKey {
+    fn new(artifact_id: ArtifactId, correlation: JobCorrelation) -> Self {
+        Self {
+            artifact_id,
+            correlation,
+        }
+    }
+}
+
 fn generated_trace_parent(source_id: &SourceId, started_at: DateTime<Utc>) -> String {
     let sequence = TRACE_PARENT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let seed = format!(
@@ -517,9 +532,15 @@ enum LoadStageItem {
         item: LoadItem,
         correlation: JobCorrelation,
     },
-    AcceptArtifact(ArtifactId),
+    AcceptArtifact {
+        artifact_id: ArtifactId,
+        correlation: JobCorrelation,
+    },
     ParseError(ParseErrorRecord),
-    RejectArtifact(ArtifactId),
+    RejectArtifact {
+        artifact_id: ArtifactId,
+        correlation: JobCorrelation,
+    },
 }
 
 #[derive(Debug)]
@@ -590,28 +611,33 @@ async fn fetch_stage(
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut fetched = 0;
     let mut input_closed = false;
-    let mut cancelled = false;
+    let mut draining = false;
+    let mut stopped_input = false;
+    let mut cancelled_in_flight = false;
     let mut in_flight = FuturesUnordered::new();
 
     loop {
-        if cancellation.is_cancelled() {
-            cancelled = true;
+        if cancellation.is_cancelled() && !draining {
+            draining = true;
+            stopped_input = !(input_closed || (rx.is_closed() && rx.is_empty()));
         }
-        if (input_closed || cancelled) && in_flight.is_empty() {
+        if (input_closed || draining) && in_flight.is_empty() {
             break;
         }
 
         tokio::select! {
-            () = cancellation.cancelled(), if !cancelled => {
-                cancelled = true;
+            () = cancellation.cancelled(), if !draining => {
+                draining = true;
+                stopped_input = !(input_closed || (rx.is_closed() && rx.is_empty()));
             }
-            job = rx.recv(), if !input_closed && !cancelled && in_flight.len() < concurrency => {
+            job = rx.recv(), if !input_closed && !draining && in_flight.len() < concurrency => {
                 let Some(job) = job else {
                     input_closed = true;
                     continue;
                 };
                 if cancellation.is_cancelled() {
-                    cancelled = true;
+                    draining = true;
+                    stopped_input = true;
                     continue;
                 }
                 validate_source_id("fetch", &source_id, &job.source_id)?;
@@ -629,14 +655,17 @@ async fn fetch_stage(
                         send_produced(&tx, fetched_artifact, &cancellation).await?;
                         fetched += 1;
                     }
-                    Err(IngestionError::Cancelled) => cancelled = true,
+                    Err(IngestionError::Cancelled) => {
+                        draining = true;
+                        cancelled_in_flight = true;
+                    }
                     Err(err) => return Err(err),
                 }
             }
         }
     }
 
-    if cancelled || cancellation.is_cancelled() {
+    if stopped_input || cancelled_in_flight {
         return Err(IngestionError::Cancelled);
     }
 
@@ -657,20 +686,24 @@ async fn parse_stage(
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut parsed = 0;
     let mut input_closed = false;
-    let mut cancelled = false;
+    let mut draining = false;
+    let mut stopped_input = false;
+    let mut cancelled_in_flight = false;
     let mut in_flight = FuturesUnordered::new();
 
     loop {
-        if cancellation.is_cancelled() {
-            cancelled = true;
+        if cancellation.is_cancelled() && !draining {
+            draining = true;
+            stopped_input = !(input_closed || (rx.is_closed() && rx.is_empty()));
         }
         if input_closed && in_flight.is_empty() {
             break;
         }
 
         tokio::select! {
-            () = cancellation.cancelled(), if !cancelled => {
-                cancelled = true;
+            () = cancellation.cancelled(), if !draining => {
+                draining = true;
+                stopped_input = !(input_closed || (rx.is_closed() && rx.is_empty()));
             }
             fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
                 let Some(fetched) = fetched else {
@@ -696,14 +729,17 @@ async fn parse_stage(
             result = in_flight.next(), if !in_flight.is_empty() => {
                 match result.expect("in_flight is not empty") {
                     Ok(count) => parsed += count,
-                    Err(IngestionError::Cancelled) => cancelled = true,
+                    Err(IngestionError::Cancelled) => {
+                        draining = true;
+                        cancelled_in_flight = true;
+                    }
                     Err(err) => return Err(err),
                 }
             }
         }
     }
 
-    if cancelled || cancellation.is_cancelled() {
+    if stopped_input || cancelled_in_flight {
         return Err(IngestionError::Cancelled);
     }
 
@@ -735,10 +771,15 @@ async fn fetch_one(
     };
     let dataflow_id = job.dataflow_id.clone();
     let metadata = job.metadata.clone();
+    let mut fetch = Box::pin(adapters.fetch(source_id.as_str(), job, &ctx));
     let artifact = async {
         tokio::select! {
-            () = cancellation.cancelled() => Err(IngestionError::Cancelled),
-            artifact = adapters.fetch(source_id.as_str(), job, &ctx) => artifact.map_err(IngestionError::Adapter),
+            biased;
+            artifact = &mut fetch => artifact.map_err(IngestionError::Adapter),
+            () = cancellation.cancelled() => match futures::poll!(&mut fetch) {
+                std::task::Poll::Ready(artifact) => artifact.map_err(IngestionError::Adapter),
+                std::task::Poll::Pending => Err(IngestionError::Cancelled),
+            },
         }
     }
     .instrument(span)
@@ -874,7 +915,10 @@ async fn parse_one_artifact(
                 send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, false).await?;
                 send_produced(
                     &tx,
-                    LoadStageItem::RejectArtifact(artifact_id),
+                    LoadStageItem::RejectArtifact {
+                        artifact_id,
+                        correlation: fetched.correlation.clone(),
+                    },
                     &cancellation,
                 )
                 .await?;
@@ -899,7 +943,10 @@ async fn parse_one_artifact(
                 send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, false).await?;
                 send_produced(
                     &tx,
-                    LoadStageItem::RejectArtifact(artifact_id),
+                    LoadStageItem::RejectArtifact {
+                        artifact_id,
+                        correlation: fetched.correlation.clone(),
+                    },
                     &cancellation,
                 )
                 .await?;
@@ -961,7 +1008,10 @@ async fn parse_one_artifact(
 
         send_produced(
             &tx,
-            LoadStageItem::AcceptArtifact(artifact_id),
+            LoadStageItem::AcceptArtifact {
+                artifact_id,
+                correlation: fetched.correlation.clone(),
+            },
             &cancellation,
         )
         .await?;
@@ -1024,7 +1074,10 @@ async fn finish_cancelled_parse(
         .await?;
         send_produced(
             tx,
-            LoadStageItem::RejectArtifact(audit.artifact_id),
+            LoadStageItem::RejectArtifact {
+                artifact_id: audit.artifact_id,
+                correlation: audit.correlation.clone(),
+            },
             audit.cancellation,
         )
         .await?;
@@ -1103,7 +1156,7 @@ async fn load_stage(
     cancellation: CancellationToken,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut loaded = LoadStats::default();
-    let mut pending = BTreeMap::<ArtifactId, PendingArtifactLoad>::new();
+    let mut pending = BTreeMap::<PendingLoadKey, PendingArtifactLoad>::new();
     let mut accepted = AcceptedLoadBuffer::new(options);
     let mut draining = false;
 
@@ -1128,7 +1181,8 @@ async fn load_stage(
             LoadStageItem::Observation { item, correlation } => {
                 let artifact_id = item.observation.source_artifact_id;
                 let item_bytes = estimate_load_item_bytes(&item);
-                let artifact = pending.entry(artifact_id).or_default();
+                let key = PendingLoadKey::new(artifact_id, correlation.clone());
+                let artifact = pending.entry(key).or_default();
                 if artifact.will_stage(item_bytes, options) {
                     flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
                 }
@@ -1136,8 +1190,12 @@ async fn load_stage(
                     .push(&pool, options, item, correlation, item_bytes)
                     .await?;
             }
-            LoadStageItem::AcceptArtifact(artifact_id) => {
-                if let Some(artifact) = pending.remove(&artifact_id) {
+            LoadStageItem::AcceptArtifact {
+                artifact_id,
+                correlation,
+            } => {
+                let key = PendingLoadKey::new(artifact_id, correlation);
+                if let Some(artifact) = pending.remove(&key) {
                     if artifact.has_staged() {
                         flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded)
                             .await?;
@@ -1146,8 +1204,12 @@ async fn load_stage(
                         .await?;
                 }
             }
-            LoadStageItem::RejectArtifact(artifact_id) => {
-                if let Some(artifact) = pending.remove(&artifact_id) {
+            LoadStageItem::RejectArtifact {
+                artifact_id,
+                correlation,
+            } => {
+                let key = PendingLoadKey::new(artifact_id, correlation);
+                if let Some(artifact) = pending.remove(&key) {
                     flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
                     artifact.rollback().await?;
                 }
