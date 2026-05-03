@@ -36,11 +36,14 @@ enum StubMode {
     SlowParse,
     WrongArtifactId,
     WrongArtifactAfterRow,
+    PanicAfterRow,
     ParseErrorBeforeRow,
     ParseErrorAfterRow,
+    ParseErrorAfterCancellation,
     FatalParseError,
     ReadyRowsAfterCancellation,
     LoaderValidationError,
+    LoaderValidationThenWrongArtifact,
     RevisionRows,
     TwoJobsCancelAfterFirstFetch,
     TwoArtifactsCancelAfterFirstParse,
@@ -112,11 +115,14 @@ impl SourceAdapter for StubAdapter {
             | StubMode::SlowParse
             | StubMode::WrongArtifactId
             | StubMode::WrongArtifactAfterRow
+            | StubMode::PanicAfterRow
             | StubMode::ParseErrorBeforeRow
             | StubMode::ParseErrorAfterRow
+            | StubMode::ParseErrorAfterCancellation
             | StubMode::FatalParseError
             | StubMode::ReadyRowsAfterCancellation
             | StubMode::LoaderValidationError
+            | StubMode::LoaderValidationThenWrongArtifact
             | StubMode::RevisionRows
             | StubMode::TwoJobsCancelAfterFirstFetch
             | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
@@ -227,6 +233,7 @@ impl SourceAdapter for StubAdapter {
                 observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
                 Box::pin(stream::iter([Ok(row), Ok((series, observation))]))
             }
+            StubMode::PanicAfterRow => panic_after_first_row(row),
             StubMode::ParseErrorBeforeRow => Box::pin(stream::iter([
                 Err(AdapterError::FormatDrift("bad first row shape".into())),
                 Ok(row),
@@ -235,6 +242,9 @@ impl SourceAdapter for StubAdapter {
                 Ok(row),
                 Err(AdapterError::FormatDrift("bad row shape".into())),
             ])),
+            StubMode::ParseErrorAfterCancellation => parse_error_after_cancellation(
+                self.cancel_token().expect("cancel token configured"),
+            ),
             StubMode::FatalParseError => Box::pin(stream::iter([Err(AdapterError::FormatDrift(
                 "artifact-level schema drift".into(),
             ))])),
@@ -244,6 +254,14 @@ impl SourceAdapter for StubAdapter {
             ),
             StubMode::LoaderValidationError => {
                 Box::pin(stream::iter([Ok(loader_validation_error_row(artifact.id))]))
+            }
+            StubMode::LoaderValidationThenWrongArtifact => {
+                let (series, mut observation) = row;
+                observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
+                Box::pin(stream::iter([
+                    Ok(loader_validation_error_row(artifact.id)),
+                    Ok((series, observation)),
+                ]))
             }
             StubMode::RevisionRows => {
                 let (series, revision_0) = row;
@@ -333,6 +351,48 @@ fn ready_rows_after_cancellation(
                     Some((Ok(row), 3))
                 }
                 _ => None,
+            }
+        }
+    }))
+}
+
+fn panic_after_first_row(
+    row: (SeriesDescriptor, Observation),
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(0_u8, move |state| {
+        let row = row.clone();
+        async move {
+            match state {
+                0 => Some((Ok(row), 1)),
+                1 => panic!("parser panicked after emitting a row"),
+                _ => None,
+            }
+        }
+    }))
+}
+
+fn parse_error_after_cancellation(
+    cancellation: CancellationToken,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(0_u8, move |state| {
+        let cancellation = cancellation.clone();
+        async move {
+            match state {
+                0 => {
+                    cancellation.cancel();
+                    Some((
+                        Err(AdapterError::FormatDrift(
+                            "bad row shape while shutting down".into(),
+                        )),
+                        1,
+                    ))
+                }
+                _ => {
+                    std::future::pending::<
+                        Option<(Result<(SeriesDescriptor, Observation), AdapterError>, u8)>,
+                    >()
+                    .await
+                }
             }
         }
     }))
@@ -760,6 +820,151 @@ async fn late_artifact_mismatch_rolls_back_current_rows_without_deleting_prior_o
     assert_eq!(observation_count, 1);
     assert_eq!(value, Some(999.0));
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parser_panic_after_row_does_not_commit_unaccepted_artifact() {
+    let timescale = start_timescale("au_kpis_pipeline_panic_after_row")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::PanicAfterRow,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(IngestionError::Join(_))), "{result:?}");
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_after_first_parse_error_does_not_wait_for_more_rows() {
+    let timescale = start_timescale("au_kpis_pipeline_cancel_after_error")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let cancellation = CancellationToken::new();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        pipeline_with_pool(
+            StubMode::ParseErrorAfterCancellation,
+            pool.clone(),
+            PipelineOptions {
+                channel_capacity: 1,
+                load_max_rows: 64,
+                shutdown_grace: Duration::from_secs(5),
+                ..PipelineOptions::default()
+            },
+            Some(cancellation.clone()),
+        )
+        .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation),
+    )
+    .await
+    .expect("pipeline should not keep polling the parser after cancellation");
+
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
+
+    let (observation_count, parse_error_count): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("count observations and parse errors");
+    assert_eq!(observation_count, 0);
+    assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_loader_validation_audit_survives_later_artifact_rejection() {
+    let timescale = start_timescale("au_kpis_pipeline_validation_then_reject")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::LoaderValidationThenWrongArtifact,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 1,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::ArtifactMismatch {
+                ref expected,
+                ref actual,
+            }) if expected != actual
+        ),
+        "{result:?}"
+    );
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT error_kind FROM parse_errors
+         ORDER BY error_kind",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read parse error kinds");
+    let error_kinds: Vec<_> = rows.into_iter().map(|(kind,)| kind).collect();
+    assert_eq!(error_kinds, vec!["artifact_mismatch", "loader_validation"]);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

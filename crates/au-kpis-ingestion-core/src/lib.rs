@@ -23,7 +23,7 @@ use au_kpis_error::Classify;
 use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats, StagedLoad};
 use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use opentelemetry::{
     Context as OtelContext, propagation::TextMapPropagator, trace::TraceContextExt,
 };
@@ -775,6 +775,7 @@ async fn parse_one_artifact(
         let mut parsed = 0;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
         let mut early_adapter_errors = Vec::new();
+        let mut admitted_post_cancel_item = false;
         let audit = ParseErrorAudit {
             artifact_id,
             dataflow_id: &fetched.dataflow_id,
@@ -784,21 +785,56 @@ async fn parse_one_artifact(
         };
 
         loop {
-            let row = if parsed == 0 && cancellation.is_cancelled() {
-                // A fetched artifact may already be queued when shutdown begins.
-                // Admit at most its first ready row, then observe cancellation
-                // before polling the parser again.
-                observations.next().await
+            let row = if cancellation.is_cancelled() {
+                if admitted_post_cancel_item {
+                    finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed).await?;
+                    return Err(IngestionError::Cancelled);
+                }
+                admitted_post_cancel_item = true;
+                match observations.next().now_or_never() {
+                    Some(row) => row,
+                    None => {
+                        finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
+                            .await?;
+                        return Err(IngestionError::Cancelled);
+                    }
+                }
             } else {
                 tokio::select! {
                     biased;
-                    () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+                    () = cancellation.cancelled() => {
+                        if admitted_post_cancel_item {
+                            finish_cancelled_parse(
+                                &tx,
+                                &audit,
+                                &mut early_adapter_errors,
+                                parsed,
+                            )
+                            .await?;
+                            return Err(IngestionError::Cancelled);
+                        }
+                        admitted_post_cancel_item = true;
+                        match observations.next().now_or_never() {
+                            Some(row) => row,
+                            None => {
+                                finish_cancelled_parse(
+                                    &tx,
+                                    &audit,
+                                    &mut early_adapter_errors,
+                                    parsed,
+                                )
+                                .await?;
+                                return Err(IngestionError::Cancelled);
+                            }
+                        }
+                    }
                     row = observations.next() => row,
                 }
             };
             let Some(row) = row else {
                 break;
             };
+            let row_arrived_after_cancel = cancellation.is_cancelled();
 
             let (series, observation) = match row {
                 Ok(row) => row,
@@ -819,6 +855,9 @@ async fn parse_one_artifact(
                             &cancellation,
                         )
                         .await?;
+                    }
+                    if row_arrived_after_cancel {
+                        admitted_post_cancel_item = true;
                     }
                     continue;
                 }
@@ -890,6 +929,9 @@ async fn parse_one_artifact(
             )
             .await?;
             parsed += 1;
+            if row_arrived_after_cancel {
+                admitted_post_cancel_item = true;
+            }
         }
 
         if parsed == 0 && !early_adapter_errors.is_empty() {
@@ -949,6 +991,28 @@ async fn send_adapter_parse_errors(
                 err,
                 fatal,
             )),
+            audit.cancellation,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn finish_cancelled_parse(
+    tx: &mpsc::Sender<LoadStageItem>,
+    audit: &ParseErrorAudit<'_>,
+    early_adapter_errors: &mut Vec<AdapterError>,
+    parsed: u64,
+) -> Result<(), IngestionError> {
+    if !early_adapter_errors.is_empty() {
+        let fatal = parsed == 0;
+        send_adapter_parse_errors(tx, audit, early_adapter_errors, fatal).await?;
+        early_adapter_errors.clear();
+    }
+    if parsed > 0 {
+        send_produced(
+            tx,
+            LoadStageItem::AcceptArtifact(audit.artifact_id),
             audit.cancellation,
         )
         .await?;
@@ -1072,7 +1136,7 @@ async fn load_stage(
         }
     }
     for (_, artifact) in pending {
-        accept_artifact_load(artifact, &pool, options, &mut accepted, &mut loaded).await?;
+        artifact.rollback().await?;
     }
     if !accepted.batch.is_empty() {
         add_load_stats(

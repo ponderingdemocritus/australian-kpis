@@ -40,6 +40,7 @@ pub struct LoadItemAudit {
 /// atomically committed only after the parser accepts the full artifact.
 #[derive(Debug)]
 pub struct StagedLoad {
+    pool: PgPool,
     tx: Transaction<'static, Postgres>,
     stats: LoadStats,
 }
@@ -193,6 +194,7 @@ pub async fn begin_staged_load(
     create_observation_staging_table(&mut tx).await?;
 
     Ok(StagedLoad {
+        pool: pool.clone(),
         tx,
         stats: LoadStats::default(),
     })
@@ -209,8 +211,8 @@ impl StagedLoad {
                     valid_items.push(audited.item);
                 }
                 Err(message) => {
-                    record_loader_validation_error_in_tx(
-                        &mut self.tx,
+                    record_loader_validation_error(
+                        &self.pool,
                         audited.item.observation.source_artifact_id,
                         &message,
                         &audited.item,
@@ -240,7 +242,7 @@ impl StagedLoad {
         Ok(self.stats)
     }
 
-    /// Drop all staged rows and validation errors for a rejected artifact.
+    /// Drop staged rows for a rejected artifact.
     pub async fn rollback(self) -> Result<(), LoadError> {
         self.tx.rollback().await?;
         Ok(())
@@ -539,34 +541,6 @@ async fn record_loader_validation_error(
         Some(row_context),
     )
     .await
-}
-
-async fn record_loader_validation_error_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    artifact_id: ArtifactId,
-    message: &str,
-    item: &LoadItem,
-    audit_context: Option<Value>,
-) -> Result<(), LoadError> {
-    let base_context = serde_json::json!({
-        "dataflow_id": item.series.dataflow_id,
-        "series_key": item.series.series_key,
-        "observation_time": item.observation.time,
-        "revision_no": item.observation.revision_no,
-    });
-    let row_context = merge_row_context(base_context, audit_context);
-
-    sqlx::query(
-        "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
-         VALUES ($1, 'loader_validation', $2, $3)",
-    )
-    .bind(artifact_id.digest().as_bytes().as_slice())
-    .bind(message)
-    .bind(Some(row_context))
-    .execute(&mut **tx)
-    .await?;
-
-    Ok(())
 }
 
 fn merge_row_context(mut base: Value, extra: Option<Value>) -> Value {
