@@ -614,6 +614,16 @@ jobs:
             git show "${BASE_SHA}:${path}"
           }
 
+          guide_file() {
+            local path="$1"
+            if git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+              base_file "$path"
+            else
+              echo "[Guide did not exist at base commit ${BASE_SHA}; showing head version.]"
+              git show "${HEAD_SHA}:${path}"
+            fi
+          }
+
           base_file ".github/codex/review_prompt.md" >codex-prompt.md
           base_file ".github/codex/output-schema.json" >codex-output-schema.json
 
@@ -725,7 +735,7 @@ jobs:
               while IFS= read -r guide_path; do
                 echo ""
                 echo "--- BEGIN GUIDE: ${guide_path} ---"
-                base_file "$guide_path"
+                guide_file "$guide_path"
                 echo "--- END GUIDE: ${guide_path} ---"
               done <"$guide_list_file"
               echo ""

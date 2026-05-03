@@ -587,11 +587,14 @@ async fn discover_stage(
         jobs = adapters.discover(source_id.as_str(), &ctx) => jobs?,
     };
     let discovered = jobs.len() as u64;
-    for job in jobs {
+    for mut job in jobs {
         if cancellation.is_cancelled() {
             return Err(IngestionError::Cancelled);
         }
         validate_source_id("discover", &source_id, &job.source_id)?;
+        if job.trace_parent.is_none() {
+            job.trace_parent = ctx.trace_parent().map(str::to_owned);
+        }
         send_produced(&tx, job, &cancellation).await?;
     }
     Ok(PipelineRunStats {
@@ -1413,14 +1416,25 @@ impl PendingArtifactLoad {
             return Ok(());
         }
 
+        let items = match audited_load_items(&mut self.batch, &mut self.correlations) {
+            Ok(items) => items,
+            Err(err) => {
+                if let Some(staged) = self.staged.take() {
+                    return match staged.rollback().await {
+                        Ok(()) => Err(err),
+                        Err(cleanup_err) => Err(cleanup_err),
+                    };
+                }
+                return Err(err);
+            }
+        };
+        emit_load_correlation_spans(&items);
         let mut staged = match self.staged.take() {
             Some(staged) => staged,
             None => au_kpis_loader::begin_staged_load(pool, options).await?,
         };
-        let items = audited_load_items(&mut self.batch, &mut self.correlations)?;
-        emit_load_correlation_spans(&items);
         let span = info_span!("ingestion_load_stage_batch", rows = items.len(),);
-        staged
+        let result = staged
             .stage(
                 items
                     .into_iter()
@@ -1431,7 +1445,13 @@ impl PendingArtifactLoad {
                     .collect(),
             )
             .instrument(span)
-            .await?;
+            .await;
+        if let Err(err) = result {
+            return match staged.rollback().await {
+                Ok(()) => Err(err),
+                Err(cleanup_err) => Err(cleanup_err),
+            };
+        }
         self.staged = Some(staged);
         self.batch_bytes = 0;
         Ok(())

@@ -234,10 +234,20 @@ impl StagedLoad {
             return Ok(());
         }
 
-        let mut tx = (&mut self.conn).begin().await?;
-        copy_series(&mut tx, &valid_items).await?;
-        copy_observations(&mut tx, &valid_items).await?;
-        tx.commit().await?;
+        let result = async {
+            let mut tx = (&mut self.conn).begin().await?;
+            copy_series(&mut tx, &valid_items).await?;
+            copy_observations(&mut tx, &valid_items).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(err) = result {
+            return match drop_staging_tables(&mut self.conn).await {
+                Ok(()) => Err(err),
+                Err(cleanup_err) => Err(cleanup_err),
+            };
+        }
         self.stats.batches += 1;
         Ok(())
     }

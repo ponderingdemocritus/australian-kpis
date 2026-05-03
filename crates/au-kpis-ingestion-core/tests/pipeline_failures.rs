@@ -32,6 +32,7 @@ enum StubMode {
     ManyRows,
     RequireParseDataflow,
     RequireDiscoveryTraceParent,
+    MissingJobTraceParent,
     CancelAfterFirstParse,
     SlowParse,
     WrongArtifactId,
@@ -113,6 +114,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ManyRows
             | StubMode::RequireParseDataflow
             | StubMode::RequireDiscoveryTraceParent
+            | StubMode::MissingJobTraceParent
             | StubMode::CancelAfterFirstParse
             | StubMode::SlowParse
             | StubMode::WrongArtifactId
@@ -132,10 +134,10 @@ impl SourceAdapter for StubAdapter {
             | StubMode::DuplicateArtifactRejectSecondJob => self.manifest.source_id.clone(),
         };
 
-        let trace_parent = if matches!(self.mode, StubMode::RequireDiscoveryTraceParent) {
-            ctx.trace_parent().map(ToOwned::to_owned)
-        } else {
-            Some(TRACE_PARENT.into())
+        let trace_parent = match self.mode {
+            StubMode::RequireDiscoveryTraceParent => ctx.trace_parent().map(ToOwned::to_owned),
+            StubMode::MissingJobTraceParent => None,
+            _ => Some(TRACE_PARENT.into()),
         };
 
         let mut jobs = vec![DiscoveredJob {
@@ -211,7 +213,10 @@ impl SourceAdapter for StubAdapter {
             }
             return Box::pin(stream::empty());
         }
-        if matches!(self.mode, StubMode::RequireDiscoveryTraceParent) {
+        if matches!(
+            self.mode,
+            StubMode::RequireDiscoveryTraceParent | StubMode::MissingJobTraceParent
+        ) {
             if ctx.job_id() != Some("job-1") || ctx.trace_parent().is_none() {
                 return Box::pin(stream::iter([Err(AdapterError::Validation(
                     "missing discovery trace correlation".into(),
@@ -319,7 +324,9 @@ impl SourceAdapter for StubAdapter {
                 Box::pin(stream::iter([Ok(row)]))
             }
             StubMode::RequireParseDataflow => unreachable!("handled above"),
-            StubMode::RequireDiscoveryTraceParent => unreachable!("handled above"),
+            StubMode::RequireDiscoveryTraceParent | StubMode::MissingJobTraceParent => {
+                unreachable!("handled above")
+            }
         }
     }
 }
@@ -783,6 +790,22 @@ async fn run_source_seeds_trace_parent_when_discovery_context_has_none() {
         )
         .await
         .expect("pipeline should seed discovery trace correlation");
+
+    assert_eq!(stats.discovered, 1);
+    assert_eq!(stats.fetched, 1);
+    assert_eq!(stats.parsed, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_source_backfills_missing_job_trace_parent_from_discovery_context() {
+    let stats = pipeline(StubMode::MissingJobTraceParent)
+        .run_source(
+            SourceId::new("stub").unwrap(),
+            contexts(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("pipeline should backfill missing job trace correlation");
 
     assert_eq!(stats.discovered, 1);
     assert_eq!(stats.fetched, 1);
