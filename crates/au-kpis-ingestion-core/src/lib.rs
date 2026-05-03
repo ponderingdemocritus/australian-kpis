@@ -31,7 +31,7 @@ use opentelemetry_sdk::propagation::TraceContextPropagator;
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, info_span};
+use tracing::{Instrument, Span, info_span, instrument::WithSubscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 64;
@@ -295,7 +295,8 @@ impl IngestionPipeline {
                 discovered_tx,
                 pipeline_token.clone(),
             )
-            .instrument(discover_span),
+            .instrument(discover_span)
+            .with_current_subscriber(),
         );
         let fetch_span = info_span!(
             "ingestion_fetch",
@@ -313,7 +314,8 @@ impl IngestionPipeline {
                 pipeline_token.clone(),
                 self.options.fetch_concurrency,
             )
-            .instrument(fetch_span),
+            .instrument(fetch_span)
+            .with_current_subscriber(),
         );
         let parse_span = info_span!(
             "ingestion_parse",
@@ -331,7 +333,8 @@ impl IngestionPipeline {
                 pipeline_token.clone(),
                 self.options.parse_concurrency,
             )
-            .instrument(parse_span),
+            .instrument(parse_span)
+            .with_current_subscriber(),
         );
         let load_span = info_span!(
             "ingestion_load",
@@ -349,7 +352,8 @@ impl IngestionPipeline {
                 },
                 pipeline_token.clone(),
             )
-            .instrument(load_span),
+            .instrument(load_span)
+            .with_current_subscriber(),
         );
 
         let shutdown_grace = self.options.shutdown_grace;
@@ -701,6 +705,14 @@ async fn fetch_one(
     job: au_kpis_adapter::DiscoveredJob,
     cancellation: CancellationToken,
 ) -> Result<FetchedArtifact, IngestionError> {
+    let trace_parent = job.trace_parent.clone();
+    let span = info_span!(
+        "ingestion_fetch_job",
+        source = %source_id,
+        job_id = %job.id,
+        trace_parent = trace_parent.as_deref().unwrap_or("")
+    );
+    restore_trace_parent(&span, trace_parent.as_deref());
     let correlation = JobCorrelation {
         source_id: job.source_id.as_str().to_string(),
         job_id: job.id.clone(),
@@ -708,10 +720,14 @@ async fn fetch_one(
     };
     let dataflow_id = job.dataflow_id.clone();
     let metadata = job.metadata.clone();
-    let artifact = tokio::select! {
-        () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
-        artifact = adapters.fetch(source_id.as_str(), job, &ctx) => artifact?,
-    };
+    let artifact = async {
+        tokio::select! {
+            () = cancellation.cancelled() => Err(IngestionError::Cancelled),
+            artifact = adapters.fetch(source_id.as_str(), job, &ctx) => artifact.map_err(IngestionError::Adapter),
+        }
+    }
+    .instrument(span)
+    .await?;
     validate_source_id("fetch", &source_id, &artifact.source_id)?;
     Ok(FetchedArtifact {
         artifact,
@@ -730,93 +746,107 @@ async fn parse_one_artifact(
     cancellation: CancellationToken,
 ) -> Result<u64, IngestionError> {
     let artifact_id = fetched.artifact.id;
-    let mut parsed = 0;
-    let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
+    let trace_parent = fetched.correlation.trace_parent.clone();
+    let span = info_span!(
+        "ingestion_parse_job",
+        source = %source_id,
+        artifact_id = %artifact_id,
+        job_id = %fetched.correlation.job_id,
+        trace_parent = trace_parent.as_deref().unwrap_or("")
+    );
+    restore_trace_parent(&span, trace_parent.as_deref());
 
-    loop {
-        let row = tokio::select! {
-            biased;
-            row = observations.next() => row,
-            () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
-        };
-        let Some(row) = row else {
-            break;
-        };
+    async move {
+        let mut parsed = 0;
+        let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
 
-        let (series, observation) = match row {
-            Ok(row) => row,
-            Err(err) => {
+        loop {
+            let row = tokio::select! {
+                biased;
+                row = observations.next() => row,
+                () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
+            };
+            let Some(row) = row else {
+                break;
+            };
+
+            let (series, observation) = match row {
+                Ok(row) => row,
+                Err(err) => {
+                    send_produced(
+                        &tx,
+                        LoadStageItem::ParseError(parse_error_record(
+                            artifact_id,
+                            &fetched.dataflow_id,
+                            &source_id,
+                            &fetched.correlation,
+                            &err,
+                            parsed == 0,
+                        )),
+                        &cancellation,
+                    )
+                    .await?;
+                    if parsed == 0 {
+                        return Err(IngestionError::Adapter(err));
+                    }
+                    continue;
+                }
+            };
+            if series.dataflow_id != fetched.dataflow_id {
+                let expected = fetched.dataflow_id.to_string();
+                let actual = series.dataflow_id.to_string();
                 send_produced(
                     &tx,
-                    LoadStageItem::ParseError(parse_error_record(
+                    LoadStageItem::ParseError(provenance_error_record(
                         artifact_id,
                         &fetched.dataflow_id,
                         &source_id,
                         &fetched.correlation,
-                        &err,
-                        parsed == 0,
+                        "dataflow_mismatch",
+                        &format!("dataflow mismatch: expected `{expected}`, got `{actual}`"),
                     )),
                     &cancellation,
                 )
                 .await?;
-                if parsed == 0 {
-                    return Err(IngestionError::Adapter(err));
-                }
-                continue;
+                return Err(IngestionError::DataflowMismatch { expected, actual });
             }
-        };
-        if series.dataflow_id != fetched.dataflow_id {
-            let expected = fetched.dataflow_id.to_string();
-            let actual = series.dataflow_id.to_string();
+            if observation.source_artifact_id != artifact_id {
+                let expected = artifact_id.to_string();
+                let actual = observation.source_artifact_id.to_string();
+                send_produced(
+                    &tx,
+                    LoadStageItem::ParseError(provenance_error_record(
+                        artifact_id,
+                        &fetched.dataflow_id,
+                        &source_id,
+                        &fetched.correlation,
+                        "artifact_mismatch",
+                        &format!("artifact mismatch: expected `{expected}`, got `{actual}`"),
+                    )),
+                    &cancellation,
+                )
+                .await?;
+                return Err(IngestionError::ArtifactMismatch { expected, actual });
+            }
             send_produced(
                 &tx,
-                LoadStageItem::ParseError(provenance_error_record(
-                    artifact_id,
-                    &fetched.dataflow_id,
-                    &source_id,
-                    &fetched.correlation,
-                    "dataflow_mismatch",
-                    &format!("dataflow mismatch: expected `{expected}`, got `{actual}`"),
-                )),
-                &cancellation,
-            )
-            .await?;
-            return Err(IngestionError::DataflowMismatch { expected, actual });
-        }
-        if observation.source_artifact_id != artifact_id {
-            let expected = artifact_id.to_string();
-            let actual = observation.source_artifact_id.to_string();
-            send_produced(
-                &tx,
-                LoadStageItem::ParseError(provenance_error_record(
-                    artifact_id,
-                    &fetched.dataflow_id,
-                    &source_id,
-                    &fetched.correlation,
-                    "artifact_mismatch",
-                    &format!("artifact mismatch: expected `{expected}`, got `{actual}`"),
-                )),
-                &cancellation,
-            )
-            .await?;
-            return Err(IngestionError::ArtifactMismatch { expected, actual });
-        }
-        send_produced(
-            &tx,
-            LoadStageItem::Observation {
-                item: LoadItem {
-                    series,
-                    observation,
+                LoadStageItem::Observation {
+                    item: LoadItem {
+                        series,
+                        observation,
+                    },
+                    correlation: fetched.correlation.clone(),
                 },
-                correlation: fetched.correlation.clone(),
-            },
-            &cancellation,
-        )
-        .await?;
-        parsed += 1;
-    }
+                &cancellation,
+            )
+            .await?;
+            parsed += 1;
+        }
 
-    Ok(parsed)
+        Ok(parsed)
+    }
+    .instrument(span)
+    .await
 }
 
 fn parse_error_record(
@@ -873,8 +903,9 @@ async fn load_stage(
     cancellation: CancellationToken,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut loaded = LoadStats::default();
-    let mut batch = Vec::with_capacity(options.max_rows.min(1024));
-    let mut batch_correlations = Vec::with_capacity(options.max_rows.min(1024));
+    let mut batch: Vec<LoadItem> = Vec::with_capacity(options.max_rows.min(1024));
+    let mut batch_correlations: Vec<JobCorrelation> =
+        Vec::with_capacity(options.max_rows.min(1024));
     let mut batch_bytes = 0usize;
     let mut draining = false;
 
@@ -898,6 +929,12 @@ async fn load_stage(
         let (item, correlation) = match item {
             LoadStageItem::Observation { item, correlation } => (item, correlation),
             LoadStageItem::ParseError(record) => {
+                let trace_parent = parse_error_trace_parent(&record).map(str::to_owned);
+                let span = info_span!(
+                    "ingestion_load_parse_error",
+                    trace_parent = trace_parent.as_deref().unwrap_or("")
+                );
+                restore_trace_parent(&span, trace_parent.as_deref());
                 au_kpis_loader::record_parse_error(
                     &pool,
                     record.artifact_id,
@@ -905,11 +942,25 @@ async fn load_stage(
                     &record.error_message,
                     record.row_context,
                 )
+                .instrument(span)
                 .await?;
                 loaded.parse_errors += 1;
                 continue;
             }
         };
+
+        if !batch.is_empty()
+            && batch_correlations
+                .first()
+                .map(|existing| existing.trace_parent.as_deref())
+                != Some(correlation.trace_parent.as_deref())
+        {
+            add_load_stats(
+                &mut loaded,
+                flush_load_batch(&pool, &mut batch, &mut batch_correlations, options).await?,
+            );
+            batch_bytes = 0;
+        }
 
         let item_bytes = estimate_load_item_bytes(&item);
         if should_flush_load_batch(&batch, batch_bytes, item_bytes, options) {
@@ -960,6 +1011,10 @@ async fn flush_load_batch(
             .iter()
             .filter_map(|correlation| correlation.trace_parent.as_deref()),
     );
+    let trace_parent = correlations
+        .first()
+        .and_then(|correlation| correlation.trace_parent.as_deref())
+        .map(str::to_owned);
     let items = std::mem::take(batch);
     let correlations = std::mem::take(correlations);
     if items.len() != correlations.len() {
@@ -975,13 +1030,23 @@ async fn flush_load_batch(
             row_context: Some(correlation.row_context()),
         })
         .collect();
+    let span = info_span!(
+        "ingestion_load_batch",
+        job_ids = %job_ids,
+        trace_parents = %trace_parents,
+    );
+    restore_trace_parent(&span, trace_parent.as_deref());
     au_kpis_loader::load_batch_with_options_and_audit_context(pool, items, options)
-        .instrument(info_span!(
-            "ingestion_load_batch",
-            job_ids = %job_ids,
-            trace_parents = %trace_parents,
-        ))
+        .instrument(span)
         .await
+}
+
+fn parse_error_trace_parent(record: &ParseErrorRecord) -> Option<&str> {
+    record
+        .row_context
+        .as_ref()
+        .and_then(|context| context.get("trace_parent"))
+        .and_then(serde_json::Value::as_str)
 }
 
 fn joined_unique<'a>(values: impl Iterator<Item = &'a str>) -> String {

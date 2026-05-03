@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -18,12 +22,16 @@ use au_kpis_ingestion_core::{
 use au_kpis_storage::BlobStore;
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{TimeZone, Utc};
-use futures::stream::{self, BoxStream};
+use futures::{
+    future::BoxFuture,
+    stream::{self, BoxStream},
+};
 use object_store::memory::InMemory;
 use sqlx::postgres::PgPoolOptions;
 use tokio_util::sync::CancellationToken;
 
 const TRACE_PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+const TRACE_PARENT_ALT: &str = "00-11111111111111111111111111111111-2222222222222222-01";
 
 #[derive(Debug, Clone, Copy)]
 enum StubMode {
@@ -39,6 +47,7 @@ enum StubMode {
     FatalParseError,
     LoaderValidationError,
     RevisionRows,
+    DistinctTraceParents,
     TwoJobsCancelAfterFirstFetch,
     TwoArtifactsCancelAfterFirstParse,
 }
@@ -48,6 +57,28 @@ struct StubAdapter {
     mode: StubMode,
     manifest: AdapterManifest,
     cancel_on_second_parse_poll: Option<CancellationToken>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TestSpanExporter(Arc<Mutex<Vec<opentelemetry_sdk::export::trace::SpanData>>>);
+
+impl TestSpanExporter {
+    fn finished_spans(&self) -> Vec<opentelemetry_sdk::export::trace::SpanData> {
+        self.0.lock().expect("span exporter lock").clone()
+    }
+}
+
+impl opentelemetry_sdk::export::trace::SpanExporter for TestSpanExporter {
+    fn export(
+        &mut self,
+        mut batch: Vec<opentelemetry_sdk::export::trace::SpanData>,
+    ) -> BoxFuture<'static, opentelemetry_sdk::export::trace::ExportResult> {
+        let spans = self.0.clone();
+        Box::pin(async move {
+            spans.lock().expect("span exporter lock").append(&mut batch);
+            Ok(())
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -112,6 +143,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::FatalParseError
             | StubMode::LoaderValidationError
             | StubMode::RevisionRows
+            | StubMode::DistinctTraceParents
             | StubMode::TwoJobsCancelAfterFirstFetch
             | StubMode::TwoArtifactsCancelAfterFirstParse => self.manifest.source_id.clone(),
         };
@@ -133,14 +165,23 @@ impl SourceAdapter for StubAdapter {
 
         if matches!(
             self.mode,
-            StubMode::TwoArtifactsCancelAfterFirstParse | StubMode::TwoJobsCancelAfterFirstFetch
+            StubMode::DistinctTraceParents
+                | StubMode::TwoArtifactsCancelAfterFirstParse
+                | StubMode::TwoJobsCancelAfterFirstFetch
         ) {
             jobs.push(DiscoveredJob {
                 id: "job-2".into(),
                 source_id,
                 dataflow_id: self.manifest.dataflows[0].clone(),
                 source_url: "https://example.test/cpi-2.json".into(),
-                trace_parent: Some(TRACE_PARENT.into()),
+                trace_parent: Some(
+                    if matches!(self.mode, StubMode::DistinctTraceParents) {
+                        TRACE_PARENT_ALT
+                    } else {
+                        TRACE_PARENT
+                    }
+                    .into(),
+                ),
                 metadata: BTreeMap::from([("revision_key".into(), "ABS:CPI".into())]),
             });
         }
@@ -236,7 +277,7 @@ impl SourceAdapter for StubAdapter {
                     Ok((series, revision_1)),
                 ]))
             }
-            StubMode::TwoArtifactsCancelAfterFirstParse => {
+            StubMode::DistinctTraceParents | StubMode::TwoArtifactsCancelAfterFirstParse => {
                 let (series, mut observation) = row;
                 if artifact.id == ArtifactId::of_content(b"job-2") {
                     observation.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
@@ -386,6 +427,22 @@ fn contexts() -> PipelineContexts {
         ),
         parse: ParseCtx::new(http, blob_store, started_at),
     }
+}
+
+fn span_parent_pairs(
+    spans: &[opentelemetry_sdk::export::trace::SpanData],
+    name: &str,
+) -> BTreeSet<(String, String)> {
+    spans
+        .iter()
+        .filter(|span| span.name == name)
+        .map(|span| {
+            (
+                span.parent_span_id.to_string(),
+                span.span_context.trace_id().to_string(),
+            )
+        })
+        .collect()
 }
 
 async fn connect_with_retry(cfg: &DatabaseConfig) -> PgPool {
@@ -593,6 +650,82 @@ async fn run_source_seeds_trace_parent_when_discovery_context_has_none() {
     assert_eq!(stats.discovered, 1);
     assert_eq!(stats.fetched, 1);
     assert_eq!(stats.parsed, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::TracerProvider;
+    use tracing::level_filters::LevelFilter;
+    use tracing_subscriber::prelude::*;
+
+    let timescale = start_timescale("au_kpis_pipeline_trace_parent_spans")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let first_artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
+    seed_stub_reference_data(&pool, first_artifact_id).await;
+    seed_stub_artifact(&pool, second_artifact_id, "https://example.test/cpi-2.json").await;
+
+    let exporter = TestSpanExporter::default();
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let tracer = provider.tracer("ingestion-core-test");
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_filter(LevelFilter::INFO),
+    );
+
+    let guard = tracing::subscriber::set_default(subscriber);
+    let stats = pipeline_with_pool(
+        StubMode::DistinctTraceParents,
+        pool,
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 2,
+            parse_concurrency: 2,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("pipeline should preserve per-job trace parents");
+    drop(guard);
+
+    assert_eq!(stats.loaded.observations_loaded, 2);
+    for result in provider.force_flush() {
+        result.expect("flush exported spans");
+    }
+
+    let spans = exporter.finished_spans();
+    let expected = BTreeSet::from([
+        (
+            "00f067aa0ba902b7".to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736".to_string(),
+        ),
+        (
+            "2222222222222222".to_string(),
+            "11111111111111111111111111111111".to_string(),
+        ),
+    ]);
+
+    assert_eq!(span_parent_pairs(&spans, "ingestion_fetch_job"), expected);
+    assert_eq!(span_parent_pairs(&spans, "ingestion_parse_job"), expected);
+    assert_eq!(span_parent_pairs(&spans, "ingestion_load_batch"), expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
