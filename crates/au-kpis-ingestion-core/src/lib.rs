@@ -501,6 +501,16 @@ fn restore_trace_parent(span: &Span, trace_parent: Option<&str>) {
     span.set_parent(context);
 }
 
+fn trace_parent_from_current_span() -> Option<String> {
+    let context = Span::current().context();
+    if !context.span().span_context().is_valid() {
+        return None;
+    }
+    let mut carrier = HashMap::new();
+    TraceContextPropagator::new().inject_context(&context, &mut carrier);
+    carrier.remove("traceparent")
+}
+
 #[derive(Debug)]
 enum LoadStageItem {
     Observation {
@@ -539,12 +549,15 @@ fn is_secondary_shutdown_error(err: &IngestionError) -> bool {
 async fn discover_stage(
     adapters: Adapters,
     source_id: SourceId,
-    ctx: DiscoveryCtx,
+    mut ctx: DiscoveryCtx,
     tx: mpsc::Sender<au_kpis_adapter::DiscoveredJob>,
     cancellation: CancellationToken,
 ) -> Result<PipelineRunStats, IngestionError> {
     if cancellation.is_cancelled() {
         return Err(IngestionError::Cancelled);
+    }
+    if let Some(trace_parent) = trace_parent_from_current_span() {
+        ctx = ctx.with_trace_parent(trace_parent);
     }
     let jobs = tokio::select! {
         () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
@@ -759,6 +772,15 @@ async fn parse_one_artifact(
     async move {
         let mut parsed = 0;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
+        let mut adapter_errors = Vec::new();
+        let mut valid_items = Vec::new();
+        let audit = ParseErrorAudit {
+            artifact_id,
+            dataflow_id: &fetched.dataflow_id,
+            source_id: &source_id,
+            correlation: &fetched.correlation,
+            cancellation: &cancellation,
+        };
 
         loop {
             let row = tokio::select! {
@@ -773,28 +795,14 @@ async fn parse_one_artifact(
             let (series, observation) = match row {
                 Ok(row) => row,
                 Err(err) => {
-                    send_produced(
-                        &tx,
-                        LoadStageItem::ParseError(parse_error_record(
-                            artifact_id,
-                            &fetched.dataflow_id,
-                            &source_id,
-                            &fetched.correlation,
-                            &err,
-                            parsed == 0,
-                        )),
-                        &cancellation,
-                    )
-                    .await?;
-                    if parsed == 0 {
-                        return Err(IngestionError::Adapter(err));
-                    }
+                    adapter_errors.push(err);
                     continue;
                 }
             };
             if series.dataflow_id != fetched.dataflow_id {
                 let expected = fetched.dataflow_id.to_string();
                 let actual = series.dataflow_id.to_string();
+                send_adapter_parse_errors(&tx, &audit, &adapter_errors, false).await?;
                 send_produced(
                     &tx,
                     LoadStageItem::ParseError(provenance_error_record(
@@ -813,6 +821,7 @@ async fn parse_one_artifact(
             if observation.source_artifact_id != artifact_id {
                 let expected = artifact_id.to_string();
                 let actual = observation.source_artifact_id.to_string();
+                send_adapter_parse_errors(&tx, &audit, &adapter_errors, false).await?;
                 send_produced(
                     &tx,
                     LoadStageItem::ParseError(provenance_error_record(
@@ -828,25 +837,78 @@ async fn parse_one_artifact(
                 .await?;
                 return Err(IngestionError::ArtifactMismatch { expected, actual });
             }
-            send_produced(
-                &tx,
-                LoadStageItem::Observation {
-                    item: LoadItem {
-                        series,
-                        observation,
-                    },
-                    correlation: fetched.correlation.clone(),
+            valid_items.push(LoadStageItem::Observation {
+                item: LoadItem {
+                    series,
+                    observation,
                 },
-                &cancellation,
-            )
-            .await?;
+                correlation: fetched.correlation.clone(),
+            });
             parsed += 1;
+        }
+
+        if parsed == 0 {
+            if !adapter_errors.is_empty() {
+                let first_error = adapter_errors.remove(0);
+                send_produced(
+                    &tx,
+                    LoadStageItem::ParseError(parse_error_record(
+                        artifact_id,
+                        &fetched.dataflow_id,
+                        &source_id,
+                        &fetched.correlation,
+                        &first_error,
+                        true,
+                    )),
+                    &cancellation,
+                )
+                .await?;
+                send_adapter_parse_errors(&tx, &audit, &adapter_errors, true).await?;
+                return Err(IngestionError::Adapter(first_error));
+            }
+        } else {
+            send_adapter_parse_errors(&tx, &audit, &adapter_errors, false).await?;
+            for item in valid_items {
+                send_produced(&tx, item, &cancellation).await?;
+            }
         }
 
         Ok(parsed)
     }
     .instrument(span)
     .await
+}
+
+struct ParseErrorAudit<'a> {
+    artifact_id: ArtifactId,
+    dataflow_id: &'a DataflowId,
+    source_id: &'a SourceId,
+    correlation: &'a JobCorrelation,
+    cancellation: &'a CancellationToken,
+}
+
+async fn send_adapter_parse_errors(
+    tx: &mpsc::Sender<LoadStageItem>,
+    audit: &ParseErrorAudit<'_>,
+    errors: &[AdapterError],
+    fatal: bool,
+) -> Result<(), IngestionError> {
+    for err in errors {
+        send_produced(
+            tx,
+            LoadStageItem::ParseError(parse_error_record(
+                audit.artifact_id,
+                audit.dataflow_id,
+                audit.source_id,
+                audit.correlation,
+                err,
+                fatal,
+            )),
+            audit.cancellation,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn parse_error_record(

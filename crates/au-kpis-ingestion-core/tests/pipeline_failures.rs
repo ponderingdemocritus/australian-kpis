@@ -35,6 +35,8 @@ enum StubMode {
     CancelAfterFirstParse,
     SlowParse,
     WrongArtifactId,
+    WrongArtifactAfterRow,
+    ParseErrorBeforeRow,
     ParseErrorAfterRow,
     FatalParseError,
     LoaderValidationError,
@@ -108,6 +110,8 @@ impl SourceAdapter for StubAdapter {
             | StubMode::CancelAfterFirstParse
             | StubMode::SlowParse
             | StubMode::WrongArtifactId
+            | StubMode::WrongArtifactAfterRow
+            | StubMode::ParseErrorBeforeRow
             | StubMode::ParseErrorAfterRow
             | StubMode::FatalParseError
             | StubMode::LoaderValidationError
@@ -216,6 +220,15 @@ impl SourceAdapter for StubAdapter {
                 observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
                 Box::pin(stream::iter([Ok((series, observation))]))
             }
+            StubMode::WrongArtifactAfterRow => {
+                let (series, mut observation) = row.clone();
+                observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
+                Box::pin(stream::iter([Ok(row), Ok((series, observation))]))
+            }
+            StubMode::ParseErrorBeforeRow => Box::pin(stream::iter([
+                Err(AdapterError::FormatDrift("bad first row shape".into())),
+                Ok(row),
+            ])),
             StubMode::ParseErrorAfterRow => Box::pin(stream::iter([
                 Ok(row),
                 Err(AdapterError::FormatDrift("bad row shape".into())),
@@ -652,6 +665,60 @@ async fn parse_rejects_observations_for_the_wrong_artifact_and_audits_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn late_artifact_mismatch_rejects_buffered_rows_and_audits_error() {
+    let timescale = start_timescale("au_kpis_pipeline_late_artifact_mismatch")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::WrongArtifactAfterRow,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::ArtifactMismatch {
+                ref expected,
+                ref actual,
+            }) if expected != actual
+        ),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    let parse_error_count: i64 = sqlx::query_scalar("SELECT count(*) FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("count parse errors");
+    assert_eq!(observation_count, 0);
+    assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fatal_parse_error_before_any_rows_is_audited_and_fails_pipeline() {
     let timescale = start_timescale("au_kpis_pipeline_fatal_parse_error")
         .await
@@ -695,6 +762,54 @@ async fn fatal_parse_error_before_any_rows_is_audited_and_fails_pipeline() {
         .await
         .expect("count parse errors");
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_row_parse_error_is_audited_while_later_valid_rows_load() {
+    let timescale = start_timescale("au_kpis_pipeline_first_parse_error")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::ParseErrorBeforeRow,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("row-level parse errors before valid rows should not fail the artifact");
+
+    assert_eq!(stats.loaded.observations_loaded, 1);
+    assert_eq!(stats.loaded.parse_errors, 1);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    let row_context: serde_json::Value = sqlx::query_scalar("SELECT row_context FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("read parse error row context");
+
+    assert_eq!(observation_count, 1);
+    assert_eq!(row_context["fatal"], false);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

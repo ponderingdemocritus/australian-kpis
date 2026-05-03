@@ -78,10 +78,17 @@ impl ArtifactRecorder for PassthroughRecorder {
 #[derive(Debug)]
 struct TraceParentAdapter {
     manifest: AdapterManifest,
+    mode: TraceParentMode,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TraceParentMode {
+    ExplicitJobParents,
+    DiscoveryParent,
 }
 
 impl TraceParentAdapter {
-    fn new() -> Self {
+    fn new(mode: TraceParentMode) -> Self {
         Self {
             manifest: AdapterManifest {
                 source_id: SourceId::new("stub").unwrap(),
@@ -90,6 +97,7 @@ impl TraceParentAdapter {
                 rate_limit: RateLimit::new(600, Duration::from_secs(60)).unwrap(),
                 dataflows: vec![DataflowId::new("stub.cpi").unwrap()],
             },
+            mode,
         }
     }
 }
@@ -104,11 +112,18 @@ impl SourceAdapter for TraceParentAdapter {
         &self.manifest
     }
 
-    async fn discover(&self, _ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
-        Ok(vec![
-            trace_job("job-1", "https://example.test/cpi.json", TRACE_PARENT),
-            trace_job("job-2", "https://example.test/cpi-2.json", TRACE_PARENT_ALT),
-        ])
+    async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+        match self.mode {
+            TraceParentMode::ExplicitJobParents => Ok(vec![
+                trace_job("job-1", "https://example.test/cpi.json", TRACE_PARENT),
+                trace_job("job-2", "https://example.test/cpi-2.json", TRACE_PARENT_ALT),
+            ]),
+            TraceParentMode::DiscoveryParent => Ok(vec![trace_job(
+                "job-1",
+                "https://example.test/cpi.json",
+                ctx.trace_parent().expect("discovery trace parent"),
+            )]),
+        }
     }
 
     async fn fetch(
@@ -178,7 +193,7 @@ async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
     );
 
     let guard = tracing::subscriber::set_default(subscriber);
-    let stats = pipeline(pool)
+    let stats = pipeline(pool, TraceParentMode::ExplicitJobParents)
         .run_source(
             SourceId::new("stub").unwrap(),
             contexts(),
@@ -210,9 +225,56 @@ async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
     assert_eq!(span_parent_pairs(&spans, "ingestion_load_batch"), expected);
 }
 
-fn pipeline(pool: PgPool) -> IngestionPipeline {
+#[tokio::test(flavor = "current_thread")]
+async fn downstream_job_spans_descend_from_discovery_span() {
+    let timescale = start_timescale("au_kpis_pipeline_discovery_trace_tree")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    seed_stub_reference_data(&pool, ArtifactId::of_content(b"job-1")).await;
+
+    let exporter = TestSpanExporter::default();
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let tracer = provider.tracer("ingestion-core-test");
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_filter(LevelFilter::INFO),
+    );
+
+    let guard = tracing::subscriber::set_default(subscriber);
+    let stats = pipeline(pool, TraceParentMode::DiscoveryParent)
+        .run_source(
+            SourceId::new("stub").unwrap(),
+            contexts(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("pipeline should propagate discovery span context");
+    drop(guard);
+
+    assert_eq!(stats.loaded.observations_loaded, 1);
+    for result in provider.force_flush() {
+        result.expect("flush exported spans");
+    }
+
+    let spans = exporter.finished_spans();
+    let expected = BTreeSet::from([span_context_pair(&spans, "ingestion_discover")]);
+
+    assert_eq!(span_parent_pairs(&spans, "ingestion_fetch_job"), expected);
+    assert_eq!(span_parent_pairs(&spans, "ingestion_parse_job"), expected);
+    assert_eq!(span_parent_pairs(&spans, "ingestion_load_batch"), expected);
+}
+
+fn pipeline(pool: PgPool, mode: TraceParentMode) -> IngestionPipeline {
     let mut builder = au_kpis_adapter::Adapters::builder();
-    builder.register(TraceParentAdapter::new()).unwrap();
+    builder.register(TraceParentAdapter::new(mode)).unwrap();
     IngestionPipeline::new(builder.build(), pool).with_options(PipelineOptions {
         channel_capacity: 2,
         fetch_concurrency: 2,
@@ -253,6 +315,20 @@ fn span_parent_pairs(
             )
         })
         .collect()
+}
+
+fn span_context_pair(
+    spans: &[opentelemetry_sdk::export::trace::SpanData],
+    name: &str,
+) -> (String, String) {
+    let span = spans
+        .iter()
+        .find(|span| span.name == name)
+        .unwrap_or_else(|| panic!("missing span `{name}`"));
+    (
+        span.span_context.span_id().to_string(),
+        span.span_context.trace_id().to_string(),
+    )
 }
 
 async fn connect_with_retry(cfg: &DatabaseConfig) -> PgPool {
