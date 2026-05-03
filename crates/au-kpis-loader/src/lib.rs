@@ -39,8 +39,8 @@ pub struct LoadItemAudit {
 /// Parsed rows can be staged incrementally to keep the hot path bounded, then
 /// promoted only after the parser accepts the full artifact. Each staged COPY
 /// chunk uses its own transaction; the temporary staging tables live on a
-/// dedicated connection that is closed when the artifact is accepted or
-/// rejected.
+/// dedicated connection that is cleaned and returned to the pool when the
+/// artifact is accepted or rejected.
 #[derive(Debug)]
 pub struct StagedLoad {
     pool: PgPool,
@@ -193,7 +193,7 @@ pub async fn begin_staged_load(
     validate_options(options)?;
 
     let mut conn = pool.acquire().await?;
-    conn.close_on_drop();
+    drop_staging_tables(&mut conn).await?;
     let mut tx = (&mut conn).begin().await?;
     create_series_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
     create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
@@ -244,18 +244,24 @@ impl StagedLoad {
 
     /// Promote all staged rows into durable tables.
     pub async fn commit(mut self) -> Result<LoadStats, LoadError> {
-        let mut tx = (&mut self.conn).begin().await?;
-        self.stats.series_upserted += upsert_series(&mut tx).await?;
-        self.stats.observations_loaded += upsert_observations(&mut tx).await?;
-        tx.commit().await?;
-        self.conn.close().await?;
-        Ok(self.stats)
+        let result = async {
+            let mut tx = (&mut self.conn).begin().await?;
+            self.stats.series_upserted += upsert_series(&mut tx).await?;
+            self.stats.observations_loaded += upsert_observations(&mut tx).await?;
+            tx.commit().await?;
+            Ok(self.stats)
+        }
+        .await;
+        let cleanup = drop_staging_tables(&mut self.conn).await;
+        match (result, cleanup) {
+            (Ok(stats), Ok(())) => Ok(stats),
+            (Err(err), _) | (Ok(_), Err(err)) => Err(err),
+        }
     }
 
     /// Drop staged rows for a rejected artifact.
-    pub async fn rollback(self) -> Result<(), LoadError> {
-        self.conn.close().await?;
-        Ok(())
+    pub async fn rollback(mut self) -> Result<(), LoadError> {
+        drop_staging_tables(&mut self.conn).await
     }
 }
 
@@ -329,6 +335,13 @@ async fn load_observation_batch(
 
 async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Result<(), LoadError> {
     create_series_staging_table_with_on_commit(tx, "DROP").await
+}
+
+async fn drop_staging_tables(conn: &mut PoolConnection<Postgres>) -> Result<(), LoadError> {
+    sqlx::query("DROP TABLE IF EXISTS staging_observations, staging_series")
+        .execute(&mut **conn)
+        .await?;
+    Ok(())
 }
 
 async fn create_series_staging_table_with_on_commit(

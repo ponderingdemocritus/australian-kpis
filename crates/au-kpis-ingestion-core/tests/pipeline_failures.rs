@@ -1044,6 +1044,50 @@ async fn accepted_rows_flush_before_later_staged_load_failure() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_rows_flush_before_later_buffered_load_failure() {
+    let timescale = start_timescale("au_kpis_pipeline_accepted_before_buffered_failure")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let first_artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
+    seed_stub_reference_data(&pool, first_artifact_id).await;
+    seed_stub_artifact(&pool, second_artifact_id, "https://example.test/cpi-2.json").await;
+
+    let result = pipeline_with_pool(
+        StubMode::AcceptedThenStagedLoadError,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 1,
+            parse_concurrency: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fatal_parse_error_before_any_rows_is_audited_and_fails_pipeline() {
     let timescale = start_timescale("au_kpis_pipeline_fatal_parse_error")
         .await

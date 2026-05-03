@@ -1218,6 +1218,7 @@ async fn append_accepted_load_items(
             "accepted load item/correlation count mismatch".into(),
         ));
     }
+    flush_accepted_if_needed(pool, accepted, options, loaded).await?;
 
     for (item, correlation) in items.into_iter().zip(correlations) {
         let item_bytes = estimate_load_item_bytes(&item);

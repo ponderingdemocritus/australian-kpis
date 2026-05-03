@@ -226,7 +226,7 @@ async fn per_job_trace_parents_are_restored_on_fetch_parse_and_load_spans() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn trace_parent_changes_do_not_fragment_load_batches() {
+async fn trace_parent_changes_do_not_fragment_beyond_artifact_boundaries() {
     let timescale = start_timescale("au_kpis_pipeline_trace_batch_size")
         .await
         .expect("start timescaledb container");
@@ -266,7 +266,7 @@ async fn trace_parent_changes_do_not_fragment_load_batches() {
     drop(guard);
 
     assert_eq!(stats.loaded.observations_loaded, 2);
-    assert_eq!(stats.loaded.batches, 1);
+    assert_eq!(stats.loaded.batches, 2);
     for result in provider.force_flush() {
         result.expect("flush exported spans");
     }

@@ -6,10 +6,12 @@ use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
     ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
 };
-use au_kpis_loader::{LoadItem, LoadOptions, load_batch, load_batch_with_options};
+use au_kpis_loader::{
+    LoadItem, LoadItemAudit, LoadOptions, begin_staged_load, load_batch, load_batch_with_options,
+};
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
 static TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -236,6 +238,53 @@ async fn validation_errors_are_recorded_without_failing_valid_rows() {
 
     assert_eq!(observation_count, 1);
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_load_cleanup_returns_live_connection_to_pool() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_connection_reuse")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged connection reuse fixture");
+    seed_reference_data(&pool, artifact_id).await;
+    let initial_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read initial backend pid");
+
+    let aus = descriptor("AUS");
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 1,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&aus, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage row");
+    let stats = staged.commit().await.expect("commit staged load");
+
+    assert_eq!(stats.observations_loaded, 1);
+    let after_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read backend pid after staged cleanup");
+    assert_eq!(after_pid, initial_pid);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
