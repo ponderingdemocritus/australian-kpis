@@ -266,7 +266,7 @@ async fn trace_parent_changes_do_not_fragment_beyond_artifact_boundaries() {
     drop(guard);
 
     assert_eq!(stats.loaded.observations_loaded, 2);
-    assert_eq!(stats.loaded.batches, 2);
+    assert_eq!(stats.loaded.batches, 1);
     for result in provider.force_flush() {
         result.expect("flush exported spans");
     }

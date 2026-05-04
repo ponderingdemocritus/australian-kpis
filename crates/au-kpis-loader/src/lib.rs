@@ -183,6 +183,62 @@ pub async fn load_batch_with_options_and_audit_context(
     Ok(stats)
 }
 
+/// Validate database references that would otherwise fail after batching.
+#[instrument(skip(pool, items))]
+pub async fn validate_load_references(pool: &PgPool, items: &[LoadItem]) -> Result<(), LoadError> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    let dataflow_ids = items
+        .iter()
+        .map(|item| item.series.dataflow_id.to_string())
+        .collect::<Vec<_>>();
+    let measure_ids = items
+        .iter()
+        .map(|item| item.series.measure_id.to_string())
+        .collect::<Vec<_>>();
+    let artifact_ids = items
+        .iter()
+        .map(|item| {
+            item.observation
+                .source_artifact_id
+                .digest()
+                .as_bytes()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+
+    let (missing_dataflows, missing_measures, missing_artifacts): (i64, i64, i64) = sqlx::query_as(
+        "WITH input AS (
+             SELECT *
+             FROM UNNEST($1::text[], $2::text[], $3::bytea[])
+                  AS item(dataflow_id, measure_id, artifact_id)
+         )
+         SELECT
+             COUNT(*) FILTER (WHERE dataflows.id IS NULL)::BIGINT,
+             COUNT(*) FILTER (WHERE measures.id IS NULL)::BIGINT,
+             COUNT(*) FILTER (WHERE artifacts.id IS NULL)::BIGINT
+         FROM input
+         LEFT JOIN dataflows ON dataflows.id = input.dataflow_id
+         LEFT JOIN measures ON measures.id = input.measure_id
+         LEFT JOIN artifacts ON artifacts.id = input.artifact_id",
+    )
+    .bind(dataflow_ids)
+    .bind(measure_ids)
+    .bind(artifact_ids)
+    .fetch_one(pool)
+    .await?;
+
+    if missing_dataflows == 0 && missing_measures == 0 && missing_artifacts == 0 {
+        return Ok(());
+    }
+
+    Err(LoadError::Validation(format!(
+        "loader references missing: dataflows={missing_dataflows}, measures={missing_measures}, artifacts={missing_artifacts}"
+    )))
+}
+
 /// Start a staged load session for one artifact.
 #[instrument(skip(pool))]
 pub async fn begin_staged_load(

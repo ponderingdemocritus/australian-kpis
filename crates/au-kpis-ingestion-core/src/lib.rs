@@ -1060,6 +1060,17 @@ async fn finish_cancelled_parse(
     early_adapter_errors: &mut Vec<AdapterError>,
     parsed: u64,
 ) -> Result<(), IngestionError> {
+    if parsed > 0 {
+        send_produced(
+            tx,
+            LoadStageItem::RejectArtifact {
+                artifact_id: audit.artifact_id,
+                correlation: audit.correlation.clone(),
+            },
+            audit.cancellation,
+        )
+        .await?;
+    }
     if !early_adapter_errors.is_empty() {
         let fatal = parsed == 0;
         send_adapter_parse_errors(tx, audit, early_adapter_errors, fatal).await?;
@@ -1069,15 +1080,6 @@ async fn finish_cancelled_parse(
         send_produced(
             tx,
             LoadStageItem::ParseError(parse_cancelled_error_record(audit, parsed)),
-            audit.cancellation,
-        )
-        .await?;
-        send_produced(
-            tx,
-            LoadStageItem::RejectArtifact {
-                artifact_id: audit.artifact_id,
-                correlation: audit.correlation.clone(),
-            },
             audit.cancellation,
         )
         .await?;
@@ -1282,7 +1284,12 @@ async fn append_accepted_load_items(
             "accepted load item/correlation count mismatch".into(),
         ));
     }
-    flush_accepted_if_needed(pool, accepted, options, loaded).await?;
+    if !accepted.batch.is_empty() {
+        if let Err(err) = au_kpis_loader::validate_load_references(pool, &items).await {
+            flush_accepted_if_needed(pool, accepted, options, loaded).await?;
+            return Err(err);
+        }
+    }
 
     for (item, correlation) in items.into_iter().zip(correlations) {
         let item_bytes = estimate_load_item_bytes(&item);
