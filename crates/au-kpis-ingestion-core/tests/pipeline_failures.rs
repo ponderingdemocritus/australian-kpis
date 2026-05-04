@@ -1138,6 +1138,65 @@ async fn staged_loader_validation_audit_survives_later_artifact_rejection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn buffered_loader_validation_audit_survives_artifact_rejection() {
+    let timescale = start_timescale("au_kpis_pipeline_buffered_validation_reject")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::LoaderValidationThenWrongArtifact,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::ArtifactMismatch {
+                ref expected,
+                ref actual,
+            }) if expected != actual
+        ),
+        "{result:?}"
+    );
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT error_kind FROM parse_errors
+         ORDER BY error_kind",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read parse error kinds");
+    let error_kinds: Vec<_> = rows.into_iter().map(|(kind,)| kind).collect();
+    assert_eq!(error_kinds, vec!["artifact_mismatch", "loader_validation"]);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn accepted_rows_flush_before_later_staged_load_failure() {
     let timescale = start_timescale("au_kpis_pipeline_accepted_before_staged_failure")
         .await
@@ -1505,7 +1564,7 @@ async fn cancellation_flushes_partial_load_batch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_rejects_partially_parsed_artifacts_after_shutdown() {
+async fn cancellation_drains_ready_parser_rows_after_shutdown() {
     let timescale = start_timescale("au_kpis_pipeline_ready_cancel")
         .await
         .expect("start timescaledb container");
@@ -1532,24 +1591,15 @@ async fn cancellation_rejects_partially_parsed_artifacts_after_shutdown() {
     .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
     .await;
 
-    assert!(
-        matches!(result, Err(IngestionError::Cancelled)),
-        "{result:?}"
-    );
+    result.expect("ready parser rows should drain before shutdown completes");
 
     let (observation_count, parse_error_count): (i64, i64) =
         sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")
             .fetch_one(&pool)
             .await
             .expect("count observations and parse errors");
-    assert_eq!(observation_count, 0);
-    assert_eq!(parse_error_count, 1);
-
-    let error_kind: String = sqlx::query_scalar("SELECT error_kind FROM parse_errors")
-        .fetch_one(&pool)
-        .await
-        .expect("read parse error kind");
-    assert_eq!(error_kind, "parse_cancelled");
+    assert_eq!(observation_count, 3);
+    assert_eq!(parse_error_count, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

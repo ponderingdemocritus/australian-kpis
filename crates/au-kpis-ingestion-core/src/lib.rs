@@ -15,10 +15,12 @@ use std::{
 use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterHttpClient, Adapters, ArtifactRecorder, ArtifactRecorderRef, DiscoveryCtx,
-    FetchCtx, ParseCtx,
+    FetchCtx, ObservationStream, ParseCtx,
 };
 use au_kpis_db::PgPool;
-use au_kpis_domain::{Artifact, ids::ArtifactId, ids::DataflowId, ids::SourceId};
+use au_kpis_domain::{
+    Artifact, Observation, SeriesDescriptor, ids::ArtifactId, ids::DataflowId, ids::SourceId,
+};
 use au_kpis_error::Classify;
 use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats, StagedLoad};
 use au_kpis_storage::BlobStore;
@@ -820,7 +822,7 @@ async fn parse_one_artifact(
         let mut parsed = 0;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
         let mut early_adapter_errors = Vec::new();
-        let mut admitted_post_cancel_item = false;
+        let mut draining_after_cancel = false;
         let audit = ParseErrorAudit {
             artifact_id,
             dataflow_id: &fetched.dataflow_id,
@@ -831,49 +833,49 @@ async fn parse_one_artifact(
 
         loop {
             let row = if cancellation.is_cancelled() {
-                if admitted_post_cancel_item {
-                    // Already accepted one row post-cancel; only honor a
-                    // synchronously-ready end-of-stream so the task winds down
-                    // promptly without admitting further rows.
-                    if matches!(observations.next().now_or_never(), Some(None)) {
-                        break;
+                match next_after_cancellation(&mut observations, &mut draining_after_cancel).await {
+                    Some(row) => row,
+                    None => {
+                        finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
+                            .await?;
+                        return Err(IngestionError::Cancelled);
                     }
-                    finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed).await?;
-                    return Err(IngestionError::Cancelled);
                 }
-                admitted_post_cancel_item = true;
-                // Allow one async wake so adapters that need a single async
-                // step to deliver the in-flight row (blob_store read,
-                // spawn_blocking handoff, sidecar call) are not dropped. The
-                // outer shutdown_grace bounds how long this can take.
-                observations.next().await
             } else {
                 tokio::select! {
                     biased;
                     () = cancellation.cancelled() => {
-                        if admitted_post_cancel_item {
-                            if matches!(observations.next().now_or_never(), Some(None)) {
-                                break;
+                        match next_after_cancellation(
+                            &mut observations,
+                            &mut draining_after_cancel,
+                        )
+                        .await
+                        {
+                            Some(row) => row,
+                            None => {
+                                finish_cancelled_parse(
+                                    &tx,
+                                    &audit,
+                                    &mut early_adapter_errors,
+                                    parsed,
+                                )
+                                .await?;
+                                return Err(IngestionError::Cancelled);
                             }
-                            finish_cancelled_parse(
-                                &tx,
-                                &audit,
-                                &mut early_adapter_errors,
-                                parsed,
-                            )
-                            .await?;
-                            return Err(IngestionError::Cancelled);
                         }
-                        admitted_post_cancel_item = true;
-                        observations.next().await
                     }
-                    row = observations.next() => row,
+                    row = observations.next() => {
+                        let after_cancel = cancellation.is_cancelled();
+                        if after_cancel {
+                            draining_after_cancel = true;
+                        }
+                        row
+                    },
                 }
             };
             let Some(row) = row else {
                 break;
             };
-            let row_arrived_after_cancel = cancellation.is_cancelled();
 
             let (series, observation) = match row {
                 Ok(row) => row,
@@ -894,9 +896,6 @@ async fn parse_one_artifact(
                             &cancellation,
                         )
                         .await?;
-                    }
-                    if row_arrived_after_cancel {
-                        admitted_post_cancel_item = true;
                     }
                     continue;
                 }
@@ -974,9 +973,6 @@ async fn parse_one_artifact(
             )
             .await?;
             parsed += 1;
-            if row_arrived_after_cancel {
-                admitted_post_cancel_item = true;
-            }
         }
 
         if parsed == 0 && !early_adapter_errors.is_empty() {
@@ -1012,6 +1008,18 @@ async fn parse_one_artifact(
     }
     .instrument(span)
     .await
+}
+
+async fn next_after_cancellation(
+    observations: &mut ObservationStream<'_>,
+    draining_after_cancel: &mut bool,
+) -> Option<Option<Result<(SeriesDescriptor, Observation), AdapterError>>> {
+    if *draining_after_cancel {
+        observations.next().now_or_never()
+    } else {
+        *draining_after_cancel = true;
+        Some(observations.next().await)
+    }
 }
 
 struct ParseErrorAudit<'a> {
@@ -1203,7 +1211,7 @@ async fn load_stage(
                 let key = PendingLoadKey::new(artifact_id, correlation);
                 if let Some(artifact) = pending.remove(&key) {
                     flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
-                    let staged_stats = artifact.rollback().await?;
+                    let staged_stats = artifact.rollback(&pool, options).await?;
                     add_load_stats(&mut loaded, staged_stats);
                 }
             }
@@ -1230,7 +1238,7 @@ async fn load_stage(
     }
     flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
     for (_, artifact) in pending {
-        let staged_stats = artifact.rollback().await?;
+        let staged_stats = artifact.rollback(&pool, options).await?;
         add_load_stats(&mut loaded, staged_stats);
     }
     Ok(PipelineRunStats {
@@ -1391,7 +1399,14 @@ impl PendingArtifactLoad {
         }
     }
 
-    async fn rollback(self) -> Result<LoadStats, au_kpis_loader::LoadError> {
+    async fn rollback(
+        mut self,
+        pool: &PgPool,
+        options: LoadOptions,
+    ) -> Result<LoadStats, au_kpis_loader::LoadError> {
+        if !self.batch.is_empty() {
+            self.stage(pool, options).await?;
+        }
         if let Some(staged) = self.staged {
             return staged.rollback().await;
         }

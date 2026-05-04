@@ -43,7 +43,6 @@ pub struct LoadItemAudit {
 /// artifact is accepted or rejected.
 #[derive(Debug)]
 pub struct StagedLoad {
-    pool: PgPool,
     conn: PoolConnection<Postgres>,
     stats: LoadStats,
 }
@@ -200,7 +199,6 @@ pub async fn begin_staged_load(
     tx.commit().await?;
 
     Ok(StagedLoad {
-        pool: pool.clone(),
         conn,
         stats: LoadStats::default(),
     })
@@ -217,8 +215,8 @@ impl StagedLoad {
                     valid_items.push(audited.item);
                 }
                 Err(message) => {
-                    record_loader_validation_error(
-                        &self.pool,
+                    record_loader_validation_error_on_connection(
+                        &mut self.conn,
                         audited.item.observation.source_artifact_id,
                         &message,
                         &audited.item,
@@ -574,13 +572,7 @@ async fn record_loader_validation_error(
     item: &LoadItem,
     audit_context: Option<Value>,
 ) -> Result<(), LoadError> {
-    let base_context = serde_json::json!({
-        "dataflow_id": item.series.dataflow_id,
-        "series_key": item.series.series_key,
-        "observation_time": item.observation.time,
-        "revision_no": item.observation.revision_no,
-    });
-    let row_context = merge_row_context(base_context, audit_context);
+    let row_context = loader_validation_row_context(item, audit_context);
 
     record_parse_error(
         pool,
@@ -590,6 +582,56 @@ async fn record_loader_validation_error(
         Some(row_context),
     )
     .await
+}
+
+async fn record_loader_validation_error_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    artifact_id: ArtifactId,
+    message: &str,
+    item: &LoadItem,
+    audit_context: Option<Value>,
+) -> Result<(), LoadError> {
+    let row_context = loader_validation_row_context(item, audit_context);
+
+    record_parse_error_on_connection(
+        conn,
+        artifact_id,
+        "loader_validation",
+        message,
+        Some(row_context),
+    )
+    .await
+}
+
+fn loader_validation_row_context(item: &LoadItem, audit_context: Option<Value>) -> Value {
+    let base_context = serde_json::json!({
+        "dataflow_id": item.series.dataflow_id,
+        "series_key": item.series.series_key,
+        "observation_time": item.observation.time,
+        "revision_no": item.observation.revision_no,
+    });
+    merge_row_context(base_context, audit_context)
+}
+
+async fn record_parse_error_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    artifact_id: ArtifactId,
+    error_kind: &str,
+    error_message: &str,
+    row_context: Option<Value>,
+) -> Result<(), LoadError> {
+    sqlx::query(
+        "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(error_kind)
+    .bind(error_message)
+    .bind(row_context)
+    .execute(&mut **conn)
+    .await?;
+
+    Ok(())
 }
 
 fn merge_row_context(mut base: Value, extra: Option<Value>) -> Value {

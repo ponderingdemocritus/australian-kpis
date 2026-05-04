@@ -294,7 +294,7 @@ async fn staged_load_rollback_returns_recorded_parse_error_stats() {
         .await
         .expect("start timescaledb container");
     let pool = PgPoolOptions::new()
-        .max_connections(2)
+        .max_connections(1)
         .connect(timescale.url())
         .await
         .expect("connect to timescaledb");
