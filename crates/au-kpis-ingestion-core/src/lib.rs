@@ -832,6 +832,9 @@ async fn parse_one_artifact(
         loop {
             let row = if cancellation.is_cancelled() {
                 if admitted_post_cancel_item {
+                    // Already accepted one row post-cancel; only honor a
+                    // synchronously-ready end-of-stream so the task winds down
+                    // promptly without admitting further rows.
                     if matches!(observations.next().now_or_never(), Some(None)) {
                         break;
                     }
@@ -839,14 +842,11 @@ async fn parse_one_artifact(
                     return Err(IngestionError::Cancelled);
                 }
                 admitted_post_cancel_item = true;
-                match observations.next().now_or_never() {
-                    Some(row) => row,
-                    None => {
-                        finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
-                            .await?;
-                        return Err(IngestionError::Cancelled);
-                    }
-                }
+                // Allow one async wake so adapters that need a single async
+                // step to deliver the in-flight row (blob_store read,
+                // spawn_blocking handoff, sidecar call) are not dropped. The
+                // outer shutdown_grace bounds how long this can take.
+                observations.next().await
             } else {
                 tokio::select! {
                     biased;
@@ -865,19 +865,7 @@ async fn parse_one_artifact(
                             return Err(IngestionError::Cancelled);
                         }
                         admitted_post_cancel_item = true;
-                        match observations.next().now_or_never() {
-                            Some(row) => row,
-                            None => {
-                                finish_cancelled_parse(
-                                    &tx,
-                                    &audit,
-                                    &mut early_adapter_errors,
-                                    parsed,
-                                )
-                                .await?;
-                                return Err(IngestionError::Cancelled);
-                            }
-                        }
+                        observations.next().await
                     }
                     row = observations.next() => row,
                 }
