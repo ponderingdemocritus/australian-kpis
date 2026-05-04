@@ -288,6 +288,54 @@ async fn staged_load_cleanup_returns_live_connection_to_pool() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_load_rollback_returns_recorded_parse_error_stats() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_rollback_parse_errors")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged rollback parse errors fixture");
+    seed_reference_data(&pool, artifact_id).await;
+
+    let aus = descriptor("AUS");
+    let mut bad = descriptor("NSW");
+    bad.series_key = aus.series_key;
+
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 8,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&bad, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage records loader validation error without failing");
+
+    let stats = staged.rollback().await.expect("rollback returns stats");
+    assert_eq!(stats.parse_errors, 1);
+    assert_eq!(stats.observations_loaded, 0);
+
+    let parse_error_count: i64 = sqlx::query_scalar("SELECT count(*) FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("count parse_errors after rollback");
+    assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn staged_load_stage_error_drops_temp_tables_before_pool_reuse() {
     let _guard = TEST_LOCK.lock().await;
     let timescale = start_timescale("au_kpis_loader_staged_stage_error_cleanup")

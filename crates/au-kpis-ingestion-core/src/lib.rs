@@ -1203,7 +1203,8 @@ async fn load_stage(
                 let key = PendingLoadKey::new(artifact_id, correlation);
                 if let Some(artifact) = pending.remove(&key) {
                     flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
-                    artifact.rollback().await?;
+                    let staged_stats = artifact.rollback().await?;
+                    add_load_stats(&mut loaded, staged_stats);
                 }
             }
             LoadStageItem::ParseError(record) => {
@@ -1229,7 +1230,8 @@ async fn load_stage(
     }
     flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
     for (_, artifact) in pending {
-        artifact.rollback().await?;
+        let staged_stats = artifact.rollback().await?;
+        add_load_stats(&mut loaded, staged_stats);
     }
     Ok(PipelineRunStats {
         loaded,
@@ -1389,11 +1391,11 @@ impl PendingArtifactLoad {
         }
     }
 
-    async fn rollback(self) -> Result<(), au_kpis_loader::LoadError> {
+    async fn rollback(self) -> Result<LoadStats, au_kpis_loader::LoadError> {
         if let Some(staged) = self.staged {
-            staged.rollback().await?;
+            return staged.rollback().await;
         }
-        Ok(())
+        Ok(LoadStats::default())
     }
 
     async fn stage(
@@ -1410,7 +1412,7 @@ impl PendingArtifactLoad {
             Err(err) => {
                 if let Some(staged) = self.staged.take() {
                     return match staged.rollback().await {
-                        Ok(()) => Err(err),
+                        Ok(_) => Err(err),
                         Err(cleanup_err) => Err(cleanup_err),
                     };
                 }
@@ -1437,7 +1439,7 @@ impl PendingArtifactLoad {
             .await;
         if let Err(err) = result {
             return match staged.rollback().await {
-                Ok(()) => Err(err),
+                Ok(_) => Err(err),
                 Err(cleanup_err) => Err(cleanup_err),
             };
         }

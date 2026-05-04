@@ -269,9 +269,13 @@ impl StagedLoad {
         }
     }
 
-    /// Drop staged rows for a rejected artifact.
-    pub async fn rollback(mut self) -> Result<(), LoadError> {
-        drop_staging_tables(&mut self.conn).await
+    /// Drop staged rows for a rejected artifact and surface any loader
+    /// validation errors that were already recorded against `parse_errors` so
+    /// the caller can fold them into pipeline stats.
+    pub async fn rollback(mut self) -> Result<LoadStats, LoadError> {
+        let stats = self.stats;
+        drop_staging_tables(&mut self.conn).await?;
+        Ok(stats)
     }
 }
 
