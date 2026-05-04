@@ -614,23 +614,30 @@ jobs:
             git show "${BASE_SHA}:${path}"
           }
 
+          current_file() {
+            local path="$1"
+            cat "$path"
+          }
+
           guide_file() {
             local path="$1"
-            if git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+            if [ -f "$path" ]; then
+              current_file "$path"
+            elif git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+              echo "[Guide was deleted in this PR; showing base version.]"
               base_file "$path"
             else
-              echo "[Guide did not exist at base commit ${BASE_SHA}; showing head version.]"
-              git show "${HEAD_SHA}:${path}"
+              echo "[Guide does not exist in base or head.]"
             fi
           }
 
-          base_file ".github/codex/review_prompt.md" >codex-prompt.md
-          base_file ".github/codex/output-schema.json" >codex-output-schema.json
+          current_file ".github/codex/review_prompt.md" >codex-prompt.md
+          current_file ".github/codex/output-schema.json" >codex-output-schema.json
 
           changed_files="$(git --no-pager diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
           guide_list_file="$(mktemp)"
           base_agents_file="$(mktemp)"
-          base_file "AGENTS.md" >"$base_agents_file"
+          current_file "AGENTS.md" >"$base_agents_file"
 
           print_agents_section() {
             local start_regex="$1"

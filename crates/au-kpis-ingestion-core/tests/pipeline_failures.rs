@@ -28,6 +28,7 @@ const TRACE_PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7
 #[derive(Debug, Clone, Copy)]
 enum StubMode {
     SlowFetch,
+    FetchCompletesAfterCancellation,
     WrongDiscoveredSource,
     ManyRows,
     RequireParseDataflow,
@@ -45,6 +46,7 @@ enum StubMode {
     ReadyRowsAfterCancellation,
     LoaderValidationError,
     LoaderValidationThenWrongArtifact,
+    MissingReferenceFirstAccepted,
     AcceptedThenStagedLoadError,
     RevisionRows,
     TwoJobsCancelAfterFirstFetch,
@@ -111,6 +113,7 @@ impl SourceAdapter for StubAdapter {
         let source_id = match self.mode {
             StubMode::WrongDiscoveredSource => SourceId::new("other").unwrap(),
             StubMode::SlowFetch
+            | StubMode::FetchCompletesAfterCancellation
             | StubMode::ManyRows
             | StubMode::RequireParseDataflow
             | StubMode::RequireDiscoveryTraceParent
@@ -127,6 +130,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ReadyRowsAfterCancellation
             | StubMode::LoaderValidationError
             | StubMode::LoaderValidationThenWrongArtifact
+            | StubMode::MissingReferenceFirstAccepted
             | StubMode::AcceptedThenStagedLoadError
             | StubMode::RevisionRows
             | StubMode::TwoJobsCancelAfterFirstFetch
@@ -176,6 +180,9 @@ impl SourceAdapter for StubAdapter {
     ) -> Result<ArtifactRef, AdapterError> {
         if matches!(self.mode, StubMode::SlowFetch) {
             tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+        if matches!(self.mode, StubMode::FetchCompletesAfterCancellation) {
+            tokio::time::sleep(Duration::from_millis(75)).await;
         }
         if matches!(self.mode, StubMode::TwoJobsCancelAfterFirstFetch) && job.id == "job-1" {
             self.cancel_token()
@@ -281,6 +288,9 @@ impl SourceAdapter for StubAdapter {
                     Ok((series, observation)),
                 ]))
             }
+            StubMode::MissingReferenceFirstAccepted => {
+                Box::pin(stream::iter([Ok(missing_measure_row(artifact.id))]))
+            }
             StubMode::AcceptedThenStagedLoadError => {
                 if artifact.id == ArtifactId::of_content(b"job-2") {
                     let first = missing_measure_row(artifact.id);
@@ -320,9 +330,9 @@ impl SourceAdapter for StubAdapter {
                 Some("job-2") => row_then_delayed_wrong_artifact(row, Duration::from_millis(100)),
                 other => panic!("unexpected duplicate artifact job id: {other:?}"),
             },
-            StubMode::SlowFetch | StubMode::WrongDiscoveredSource => {
-                Box::pin(stream::iter([Ok(row)]))
-            }
+            StubMode::SlowFetch
+            | StubMode::FetchCompletesAfterCancellation
+            | StubMode::WrongDiscoveredSource => Box::pin(stream::iter([Ok(row)])),
             StubMode::RequireParseDataflow => unreachable!("handled above"),
             StubMode::RequireDiscoveryTraceParent | StubMode::MissingJobTraceParent => {
                 unreachable!("handled above")
@@ -694,6 +704,52 @@ async fn cancellation_bounds_busy_fetch_stage_by_shutdown_grace() {
         ),
         "{result:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_drains_fetch_that_completes_within_shutdown_grace() {
+    let timescale = start_timescale("au_kpis_pipeline_cancel_fetch_drain")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let cancellation = CancellationToken::new();
+    let cancel = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+    });
+
+    let result = pipeline_with_pool(
+        StubMode::FetchCompletesAfterCancellation,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
+    .await;
+
+    assert!(
+        matches!(result, Ok(_) | Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1188,6 +1244,53 @@ async fn buffered_loader_validation_audit_survives_artifact_rejection() {
     .expect("read parse error kinds");
     let error_kinds: Vec<_> = rows.into_iter().map(|(kind,)| kind).collect();
     assert_eq!(error_kinds, vec!["artifact_mismatch", "loader_validation"]);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_buffered_accepted_artifact_missing_reference_is_audited() {
+    let timescale = start_timescale("au_kpis_pipeline_first_buffered_reference")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::MissingReferenceFirstAccepted,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT error_kind FROM parse_errors")
+        .fetch_all(&pool)
+        .await
+        .expect("read parse error kinds");
+    let error_kinds: Vec<_> = rows.into_iter().map(|(kind,)| kind).collect();
+    assert_eq!(error_kinds, vec!["loader_validation"]);
 
     let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
         .fetch_one(&pool)

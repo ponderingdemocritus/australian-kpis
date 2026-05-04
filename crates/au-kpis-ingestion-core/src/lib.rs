@@ -760,7 +760,7 @@ async fn fetch_one(
     source_id: SourceId,
     ctx: FetchCtx,
     job: au_kpis_adapter::DiscoveredJob,
-    cancellation: CancellationToken,
+    _cancellation: CancellationToken,
 ) -> Result<FetchedArtifact, IngestionError> {
     let trace_parent = job.trace_parent.clone();
     let span = info_span!(
@@ -777,19 +777,11 @@ async fn fetch_one(
     };
     let dataflow_id = job.dataflow_id.clone();
     let metadata = job.metadata.clone();
-    let mut fetch = Box::pin(adapters.fetch(source_id.as_str(), job, &ctx));
-    let artifact = async {
-        tokio::select! {
-            biased;
-            artifact = &mut fetch => artifact.map_err(IngestionError::Adapter),
-            () = cancellation.cancelled() => match futures::poll!(&mut fetch) {
-                std::task::Poll::Ready(artifact) => artifact.map_err(IngestionError::Adapter),
-                std::task::Poll::Pending => Err(IngestionError::Cancelled),
-            },
-        }
-    }
-    .instrument(span)
-    .await?;
+    let artifact = adapters
+        .fetch(source_id.as_str(), job, &ctx)
+        .instrument(span)
+        .await
+        .map_err(IngestionError::Adapter)?;
     validate_source_id("fetch", &source_id, &artifact.source_id)?;
     Ok(FetchedArtifact {
         artifact,
@@ -1284,11 +1276,21 @@ async fn append_accepted_load_items(
             "accepted load item/correlation count mismatch".into(),
         ));
     }
-    if !accepted.batch.is_empty() {
-        if let Err(err) = au_kpis_loader::validate_load_references(pool, &items).await {
-            flush_accepted_if_needed(pool, accepted, options, loaded).await?;
-            return Err(err);
-        }
+    let audited_items = items
+        .iter()
+        .zip(correlations.iter())
+        .map(|(item, correlation)| LoadItemAudit {
+            item: item.clone(),
+            row_context: Some(correlation.row_context()),
+        })
+        .collect::<Vec<_>>();
+    let reference_stats = au_kpis_loader::validate_load_references(pool, &audited_items).await?;
+    if reference_stats.parse_errors > 0 {
+        flush_accepted_if_needed(pool, accepted, options, loaded).await?;
+        add_load_stats(loaded, reference_stats);
+        return Err(au_kpis_loader::LoadError::Validation(
+            "accepted load item references failed validation".into(),
+        ));
     }
 
     for (item, correlation) in items.into_iter().zip(correlations) {

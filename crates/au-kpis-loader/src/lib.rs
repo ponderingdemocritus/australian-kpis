@@ -185,58 +185,66 @@ pub async fn load_batch_with_options_and_audit_context(
 
 /// Validate database references that would otherwise fail after batching.
 #[instrument(skip(pool, items))]
-pub async fn validate_load_references(pool: &PgPool, items: &[LoadItem]) -> Result<(), LoadError> {
+pub async fn validate_load_references(
+    pool: &PgPool,
+    items: &[LoadItemAudit],
+) -> Result<LoadStats, LoadError> {
+    let mut stats = LoadStats::default();
     if items.is_empty() {
-        return Ok(());
+        return Ok(stats);
     }
 
-    let dataflow_ids = items
-        .iter()
-        .map(|item| item.series.dataflow_id.to_string())
-        .collect::<Vec<_>>();
-    let measure_ids = items
-        .iter()
-        .map(|item| item.series.measure_id.to_string())
-        .collect::<Vec<_>>();
-    let artifact_ids = items
-        .iter()
-        .map(|item| {
-            item.observation
-                .source_artifact_id
-                .digest()
-                .as_bytes()
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
+    for audited in items {
+        let (dataflow_exists, measure_exists, artifact_exists): (bool, bool, bool) =
+            sqlx::query_as(
+                "SELECT
+                     EXISTS (SELECT 1 FROM dataflows WHERE id = $1),
+                     EXISTS (SELECT 1 FROM measures WHERE id = $2),
+                     EXISTS (SELECT 1 FROM artifacts WHERE id = $3)",
+            )
+            .bind(audited.item.series.dataflow_id.as_str())
+            .bind(audited.item.series.measure_id.as_str())
+            .bind(
+                audited
+                    .item
+                    .observation
+                    .source_artifact_id
+                    .digest()
+                    .as_bytes()
+                    .as_slice(),
+            )
+            .fetch_one(pool)
+            .await?;
 
-    let (missing_dataflows, missing_measures, missing_artifacts): (i64, i64, i64) = sqlx::query_as(
-        "WITH input AS (
-             SELECT *
-             FROM UNNEST($1::text[], $2::text[], $3::bytea[])
-                  AS item(dataflow_id, measure_id, artifact_id)
-         )
-         SELECT
-             COUNT(*) FILTER (WHERE dataflows.id IS NULL)::BIGINT,
-             COUNT(*) FILTER (WHERE measures.id IS NULL)::BIGINT,
-             COUNT(*) FILTER (WHERE artifacts.id IS NULL)::BIGINT
-         FROM input
-         LEFT JOIN dataflows ON dataflows.id = input.dataflow_id
-         LEFT JOIN measures ON measures.id = input.measure_id
-         LEFT JOIN artifacts ON artifacts.id = input.artifact_id",
-    )
-    .bind(dataflow_ids)
-    .bind(measure_ids)
-    .bind(artifact_ids)
-    .fetch_one(pool)
-    .await?;
+        let mut missing = Vec::new();
+        if !dataflow_exists {
+            missing.push(format!("dataflow `{}`", audited.item.series.dataflow_id));
+        }
+        if !measure_exists {
+            missing.push(format!("measure `{}`", audited.item.series.measure_id));
+        }
+        if !artifact_exists {
+            missing.push(format!(
+                "artifact `{}`",
+                audited.item.observation.source_artifact_id
+            ));
+        }
+        if missing.is_empty() {
+            continue;
+        }
 
-    if missing_dataflows == 0 && missing_measures == 0 && missing_artifacts == 0 {
-        return Ok(());
+        record_loader_validation_error(
+            pool,
+            audited.item.observation.source_artifact_id,
+            &format!("missing loader reference: {}", missing.join(", ")),
+            &audited.item,
+            audited.row_context.clone(),
+        )
+        .await?;
+        stats.parse_errors += 1;
     }
 
-    Err(LoadError::Validation(format!(
-        "loader references missing: dataflows={missing_dataflows}, measures={missing_measures}, artifacts={missing_artifacts}"
-    )))
+    Ok(stats)
 }
 
 /// Start a staged load session for one artifact.
