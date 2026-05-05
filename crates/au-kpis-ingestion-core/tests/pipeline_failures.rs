@@ -1516,7 +1516,8 @@ async fn accepted_rows_flush_before_later_buffered_load_failure() {
     )
     .await;
 
-    assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+    let stats = result.expect("later buffered reference failures should be audited and dropped");
+    assert_eq!(stats.loaded.parse_errors, 2);
 
     let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
         .fetch_one(&pool)

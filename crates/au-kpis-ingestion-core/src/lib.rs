@@ -848,9 +848,13 @@ async fn parse_one_artifact(
         };
 
         loop {
+            let mut row_drained_after_cancellation = false;
             let row = if cancellation.is_cancelled() {
                 match next_after_cancellation(&mut observations, shutdown_grace).await {
-                    Ok(Some(row)) => Some(row),
+                    Ok(Some(row)) => {
+                        row_drained_after_cancellation = true;
+                        Some(row)
+                    }
                     Ok(None) => None,
                     Err(err) => {
                         finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
@@ -863,7 +867,10 @@ async fn parse_one_artifact(
                     biased;
                     () = cancellation.cancelled() => {
                         match next_after_cancellation(&mut observations, shutdown_grace).await {
-                            Ok(Some(row)) => Some(row),
+                            Ok(Some(row)) => {
+                                row_drained_after_cancellation = true;
+                                Some(row)
+                            }
                             Ok(None) => None,
                             Err(err) => {
                                 finish_cancelled_parse(
@@ -887,7 +894,7 @@ async fn parse_one_artifact(
                 }
                 break;
             };
-            if cancellation.is_cancelled() {
+            if row_drained_after_cancellation || cancellation.is_cancelled() {
                 drained_after_cancellation = true;
             }
 
