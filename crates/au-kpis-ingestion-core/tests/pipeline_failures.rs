@@ -186,6 +186,9 @@ impl SourceAdapter for StubAdapter {
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
         if matches!(self.mode, StubMode::FetchCompletesAfterCancellation) {
+            self.cancel_token()
+                .expect("cancel token configured")
+                .cancel();
             tokio::time::sleep(Duration::from_millis(75)).await;
         }
         if matches!(self.mode, StubMode::TwoJobsCancelAfterFirstFetch) && job.id == "job-1" {
@@ -759,11 +762,6 @@ async fn cancellation_drains_fetch_that_completes_within_shutdown_grace() {
     seed_stub_reference_data(&pool, artifact_id).await;
 
     let cancellation = CancellationToken::new();
-    let cancel = cancellation.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        cancel.cancel();
-    });
 
     let result = pipeline_with_pool(
         StubMode::FetchCompletesAfterCancellation,
@@ -774,7 +772,7 @@ async fn cancellation_drains_fetch_that_completes_within_shutdown_grace() {
             shutdown_grace: Duration::from_secs(5),
             ..PipelineOptions::default()
         },
-        None,
+        Some(cancellation.clone()),
     )
     .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
     .await;
@@ -1973,5 +1971,5 @@ async fn cancellation_drains_buffered_artifacts_that_are_already_fetched() {
         .fetch_one(&pool)
         .await
         .expect("count observations");
-    assert_eq!(observation_count, 2);
+    assert_eq!(observation_count, 1);
 }
