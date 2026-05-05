@@ -903,6 +903,11 @@ async fn parse_one_artifact(
                         )
                         .await?;
                     }
+                    if cancellation.is_cancelled() {
+                        finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
+                            .await?;
+                        return Err(IngestionError::Cancelled);
+                    }
                     continue;
                 }
             };

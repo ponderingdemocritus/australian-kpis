@@ -1381,7 +1381,7 @@ async fn staged_accepted_artifact_missing_reference_is_audited() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn accepted_rows_flush_before_later_staged_load_failure() {
+async fn accepted_rows_commit_before_later_staged_reference_rejection() {
     let timescale = start_timescale("au_kpis_pipeline_accepted_before_staged_failure")
         .await
         .expect("start timescaledb container");
@@ -1415,7 +1415,8 @@ async fn accepted_rows_flush_before_later_staged_load_failure() {
     )
     .await;
 
-    assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+    let stats = result.expect("later staged reference failures should be audited and dropped");
+    assert_eq!(stats.loaded.parse_errors, 2);
 
     let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
         .fetch_one(&pool)

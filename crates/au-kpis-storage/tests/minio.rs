@@ -67,11 +67,15 @@ fn build_store(
 async fn wait_for_ready(store: &Arc<dyn ObjectStore>) {
     let probe = object_store::path::Path::from("readiness-probe");
     for _ in 0..20 {
-        // A list() call is cheap and succeeds as soon as the bucket is
-        // reachable; NotFound on an individual key would also be fine,
-        // but the list form also validates credentials.
-        let mut stream = store.list(Some(&probe));
-        if stream.next().await.is_none() || stream.next().await.is_some() {
+        // Exercise the same write/read/delete path as the tests. MinIO can
+        // accept list calls before object operations are fully ready.
+        if store
+            .put(&probe, Bytes::from_static(b"ready").into())
+            .await
+            .is_ok()
+            && store.head(&probe).await.is_ok()
+            && store.delete(&probe).await.is_ok()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
