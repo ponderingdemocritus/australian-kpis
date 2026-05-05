@@ -69,6 +69,15 @@ pub struct LoadStats {
     pub batches: u64,
 }
 
+/// Result of validating load-item database references before COPY.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadReferenceValidation {
+    /// Rows that passed reference validation and may continue to COPY.
+    pub valid_rows: Vec<bool>,
+    /// Invalid references recorded in `parse_errors`.
+    pub stats: LoadStats,
+}
+
 /// Loader configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoadOptions {
@@ -188,51 +197,11 @@ pub async fn load_batch_with_options_and_audit_context(
 pub async fn validate_load_references(
     pool: &PgPool,
     items: &[LoadItemAudit],
-) -> Result<LoadStats, LoadError> {
-    let mut stats = LoadStats::default();
-    if items.is_empty() {
-        return Ok(stats);
-    }
-
-    for audited in items {
-        let (dataflow_exists, measure_exists, artifact_exists): (bool, bool, bool) =
-            sqlx::query_as(
-                "SELECT
-                     EXISTS (SELECT 1 FROM dataflows WHERE id = $1),
-                     EXISTS (SELECT 1 FROM measures WHERE id = $2),
-                     EXISTS (SELECT 1 FROM artifacts WHERE id = $3)",
-            )
-            .bind(audited.item.series.dataflow_id.as_str())
-            .bind(audited.item.series.measure_id.as_str())
-            .bind(
-                audited
-                    .item
-                    .observation
-                    .source_artifact_id
-                    .digest()
-                    .as_bytes()
-                    .as_slice(),
-            )
-            .fetch_one(pool)
-            .await?;
-
-        let mut missing = Vec::new();
-        if !dataflow_exists {
-            missing.push(format!("dataflow `{}`", audited.item.series.dataflow_id));
-        }
-        if !measure_exists {
-            missing.push(format!("measure `{}`", audited.item.series.measure_id));
-        }
-        if !artifact_exists {
-            missing.push(format!(
-                "artifact `{}`",
-                audited.item.observation.source_artifact_id
-            ));
-        }
-        if missing.is_empty() {
-            continue;
-        }
-
+) -> Result<LoadReferenceValidation, LoadError> {
+    let rows = load_reference_rows(pool, items).await?;
+    let mut validation = empty_reference_validation(items.len());
+    for (idx, missing) in missing_references(items, rows) {
+        let audited = &items[idx];
         record_loader_validation_error(
             pool,
             audited.item.observation.source_artifact_id,
@@ -241,71 +210,167 @@ pub async fn validate_load_references(
             audited.row_context.clone(),
         )
         .await?;
-        stats.parse_errors += 1;
+        validation.valid_rows[idx] = false;
+        validation.stats.parse_errors += 1;
     }
 
-    Ok(stats)
+    Ok(validation)
 }
 
 async fn validate_load_references_on_connection(
     conn: &mut PoolConnection<Postgres>,
     items: Vec<LoadItemAudit>,
 ) -> Result<(Vec<LoadItem>, LoadStats), LoadError> {
-    let mut stats = LoadStats::default();
-    let mut valid_items = Vec::with_capacity(items.len());
-
-    for audited in items {
-        let (dataflow_exists, measure_exists, artifact_exists): (bool, bool, bool) =
-            sqlx::query_as(
-                "SELECT
-                     EXISTS (SELECT 1 FROM dataflows WHERE id = $1),
-                     EXISTS (SELECT 1 FROM measures WHERE id = $2),
-                     EXISTS (SELECT 1 FROM artifacts WHERE id = $3)",
-            )
-            .bind(audited.item.series.dataflow_id.as_str())
-            .bind(audited.item.series.measure_id.as_str())
-            .bind(
-                audited
-                    .item
-                    .observation
-                    .source_artifact_id
-                    .digest()
-                    .as_bytes()
-                    .as_slice(),
-            )
-            .fetch_one(&mut **conn)
-            .await?;
-
-        let mut missing = Vec::new();
-        if !dataflow_exists {
-            missing.push(format!("dataflow `{}`", audited.item.series.dataflow_id));
-        }
-        if !measure_exists {
-            missing.push(format!("measure `{}`", audited.item.series.measure_id));
-        }
-        if !artifact_exists {
-            missing.push(format!(
-                "artifact `{}`",
-                audited.item.observation.source_artifact_id
-            ));
-        }
-        if missing.is_empty() {
-            valid_items.push(audited.item);
-            continue;
-        }
-
+    let rows = load_reference_rows_on_connection(conn, &items).await?;
+    let mut validation = empty_reference_validation(items.len());
+    for (idx, missing) in missing_references(&items, rows) {
+        let audited = &items[idx];
         record_loader_validation_error_on_connection(
             conn,
             audited.item.observation.source_artifact_id,
             &format!("missing loader reference: {}", missing.join(", ")),
             &audited.item,
-            audited.row_context,
+            audited.row_context.clone(),
         )
         .await?;
-        stats.parse_errors += 1;
+        validation.valid_rows[idx] = false;
+        validation.stats.parse_errors += 1;
     }
 
-    Ok((valid_items, stats))
+    let valid_items = items
+        .into_iter()
+        .zip(validation.valid_rows.iter())
+        .filter_map(|(audited, valid)| valid.then_some(audited.item))
+        .collect();
+
+    Ok((valid_items, validation.stats))
+}
+
+type ReferenceRow = (i64, bool, bool, bool);
+
+async fn load_reference_rows(
+    pool: &PgPool,
+    items: &[LoadItemAudit],
+) -> Result<Vec<ReferenceRow>, LoadError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (dataflow_ids, measure_ids, artifact_ids) = reference_validation_inputs(items);
+    sqlx::query_as(
+        "WITH input AS (
+             SELECT *
+             FROM UNNEST($1::text[], $2::text[], $3::bytea[])
+                  WITH ORDINALITY AS item(dataflow_id, measure_id, artifact_id, ord)
+         )
+         SELECT
+             input.ord::BIGINT,
+             dataflows.id IS NOT NULL,
+             measures.id IS NOT NULL,
+             artifacts.id IS NOT NULL
+         FROM input
+         LEFT JOIN dataflows ON dataflows.id = input.dataflow_id
+         LEFT JOIN measures ON measures.id = input.measure_id
+         LEFT JOIN artifacts ON artifacts.id = input.artifact_id
+         ORDER BY input.ord",
+    )
+    .bind(dataflow_ids)
+    .bind(measure_ids)
+    .bind(artifact_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_reference_rows_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    items: &[LoadItemAudit],
+) -> Result<Vec<ReferenceRow>, LoadError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (dataflow_ids, measure_ids, artifact_ids) = reference_validation_inputs(items);
+    sqlx::query_as(
+        "WITH input AS (
+             SELECT *
+             FROM UNNEST($1::text[], $2::text[], $3::bytea[])
+                  WITH ORDINALITY AS item(dataflow_id, measure_id, artifact_id, ord)
+         )
+         SELECT
+             input.ord::BIGINT,
+             dataflows.id IS NOT NULL,
+             measures.id IS NOT NULL,
+             artifacts.id IS NOT NULL
+         FROM input
+         LEFT JOIN dataflows ON dataflows.id = input.dataflow_id
+         LEFT JOIN measures ON measures.id = input.measure_id
+         LEFT JOIN artifacts ON artifacts.id = input.artifact_id
+         ORDER BY input.ord",
+    )
+    .bind(dataflow_ids)
+    .bind(measure_ids)
+    .bind(artifact_ids)
+    .fetch_all(&mut **conn)
+    .await
+    .map_err(Into::into)
+}
+
+fn reference_validation_inputs(
+    items: &[LoadItemAudit],
+) -> (Vec<String>, Vec<String>, Vec<Vec<u8>>) {
+    let dataflow_ids = items
+        .iter()
+        .map(|item| item.item.series.dataflow_id.to_string())
+        .collect();
+    let measure_ids = items
+        .iter()
+        .map(|item| item.item.series.measure_id.to_string())
+        .collect();
+    let artifact_ids = items
+        .iter()
+        .map(|item| {
+            item.item
+                .observation
+                .source_artifact_id
+                .digest()
+                .as_bytes()
+                .to_vec()
+        })
+        .collect();
+    (dataflow_ids, measure_ids, artifact_ids)
+}
+
+fn empty_reference_validation(row_count: usize) -> LoadReferenceValidation {
+    LoadReferenceValidation {
+        valid_rows: vec![true; row_count],
+        stats: LoadStats::default(),
+    }
+}
+
+fn missing_references(
+    items: &[LoadItemAudit],
+    rows: Vec<ReferenceRow>,
+) -> impl Iterator<Item = (usize, Vec<String>)> + '_ {
+    rows.into_iter()
+        .filter_map(|(ord, dataflow, measure, artifact)| {
+            let idx = usize::try_from(ord).ok()?.checked_sub(1)?;
+            let item = items.get(idx)?;
+            let mut missing = Vec::new();
+            if !dataflow {
+                missing.push(format!("dataflow `{}`", item.item.series.dataflow_id));
+            }
+            if !measure {
+                missing.push(format!("measure `{}`", item.item.series.measure_id));
+            }
+            if !artifact {
+                missing.push(format!(
+                    "artifact `{}`",
+                    item.item.observation.source_artifact_id
+                ));
+            }
+            (!missing.is_empty()).then_some((idx, missing))
+        })
 }
 
 /// Start a staged load session for one artifact.

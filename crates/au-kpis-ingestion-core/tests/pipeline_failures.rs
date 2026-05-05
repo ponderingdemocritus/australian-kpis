@@ -48,6 +48,7 @@ enum StubMode {
     LoaderValidationError,
     LoaderValidationThenWrongArtifact,
     MissingReferenceFirstAccepted,
+    MixedReferenceFirstAccepted,
     AcceptedThenStagedLoadError,
     RevisionRows,
     TwoJobsCancelAfterFirstFetch,
@@ -133,6 +134,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::LoaderValidationError
             | StubMode::LoaderValidationThenWrongArtifact
             | StubMode::MissingReferenceFirstAccepted
+            | StubMode::MixedReferenceFirstAccepted
             | StubMode::AcceptedThenStagedLoadError
             | StubMode::RevisionRows
             | StubMode::TwoJobsCancelAfterFirstFetch
@@ -297,6 +299,10 @@ impl SourceAdapter for StubAdapter {
             StubMode::MissingReferenceFirstAccepted => {
                 Box::pin(stream::iter([Ok(missing_measure_row(artifact.id))]))
             }
+            StubMode::MixedReferenceFirstAccepted => Box::pin(stream::iter([
+                Ok(row),
+                Ok(missing_measure_row(artifact.id)),
+            ])),
             StubMode::AcceptedThenStagedLoadError => {
                 if artifact.id == ArtifactId::of_content(b"job-2") {
                     let first = missing_measure_row(artifact.id);
@@ -1298,7 +1304,7 @@ async fn first_buffered_accepted_artifact_missing_reference_is_audited() {
     let artifact_id = ArtifactId::of_content(b"job-1");
     seed_stub_reference_data(&pool, artifact_id).await;
 
-    let result = pipeline_with_pool(
+    let stats = pipeline_with_pool(
         StubMode::MissingReferenceFirstAccepted,
         pool.clone(),
         PipelineOptions {
@@ -1316,7 +1322,8 @@ async fn first_buffered_accepted_artifact_missing_reference_is_audited() {
     )
     .await;
 
-    assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+    let stats = stats.expect("missing reference should be audited and dropped");
+    assert_eq!(stats.loaded.parse_errors, 1);
 
     let rows: Vec<(String,)> = sqlx::query_as("SELECT error_kind FROM parse_errors")
         .fetch_all(&pool)
@@ -1330,6 +1337,55 @@ async fn first_buffered_accepted_artifact_missing_reference_is_audited() {
         .await
         .expect("count observations");
     assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mixed_buffered_accepted_artifact_loads_valid_rows_and_audits_bad_reference() {
+    let timescale = start_timescale("au_kpis_pipeline_mixed_buffered_reference")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::MixedReferenceFirstAccepted,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("valid rows should load while missing references are audited");
+
+    assert_eq!(stats.loaded.observations_loaded, 1);
+    assert_eq!(stats.loaded.parse_errors, 1);
+
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT error_kind FROM parse_errors")
+        .fetch_all(&pool)
+        .await
+        .expect("read parse error kinds");
+    let error_kinds: Vec<_> = rows.into_iter().map(|(kind,)| kind).collect();
+    assert_eq!(error_kinds, vec!["loader_validation"]);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1712,7 +1768,7 @@ async fn pipeline_preserves_revision_chain_and_latest_view_selects_highest_revis
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancellation_flushes_partial_load_batch() {
+async fn cancellation_rejects_incomplete_artifact_after_draining_parse_rows() {
     let timescale = start_timescale("au_kpis_pipeline_cancel_flush")
         .await
         .expect("start timescaledb container");
@@ -1739,13 +1795,18 @@ async fn cancellation_flushes_partial_load_batch() {
     .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
     .await;
 
-    result.expect("late cancellation after parser drain should keep committed rows");
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
 
-    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
-        .fetch_one(&pool)
-        .await
-        .expect("count observations");
-    assert_eq!(observation_count, 1);
+    let (observation_count, parse_error_count): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("count observations and parse errors");
+    assert_eq!(observation_count, 0);
+    assert_eq!(parse_error_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

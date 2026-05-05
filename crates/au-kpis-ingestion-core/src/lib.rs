@@ -850,7 +850,11 @@ async fn parse_one_artifact(
             let row = if cancellation.is_cancelled() {
                 match next_after_cancellation(&mut observations, shutdown_grace).await {
                     Ok(Some(row)) => Some(row),
-                    Ok(None) => break,
+                    Ok(None) => {
+                        finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
+                            .await?;
+                        return Err(IngestionError::Cancelled);
+                    }
                     Err(err) => {
                         finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
                             .await?;
@@ -863,7 +867,16 @@ async fn parse_one_artifact(
                     () = cancellation.cancelled() => {
                         match next_after_cancellation(&mut observations, shutdown_grace).await {
                             Ok(Some(row)) => Some(row),
-                            Ok(None) => break,
+                            Ok(None) => {
+                                finish_cancelled_parse(
+                                    &tx,
+                                    &audit,
+                                    &mut early_adapter_errors,
+                                    parsed,
+                                )
+                                .await?;
+                                return Err(IngestionError::Cancelled);
+                            }
                             Err(err) => {
                                 finish_cancelled_parse(
                                     &tx,
@@ -1300,16 +1313,21 @@ async fn append_accepted_load_items(
             row_context: Some(correlation.row_context()),
         })
         .collect::<Vec<_>>();
-    let reference_stats = au_kpis_loader::validate_load_references(pool, &audited_items).await?;
-    if reference_stats.parse_errors > 0 {
+    let reference_validation =
+        au_kpis_loader::validate_load_references(pool, &audited_items).await?;
+    if reference_validation.stats.parse_errors > 0 {
         flush_accepted_if_needed(pool, accepted, options, loaded).await?;
-        add_load_stats(loaded, reference_stats);
-        return Err(au_kpis_loader::LoadError::Validation(
-            "accepted load item references failed validation".into(),
-        ));
+        add_load_stats(loaded, reference_validation.stats);
     }
 
-    for (item, correlation) in items.into_iter().zip(correlations) {
+    for ((item, correlation), valid) in items
+        .into_iter()
+        .zip(correlations)
+        .zip(reference_validation.valid_rows)
+    {
+        if !valid {
+            continue;
+        }
         let item_bytes = estimate_load_item_bytes(&item);
         if should_flush_load_batch(&accepted.batch, accepted.batch_bytes, item_bytes, options) {
             add_load_stats(
