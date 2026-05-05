@@ -412,17 +412,7 @@ async fn collect_stage_stats(
     let mut stats = PipelineRunStats::default();
     loop {
         tokio::select! {
-            () = cancellation.cancelled() => {
-                pipeline_token.cancel();
-                let (drained_stats, errors) = timeout(shutdown_grace, drain_task_results(tasks))
-                    .await
-                    .map_err(|_| IngestionError::ShutdownTimeout(shutdown_grace))?;
-                stats.add(drained_stats);
-                if errors.is_empty() {
-                    return Ok(stats);
-                }
-                return Err(preferred_error(IngestionError::Cancelled, errors));
-            }
+            biased;
             result = tasks.join_next() => {
                 let Some(result) = result else {
                     return Ok(stats);
@@ -437,6 +427,17 @@ async fn collect_stage_stats(
                         return Err(preferred_error(err, errors));
                     }
                 }
+            }
+            () = cancellation.cancelled() => {
+                pipeline_token.cancel();
+                let (drained_stats, errors) = timeout(shutdown_grace, drain_task_results(tasks))
+                    .await
+                    .map_err(|_| IngestionError::ShutdownTimeout(shutdown_grace))?;
+                stats.add(drained_stats);
+                if errors.is_empty() {
+                    return Ok(stats);
+                }
+                return Err(preferred_error(IngestionError::Cancelled, errors));
             }
         }
     }
