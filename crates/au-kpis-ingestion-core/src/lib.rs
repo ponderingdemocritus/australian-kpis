@@ -31,7 +31,11 @@ use opentelemetry::{
 };
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use thiserror::Error;
-use tokio::{sync::mpsc, task::JoinSet, time::timeout};
+use tokio::{
+    sync::mpsc,
+    task::JoinSet,
+    time::{Instant, timeout, timeout_at},
+};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{Instrument, Level, Span, info_span, instrument::WithSubscriber, trace_span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -866,6 +870,7 @@ async fn parse_one_artifact(
     async move {
         let mut parsed = 0;
         let mut drained_after_cancellation = false;
+        let mut cancellation_deadline = None;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
         let mut early_adapter_errors = Vec::new();
         let audit = ParseErrorAudit {
@@ -879,7 +884,9 @@ async fn parse_one_artifact(
         loop {
             let mut row_drained_after_cancellation = false;
             let row = if cancellation.is_cancelled() {
-                match next_after_cancellation(&mut observations, shutdown_grace).await {
+                let deadline =
+                    *cancellation_deadline.get_or_insert_with(|| Instant::now() + shutdown_grace);
+                match next_after_cancellation(&mut observations, deadline).await {
                     Ok(Some(row)) => {
                         row_drained_after_cancellation = true;
                         Some(row)
@@ -895,7 +902,9 @@ async fn parse_one_artifact(
                 tokio::select! {
                     biased;
                     () = cancellation.cancelled() => {
-                        match next_after_cancellation(&mut observations, shutdown_grace).await {
+                        let deadline = *cancellation_deadline
+                            .get_or_insert_with(|| Instant::now() + shutdown_grace);
+                        match next_after_cancellation(&mut observations, deadline).await {
                             Ok(Some(row)) => {
                                 row_drained_after_cancellation = true;
                                 Some(row)
@@ -1067,9 +1076,9 @@ async fn parse_one_artifact(
 
 async fn next_after_cancellation(
     observations: &mut ObservationStream<'_>,
-    shutdown_grace: Duration,
+    deadline: Instant,
 ) -> Result<Option<Result<(SeriesDescriptor, Observation), AdapterError>>, IngestionError> {
-    timeout(shutdown_grace, observations.next())
+    timeout_at(deadline, observations.next())
         .await
         .map_err(|_| IngestionError::Cancelled)
 }
@@ -1855,6 +1864,38 @@ mod tests {
             .expect("handoff task should not panic")
             .expect("handoff should complete once capacity is available");
         assert_eq!(rx.recv().await, Some(2));
+    }
+
+    #[tokio::test]
+    async fn post_cancel_parser_drain_uses_absolute_deadline() {
+        let item = load_item_with_attribute_bytes(8);
+        let row = (item.series, item.observation);
+        let mut observations: ObservationStream<'static> =
+            Box::pin(futures::stream::unfold(0_u8, move |state| {
+                let row = row.clone();
+                async move {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    Some((Ok(row), state.saturating_add(1)))
+                }
+            }));
+        let deadline = Instant::now() + Duration::from_millis(120);
+
+        assert!(
+            next_after_cancellation(&mut observations, deadline)
+                .await
+                .expect("first row before deadline")
+                .is_some()
+        );
+        assert!(
+            next_after_cancellation(&mut observations, deadline)
+                .await
+                .expect("second row before deadline")
+                .is_some()
+        );
+        assert!(matches!(
+            next_after_cancellation(&mut observations, deadline).await,
+            Err(IngestionError::Cancelled)
+        ));
     }
 
     fn load_item_with_attribute_bytes(attribute_bytes: usize) -> LoadItem {

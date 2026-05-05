@@ -288,6 +288,61 @@ async fn staged_load_cleanup_returns_live_connection_to_pool() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_staged_load_closes_dirty_session_before_pool_reuse() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_drop_closes_session")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged dirty drop fixture");
+    seed_reference_data(&pool, artifact_id).await;
+    let initial_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read initial backend pid");
+
+    let aus = descriptor("AUS");
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 1,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&aus, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage row");
+    drop(staged);
+
+    let after_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read backend pid after dirty staged drop");
+    let staging_exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('pg_temp.staging_series') IS NOT NULL
+         OR to_regclass('pg_temp.staging_observations') IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check temp staging tables after dirty staged drop");
+
+    assert_ne!(after_pid, initial_pid);
+    assert!(!staging_exists);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn staged_load_rollback_returns_recorded_parse_error_stats() {
     let _guard = TEST_LOCK.lock().await;
     let timescale = start_timescale("au_kpis_loader_staged_rollback_parse_errors")

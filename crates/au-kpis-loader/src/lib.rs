@@ -45,6 +45,7 @@ pub struct LoadItemAudit {
 pub struct StagedLoad {
     conn: PoolConnection<Postgres>,
     stats: LoadStats,
+    cleaned: bool,
 }
 
 impl From<LoadItem> for LoadItemAudit {
@@ -393,6 +394,7 @@ pub async fn begin_staged_load(
     Ok(StagedLoad {
         conn,
         stats: LoadStats::default(),
+        cleaned: false,
     })
 }
 
@@ -457,6 +459,9 @@ impl StagedLoad {
         }
         .await;
         let cleanup = drop_staging_tables(&mut self.conn).await;
+        if cleanup.is_ok() {
+            self.cleaned = true;
+        }
         match (result, cleanup) {
             (Ok(stats), Ok(())) => Ok(stats),
             (Err(err), _) | (Ok(_), Err(err)) => Err(err),
@@ -469,7 +474,16 @@ impl StagedLoad {
     pub async fn rollback(mut self) -> Result<LoadStats, LoadError> {
         let stats = self.stats;
         drop_staging_tables(&mut self.conn).await?;
+        self.cleaned = true;
         Ok(stats)
+    }
+}
+
+impl Drop for StagedLoad {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            self.conn.close_on_drop();
+        }
     }
 }
 
