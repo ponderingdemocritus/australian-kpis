@@ -32,7 +32,7 @@ use opentelemetry::{
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time::timeout};
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{Instrument, Level, Span, info_span, instrument::WithSubscriber, trace_span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -473,6 +473,14 @@ struct JobCorrelation {
     trace_parent: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ParseJobAuditOwned {
+    artifact_id: ArtifactId,
+    dataflow_id: DataflowId,
+    source_id: SourceId,
+    correlation: JobCorrelation,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct StageRuntime {
     concurrency: usize,
@@ -486,6 +494,17 @@ impl JobCorrelation {
             "job_id": self.job_id.as_str(),
             "trace_parent": self.trace_parent.as_deref(),
         })
+    }
+}
+
+impl ParseJobAuditOwned {
+    fn new(source_id: &SourceId, fetched: &FetchedArtifact) -> Self {
+        Self {
+            artifact_id: fetched.artifact.id,
+            dataflow_id: fetched.dataflow_id.clone(),
+            source_id: source_id.clone(),
+            correlation: fetched.correlation.clone(),
+        }
     }
 }
 
@@ -737,7 +756,8 @@ async fn parse_stage(
                         fetched.correlation.trace_parent.clone(),
                     )
                     .with_cancellation(cancellation.clone());
-                in_flight.push(parse_one_artifact(
+                let audit = ParseJobAuditOwned::new(&source_id, &fetched);
+                let handle = AbortOnDropHandle::new(tokio::spawn(parse_one_artifact(
                     adapters.clone(),
                     source_id.clone(),
                     parse_ctx,
@@ -745,16 +765,24 @@ async fn parse_stage(
                     fetched,
                     cancellation.clone(),
                     runtime.shutdown_grace,
-                ));
+                ).with_current_subscriber()));
+                in_flight.push(async move {
+                    (audit, handle.await)
+                });
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
-                match result.expect("in_flight is not empty") {
-                    Ok(count) => parsed += count,
-                    Err(IngestionError::Cancelled) => {
+                let (audit, result) = result.expect("in_flight is not empty");
+                match result {
+                    Ok(Ok(count)) => parsed += count,
+                    Ok(Err(IngestionError::Cancelled)) => {
                         draining = true;
                         cancelled_in_flight = true;
                     }
-                    Err(err) => return Err(err),
+                    Ok(Err(err)) => return Err(err),
+                    Err(err) if err.is_panic() => {
+                        finish_panicked_parse(&tx, &audit, &cancellation, &err).await?;
+                    }
+                    Err(err) => return Err(IngestionError::Join(err)),
                 }
             }
         }
@@ -1084,23 +1112,22 @@ async fn finish_cancelled_parse(
     early_adapter_errors: &mut Vec<AdapterError>,
     parsed: u64,
 ) -> Result<(), IngestionError> {
-    if parsed > 0 {
-        send_produced(
-            tx,
-            LoadStageItem::RejectArtifact {
-                artifact_id: audit.artifact_id,
-                correlation: audit.correlation.clone(),
-            },
-            audit.cancellation,
-        )
-        .await?;
-    }
+    send_produced(
+        tx,
+        LoadStageItem::RejectArtifact {
+            artifact_id: audit.artifact_id,
+            correlation: audit.correlation.clone(),
+        },
+        audit.cancellation,
+    )
+    .await?;
+    let had_early_adapter_errors = !early_adapter_errors.is_empty();
     if !early_adapter_errors.is_empty() {
         let fatal = parsed == 0;
         send_adapter_parse_errors(tx, audit, early_adapter_errors, fatal).await?;
         early_adapter_errors.clear();
     }
-    if parsed > 0 {
+    if parsed > 0 || !had_early_adapter_errors {
         send_produced(
             tx,
             LoadStageItem::ParseError(parse_cancelled_error_record(audit, parsed)),
@@ -1108,6 +1135,30 @@ async fn finish_cancelled_parse(
         )
         .await?;
     }
+    Ok(())
+}
+
+async fn finish_panicked_parse(
+    tx: &mpsc::Sender<LoadStageItem>,
+    audit: &ParseJobAuditOwned,
+    cancellation: &CancellationToken,
+    err: &tokio::task::JoinError,
+) -> Result<(), IngestionError> {
+    send_produced(
+        tx,
+        LoadStageItem::RejectArtifact {
+            artifact_id: audit.artifact_id,
+            correlation: audit.correlation.clone(),
+        },
+        cancellation,
+    )
+    .await?;
+    send_produced(
+        tx,
+        LoadStageItem::ParseError(parse_panic_error_record(audit, err)),
+        cancellation,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1131,6 +1182,25 @@ fn parse_error_record(
             "trace_parent": correlation.trace_parent.as_deref(),
             "error_class": format!("{:?}", err.class()),
             "fatal": fatal,
+        })),
+    }
+}
+
+fn parse_panic_error_record(
+    audit: &ParseJobAuditOwned,
+    err: &tokio::task::JoinError,
+) -> ParseErrorRecord {
+    ParseErrorRecord {
+        artifact_id: audit.artifact_id,
+        error_kind: "parser_panic",
+        error_message: err.to_string(),
+        row_context: Some(serde_json::json!({
+            "dataflow_id": audit.dataflow_id,
+            "source_id": audit.source_id,
+            "artifact_id": audit.artifact_id,
+            "job_id": audit.correlation.job_id.as_str(),
+            "trace_parent": audit.correlation.trace_parent.as_deref(),
+            "fatal": true,
         })),
     }
 }

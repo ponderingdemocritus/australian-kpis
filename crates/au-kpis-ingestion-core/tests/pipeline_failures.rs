@@ -35,10 +35,11 @@ enum StubMode {
     RequireDiscoveryTraceParent,
     MissingJobTraceParent,
     CancelAfterFirstParse,
+    CancelBeforeFirstParse,
     SlowParse,
     WrongArtifactId,
     WrongArtifactAfterRow,
-    PanicAfterRow,
+    TwoArtifactsPanicFirstParse,
     ParseErrorBeforeRow,
     ParseErrorAfterRow,
     ParseErrorAfterCancellation,
@@ -121,10 +122,11 @@ impl SourceAdapter for StubAdapter {
             | StubMode::RequireDiscoveryTraceParent
             | StubMode::MissingJobTraceParent
             | StubMode::CancelAfterFirstParse
+            | StubMode::CancelBeforeFirstParse
             | StubMode::SlowParse
             | StubMode::WrongArtifactId
             | StubMode::WrongArtifactAfterRow
-            | StubMode::PanicAfterRow
+            | StubMode::TwoArtifactsPanicFirstParse
             | StubMode::ParseErrorBeforeRow
             | StubMode::ParseErrorAfterRow
             | StubMode::ParseErrorAfterCancellation
@@ -161,6 +163,7 @@ impl SourceAdapter for StubAdapter {
             self.mode,
             StubMode::TwoArtifactsCancelAfterFirstParse
                 | StubMode::TwoJobsCancelAfterFirstFetch
+                | StubMode::TwoArtifactsPanicFirstParse
                 | StubMode::AcceptedThenStagedLoadError
                 | StubMode::DuplicateArtifactRejectSecondJob
         ) {
@@ -245,6 +248,9 @@ impl SourceAdapter for StubAdapter {
             StubMode::CancelAfterFirstParse => {
                 cancel_after_first_row(row, self.cancel_token().expect("cancel token configured"))
             }
+            StubMode::CancelBeforeFirstParse => {
+                cancel_before_first_row(self.cancel_token().expect("cancel token configured"))
+            }
             StubMode::SlowParse => Box::pin(stream::pending()),
             StubMode::TwoArtifactsCancelAfterFirstParse
                 if artifact.id == ArtifactId::of_content(b"job-1") =>
@@ -265,7 +271,11 @@ impl SourceAdapter for StubAdapter {
                 observation.source_artifact_id = ArtifactId::of_content(b"wrong artifact");
                 Box::pin(stream::iter([Ok(row), Ok((series, observation))]))
             }
-            StubMode::PanicAfterRow => panic_after_first_row(row),
+            StubMode::TwoArtifactsPanicFirstParse
+                if artifact.id == ArtifactId::of_content(b"job-1") =>
+            {
+                panic_after_first_row(row)
+            }
             StubMode::ParseErrorBeforeRow => Box::pin(stream::iter([
                 Err(AdapterError::FormatDrift("bad first row shape".into())),
                 Ok(row),
@@ -340,6 +350,13 @@ impl SourceAdapter for StubAdapter {
                 }
                 Box::pin(stream::iter([Ok((series, observation))]))
             }
+            StubMode::TwoArtifactsPanicFirstParse => {
+                let (series, mut observation) = row;
+                if artifact.id == ArtifactId::of_content(b"job-2") {
+                    observation.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                }
+                Box::pin(stream::iter([Ok((series, observation))]))
+            }
             StubMode::DuplicateArtifactRejectSecondJob => match ctx.job_id() {
                 Some("job-1") => delayed_single_row(row, Duration::from_millis(20)),
                 Some("job-2") => row_then_delayed_wrong_artifact(row, Duration::from_millis(100)),
@@ -367,6 +384,23 @@ fn cancel_after_first_row(
     cancellation: CancellationToken,
 ) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
     cancel_after_first_row_after_delay(row, cancellation, Duration::ZERO)
+}
+
+fn cancel_before_first_row(
+    cancellation: CancellationToken,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(false, move |cancelled| {
+        let cancellation = cancellation.clone();
+        async move {
+            if !cancelled {
+                cancellation.cancel();
+            }
+            std::future::pending::<
+                Option<(Result<(SeriesDescriptor, Observation), AdapterError>, bool)>,
+            >()
+            .await
+        }
+    }))
 }
 
 fn cancel_after_first_row_after_delay(
@@ -1086,7 +1120,7 @@ async fn duplicate_artifact_jobs_keep_pending_loads_separate() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parser_panic_after_row_does_not_commit_unaccepted_artifact() {
+async fn parser_panic_after_row_is_audited_without_aborting_sibling_artifacts() {
     let timescale = start_timescale("au_kpis_pipeline_panic_after_row")
         .await
         .expect("start timescaledb container");
@@ -1095,14 +1129,17 @@ async fn parser_panic_after_row_does_not_commit_unaccepted_artifact() {
     };
     let pool = connect_with_retry(&cfg).await;
     migrate(&pool).await.expect("apply migrations");
-    let artifact_id = ArtifactId::of_content(b"job-1");
-    seed_stub_reference_data(&pool, artifact_id).await;
+    let first_artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
+    seed_stub_reference_data(&pool, first_artifact_id).await;
+    seed_stub_artifact(&pool, second_artifact_id, "https://example.test/cpi-2.json").await;
 
-    let result = pipeline_with_pool(
-        StubMode::PanicAfterRow,
+    let stats = pipeline_with_pool(
+        StubMode::TwoArtifactsPanicFirstParse,
         pool.clone(),
         PipelineOptions {
-            channel_capacity: 1,
+            channel_capacity: 2,
+            parse_concurrency: 2,
             load_max_rows: 64,
             shutdown_grace: Duration::from_secs(5),
             ..PipelineOptions::default()
@@ -1114,15 +1151,24 @@ async fn parser_panic_after_row_does_not_commit_unaccepted_artifact() {
         contexts(),
         CancellationToken::new(),
     )
-    .await;
-
-    assert!(matches!(result, Err(IngestionError::Join(_))), "{result:?}");
+    .await
+    .expect("parser panic should be isolated to the offending artifact");
 
     let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
         .fetch_one(&pool)
         .await
         .expect("count observations");
-    assert_eq!(observation_count, 0);
+    let (error_kind, row_context): (String, serde_json::Value) =
+        sqlx::query_as("SELECT error_kind, row_context FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("read parse error");
+
+    assert_eq!(stats.loaded.observations_loaded, 1);
+    assert_eq!(stats.loaded.parse_errors, 1);
+    assert_eq!(observation_count, 1);
+    assert_eq!(error_kind, "parser_panic");
+    assert_eq!(row_context["job_id"], "job-1");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1169,6 +1215,60 @@ async fn cancellation_after_first_parse_error_does_not_wait_for_more_rows() {
             .expect("count observations and parse errors");
     assert_eq!(observation_count, 0);
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_before_first_parser_row_records_parse_error() {
+    let timescale = start_timescale("au_kpis_pipeline_cancel_before_row")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let cancellation = CancellationToken::new();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        pipeline_with_pool(
+            StubMode::CancelBeforeFirstParse,
+            pool.clone(),
+            PipelineOptions {
+                channel_capacity: 1,
+                load_max_rows: 64,
+                shutdown_grace: Duration::from_millis(100),
+                ..PipelineOptions::default()
+            },
+            Some(cancellation.clone()),
+        )
+        .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation),
+    )
+    .await
+    .expect("pipeline should audit zero-row cancellation before shutdown completes");
+
+    assert!(
+        matches!(result, Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    let (error_kind, row_context): (String, serde_json::Value) =
+        sqlx::query_as("SELECT error_kind, row_context FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("read parse error");
+
+    assert_eq!(observation_count, 0);
+    assert_eq!(error_kind, "parse_cancelled");
+    assert_eq!(row_context["job_id"], "job-1");
+    assert_eq!(row_context["rows_parsed"], 0);
+    assert_eq!(row_context["fatal"], true);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
