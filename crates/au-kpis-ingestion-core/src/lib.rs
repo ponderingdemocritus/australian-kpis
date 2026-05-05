@@ -836,6 +836,7 @@ async fn parse_one_artifact(
 
     async move {
         let mut parsed = 0;
+        let mut drained_after_cancellation = false;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
         let mut early_adapter_errors = Vec::new();
         let audit = ParseErrorAudit {
@@ -850,11 +851,7 @@ async fn parse_one_artifact(
             let row = if cancellation.is_cancelled() {
                 match next_after_cancellation(&mut observations, shutdown_grace).await {
                     Ok(Some(row)) => Some(row),
-                    Ok(None) => {
-                        finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
-                            .await?;
-                        return Err(IngestionError::Cancelled);
-                    }
+                    Ok(None) => None,
                     Err(err) => {
                         finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
                             .await?;
@@ -867,16 +864,7 @@ async fn parse_one_artifact(
                     () = cancellation.cancelled() => {
                         match next_after_cancellation(&mut observations, shutdown_grace).await {
                             Ok(Some(row)) => Some(row),
-                            Ok(None) => {
-                                finish_cancelled_parse(
-                                    &tx,
-                                    &audit,
-                                    &mut early_adapter_errors,
-                                    parsed,
-                                )
-                                .await?;
-                                return Err(IngestionError::Cancelled);
-                            }
+                            Ok(None) => None,
                             Err(err) => {
                                 finish_cancelled_parse(
                                     &tx,
@@ -893,8 +881,15 @@ async fn parse_one_artifact(
                 }
             };
             let Some(row) = row else {
+                if cancellation.is_cancelled() && !drained_after_cancellation {
+                    finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed).await?;
+                    return Err(IngestionError::Cancelled);
+                }
                 break;
             };
+            if cancellation.is_cancelled() {
+                drained_after_cancellation = true;
+            }
 
             let (series, observation) = match row {
                 Ok(row) => row,
