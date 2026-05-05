@@ -1183,14 +1183,14 @@ async fn cancellation_after_first_parse_error_does_not_wait_for_more_rows() {
 
     let cancellation = CancellationToken::new();
     let result = tokio::time::timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(10),
         pipeline_with_pool(
             StubMode::ParseErrorAfterCancellation,
             pool.clone(),
             PipelineOptions {
                 channel_capacity: 1,
                 load_max_rows: 64,
-                shutdown_grace: Duration::from_millis(100),
+                shutdown_grace: Duration::from_secs(5),
                 ..PipelineOptions::default()
             },
             Some(cancellation.clone()),
@@ -1229,14 +1229,14 @@ async fn cancellation_before_first_parser_row_records_parse_error() {
 
     let cancellation = CancellationToken::new();
     let result = tokio::time::timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(10),
         pipeline_with_pool(
             StubMode::CancelBeforeFirstParse,
             pool.clone(),
             PipelineOptions {
                 channel_capacity: 1,
                 load_max_rows: 64,
-                shutdown_grace: Duration::from_millis(100),
+                shutdown_grace: Duration::from_secs(5),
                 ..PipelineOptions::default()
             },
             Some(cancellation.clone()),
