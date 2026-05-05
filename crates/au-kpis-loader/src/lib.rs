@@ -173,11 +173,13 @@ pub async fn load_batch_with_options_and_audit_context(
     let mut valid_batch = Vec::new();
     let mut valid_batch_bytes = 0usize;
     for item in valid_items {
-        let estimated_bytes = estimate_item_bytes(&item)?;
-        if !valid_batch.is_empty()
-            && (valid_batch.len() >= options.max_rows
-                || valid_batch_bytes + estimated_bytes > options.max_bytes)
-        {
+        let estimated_bytes = estimate_load_item_bytes(&item)?;
+        if should_flush_load_batch(
+            valid_batch.len(),
+            valid_batch_bytes,
+            estimated_bytes,
+            options,
+        ) {
             load_observation_batch(pool, &valid_batch, &mut stats).await?;
             valid_batch.clear();
             valid_batch_bytes = 0;
@@ -502,10 +504,38 @@ fn validate_item(item: &LoadItem) -> Result<(), String> {
     Ok(())
 }
 
-fn estimate_item_bytes(item: &LoadItem) -> Result<usize, LoadError> {
+/// Estimate the COPY payload size contribution for one load item.
+///
+/// The ingestion orchestrator uses this loader-owned estimator only to decide
+/// when an in-memory artifact buffer should be handed to the loader; the loader
+/// remains the source of truth for COPY batch boundaries.
+pub fn estimate_load_item_bytes(item: &LoadItem) -> Result<usize, LoadError> {
     let dimensions = descriptor_dimensions_json(&item.series)?;
     let attributes = serde_json::to_string(&item.observation.attributes)?;
     Ok(256 + dimensions.len() + attributes.len())
+}
+
+/// Return whether adding the next item should flush the current COPY batch.
+#[must_use]
+pub fn should_flush_load_batch(
+    batch_len: usize,
+    batch_bytes: usize,
+    next_item_bytes: usize,
+    options: LoadOptions,
+) -> bool {
+    batch_len != 0
+        && (batch_len >= options.max_rows
+            || batch_bytes.saturating_add(next_item_bytes) > options.max_bytes)
+}
+
+/// Return whether the current batch has reached a configured COPY boundary.
+#[must_use]
+pub fn load_batch_boundary_reached(
+    batch_len: usize,
+    batch_bytes: usize,
+    options: LoadOptions,
+) -> bool {
+    batch_len >= options.max_rows || batch_bytes >= options.max_bytes
 }
 
 async fn upsert_series_batch(

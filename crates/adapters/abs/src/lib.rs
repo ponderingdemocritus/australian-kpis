@@ -29,6 +29,7 @@ use serde::{
     Deserialize,
     de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor},
 };
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_BASE_URL: &str = "https://data.api.abs.gov.au/rest";
 const STRUCTURE_JSON_ACCEPT: &str = "application/vnd.sdmx.structure+json";
@@ -292,30 +293,44 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
 
     let blob_store = ctx.blob_store.clone();
     let started_at = ctx.started_at;
+    let cancellation = ctx.cancellation().clone();
     let (row_tx, row_rx) = tokio::sync::mpsc::channel(64);
 
     tokio::spawn(async move {
         let key = StorageKey::from_persisted(artifact.storage_key.clone());
-        if let Err(err) = verify_parse_artifact_identity(&blob_store, &key, &artifact).await {
+        let identity = tokio::select! {
+            () = cancellation.cancelled() => Err(cancelled_parse_error()),
+            result = verify_parse_artifact_identity(&blob_store, &key, &artifact) => result,
+        };
+        if let Err(err) = identity {
             let _ = row_tx.send(Err(err)).await;
             return;
         }
 
         let parse_tx = row_tx.clone();
         let artifact_for_full_parse = artifact.clone();
-        let result = match parse_blob_stream(blob_store.clone(), key.clone(), move |reader| {
-            parse_sdmx_json(reader, artifact_for_full_parse, started_at, parse_tx)
-        })
+        let cancellation_for_full_parse = cancellation.clone();
+        let result = match parse_blob_stream(
+            blob_store.clone(),
+            key.clone(),
+            cancellation.clone(),
+            move |reader| parse_sdmx_json(reader, artifact_for_full_parse, started_at, parse_tx),
+        )
         .await
         {
             Ok(ParseOutcome::Complete) => Ok(()),
             Ok(ParseOutcome::DataSetsBeforeStructure(structure)) => {
                 let parse_tx = row_tx.clone();
-                parse_blob_stream(blob_store, key, move |reader| {
-                    parse_sdmx_data_sets_with_structure(
-                        reader, structure, artifact, started_at, parse_tx,
-                    )
-                })
+                parse_blob_stream(
+                    blob_store,
+                    key,
+                    cancellation_for_full_parse,
+                    move |reader| {
+                        parse_sdmx_data_sets_with_structure(
+                            reader, structure, artifact, started_at, parse_tx,
+                        )
+                    },
+                )
                 .await
             }
             Err(err) => Err(err),
@@ -403,25 +418,63 @@ async fn verify_parse_artifact_identity(
 async fn parse_blob_stream<T, F>(
     blob_store: BlobStore,
     key: StorageKey,
+    cancellation: CancellationToken,
     parser: F,
 ) -> Result<T, AdapterError>
 where
     T: Send + 'static,
     F: FnOnce(ChannelReader) -> Result<T, AdapterError> + Send + 'static,
 {
-    let mut chunks = blob_store.get(&key).await?;
+    if cancellation.is_cancelled() {
+        return Err(cancelled_parse_error());
+    }
+
+    let mut chunks = tokio::select! {
+        () = cancellation.cancelled() => return Err(cancelled_parse_error()),
+        chunks = blob_store.get(&key) => chunks?,
+    };
     let (byte_tx, byte_rx) = tokio::sync::mpsc::channel(8);
     let read_error = Arc::new(Mutex::new(None));
     let reader_error = Arc::clone(&read_error);
-    let parser =
-        tokio::task::spawn_blocking(move || parser(ChannelReader::new(byte_rx, reader_error)));
+    let reader_cancellation = cancellation.clone();
+    let parser = tokio::task::spawn_blocking(move || {
+        parser(ChannelReader::new(
+            byte_rx,
+            reader_error,
+            reader_cancellation,
+        ))
+    });
 
-    while let Some(chunk) = chunks.next().await {
-        if byte_tx.send(chunk).await.is_err() {
-            break;
+    let mut cancelled = false;
+    loop {
+        tokio::select! {
+            () = cancellation.cancelled(), if !cancelled => {
+                cancelled = true;
+                break;
+            }
+            chunk = chunks.next() => {
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                let send = tokio::select! {
+                    () = cancellation.cancelled() => {
+                        cancelled = true;
+                        break;
+                    }
+                    send = byte_tx.send(chunk) => send,
+                };
+                if send.is_err() {
+                    break;
+                }
+            }
         }
     }
     drop(byte_tx);
+
+    if cancelled {
+        let _ = parser.await;
+        return Err(cancelled_parse_error());
+    }
 
     match parser.await {
         Ok(Err(err)) => match read_error.lock().expect("read error mutex poisoned").take() {
@@ -435,6 +488,14 @@ where
 
 fn parse_worker_error(err: tokio::task::JoinError) -> AdapterError {
     CoreError::Io(io::Error::other(format!("ABS parse worker failed: {err}"))).into()
+}
+
+fn cancelled_parse_error() -> AdapterError {
+    CoreError::Io(io::Error::new(
+        io::ErrorKind::Interrupted,
+        "ABS parse cancelled",
+    ))
+    .into()
 }
 
 fn parse_sdmx_data_sets_with_structure<R: Read>(
@@ -482,6 +543,7 @@ fn map_sdmx_json_error(err: serde_json::Error) -> AdapterError {
 struct ChannelReader {
     rx: tokio::sync::mpsc::Receiver<Result<Bytes, StorageError>>,
     read_error: Arc<Mutex<Option<StorageError>>>,
+    cancellation: CancellationToken,
     current: Option<Bytes>,
     offset: usize,
 }
@@ -490,10 +552,12 @@ impl ChannelReader {
     fn new(
         rx: tokio::sync::mpsc::Receiver<Result<Bytes, StorageError>>,
         read_error: Arc<Mutex<Option<StorageError>>>,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             rx,
             read_error,
+            cancellation,
             current: None,
             offset: 0,
         }
@@ -507,6 +571,12 @@ impl Read for ChannelReader {
         }
 
         loop {
+            if self.cancellation.is_cancelled() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "ABS parse cancelled",
+                ));
+            }
             if let Some(current) = &self.current {
                 if self.offset < current.len() {
                     let available = &current[self.offset..];
@@ -1850,14 +1920,43 @@ mod tests {
             .expect("store fixture artifact");
         let key = StorageKey::canonical_for(&artifact_id);
 
-        let err = parse_blob_stream(blob_store, key, |_reader| -> Result<(), AdapterError> {
-            panic!("synthetic parse worker panic")
-        })
+        let err = parse_blob_stream(
+            blob_store,
+            key,
+            CancellationToken::new(),
+            |_reader| -> Result<(), AdapterError> { panic!("synthetic parse worker panic") },
+        )
         .await
         .expect_err("worker panic should be returned as an adapter error");
 
         assert!(matches!(err, AdapterError::Core(CoreError::Io(_))));
         assert_eq!(err.class(), ErrorClass::Transient);
         assert!(err.to_string().contains("ABS parse worker failed"));
+    }
+
+    #[tokio::test]
+    async fn parse_blob_stream_returns_promptly_when_cancelled_before_read() {
+        let blob_store = BlobStore::new(InMemory::new());
+        let artifact_id = blob_store
+            .put_artifact_stream(stream::iter([Ok::<_, io::Error>(Bytes::from_static(
+                b"{}",
+            ))]))
+            .await
+            .expect("store fixture artifact");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let err = parse_blob_stream(
+            blob_store,
+            StorageKey::canonical_for(&artifact_id),
+            cancellation,
+            |_reader| -> Result<(), AdapterError> { Ok(()) },
+        )
+        .await
+        .expect_err("cancelled parse should return an adapter error");
+
+        assert!(matches!(err, AdapterError::Core(CoreError::Io(_))));
+        assert_eq!(err.class(), ErrorClass::Transient);
+        assert!(err.to_string().contains("ABS parse cancelled"));
     }
 }

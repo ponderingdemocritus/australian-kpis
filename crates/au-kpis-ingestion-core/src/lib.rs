@@ -1205,7 +1205,7 @@ async fn load_stage(
         match item {
             LoadStageItem::Observation { item, correlation } => {
                 let artifact_id = item.observation.source_artifact_id;
-                let item_bytes = estimate_load_item_bytes(&item);
+                let item_bytes = au_kpis_loader::estimate_load_item_bytes(&item)?;
                 let key = PendingLoadKey::new(artifact_id, correlation.clone());
                 let artifact = pending.entry(key).or_default();
                 if artifact.will_stage(item_bytes, options) {
@@ -1330,8 +1330,13 @@ async fn append_accepted_load_items(
         if !valid {
             continue;
         }
-        let item_bytes = estimate_load_item_bytes(&item);
-        if should_flush_load_batch(&accepted.batch, accepted.batch_bytes, item_bytes, options) {
+        let item_bytes = au_kpis_loader::estimate_load_item_bytes(&item)?;
+        if au_kpis_loader::should_flush_load_batch(
+            accepted.batch.len(),
+            accepted.batch_bytes,
+            item_bytes,
+            options,
+        ) {
             add_load_stats(
                 loaded,
                 flush_accepted_load_batch(pool, accepted, options).await?,
@@ -1342,7 +1347,11 @@ async fn append_accepted_load_items(
         accepted.batch.push(item);
         accepted.correlations.push(correlation);
 
-        if accepted.batch.len() >= options.max_rows || accepted.batch_bytes >= options.max_bytes {
+        if au_kpis_loader::load_batch_boundary_reached(
+            accepted.batch.len(),
+            accepted.batch_bytes,
+            options,
+        ) {
             add_load_stats(
                 loaded,
                 flush_accepted_load_batch(pool, accepted, options).await?,
@@ -1402,7 +1411,12 @@ impl PendingArtifactLoad {
         correlation: JobCorrelation,
         item_bytes: usize,
     ) -> Result<(), au_kpis_loader::LoadError> {
-        if should_flush_load_batch(&self.batch, self.batch_bytes, item_bytes, options) {
+        if au_kpis_loader::should_flush_load_batch(
+            self.batch.len(),
+            self.batch_bytes,
+            item_bytes,
+            options,
+        ) {
             self.stage(pool, options).await?;
         }
 
@@ -1410,7 +1424,8 @@ impl PendingArtifactLoad {
         self.batch.push(item);
         self.correlations.push(correlation);
 
-        if self.batch.len() >= options.max_rows || self.batch_bytes >= options.max_bytes {
+        if au_kpis_loader::load_batch_boundary_reached(self.batch.len(), self.batch_bytes, options)
+        {
             self.stage(pool, options).await?;
         }
 
@@ -1418,8 +1433,12 @@ impl PendingArtifactLoad {
     }
 
     fn will_stage(&self, next_item_bytes: usize, options: LoadOptions) -> bool {
-        should_flush_load_batch(&self.batch, self.batch_bytes, next_item_bytes, options)
-            || self.batch.len() + 1 >= options.max_rows
+        au_kpis_loader::should_flush_load_batch(
+            self.batch.len(),
+            self.batch_bytes,
+            next_item_bytes,
+            options,
+        ) || self.batch.len() + 1 >= options.max_rows
             || self.batch_bytes.saturating_add(next_item_bytes) >= options.max_bytes
     }
 
@@ -1611,37 +1630,6 @@ fn validate_source_id(
     }
 }
 
-fn should_flush_load_batch(
-    batch: &[LoadItem],
-    batch_bytes: usize,
-    next_item_bytes: usize,
-    options: LoadOptions,
-) -> bool {
-    !batch.is_empty()
-        && (batch.len() >= options.max_rows
-            || batch_bytes.saturating_add(next_item_bytes) > options.max_bytes)
-}
-
-fn estimate_load_item_bytes(item: &LoadItem) -> usize {
-    const BASE_ROW_BYTES: usize = 256;
-    BASE_ROW_BYTES
-        + item.series.dataflow_id.as_str().len()
-        + item.series.measure_id.as_str().len()
-        + item.series.unit.len()
-        + item
-            .series
-            .dimensions
-            .iter()
-            .map(|(key, value)| key.as_str().len() + value.as_str().len())
-            .sum::<usize>()
-        + item
-            .observation
-            .attributes
-            .iter()
-            .map(|(key, value)| key.len() + value.len())
-            .sum::<usize>()
-}
-
 async fn send_produced<T>(
     tx: &mpsc::Sender<T>,
     value: T,
@@ -1673,19 +1661,24 @@ mod tests {
     const TRACE_PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
     #[test]
-    fn load_stage_flushes_before_next_item_exceeds_byte_cap() {
+    fn load_stage_uses_loader_owned_byte_cap_boundary() {
         let first = load_item_with_attribute_bytes(8);
         let second = load_item_with_attribute_bytes(8);
-        let first_bytes = estimate_load_item_bytes(&first);
-        let second_bytes = estimate_load_item_bytes(&second);
+        let first_bytes = au_kpis_loader::estimate_load_item_bytes(&first).unwrap();
+        let second_bytes = au_kpis_loader::estimate_load_item_bytes(&second).unwrap();
         let options = LoadOptions {
             max_rows: 64,
             max_bytes: first_bytes + second_bytes - 1,
         };
 
-        assert!(!should_flush_load_batch(&[], 0, first_bytes, options));
-        assert!(should_flush_load_batch(
-            &[first],
+        assert!(!au_kpis_loader::should_flush_load_batch(
+            0,
+            0,
+            first_bytes,
+            options
+        ));
+        assert!(au_kpis_loader::should_flush_load_batch(
+            1,
             first_bytes,
             second_bytes,
             options
@@ -1695,13 +1688,15 @@ mod tests {
     #[test]
     fn load_stage_does_not_flush_empty_batch_for_oversized_single_item() {
         let item = load_item_with_attribute_bytes(1024);
-        let item_bytes = estimate_load_item_bytes(&item);
+        let item_bytes = au_kpis_loader::estimate_load_item_bytes(&item).unwrap();
         let options = LoadOptions {
             max_rows: 64,
             max_bytes: item_bytes - 1,
         };
 
-        assert!(!should_flush_load_batch(&[], 0, item_bytes, options));
+        assert!(!au_kpis_loader::should_flush_load_batch(
+            0, 0, item_bytes, options
+        ));
     }
 
     #[tokio::test]
