@@ -395,10 +395,7 @@ fn cancel_before_first_row(
             if !cancelled {
                 cancellation.cancel();
             }
-            std::future::pending::<
-                Option<(Result<(SeriesDescriptor, Observation), AdapterError>, bool)>,
-            >()
-            .await
+            None
         }
     }))
 }
