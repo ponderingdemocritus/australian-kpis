@@ -247,6 +247,67 @@ pub async fn validate_load_references(
     Ok(stats)
 }
 
+async fn validate_load_references_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    items: Vec<LoadItemAudit>,
+) -> Result<(Vec<LoadItem>, LoadStats), LoadError> {
+    let mut stats = LoadStats::default();
+    let mut valid_items = Vec::with_capacity(items.len());
+
+    for audited in items {
+        let (dataflow_exists, measure_exists, artifact_exists): (bool, bool, bool) =
+            sqlx::query_as(
+                "SELECT
+                     EXISTS (SELECT 1 FROM dataflows WHERE id = $1),
+                     EXISTS (SELECT 1 FROM measures WHERE id = $2),
+                     EXISTS (SELECT 1 FROM artifacts WHERE id = $3)",
+            )
+            .bind(audited.item.series.dataflow_id.as_str())
+            .bind(audited.item.series.measure_id.as_str())
+            .bind(
+                audited
+                    .item
+                    .observation
+                    .source_artifact_id
+                    .digest()
+                    .as_bytes()
+                    .as_slice(),
+            )
+            .fetch_one(&mut **conn)
+            .await?;
+
+        let mut missing = Vec::new();
+        if !dataflow_exists {
+            missing.push(format!("dataflow `{}`", audited.item.series.dataflow_id));
+        }
+        if !measure_exists {
+            missing.push(format!("measure `{}`", audited.item.series.measure_id));
+        }
+        if !artifact_exists {
+            missing.push(format!(
+                "artifact `{}`",
+                audited.item.observation.source_artifact_id
+            ));
+        }
+        if missing.is_empty() {
+            valid_items.push(audited.item);
+            continue;
+        }
+
+        record_loader_validation_error_on_connection(
+            conn,
+            audited.item.observation.source_artifact_id,
+            &format!("missing loader reference: {}", missing.join(", ")),
+            &audited.item,
+            audited.row_context,
+        )
+        .await?;
+        stats.parse_errors += 1;
+    }
+
+    Ok((valid_items, stats))
+}
+
 /// Start a staged load session for one artifact.
 #[instrument(skip(pool))]
 pub async fn begin_staged_load(
@@ -276,7 +337,7 @@ impl StagedLoad {
         for audited in items {
             match validate_item(&audited.item) {
                 Ok(()) => {
-                    valid_items.push(audited.item);
+                    valid_items.push(audited);
                 }
                 Err(message) => {
                     record_loader_validation_error_on_connection(
@@ -291,6 +352,10 @@ impl StagedLoad {
                 }
             }
         }
+
+        let (valid_items, reference_stats) =
+            validate_load_references_on_connection(&mut self.conn, valid_items).await?;
+        self.stats.parse_errors += reference_stats.parse_errors;
 
         if valid_items.is_empty() {
             return Ok(());

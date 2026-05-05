@@ -44,6 +44,7 @@ enum StubMode {
     ParseErrorAfterCancellation,
     FatalParseError,
     ReadyRowsAfterCancellation,
+    AsyncRowsAfterCancellation,
     LoaderValidationError,
     LoaderValidationThenWrongArtifact,
     MissingReferenceFirstAccepted,
@@ -128,6 +129,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::ParseErrorAfterCancellation
             | StubMode::FatalParseError
             | StubMode::ReadyRowsAfterCancellation
+            | StubMode::AsyncRowsAfterCancellation
             | StubMode::LoaderValidationError
             | StubMode::LoaderValidationThenWrongArtifact
             | StubMode::MissingReferenceFirstAccepted
@@ -277,6 +279,10 @@ impl SourceAdapter for StubAdapter {
                 row,
                 self.cancel_token().expect("cancel token configured"),
             ),
+            StubMode::AsyncRowsAfterCancellation => async_rows_after_cancellation(
+                row,
+                self.cancel_token().expect("cancel token configured"),
+            ),
             StubMode::LoaderValidationError => {
                 Box::pin(stream::iter([Ok(loader_validation_error_row(artifact.id))]))
             }
@@ -392,6 +398,33 @@ fn ready_rows_after_cancellation(
                     Some((Ok(row), 2))
                 }
                 2 => {
+                    row.1.time = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
+                    Some((Ok(row), 3))
+                }
+                _ => None,
+            }
+        }
+    }))
+}
+
+fn async_rows_after_cancellation(
+    row: (SeriesDescriptor, Observation),
+    cancellation: CancellationToken,
+) -> BoxStream<'static, Result<(SeriesDescriptor, Observation), AdapterError>> {
+    Box::pin(stream::unfold(0_u8, move |state| {
+        let mut row = row.clone();
+        let cancellation = cancellation.clone();
+        async move {
+            match state {
+                0 => Some((Ok(row), 1)),
+                1 => {
+                    cancellation.cancel();
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    row.1.time = Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+                    Some((Ok(row), 2))
+                }
+                2 => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
                     row.1.time = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
                     Some((Ok(row), 3))
                 }
@@ -1110,7 +1143,7 @@ async fn cancellation_after_first_parse_error_does_not_wait_for_more_rows() {
             PipelineOptions {
                 channel_capacity: 1,
                 load_max_rows: 64,
-                shutdown_grace: Duration::from_secs(5),
+                shutdown_grace: Duration::from_millis(100),
                 ..PipelineOptions::default()
             },
             Some(cancellation.clone()),
@@ -1284,6 +1317,54 @@ async fn first_buffered_accepted_artifact_missing_reference_is_audited() {
     .await;
 
     assert!(matches!(result, Err(IngestionError::Load(_))), "{result:?}");
+
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT error_kind FROM parse_errors")
+        .fetch_all(&pool)
+        .await
+        .expect("read parse error kinds");
+    let error_kinds: Vec<_> = rows.into_iter().map(|(kind,)| kind).collect();
+    assert_eq!(error_kinds, vec!["loader_validation"]);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_accepted_artifact_missing_reference_is_audited() {
+    let timescale = start_timescale("au_kpis_pipeline_staged_reference")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::MissingReferenceFirstAccepted,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 1,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("staged reference validation should audit and drop invalid rows");
+
+    assert_eq!(stats.loaded.parse_errors, 1);
 
     let rows: Vec<(String,)> = sqlx::query_as("SELECT error_kind FROM parse_errors")
         .fetch_all(&pool)
@@ -1695,6 +1776,45 @@ async fn cancellation_drains_ready_parser_rows_after_shutdown() {
     .await;
 
     result.expect("ready parser rows should drain before shutdown completes");
+
+    let (observation_count, parse_error_count): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("count observations and parse errors");
+    assert_eq!(observation_count, 3);
+    assert_eq!(parse_error_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_drains_async_parser_rows_after_shutdown() {
+    let timescale = start_timescale("au_kpis_pipeline_async_cancel")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let cancellation = CancellationToken::new();
+    let result = pipeline_with_pool(
+        StubMode::AsyncRowsAfterCancellation,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        Some(cancellation.clone()),
+    )
+    .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
+    .await;
+
+    result.expect("async parser rows should drain before shutdown completes");
 
     let (observation_count, parse_error_count): (i64, i64) =
         sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")

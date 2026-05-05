@@ -366,6 +366,7 @@ pub struct FetchCtx {
     /// Timestamp captured by the worker when fetch started.
     pub started_at: DateTime<Utc>,
     artifact_recorder: ArtifactRecorderRef,
+    cancellation: CancellationToken,
 }
 
 impl FetchCtx {
@@ -382,7 +383,28 @@ impl FetchCtx {
             blob_store,
             started_at,
             artifact_recorder,
+            cancellation: CancellationToken::new(),
         }
+    }
+
+    /// Return a context bound to the orchestrator's cancellation token so
+    /// adapters can abort long-running fetch work during shutdown.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    /// Cancellation token shared with the orchestrator.
+    #[must_use]
+    pub const fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    /// Convenience predicate equivalent to `self.cancellation().is_cancelled()`.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
     }
 
     /// Persist fetched artifact provenance, then return the parse reference.

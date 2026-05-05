@@ -25,7 +25,7 @@ use au_kpis_error::Classify;
 use au_kpis_loader::{LoadItem, LoadItemAudit, LoadOptions, LoadStats, StagedLoad};
 use au_kpis_storage::BlobStore;
 use chrono::{DateTime, Utc};
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, stream::FuturesUnordered};
 use opentelemetry::{
     Context as OtelContext, propagation::TextMapPropagator, trace::TraceContextExt,
 };
@@ -314,7 +314,10 @@ impl IngestionPipeline {
                 artifact_tx,
                 source_id.clone(),
                 pipeline_token.clone(),
-                self.options.fetch_concurrency,
+                StageRuntime {
+                    concurrency: self.options.fetch_concurrency,
+                    shutdown_grace: self.options.shutdown_grace,
+                },
             )
             .instrument(fetch_span)
             .with_current_subscriber(),
@@ -333,7 +336,10 @@ impl IngestionPipeline {
                 load_tx,
                 source_id.clone(),
                 pipeline_token.clone(),
-                self.options.parse_concurrency,
+                StageRuntime {
+                    concurrency: self.options.parse_concurrency,
+                    shutdown_grace: self.options.shutdown_grace,
+                },
             )
             .instrument(parse_span)
             .with_current_subscriber(),
@@ -464,6 +470,12 @@ struct JobCorrelation {
     source_id: String,
     job_id: String,
     trace_parent: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StageRuntime {
+    concurrency: usize,
+    shutdown_grace: Duration,
 }
 
 impl JobCorrelation {
@@ -612,7 +624,7 @@ async fn fetch_stage(
     tx: mpsc::Sender<FetchedArtifact>,
     source_id: SourceId,
     cancellation: CancellationToken,
-    concurrency: usize,
+    runtime: StageRuntime,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut fetched = 0;
     let mut input_closed = false;
@@ -635,7 +647,7 @@ async fn fetch_stage(
                 draining = true;
                 stopped_input = !(input_closed || (rx.is_closed() && rx.is_empty()));
             }
-            job = rx.recv(), if !input_closed && !draining && in_flight.len() < concurrency => {
+            job = rx.recv(), if !input_closed && !draining && in_flight.len() < runtime.concurrency => {
                 let Some(job) = job else {
                     input_closed = true;
                     continue;
@@ -649,9 +661,10 @@ async fn fetch_stage(
                 in_flight.push(fetch_one(
                     adapters.clone(),
                     source_id.clone(),
-                    ctx.clone(),
+                    ctx.clone().with_cancellation(cancellation.clone()),
                     job,
                     cancellation.clone(),
+                    runtime.shutdown_grace,
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
@@ -687,7 +700,7 @@ async fn parse_stage(
     tx: mpsc::Sender<LoadStageItem>,
     source_id: SourceId,
     cancellation: CancellationToken,
-    concurrency: usize,
+    runtime: StageRuntime,
 ) -> Result<PipelineRunStats, IngestionError> {
     let mut parsed = 0;
     let mut input_closed = false;
@@ -710,7 +723,7 @@ async fn parse_stage(
                 draining = true;
                 stopped_input = !(input_closed || (rx.is_closed() && rx.is_empty()));
             }
-            fetched = rx.recv(), if !input_closed && in_flight.len() < concurrency => {
+            fetched = rx.recv(), if !input_closed && in_flight.len() < runtime.concurrency => {
                 let Some(fetched) = fetched else {
                     input_closed = true;
                     continue;
@@ -730,6 +743,7 @@ async fn parse_stage(
                     tx.clone(),
                     fetched,
                     cancellation.clone(),
+                    runtime.shutdown_grace,
                 ));
             }
             result = in_flight.next(), if !in_flight.is_empty() => {
@@ -760,7 +774,8 @@ async fn fetch_one(
     source_id: SourceId,
     ctx: FetchCtx,
     job: au_kpis_adapter::DiscoveredJob,
-    _cancellation: CancellationToken,
+    cancellation: CancellationToken,
+    shutdown_grace: Duration,
 ) -> Result<FetchedArtifact, IngestionError> {
     let trace_parent = job.trace_parent.clone();
     let span = info_span!(
@@ -777,11 +792,19 @@ async fn fetch_one(
     };
     let dataflow_id = job.dataflow_id.clone();
     let metadata = job.metadata.clone();
-    let artifact = adapters
-        .fetch(source_id.as_str(), job, &ctx)
-        .instrument(span)
-        .await
-        .map_err(IngestionError::Adapter)?;
+    let mut fetch = Box::pin(adapters.fetch(source_id.as_str(), job, &ctx));
+    let artifact = async {
+        tokio::select! {
+            biased;
+            artifact = &mut fetch => artifact.map_err(IngestionError::Adapter),
+            () = cancellation.cancelled() => timeout(shutdown_grace, &mut fetch)
+                .await
+                .map_err(|_| IngestionError::Cancelled)?
+                .map_err(IngestionError::Adapter),
+        }
+    }
+    .instrument(span)
+    .await?;
     validate_source_id("fetch", &source_id, &artifact.source_id)?;
     Ok(FetchedArtifact {
         artifact,
@@ -798,6 +821,7 @@ async fn parse_one_artifact(
     tx: mpsc::Sender<LoadStageItem>,
     fetched: FetchedArtifact,
     cancellation: CancellationToken,
+    shutdown_grace: Duration,
 ) -> Result<u64, IngestionError> {
     let artifact_id = fetched.artifact.id;
     let trace_parent = fetched.correlation.trace_parent.clone();
@@ -814,7 +838,6 @@ async fn parse_one_artifact(
         let mut parsed = 0;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
         let mut early_adapter_errors = Vec::new();
-        let mut draining_after_cancel = false;
         let audit = ParseErrorAudit {
             artifact_id,
             dataflow_id: &fetched.dataflow_id,
@@ -825,26 +848,23 @@ async fn parse_one_artifact(
 
         loop {
             let row = if cancellation.is_cancelled() {
-                match next_after_cancellation(&mut observations, &mut draining_after_cancel).await {
-                    Some(row) => row,
-                    None => {
+                match next_after_cancellation(&mut observations, shutdown_grace).await {
+                    Ok(Some(row)) => Some(row),
+                    Ok(None) => break,
+                    Err(err) => {
                         finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
                             .await?;
-                        return Err(IngestionError::Cancelled);
+                        return Err(err);
                     }
                 }
             } else {
                 tokio::select! {
                     biased;
                     () = cancellation.cancelled() => {
-                        match next_after_cancellation(
-                            &mut observations,
-                            &mut draining_after_cancel,
-                        )
-                        .await
-                        {
-                            Some(row) => row,
-                            None => {
+                        match next_after_cancellation(&mut observations, shutdown_grace).await {
+                            Ok(Some(row)) => Some(row),
+                            Ok(None) => break,
+                            Err(err) => {
                                 finish_cancelled_parse(
                                     &tx,
                                     &audit,
@@ -852,17 +872,11 @@ async fn parse_one_artifact(
                                     parsed,
                                 )
                                 .await?;
-                                return Err(IngestionError::Cancelled);
+                                return Err(err);
                             }
                         }
                     }
-                    row = observations.next() => {
-                        let after_cancel = cancellation.is_cancelled();
-                        if after_cancel {
-                            draining_after_cancel = true;
-                        }
-                        row
-                    },
+                    row = observations.next() => row,
                 }
             };
             let Some(row) = row else {
@@ -1004,14 +1018,11 @@ async fn parse_one_artifact(
 
 async fn next_after_cancellation(
     observations: &mut ObservationStream<'_>,
-    draining_after_cancel: &mut bool,
-) -> Option<Option<Result<(SeriesDescriptor, Observation), AdapterError>>> {
-    if *draining_after_cancel {
-        observations.next().now_or_never()
-    } else {
-        *draining_after_cancel = true;
-        Some(observations.next().await)
-    }
+    shutdown_grace: Duration,
+) -> Result<Option<Result<(SeriesDescriptor, Observation), AdapterError>>, IngestionError> {
+    timeout(shutdown_grace, observations.next())
+        .await
+        .map_err(|_| IngestionError::Cancelled)
 }
 
 struct ParseErrorAudit<'a> {
