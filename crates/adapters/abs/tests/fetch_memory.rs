@@ -102,6 +102,7 @@ async fn fetch_500mb_stays_below_50mb_peak_heap_under_dhat() {
         source_id: SourceId::new("abs").unwrap(),
         dataflow_id: DataflowId::new("abs.cpi").unwrap(),
         source_url,
+        trace_parent: None,
         metadata: BTreeMap::from([
             ("abs_dataflow_id".into(), "CPI".into()),
             ("agency_id".into(), "ABS".into()),

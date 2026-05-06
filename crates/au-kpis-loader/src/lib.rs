@@ -8,7 +8,8 @@ use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
     ids::{ArtifactId, SeriesKey},
 };
-use sqlx::{PgPool, Postgres, Transaction};
+use serde_json::Value;
+use sqlx::{Acquire, PgPool, Postgres, Transaction, pool::PoolConnection};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -24,6 +25,38 @@ pub struct LoadItem {
     pub observation: Observation,
 }
 
+/// Loader item plus optional audit fields to merge into validation errors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadItemAudit {
+    /// Parsed row to validate and load.
+    pub item: LoadItem,
+    /// Extra row-level audit context for `parse_errors.row_context`.
+    pub row_context: Option<Value>,
+}
+
+/// Session-scoped loader staging state for one source artifact.
+///
+/// Parsed rows can be staged incrementally to keep the hot path bounded, then
+/// promoted only after the parser accepts the full artifact. Each staged COPY
+/// chunk uses its own transaction; the temporary staging tables live on a
+/// dedicated connection that is cleaned and returned to the pool when the
+/// artifact is accepted or rejected.
+#[derive(Debug)]
+pub struct StagedLoad {
+    conn: PoolConnection<Postgres>,
+    stats: LoadStats,
+    cleaned: bool,
+}
+
+impl From<LoadItem> for LoadItemAudit {
+    fn from(item: LoadItem) -> Self {
+        Self {
+            item,
+            row_context: None,
+        }
+    }
+}
+
 /// Aggregate result for a loader run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LoadStats {
@@ -33,8 +66,17 @@ pub struct LoadStats {
     pub series_upserted: u64,
     /// Invalid rows recorded in `parse_errors`.
     pub parse_errors: u64,
-    /// Number of database transactions used for valid batches.
+    /// Number of valid observation COPY batches.
     pub batches: u64,
+}
+
+/// Result of validating load-item database references before COPY.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadReferenceValidation {
+    /// Rows that passed reference validation and may continue to COPY.
+    pub valid_rows: Vec<bool>,
+    /// Invalid references recorded in `parse_errors`.
+    pub stats: LoadStats,
 }
 
 /// Loader configuration.
@@ -84,28 +126,40 @@ pub async fn load_batch_with_options(
     items: Vec<LoadItem>,
     options: LoadOptions,
 ) -> Result<LoadStats, LoadError> {
-    if options.max_rows == 0 {
-        return Err(LoadError::Validation(
-            "max_rows must be greater than 0".into(),
-        ));
-    }
-    if options.max_bytes == 0 {
-        return Err(LoadError::Validation(
-            "max_bytes must be greater than 0".into(),
-        ));
-    }
+    load_batch_with_options_and_audit_context(
+        pool,
+        items.into_iter().map(Into::into).collect(),
+        options,
+    )
+    .await
+}
+
+/// Load observations using explicit batch limits and audit context for rejected rows.
+#[instrument(skip(pool, items))]
+pub async fn load_batch_with_options_and_audit_context(
+    pool: &PgPool,
+    items: Vec<LoadItemAudit>,
+    options: LoadOptions,
+) -> Result<LoadStats, LoadError> {
+    validate_options(options)?;
 
     let mut stats = LoadStats::default();
     let mut valid_items = Vec::with_capacity(items.len());
 
-    for item in items {
-        match validate_item(&item) {
+    for audited in items {
+        match validate_item(&audited.item) {
             Ok(()) => {
-                valid_items.push(item);
+                valid_items.push(audited.item);
             }
             Err(message) => {
-                record_parse_error(pool, item.observation.source_artifact_id, &message, &item)
-                    .await?;
+                record_loader_validation_error(
+                    pool,
+                    audited.item.observation.source_artifact_id,
+                    &message,
+                    &audited.item,
+                    audited.row_context,
+                )
+                .await?;
                 stats.parse_errors += 1;
             }
         }
@@ -120,11 +174,13 @@ pub async fn load_batch_with_options(
     let mut valid_batch = Vec::new();
     let mut valid_batch_bytes = 0usize;
     for item in valid_items {
-        let estimated_bytes = estimate_item_bytes(&item)?;
-        if !valid_batch.is_empty()
-            && (valid_batch.len() >= options.max_rows
-                || valid_batch_bytes + estimated_bytes > options.max_bytes)
-        {
+        let estimated_bytes = estimate_load_item_bytes(&item)?;
+        if should_flush_load_batch(
+            valid_batch.len(),
+            valid_batch_bytes,
+            estimated_bytes,
+            options,
+        ) {
             load_observation_batch(pool, &valid_batch, &mut stats).await?;
             valid_batch.clear();
             valid_batch_bytes = 0;
@@ -137,6 +193,312 @@ pub async fn load_batch_with_options(
         load_observation_batch(pool, &valid_batch, &mut stats).await?;
     }
     Ok(stats)
+}
+
+/// Validate database references that would otherwise fail after batching.
+#[instrument(skip(pool, items))]
+pub async fn validate_load_references(
+    pool: &PgPool,
+    items: &[LoadItemAudit],
+) -> Result<LoadReferenceValidation, LoadError> {
+    let rows = load_reference_rows(pool, items).await?;
+    let mut validation = empty_reference_validation(items.len());
+    for (idx, missing) in missing_references(items, rows) {
+        let audited = &items[idx];
+        record_loader_validation_error(
+            pool,
+            audited.item.observation.source_artifact_id,
+            &format!("missing loader reference: {}", missing.join(", ")),
+            &audited.item,
+            audited.row_context.clone(),
+        )
+        .await?;
+        validation.valid_rows[idx] = false;
+        validation.stats.parse_errors += 1;
+    }
+
+    Ok(validation)
+}
+
+async fn validate_load_references_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    items: Vec<LoadItemAudit>,
+) -> Result<(Vec<LoadItem>, LoadStats), LoadError> {
+    let rows = load_reference_rows_on_connection(conn, &items).await?;
+    let mut validation = empty_reference_validation(items.len());
+    for (idx, missing) in missing_references(&items, rows) {
+        let audited = &items[idx];
+        record_loader_validation_error_on_connection(
+            conn,
+            audited.item.observation.source_artifact_id,
+            &format!("missing loader reference: {}", missing.join(", ")),
+            &audited.item,
+            audited.row_context.clone(),
+        )
+        .await?;
+        validation.valid_rows[idx] = false;
+        validation.stats.parse_errors += 1;
+    }
+
+    let valid_items = items
+        .into_iter()
+        .zip(validation.valid_rows.iter())
+        .filter_map(|(audited, valid)| valid.then_some(audited.item))
+        .collect();
+
+    Ok((valid_items, validation.stats))
+}
+
+type ReferenceRow = (i64, bool, bool, bool);
+
+async fn load_reference_rows(
+    pool: &PgPool,
+    items: &[LoadItemAudit],
+) -> Result<Vec<ReferenceRow>, LoadError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (dataflow_ids, measure_ids, artifact_ids) = reference_validation_inputs(items);
+    sqlx::query_as(
+        "WITH input AS (
+             SELECT *
+             FROM UNNEST($1::text[], $2::text[], $3::bytea[])
+                  WITH ORDINALITY AS item(dataflow_id, measure_id, artifact_id, ord)
+         )
+         SELECT
+             input.ord::BIGINT,
+             dataflows.id IS NOT NULL,
+             measures.id IS NOT NULL,
+             artifacts.id IS NOT NULL
+         FROM input
+         LEFT JOIN dataflows ON dataflows.id = input.dataflow_id
+         LEFT JOIN measures ON measures.id = input.measure_id
+         LEFT JOIN artifacts ON artifacts.id = input.artifact_id
+         ORDER BY input.ord",
+    )
+    .bind(dataflow_ids)
+    .bind(measure_ids)
+    .bind(artifact_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn load_reference_rows_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    items: &[LoadItemAudit],
+) -> Result<Vec<ReferenceRow>, LoadError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (dataflow_ids, measure_ids, artifact_ids) = reference_validation_inputs(items);
+    sqlx::query_as(
+        "WITH input AS (
+             SELECT *
+             FROM UNNEST($1::text[], $2::text[], $3::bytea[])
+                  WITH ORDINALITY AS item(dataflow_id, measure_id, artifact_id, ord)
+         )
+         SELECT
+             input.ord::BIGINT,
+             dataflows.id IS NOT NULL,
+             measures.id IS NOT NULL,
+             artifacts.id IS NOT NULL
+         FROM input
+         LEFT JOIN dataflows ON dataflows.id = input.dataflow_id
+         LEFT JOIN measures ON measures.id = input.measure_id
+         LEFT JOIN artifacts ON artifacts.id = input.artifact_id
+         ORDER BY input.ord",
+    )
+    .bind(dataflow_ids)
+    .bind(measure_ids)
+    .bind(artifact_ids)
+    .fetch_all(&mut **conn)
+    .await
+    .map_err(Into::into)
+}
+
+fn reference_validation_inputs(
+    items: &[LoadItemAudit],
+) -> (Vec<String>, Vec<String>, Vec<Vec<u8>>) {
+    let dataflow_ids = items
+        .iter()
+        .map(|item| item.item.series.dataflow_id.to_string())
+        .collect();
+    let measure_ids = items
+        .iter()
+        .map(|item| item.item.series.measure_id.to_string())
+        .collect();
+    let artifact_ids = items
+        .iter()
+        .map(|item| {
+            item.item
+                .observation
+                .source_artifact_id
+                .digest()
+                .as_bytes()
+                .to_vec()
+        })
+        .collect();
+    (dataflow_ids, measure_ids, artifact_ids)
+}
+
+fn empty_reference_validation(row_count: usize) -> LoadReferenceValidation {
+    LoadReferenceValidation {
+        valid_rows: vec![true; row_count],
+        stats: LoadStats::default(),
+    }
+}
+
+fn missing_references(
+    items: &[LoadItemAudit],
+    rows: Vec<ReferenceRow>,
+) -> impl Iterator<Item = (usize, Vec<String>)> + '_ {
+    rows.into_iter()
+        .filter_map(|(ord, dataflow, measure, artifact)| {
+            let idx = usize::try_from(ord).ok()?.checked_sub(1)?;
+            let item = items.get(idx)?;
+            let mut missing = Vec::new();
+            if !dataflow {
+                missing.push(format!("dataflow `{}`", item.item.series.dataflow_id));
+            }
+            if !measure {
+                missing.push(format!("measure `{}`", item.item.series.measure_id));
+            }
+            if !artifact {
+                missing.push(format!(
+                    "artifact `{}`",
+                    item.item.observation.source_artifact_id
+                ));
+            }
+            (!missing.is_empty()).then_some((idx, missing))
+        })
+}
+
+/// Start a staged load session for one artifact.
+#[instrument(skip(pool))]
+pub async fn begin_staged_load(
+    pool: &PgPool,
+    options: LoadOptions,
+) -> Result<StagedLoad, LoadError> {
+    validate_options(options)?;
+
+    let mut conn = pool.acquire().await?;
+    drop_staging_tables(&mut conn).await?;
+    let mut tx = (&mut conn).begin().await?;
+    create_series_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
+    create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
+    tx.commit().await?;
+
+    Ok(StagedLoad {
+        conn,
+        stats: LoadStats::default(),
+        cleaned: false,
+    })
+}
+
+impl StagedLoad {
+    /// Append a validated COPY chunk to this artifact's staging tables.
+    pub async fn stage(&mut self, items: Vec<LoadItemAudit>) -> Result<(), LoadError> {
+        let mut valid_items = Vec::with_capacity(items.len());
+
+        for audited in items {
+            match validate_item(&audited.item) {
+                Ok(()) => {
+                    valid_items.push(audited);
+                }
+                Err(message) => {
+                    record_loader_validation_error_on_connection(
+                        &mut self.conn,
+                        audited.item.observation.source_artifact_id,
+                        &message,
+                        &audited.item,
+                        audited.row_context,
+                    )
+                    .await?;
+                    self.stats.parse_errors += 1;
+                }
+            }
+        }
+
+        let (valid_items, reference_stats) =
+            validate_load_references_on_connection(&mut self.conn, valid_items).await?;
+        self.stats.parse_errors += reference_stats.parse_errors;
+
+        if valid_items.is_empty() {
+            return Ok(());
+        }
+
+        let result = async {
+            let mut tx = (&mut self.conn).begin().await?;
+            copy_series(&mut tx, &valid_items).await?;
+            copy_observations(&mut tx, &valid_items).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(err) = result {
+            return match drop_staging_tables(&mut self.conn).await {
+                Ok(()) => Err(err),
+                Err(cleanup_err) => Err(cleanup_err),
+            };
+        }
+        self.stats.batches += 1;
+        Ok(())
+    }
+
+    /// Promote all staged rows into durable tables.
+    pub async fn commit(mut self) -> Result<LoadStats, LoadError> {
+        let result = async {
+            let mut tx = (&mut self.conn).begin().await?;
+            self.stats.series_upserted += upsert_series(&mut tx).await?;
+            self.stats.observations_loaded += upsert_observations(&mut tx).await?;
+            tx.commit().await?;
+            Ok(self.stats)
+        }
+        .await;
+        let cleanup = drop_staging_tables(&mut self.conn).await;
+        if cleanup.is_ok() {
+            self.cleaned = true;
+        }
+        match (result, cleanup) {
+            (Ok(stats), Ok(())) => Ok(stats),
+            (Err(err), _) | (Ok(_), Err(err)) => Err(err),
+        }
+    }
+
+    /// Drop staged rows for a rejected artifact and surface any loader
+    /// validation errors that were already recorded against `parse_errors` so
+    /// the caller can fold them into pipeline stats.
+    pub async fn rollback(mut self) -> Result<LoadStats, LoadError> {
+        let stats = self.stats;
+        drop_staging_tables(&mut self.conn).await?;
+        self.cleaned = true;
+        Ok(stats)
+    }
+}
+
+impl Drop for StagedLoad {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            self.conn.close_on_drop();
+        }
+    }
+}
+
+fn validate_options(options: LoadOptions) -> Result<(), LoadError> {
+    if options.max_rows == 0 {
+        return Err(LoadError::Validation(
+            "max_rows must be greater than 0".into(),
+        ));
+    }
+    if options.max_bytes == 0 {
+        return Err(LoadError::Validation(
+            "max_bytes must be greater than 0".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_item(item: &LoadItem) -> Result<(), String> {
@@ -156,10 +518,38 @@ fn validate_item(item: &LoadItem) -> Result<(), String> {
     Ok(())
 }
 
-fn estimate_item_bytes(item: &LoadItem) -> Result<usize, LoadError> {
+/// Estimate the COPY payload size contribution for one load item.
+///
+/// The ingestion orchestrator uses this loader-owned estimator only to decide
+/// when an in-memory artifact buffer should be handed to the loader; the loader
+/// remains the source of truth for COPY batch boundaries.
+pub fn estimate_load_item_bytes(item: &LoadItem) -> Result<usize, LoadError> {
     let dimensions = descriptor_dimensions_json(&item.series)?;
     let attributes = serde_json::to_string(&item.observation.attributes)?;
     Ok(256 + dimensions.len() + attributes.len())
+}
+
+/// Return whether adding the next item should flush the current COPY batch.
+#[must_use]
+pub fn should_flush_load_batch(
+    batch_len: usize,
+    batch_bytes: usize,
+    next_item_bytes: usize,
+    options: LoadOptions,
+) -> bool {
+    batch_len != 0
+        && (batch_len >= options.max_rows
+            || batch_bytes.saturating_add(next_item_bytes) > options.max_bytes)
+}
+
+/// Return whether the current batch has reached a configured COPY boundary.
+#[must_use]
+pub fn load_batch_boundary_reached(
+    batch_len: usize,
+    batch_bytes: usize,
+    options: LoadOptions,
+) -> bool {
+    batch_len >= options.max_rows || batch_bytes >= options.max_bytes
 }
 
 async fn upsert_series_batch(
@@ -194,7 +584,21 @@ async fn load_observation_batch(
 }
 
 async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Result<(), LoadError> {
-    sqlx::query(
+    create_series_staging_table_with_on_commit(tx, "DROP").await
+}
+
+async fn drop_staging_tables(conn: &mut PoolConnection<Postgres>) -> Result<(), LoadError> {
+    sqlx::query("DROP TABLE IF EXISTS staging_observations, staging_series")
+        .execute(&mut **conn)
+        .await?;
+    Ok(())
+}
+
+async fn create_series_staging_table_with_on_commit(
+    tx: &mut Transaction<'_, Postgres>,
+    on_commit: &str,
+) -> Result<(), LoadError> {
+    let query = format!(
         "CREATE TEMP TABLE staging_series (
              series_key_hex TEXT NOT NULL,
              dataflow_id TEXT NOT NULL,
@@ -203,10 +607,9 @@ async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Resu
              unit TEXT NOT NULL,
              first_observed TIMESTAMPTZ NOT NULL,
              last_observed TIMESTAMPTZ NOT NULL
-         ) ON COMMIT DROP",
-    )
-    .execute(&mut **tx)
-    .await?;
+         ) ON COMMIT {on_commit}",
+    );
+    sqlx::query(&query).execute(&mut **tx).await?;
 
     Ok(())
 }
@@ -214,7 +617,14 @@ async fn create_series_staging_table(tx: &mut Transaction<'_, Postgres>) -> Resu
 async fn create_observation_staging_table(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), LoadError> {
-    sqlx::query(
+    create_observation_staging_table_with_on_commit(tx, "DROP").await
+}
+
+async fn create_observation_staging_table_with_on_commit(
+    tx: &mut Transaction<'_, Postgres>,
+    on_commit: &str,
+) -> Result<(), LoadError> {
+    let query = format!(
         "CREATE TEMP TABLE staging_observations (
              series_key_hex TEXT NOT NULL,
              time TIMESTAMPTZ NOT NULL,
@@ -225,10 +635,9 @@ async fn create_observation_staging_table(
              attributes JSONB NOT NULL,
              ingested_at TIMESTAMPTZ NOT NULL,
              source_artifact_hex TEXT NOT NULL
-         ) ON COMMIT DROP",
-    )
-    .execute(&mut **tx)
-    .await?;
+         ) ON COMMIT {on_commit}",
+    );
+    sqlx::query(&query).execute(&mut **tx).await?;
 
     Ok(())
 }
@@ -372,30 +781,114 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
     Ok(result.rows_affected())
 }
 
-async fn record_parse_error(
+/// Record a parser failure against the source artifact for audit and reprocessing.
+pub async fn record_parse_error(
     pool: &PgPool,
     artifact_id: ArtifactId,
-    message: &str,
-    item: &LoadItem,
+    error_kind: &str,
+    error_message: &str,
+    row_context: Option<Value>,
 ) -> Result<(), LoadError> {
-    let row_context = serde_json::json!({
-        "dataflow_id": item.series.dataflow_id,
-        "series_key": item.series.series_key,
-        "observation_time": item.observation.time,
-        "revision_no": item.observation.revision_no,
-    });
-
     sqlx::query(
         "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
-         VALUES ($1, 'loader_validation', $2, $3)",
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(artifact_id.digest().as_bytes().as_slice())
-    .bind(message)
+    .bind(error_kind)
+    .bind(error_message)
     .bind(row_context)
     .execute(pool)
     .await?;
 
     Ok(())
+}
+
+async fn record_loader_validation_error(
+    pool: &PgPool,
+    artifact_id: ArtifactId,
+    message: &str,
+    item: &LoadItem,
+    audit_context: Option<Value>,
+) -> Result<(), LoadError> {
+    let row_context = loader_validation_row_context(item, audit_context);
+
+    record_parse_error(
+        pool,
+        artifact_id,
+        "loader_validation",
+        message,
+        Some(row_context),
+    )
+    .await
+}
+
+async fn record_loader_validation_error_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    artifact_id: ArtifactId,
+    message: &str,
+    item: &LoadItem,
+    audit_context: Option<Value>,
+) -> Result<(), LoadError> {
+    let row_context = loader_validation_row_context(item, audit_context);
+
+    record_parse_error_on_connection(
+        conn,
+        artifact_id,
+        "loader_validation",
+        message,
+        Some(row_context),
+    )
+    .await
+}
+
+fn loader_validation_row_context(item: &LoadItem, audit_context: Option<Value>) -> Value {
+    let base_context = serde_json::json!({
+        "dataflow_id": item.series.dataflow_id,
+        "series_key": item.series.series_key,
+        "observation_time": item.observation.time,
+        "revision_no": item.observation.revision_no,
+    });
+    merge_row_context(base_context, audit_context)
+}
+
+async fn record_parse_error_on_connection(
+    conn: &mut PoolConnection<Postgres>,
+    artifact_id: ArtifactId,
+    error_kind: &str,
+    error_message: &str,
+    row_context: Option<Value>,
+) -> Result<(), LoadError> {
+    sqlx::query(
+        "INSERT INTO parse_errors (artifact_id, error_kind, error_message, row_context)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(error_kind)
+    .bind(error_message)
+    .bind(row_context)
+    .execute(&mut **conn)
+    .await?;
+
+    Ok(())
+}
+
+fn merge_row_context(mut base: Value, extra: Option<Value>) -> Value {
+    if let Some(extra) = extra {
+        match (&mut base, extra) {
+            (Value::Object(base), Value::Object(extra)) => {
+                for (key, value) in extra {
+                    base.insert(key, value);
+                }
+            }
+            (Value::Object(base), extra) => {
+                base.insert("audit_context".to_string(), extra);
+            }
+            (_, extra) => {
+                base = extra;
+            }
+        }
+    }
+    base
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 use std::{
-    fmt::Write as _,
+    fmt::{self, Write as _},
     sync::{
-        Arc,
+        Arc, Mutex, Once,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -18,7 +18,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
-use tracing::{Id, Subscriber, span::Attributes};
+use tracing::{
+    Id, Subscriber,
+    field::{Field, Visit},
+    span::Attributes,
+};
 use tracing_subscriber::{
     Layer,
     layer::{Context, SubscriberExt},
@@ -26,9 +30,20 @@ use tracing_subscriber::{
 };
 
 #[derive(Debug, Clone)]
-struct SpanCounter {
-    name: &'static str,
-    count: Arc<AtomicUsize>,
+struct SpanCounter;
+
+static PDF_HTTP_SPAN_COUNTER_INIT: Once = Once::new();
+static PDF_HTTP_CHILD_SPANS: AtomicUsize = AtomicUsize::new(0);
+static PDF_HTTP_SPAN_TARGET_URL: Mutex<Option<String>> = Mutex::new(None);
+
+const PDF_EXTRACT_HTTP_SPAN: &str = "pdf.extract.http";
+
+fn ensure_pdf_span_counter() {
+    PDF_HTTP_SPAN_COUNTER_INIT.call_once(|| {
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(SpanCounter))
+            .expect("install pdf span counter subscriber");
+    });
+    tracing::callsite::rebuild_interest_cache();
 }
 
 impl<S> Layer<S> for SpanCounter
@@ -36,8 +51,38 @@ where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
     fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
-        if attrs.metadata().name() == self.name {
-            self.count.fetch_add(1, Ordering::SeqCst);
+        if attrs.metadata().name() != PDF_EXTRACT_HTTP_SPAN {
+            return;
+        }
+
+        let mut visitor = SpanUrlVisitor::default();
+        attrs.record(&mut visitor);
+        let target_url = PDF_HTTP_SPAN_TARGET_URL
+            .lock()
+            .expect("target URL lock")
+            .clone();
+
+        if target_url.as_deref() == visitor.url.as_deref() {
+            PDF_HTTP_CHILD_SPANS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[derive(Default)]
+struct SpanUrlVisitor {
+    url: Option<String>,
+}
+
+impl Visit for SpanUrlVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "url" {
+            self.url = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == "url" {
+            self.url = Some(format!("{value:?}"));
         }
     }
 }
@@ -387,6 +432,8 @@ async fn extract_stream_timeout_bounds_incomplete_response_body() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn extract_emits_outbound_http_span() {
+    ensure_pdf_span_counter();
+
     let body = r#"{
       "artifact_key": "artifacts/abc123",
       "backend": {
@@ -398,21 +445,22 @@ async fn extract_emits_outbound_http_span() {
       "tables": []
     }"#;
     let (base_url, _attempts) = serve_responses(vec![body], vec![200]).await;
+    let target_url = format!("{}/extract", base_url.trim_end_matches('/'));
     let client = PdfClient::builder()
-        .base_url(base_url)
+        .base_url(base_url.clone())
         .retry_policy(RetryPolicy::none())
         .build()
         .unwrap();
-    let span_count = Arc::new(AtomicUsize::new(0));
-    let subscriber = tracing_subscriber::registry().with(SpanCounter {
-        name: "pdf.extract.http",
-        count: Arc::clone(&span_count),
-    });
-    let _guard = tracing::subscriber::set_default(subscriber);
+    *PDF_HTTP_SPAN_TARGET_URL.lock().expect("target URL lock") = Some(target_url);
+    let span_count_before = PDF_HTTP_CHILD_SPANS.load(Ordering::SeqCst);
 
     client.extract(request()).await.expect("extract");
 
-    assert_eq!(span_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        PDF_HTTP_CHILD_SPANS.load(Ordering::SeqCst),
+        span_count_before + 1
+    );
+    *PDF_HTTP_SPAN_TARGET_URL.lock().expect("target URL lock") = None;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

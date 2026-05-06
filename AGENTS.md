@@ -348,10 +348,13 @@ Every PR must add/update tests at the appropriate layer:
 8. **Don't bypass pre-commit hooks** with `--no-verify`. If a hook fails, fix the underlying issue.
 9. **Don't commit secrets, `.env`, production fixtures, or large binaries.** Fixtures >5 MB go to R2 with a reference in-repo.
 10. **When unsure about architecture**, open a draft PR with a `Spec.md` amendment — don't guess.
-11. **Validate artifact provenance in parsers.** If parsed observations carry `source_artifact_id`, verify the artifact id, persisted storage key, and parsed bytes are consistent before emitting rows. Do not trust an `ArtifactRef` whose fields could point at different blobs.
-12. **Reject ambiguous source/dataflow provenance.** Source-specific parsers must fail fast when the artifact cannot be tied to the expected upstream dataflow. Do not infer CPI/WPI/etc. only from payload shape or a mirrored filename.
-13. **Keep streaming fixes on the hot path.** Handling harmless format variations, such as JSON key reordering, should not introduce extra full-artifact scans unless the issue explicitly accepts that cost and tests cover it.
-14. **Make performance fixtures production-shaped.** Large-memory and streaming tests should use valid content-addressed artifact ids and storage keys so they exercise the same validation path as production parsing.
+11. **Turn spec-heavy work into invariant tests before implementation.** For ingestion, loader, queue, parser, database, API, and CI changes, extract the relevant `Spec.md` guarantees into a short checklist and tests before coding. Cover failure paths, backpressure, cancellation, provenance, idempotency, ordering, and auditability as applicable; do not stop at the happy-path shape.
+12. **Validate artifact provenance in parsers.** If parsed observations carry `source_artifact_id`, verify the artifact id, persisted storage key, and parsed bytes are consistent before emitting rows. Do not trust an `ArtifactRef` whose fields could point at different blobs.
+13. **Reject ambiguous source/dataflow provenance.** Source-specific parsers must fail fast when the artifact cannot be tied to the expected upstream dataflow. Do not infer CPI/WPI/etc. only from payload shape or a mirrored filename.
+14. **Keep streaming fixes on the hot path.** Handling harmless format variations, such as JSON key reordering, should not introduce extra full-artifact scans unless the issue explicitly accepts that cost and tests cover it.
+15. **Make performance fixtures production-shaped.** Large-memory and streaming tests should use valid content-addressed artifact ids and storage keys so they exercise the same validation path as production parsing.
+16. **Do not confuse cancellation with permission to drop produced work.** In bounded pipelines, cancellation should stop admitting new work and bound shutdown, but already-produced artifacts, observations, and audit records must drain through downstream handoffs unless the configured shutdown grace expires. Add backpressure tests where a full channel is cancelled after the item is produced.
+17. **Preserve job correlation across every stage.** Discovery job id, trace context, source id, dataflow id, and artifact id are part of the work item contract. Carry them through fetch, parse, load, logs/spans, and `parse_errors`; do not collapse them to only the fields needed for the next happy-path function call.
 
 ## 13. When stuck
 

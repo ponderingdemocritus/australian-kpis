@@ -24,6 +24,7 @@ use object_store::{
 };
 use proptest::prelude::*;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 const CPI_FIXTURE: &[u8] = include_bytes!("fixtures/cpi_sdmx.json");
 const REORDERED_FIXTURE: &[u8] = br#"{
@@ -645,6 +646,51 @@ async fn parse_preserves_transient_storage_read_classification() {
 
     assert!(matches!(err, AdapterError::Storage(_)));
     assert_eq!(err.class(), ErrorClass::Transient);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_observes_cancellation_before_reading_artifact() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact_id = blob_store
+        .put_artifact_stream(stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(
+            CPI_FIXTURE,
+        ))]))
+        .await
+        .expect("store fixture artifact");
+    let artifact = ArtifactRef {
+        id: artifact_id,
+        source_id: SourceId::new("abs").expect("static source id is valid"),
+        source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
+        content_type: "application/vnd.sdmx.data+json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: StorageKey::canonical_for(&artifact_id).to_string(),
+        size_bytes: CPI_FIXTURE.len() as u64,
+        fetched_at: DateTime::parse_from_rfc3339("2024-04-24T00:00:00Z")
+            .expect("valid fixture date")
+            .with_timezone(&Utc),
+    };
+    let adapter = AbsAdapter::default();
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let ctx = ParseCtx::new(
+        AdapterHttpClient::new(adapter.manifest().rate_limit),
+        blob_store,
+        DateTime::parse_from_rfc3339("2024-04-30T00:00:00Z")
+            .expect("valid fixture date")
+            .with_timezone(&Utc),
+    )
+    .with_cancellation(cancellation);
+
+    let mut stream = adapter.parse(artifact, &ctx);
+    let err = stream
+        .next()
+        .await
+        .expect("stream yields cancellation")
+        .expect_err("cancelled parse should fail");
+
+    assert!(matches!(err, AdapterError::Core(_)));
+    assert_eq!(err.class(), ErrorClass::Transient);
+    assert!(err.to_string().contains("ABS parse cancelled"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

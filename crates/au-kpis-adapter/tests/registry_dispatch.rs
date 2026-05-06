@@ -1,4 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -18,6 +25,7 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::{StreamExt, stream};
 use object_store::memory::InMemory;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 struct StubAdapter {
@@ -77,6 +85,7 @@ impl SourceAdapter for StubAdapter {
             source_id: self.manifest.source_id.clone(),
             dataflow_id: self.manifest.dataflows[0].clone(),
             source_url: "https://example.test/cpi.json".into(),
+            trace_parent: None,
             metadata: BTreeMap::from([("kind".into(), "fixture".into())]),
         }])
     }
@@ -181,6 +190,110 @@ async fn registry_dispatches_discover_fetch_and_parse() {
     let (series, observation) = rows.into_iter().next().unwrap().unwrap();
     assert_eq!(series.unit, "index");
     assert_eq!(observation.value, Some(123.4));
+}
+
+#[tokio::test]
+async fn parse_ctx_propagates_cancellation_token_to_adapter_stream() {
+    #[derive(Debug)]
+    struct CancellationObservingAdapter {
+        manifest: AdapterManifest,
+        observed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl SourceAdapter for CancellationObservingAdapter {
+        fn id(&self) -> &'static str {
+            "stub"
+        }
+
+        fn manifest(&self) -> &AdapterManifest {
+            &self.manifest
+        }
+
+        async fn discover(&self, _ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch(
+            &self,
+            _job: DiscoveredJob,
+            _ctx: &FetchCtx,
+        ) -> Result<ArtifactRef, AdapterError> {
+            Err(AdapterError::Validation("not used in this test".into()))
+        }
+
+        fn parse<'a>(&'a self, _artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
+            let token = ctx.cancellation().clone();
+            let observed = self.observed.clone();
+            Box::pin(futures::stream::poll_fn(move |_cx| {
+                if token.is_cancelled() {
+                    observed.store(true, Ordering::SeqCst);
+                    std::task::Poll::Ready(None)
+                } else {
+                    std::task::Poll::Pending
+                }
+            }))
+        }
+    }
+
+    let source_id = SourceId::new("stub").unwrap();
+    let manifest = AdapterManifest {
+        source_id: source_id.clone(),
+        name: "Stub source".into(),
+        version: "test".into(),
+        rate_limit: RateLimit::new(60, Duration::from_secs(60)).unwrap(),
+        dataflows: vec![DataflowId::new("stub.cpi").unwrap()],
+    };
+    let observed = Arc::new(AtomicBool::new(false));
+    let mut builder = Adapters::builder();
+    builder
+        .register(CancellationObservingAdapter {
+            manifest,
+            observed: observed.clone(),
+        })
+        .unwrap();
+    let adapters = builder.build();
+
+    let http = AdapterHttpClient::new(RateLimit::new(60, Duration::from_secs(60)).unwrap());
+    let blob_store = BlobStore::new(InMemory::new());
+    let started_at = Utc.with_ymd_and_hms(2026, 4, 28, 0, 0, 0).unwrap();
+    let token = CancellationToken::new();
+    let ctx = ParseCtx::new(http, blob_store, started_at).with_cancellation(token.clone());
+    assert!(
+        !ctx.is_cancelled(),
+        "fresh ParseCtx must not start cancelled"
+    );
+
+    let artifact = ArtifactRef {
+        id: ArtifactId::of_content(b"fixture"),
+        source_id,
+        source_url: "https://example.test".into(),
+        content_type: "application/json".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: "artifacts/fixture".into(),
+        size_bytes: 0,
+        fetched_at: started_at,
+    };
+    let mut stream = adapters.parse("stub", artifact, &ctx).unwrap();
+
+    assert!(
+        futures::poll!(stream.next()).is_pending(),
+        "parser must be pending before cancellation fires"
+    );
+    assert!(!observed.load(Ordering::SeqCst));
+
+    token.cancel();
+    assert!(
+        ctx.is_cancelled(),
+        "cancelling the token must propagate through ParseCtx::cancellation()"
+    );
+
+    let next = stream.next().await;
+    assert!(next.is_none(), "stream must end after cancellation");
+    assert!(
+        observed.load(Ordering::SeqCst),
+        "adapter parse stream must observe ParseCtx::cancellation()"
+    );
 }
 
 #[test]

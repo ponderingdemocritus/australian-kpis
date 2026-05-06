@@ -26,6 +26,7 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::Mutex, time::sleep};
+use tokio_util::sync::CancellationToken;
 
 /// Streaming observation payload emitted by adapters during parse.
 pub type ObservationStream<'a> =
@@ -278,6 +279,8 @@ pub struct DiscoveryCtx {
     pub started_at: DateTime<Utc>,
     /// Stored upstream revisions for this discovery run, keyed by adapter-defined upstream identity.
     pub known_revisions: BTreeMap<String, UpstreamRevision>,
+    /// W3C trace-parent tying discovery output to downstream fetch, parse, and load work.
+    trace_parent: Option<String>,
 }
 
 impl DiscoveryCtx {
@@ -288,6 +291,7 @@ impl DiscoveryCtx {
             http,
             started_at,
             known_revisions: BTreeMap::new(),
+            trace_parent: None,
         }
     }
 
@@ -302,10 +306,23 @@ impl DiscoveryCtx {
         self
     }
 
+    /// Return a context annotated with the run-level trace parent.
+    #[must_use]
+    pub fn with_trace_parent(mut self, trace_parent: impl Into<String>) -> Self {
+        self.trace_parent = Some(trace_parent.into());
+        self
+    }
+
     /// Borrow the stored upstream revisions for this discovery run.
     #[must_use]
     pub const fn known_revisions(&self) -> &BTreeMap<String, UpstreamRevision> {
         &self.known_revisions
+    }
+
+    /// W3C trace-parent carried by jobs emitted from this discovery run.
+    #[must_use]
+    pub fn trace_parent(&self) -> Option<&str> {
+        self.trace_parent.as_deref()
     }
 }
 
@@ -349,6 +366,7 @@ pub struct FetchCtx {
     /// Timestamp captured by the worker when fetch started.
     pub started_at: DateTime<Utc>,
     artifact_recorder: ArtifactRecorderRef,
+    cancellation: CancellationToken,
 }
 
 impl FetchCtx {
@@ -365,7 +383,28 @@ impl FetchCtx {
             blob_store,
             started_at,
             artifact_recorder,
+            cancellation: CancellationToken::new(),
         }
+    }
+
+    /// Return a context bound to the orchestrator's cancellation token so
+    /// adapters can abort long-running fetch work during shutdown.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    /// Cancellation token shared with the orchestrator.
+    #[must_use]
+    pub const fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    /// Convenience predicate equivalent to `self.cancellation().is_cancelled()`.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
     }
 
     /// Persist fetched artifact provenance, then return the parse reference.
@@ -409,6 +448,11 @@ pub struct ParseCtx {
     pub blob_store: BlobStore,
     /// Timestamp captured by the worker when parse started.
     pub started_at: DateTime<Utc>,
+    expected_dataflow_id: Option<DataflowId>,
+    job_id: Option<String>,
+    trace_parent: Option<String>,
+    metadata: BTreeMap<String, String>,
+    cancellation: CancellationToken,
 }
 
 impl ParseCtx {
@@ -419,7 +463,83 @@ impl ParseCtx {
             http,
             blob_store,
             started_at,
+            expected_dataflow_id: None,
+            job_id: None,
+            trace_parent: None,
+            metadata: BTreeMap::new(),
+            cancellation: CancellationToken::new(),
         }
+    }
+
+    /// Return a context annotated with discovery-time dataflow provenance.
+    #[must_use]
+    pub fn with_expected_dataflow(
+        mut self,
+        dataflow_id: DataflowId,
+        metadata: BTreeMap<String, String>,
+    ) -> Self {
+        self.expected_dataflow_id = Some(dataflow_id);
+        self.metadata = metadata;
+        self
+    }
+
+    /// Return a context annotated with discovery-time job correlation.
+    #[must_use]
+    pub fn with_job_correlation(
+        mut self,
+        job_id: impl Into<String>,
+        trace_parent: Option<String>,
+    ) -> Self {
+        self.job_id = Some(job_id.into());
+        self.trace_parent = trace_parent;
+        self
+    }
+
+    /// Return a context bound to the orchestrator's cancellation token so the
+    /// adapter parse stage can observe shutdown end-to-end.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    /// Expected dataflow carried from the discovered job, when available.
+    #[must_use]
+    pub fn expected_dataflow_id(&self) -> Option<&DataflowId> {
+        self.expected_dataflow_id.as_ref()
+    }
+
+    /// Source-local discovered job id carried through fetch and parse.
+    #[must_use]
+    pub fn job_id(&self) -> Option<&str> {
+        self.job_id.as_deref()
+    }
+
+    /// W3C trace-parent carried from discovery, when available.
+    #[must_use]
+    pub fn trace_parent(&self) -> Option<&str> {
+        self.trace_parent.as_deref()
+    }
+
+    /// Adapter metadata carried from the discovered job.
+    #[must_use]
+    pub const fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
+
+    /// Cancellation token shared with the orchestrator. Adapters that perform
+    /// long-running or CPU-heavy parse work should poll this token (or `select!`
+    /// on its `cancelled()` future) so shutdown completes within the configured
+    /// grace window.
+    #[must_use]
+    pub const fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    /// Convenience predicate equivalent to `self.cancellation().is_cancelled()`.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
     }
 }
 
@@ -434,6 +554,8 @@ pub struct DiscoveredJob {
     pub dataflow_id: DataflowId,
     /// Canonical upstream URL or locator.
     pub source_url: String,
+    /// W3C trace-parent tying discovery, fetch, parse, and load spans together.
+    pub trace_parent: Option<String>,
     /// Adapter-specific metadata needed by fetch/parse.
     pub metadata: BTreeMap<String, String>,
 }

@@ -198,6 +198,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -221,6 +222,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -379,12 +381,22 @@ dependencies = [
  "au-kpis-db",
  "au-kpis-domain",
  "au-kpis-error",
+ "au-kpis-loader",
  "au-kpis-storage",
  "au-kpis-testing",
  "chrono",
+ "futures",
  "object_store",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "serde_json",
  "sqlx",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4365,6 +4377,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

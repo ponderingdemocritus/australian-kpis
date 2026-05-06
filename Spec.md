@@ -585,6 +585,10 @@ async fn load_batch(
 
 - COPY is 10-50x faster than row-by-row INSERT for bulk loads.
 - Batches bounded at 1000 rows or 10MB, whichever first.
+- Loader owns COPY batch sizing and byte estimation. Orchestrators may buffer
+  accepted rows for artifact-level commit/rollback semantics, but must delegate
+  row/byte boundary decisions to `au-kpis-loader` helpers so staging and direct
+  load paths cannot drift.
 - Each batch is its own transaction — partial failures don't kill a 1M-row load.
 
 ---

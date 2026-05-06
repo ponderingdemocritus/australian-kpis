@@ -6,10 +6,12 @@ use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
     ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
 };
-use au_kpis_loader::{LoadItem, LoadOptions, load_batch, load_batch_with_options};
+use au_kpis_loader::{
+    LoadItem, LoadItemAudit, LoadOptions, begin_staged_load, load_batch, load_batch_with_options,
+};
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
 static TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -236,6 +238,211 @@ async fn validation_errors_are_recorded_without_failing_valid_rows() {
 
     assert_eq!(observation_count, 1);
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_load_cleanup_returns_live_connection_to_pool() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_connection_reuse")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged connection reuse fixture");
+    seed_reference_data(&pool, artifact_id).await;
+    let initial_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read initial backend pid");
+
+    let aus = descriptor("AUS");
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 1,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&aus, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage row");
+    let stats = staged.commit().await.expect("commit staged load");
+
+    assert_eq!(stats.observations_loaded, 1);
+    let after_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read backend pid after staged cleanup");
+    assert_eq!(after_pid, initial_pid);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_staged_load_closes_dirty_session_before_pool_reuse() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_drop_closes_session")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged dirty drop fixture");
+    seed_reference_data(&pool, artifact_id).await;
+    let initial_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read initial backend pid");
+
+    let aus = descriptor("AUS");
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 1,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&aus, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage row");
+    drop(staged);
+
+    let after_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&pool)
+        .await
+        .expect("read backend pid after dirty staged drop");
+    let staging_exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('pg_temp.staging_series') IS NOT NULL
+         OR to_regclass('pg_temp.staging_observations') IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check temp staging tables after dirty staged drop");
+
+    assert_ne!(after_pid, initial_pid);
+    assert!(!staging_exists);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_load_rollback_returns_recorded_parse_error_stats() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_rollback_parse_errors")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged rollback parse errors fixture");
+    seed_reference_data(&pool, artifact_id).await;
+
+    let aus = descriptor("AUS");
+    let mut bad = descriptor("NSW");
+    bad.series_key = aus.series_key;
+
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 8,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&bad, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage records loader validation error without failing");
+
+    let stats = staged.rollback().await.expect("rollback returns stats");
+    assert_eq!(stats.parse_errors, 1);
+    assert_eq!(stats.observations_loaded, 0);
+
+    let parse_error_count: i64 = sqlx::query_scalar("SELECT count(*) FROM parse_errors")
+        .fetch_one(&pool)
+        .await
+        .expect("count parse_errors after rollback");
+    assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_load_stage_error_drops_temp_tables_before_pool_reuse() {
+    let _guard = TEST_LOCK.lock().await;
+    let timescale = start_timescale("au_kpis_loader_staged_stage_error_cleanup")
+        .await
+        .expect("start timescaledb container");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(timescale.url())
+        .await
+        .expect("connect to timescaledb");
+    migrate(&pool).await.expect("apply migrations");
+
+    let artifact_id = ArtifactId::of_content(b"loader staged error cleanup fixture");
+    seed_reference_data(&pool, artifact_id).await;
+
+    let aus = descriptor("AUS");
+    let mut staged = begin_staged_load(
+        &pool,
+        LoadOptions {
+            max_rows: 1,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged
+        .stage(vec![LoadItemAudit {
+            item: item(&aus, artifact_id, ts(2024, 3, 1), 0, 134.2),
+            row_context: None,
+        }])
+        .await
+        .expect("stage initial row");
+
+    let mut bad_item = item(&aus, artifact_id, ts(2024, 6, 1), 0, 135.0);
+    bad_item.series.unit.push('\0');
+    staged
+        .stage(vec![LoadItemAudit {
+            item: bad_item,
+            row_context: None,
+        }])
+        .await
+        .expect_err("nul byte in copy payload should fail staging");
+    drop(staged);
+
+    let staging_exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('pg_temp.staging_series') IS NOT NULL
+         OR to_regclass('pg_temp.staging_observations') IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("check temp staging tables after failed stage");
+    assert!(!staging_exists);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
