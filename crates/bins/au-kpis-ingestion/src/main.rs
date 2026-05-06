@@ -7,6 +7,7 @@
 use std::{
     env,
     ffi::OsString,
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -17,21 +18,22 @@ use std::{
 use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
-use au_kpis_config::load;
+use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
-use au_kpis_domain::ids::SourceId;
+use au_kpis_domain::ids::{DataflowId, SourceId};
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_ingestion_core::{IngestionPipeline, PipelineContexts, PipelineOptions, fetch_ctx};
-use au_kpis_queue::{ApalisPgQueue, JobKind, Nack, Queue, QueueStage, WorkerId};
+use au_kpis_queue::{ApalisPgQueue, JobKind, LeasedJob, Nack, Queue, QueueStage, WorkerId};
 use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
 use clap::{Parser, Subcommand};
 use object_store::{aws::AmazonS3Builder, memory::InMemory};
-use tokio::{net::TcpListener, signal};
+use tokio::{net::TcpListener, signal, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-const ABS_CPI_DATAFLOW: &str = "cpi";
+const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
+const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 /// Command-line arguments for `au-kpis-ingestion`.
@@ -75,6 +77,13 @@ enum Mode {
     Run,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunRequest {
+    source_id: SourceId,
+    dataflow_id: Option<DataflowId>,
+    trace_parent: Option<String>,
+}
+
 #[derive(Debug, Default)]
 struct WorkerMetrics {
     worker_loops_total: AtomicU64,
@@ -114,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     if let Mode::Once { source, dataflow } = &mode {
         validate_once_target(source, dataflow)?;
     }
-    let config = Arc::new(load(None).context("load config")?);
+    let config = Arc::new(load_ingestion(None).context("load config")?);
     let _telemetry = init_or_disabled(&config.telemetry)?;
     let db = connect_db(&config.database)
         .await
@@ -194,15 +203,18 @@ struct Runtime {
 async fn run_mode(mode: Mode, runtime: Runtime) -> anyhow::Result<()> {
     match mode {
         Mode::Once { source, dataflow } => {
-            validate_once_target(&source, &dataflow)?;
-            let stats = run_source_once(&runtime, &source).await?;
+            let request = once_run_request(&source, &dataflow)?;
+            let stats = run_source_once(&runtime, &request, runtime.shutdown.clone()).await?;
             runtime
                 .metrics
                 .once_runs_total
                 .fetch_add(1, Ordering::Relaxed);
             tracing::info!(
-                source,
-                dataflow,
+                source = request.source_id.as_str(),
+                dataflow = request
+                    .dataflow_id
+                    .as_ref()
+                    .map_or(dataflow.as_str(), DataflowId::as_str),
                 discovered = stats.discovered,
                 fetched = stats.fetched,
                 parsed = stats.parsed,
@@ -218,13 +230,21 @@ async fn run_mode(mode: Mode, runtime: Runtime) -> anyhow::Result<()> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 async fn run_source_once(
     runtime: &Runtime,
-    source: &str,
+    request: &RunRequest,
+    cancellation: CancellationToken,
 ) -> Result<au_kpis_ingestion_core::PipelineRunStats, au_kpis_ingestion_core::IngestionError> {
-    let adapter = runtime.adapters.get(source)?;
+    let adapter = runtime.adapters.get(request.source_id.as_str())?;
     let started_at = chrono::Utc::now();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let mut discovery = DiscoveryCtx::new(http.clone(), started_at);
+    if let Some(trace_parent) = &request.trace_parent {
+        discovery = discovery.with_trace_parent(trace_parent.clone());
+    }
+    if let Some(dataflow_id) = &request.dataflow_id {
+        discovery = discovery.with_requested_dataflow_id(dataflow_id.clone());
+    }
     let contexts = PipelineContexts {
-        discovery: DiscoveryCtx::new(http.clone(), started_at),
+        discovery,
         fetch: fetch_ctx(
             http.clone(),
             runtime.blob_store.clone(),
@@ -235,12 +255,7 @@ async fn run_source_once(
     };
     IngestionPipeline::new(runtime.adapters.clone(), runtime.db.clone())
         .with_options(PipelineOptions::default())
-        .run_source(
-            SourceId::new(source)
-                .map_err(|err| au_kpis_adapter::AdapterError::Validation(err.to_string()))?,
-            contexts,
-            runtime.shutdown.clone(),
-        )
+        .run_source(request.source_id.clone(), contexts, cancellation)
         .await
 }
 
@@ -298,14 +313,26 @@ async fn process_one_job(
         return Ok(WorkerStep::Idle);
     };
 
-    let result = match job.job().kind() {
-        JobKind::Discover { source_id } | JobKind::Backfill { source_id, .. } => {
-            run_source_once(runtime, source_id.as_str()).await
-        }
-        other => {
-            bail!("unexpected job kind on discovery queue: {other:?}");
+    let request = match job_run_request(job.job().kind(), job.trace_parent()) {
+        Ok(request) => request,
+        Err(err) => {
+            queue
+                .nack(&job, invalid_job_nack(err))
+                .await
+                .context("nack invalid queue job")?;
+            runtime
+                .metrics
+                .jobs_failed_total
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(WorkerStep::Processed);
         }
     };
+    let renewal_interval = lease_renewal_interval(queue.lease_timeout());
+    let worker_shutdown = runtime.shutdown.child_token();
+    let (job, result) = run_with_lease_renewal(queue, job, renewal_interval, async {
+        run_source_once(runtime, &request, worker_shutdown).await
+    })
+    .await?;
 
     match result {
         Ok(stats) => {
@@ -336,6 +363,51 @@ async fn process_one_job(
         }
     }
     Ok(WorkerStep::Processed)
+}
+
+trait LeaseClient<L> {
+    async fn renew(&self, lease: &L) -> anyhow::Result<L>;
+}
+
+impl LeaseClient<LeasedJob> for ApalisPgQueue {
+    async fn renew(&self, lease: &LeasedJob) -> anyhow::Result<LeasedJob> {
+        Queue::renew(self, lease).await.context("renew queue lease")
+    }
+}
+
+async fn run_with_lease_renewal<L, C, F>(
+    client: &C,
+    mut lease: L,
+    interval: Duration,
+    work: F,
+) -> anyhow::Result<(L, F::Output)>
+where
+    L: Clone,
+    C: LeaseClient<L> + Sync,
+    F: Future,
+{
+    let work = work;
+    tokio::pin!(work);
+    let timer = tokio::time::sleep(interval);
+    tokio::pin!(timer);
+
+    loop {
+        tokio::select! {
+            result = &mut work => return Ok((lease, result)),
+            () = &mut timer => {
+                lease = client.renew(&lease).await?;
+                timer.as_mut().reset(Instant::now() + interval);
+            }
+        }
+    }
+}
+
+fn lease_renewal_interval(lease_timeout: Duration) -> Duration {
+    std::cmp::max(lease_timeout / 2, Duration::from_secs(1))
+}
+
+fn invalid_job_nack(err: anyhow::Error) -> Nack {
+    Nack::new(ErrorClass::Permanent, err.to_string())
 }
 
 fn ingestion_error_class(err: &au_kpis_ingestion_core::IngestionError) -> ErrorClass {
@@ -456,13 +528,70 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
 }
 
 fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
+    validate_supported_source(source)?;
+    if dataflow != ABS_CPI_DATAFLOW_SLUG {
+        bail!(
+            "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
+        );
+    }
+    Ok(())
+}
+
+fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> {
+    validate_once_target(source, dataflow)?;
+    Ok(RunRequest {
+        source_id: SourceId::new(source)
+            .map_err(|err| au_kpis_adapter::AdapterError::Validation(err.to_string()))?,
+        dataflow_id: Some(
+            DataflowId::new(ABS_CPI_DATAFLOW_ID)
+                .map_err(|err| au_kpis_adapter::AdapterError::Validation(err.to_string()))?,
+        ),
+        trace_parent: None,
+    })
+}
+
+fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result<RunRequest> {
+    match kind {
+        JobKind::Discover { source_id } => {
+            validate_supported_source(source_id.as_str())?;
+            Ok(RunRequest {
+                source_id: source_id.clone(),
+                dataflow_id: None,
+                trace_parent: trace_parent.map(str::to_owned),
+            })
+        }
+        JobKind::Backfill {
+            source_id,
+            dataflow_id,
+        } => {
+            validate_supported_source(source_id.as_str())?;
+            if let Some(dataflow_id) = dataflow_id {
+                validate_supported_dataflow_id(source_id.as_str(), dataflow_id.as_str())?;
+            }
+            Ok(RunRequest {
+                source_id: source_id.clone(),
+                dataflow_id: dataflow_id.clone(),
+                trace_parent: trace_parent.map(str::to_owned),
+            })
+        }
+        other => bail!("unexpected job kind on discovery queue: {other:?}"),
+    }
+}
+
+fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     if source != "abs" {
         bail!("unsupported source `{source}`; supported source: abs");
     }
-    if dataflow != ABS_CPI_DATAFLOW {
-        bail!("unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: cpi");
-    }
     Ok(())
+}
+
+fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Result<()> {
+    if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
+        return Ok(());
+    }
+    bail!(
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflow: {ABS_CPI_DATAFLOW_ID}"
+    );
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -529,6 +658,15 @@ fn default_worker_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    };
+
+    use au_kpis_domain::ids::DataflowId;
+    use au_kpis_queue::JobKind;
+    use tokio::time::sleep;
+
     use super::*;
 
     fn cli(args: &[&str]) -> Cli {
@@ -593,6 +731,53 @@ mod tests {
     }
 
     #[test]
+    fn backfill_jobs_preserve_optional_dataflow_scope_and_trace_parent() {
+        let trace_parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string();
+        let request = job_run_request(
+            &JobKind::Backfill {
+                source_id: SourceId::new("abs").unwrap(),
+                dataflow_id: Some(DataflowId::new("abs.cpi").unwrap()),
+            },
+            Some(trace_parent.as_str()),
+        )
+        .expect("build backfill request");
+
+        assert_eq!(request.source_id.as_str(), "abs");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("abs.cpi").unwrap())
+        );
+        assert_eq!(request.trace_parent.as_deref(), Some(trace_parent.as_str()));
+    }
+
+    #[tokio::test]
+    async fn lease_renewer_keeps_latest_handle_while_work_runs() {
+        let renewals = Arc::new(AtomicUsize::new(0));
+        let lease_client = TestLeaseClient {
+            renewals: Arc::clone(&renewals),
+        };
+
+        let (lease, result) = run_with_lease_renewal(
+            &lease_client,
+            TestLease { version: 1 },
+            Duration::from_millis(10),
+            async {
+                sleep(Duration::from_millis(35)).await;
+                7_usize
+            },
+        )
+        .await
+        .expect("run with lease renewal");
+
+        assert_eq!(result, 7);
+        assert!(lease.version > 1, "lease version should be renewed");
+        assert!(
+            renewals.load(AtomicOrdering::Relaxed) > 0,
+            "lease renewer should call renew at least once"
+        );
+    }
+
+    #[test]
     fn load_error_classification_matches_retry_policy() {
         assert_eq!(
             load_error_class(&au_kpis_loader::LoadError::Validation("bad row".into())),
@@ -629,5 +814,33 @@ mod tests {
             },),
             ErrorClass::Permanent
         );
+    }
+
+    #[test]
+    fn invalid_job_nacks_are_permanent() {
+        let nack = invalid_job_nack(anyhow::anyhow!("unsupported source `rba`"));
+        let debug = format!("{nack:?}");
+
+        assert!(debug.contains("Permanent"));
+        assert!(debug.contains("unsupported source `rba`"));
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct TestLease {
+        version: usize,
+    }
+
+    #[derive(Debug)]
+    struct TestLeaseClient {
+        renewals: Arc<AtomicUsize>,
+    }
+
+    impl LeaseClient<TestLease> for TestLeaseClient {
+        async fn renew(&self, lease: &TestLease) -> anyhow::Result<TestLease> {
+            self.renewals.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(TestLease {
+                version: lease.version + 1,
+            })
+        }
     }
 }

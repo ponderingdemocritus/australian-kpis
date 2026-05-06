@@ -624,6 +624,7 @@ async fn discover_stage(
         () = cancellation.cancelled() => return Err(IngestionError::Cancelled),
         jobs = adapters.discover(source_id.as_str(), &ctx) => jobs?,
     };
+    let jobs = filter_discovered_jobs(jobs, ctx.requested_dataflow_id());
     let discovered = jobs.len() as u64;
     for mut job in jobs {
         if cancellation.is_cancelled() {
@@ -639,6 +640,19 @@ async fn discover_stage(
         discovered,
         ..PipelineRunStats::default()
     })
+}
+
+fn filter_discovered_jobs(
+    jobs: Vec<au_kpis_adapter::DiscoveredJob>,
+    requested_dataflow_id: Option<&DataflowId>,
+) -> Vec<au_kpis_adapter::DiscoveredJob> {
+    let Some(requested_dataflow_id) = requested_dataflow_id else {
+        return jobs;
+    };
+
+    jobs.into_iter()
+        .filter(|job| &job.dataflow_id == requested_dataflow_id)
+        .collect()
 }
 
 async fn fetch_stage(
@@ -1729,6 +1743,7 @@ async fn send_produced<T>(
 mod tests {
     use std::collections::BTreeMap;
 
+    use au_kpis_adapter::DiscoveredJob;
     use au_kpis_domain::{
         Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
         ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
@@ -1825,6 +1840,21 @@ mod tests {
             "4bf92f3577b34da6a3ce929d0e0e4736"
         );
         assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
+    }
+
+    #[test]
+    fn requested_dataflow_filter_keeps_only_matching_jobs() {
+        let requested = DataflowId::new("abs.cpi").unwrap();
+        let jobs = vec![
+            discovered_job("job-cpi", "abs.cpi"),
+            discovered_job("job-wpi", "abs.wpi"),
+        ];
+
+        let filtered = filter_discovered_jobs(jobs, Some(&requested));
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "job-cpi");
+        assert_eq!(filtered[0].dataflow_id, requested);
     }
 
     #[tokio::test]
@@ -1931,6 +1961,17 @@ mod tests {
         LoadItem {
             series,
             observation,
+        }
+    }
+
+    fn discovered_job(id: &str, dataflow_id: &str) -> DiscoveredJob {
+        DiscoveredJob {
+            id: id.to_string(),
+            source_id: SourceId::new("abs").unwrap(),
+            dataflow_id: DataflowId::new(dataflow_id).unwrap(),
+            source_url: format!("https://example.test/{id}.json"),
+            trace_parent: Some(TRACE_PARENT.into()),
+            metadata: BTreeMap::new(),
         }
     }
 }

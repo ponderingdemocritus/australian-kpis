@@ -21,6 +21,7 @@ COPY --from=builder /tmp/au-kpis-ingestion /usr/local/bin/au-kpis-ingestion
 EXPOSE 3000
 USER au-kpis:au-kpis
 ENTRYPOINT ["/usr/local/bin/au-kpis-ingestion"]
+CMD ["run"]
 
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 WORKDIR /app
@@ -28,3 +29,4 @@ COPY --from=builder /tmp/au-kpis-ingestion /usr/local/bin/au-kpis-ingestion
 EXPOSE 3000
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/au-kpis-ingestion"]
+CMD ["run"]

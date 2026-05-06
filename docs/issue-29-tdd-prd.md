@@ -40,3 +40,13 @@ worker loop for scheduled discovery/backfill work.
   metrics rendering.
 - Integration tests cover ABS CPI one-shot ingestion against deterministic
   fixtures, metrics exposure, SIGTERM handling, and configured drain windows.
+
+## Regression Checklist
+
+- `--once` starts with only the config it actually uses: database plus optional
+  object-store/telemetry settings. Missing Redis config must not block one-shot
+  demos.
+- A malformed or unsupported queued job is nacked and dead-lettered without
+  terminating the long-running worker loop.
+- The container image defaults to `run` without preventing callers from
+  overriding the command to execute `--once`.

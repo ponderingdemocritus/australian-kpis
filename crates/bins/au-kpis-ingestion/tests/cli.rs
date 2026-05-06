@@ -9,6 +9,8 @@ use std::{
 };
 
 use assert_cmd::cargo::cargo_bin;
+use au_kpis_domain::SourceId;
+use au_kpis_queue::{ApalisPgQueue, Job, Queue};
 use au_kpis_testing::{
     redis::{RedisHarness, start_redis},
     timescale::{TimescaleHarness, start_timescale},
@@ -66,6 +68,51 @@ async fn once_mode_loads_abs_cpi_fixture_end_to_end() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_mode_runs_without_cache_config() {
+    let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+    let fixture_base_url = serve_abs_cpi_once().await;
+    let harness = IngestionProcess::for_once_without_cache(
+        "au_kpis_ingestion_once_no_cache",
+        &fixture_base_url,
+    )
+    .await;
+
+    let status = harness
+        .command()
+        .args(["--once", "--source", "abs", "--dataflow", "cpi"])
+        .status()
+        .expect("run au-kpis-ingestion once without cache config");
+
+    assert!(
+        status.success(),
+        "once mode should not require cache config: {status}"
+    );
+}
+
+#[test]
+fn once_mode_missing_cache_config_fails_after_config_loading() {
+    let output = Command::new(cargo_bin("au-kpis-ingestion"))
+        .env("AU_KPIS_DATABASE__URL", "postgres://127.0.0.1:1/au_kpis")
+        .args(["--once", "--source", "abs", "--dataflow", "cpi"])
+        .output()
+        .expect("run au-kpis-ingestion once without cache config");
+
+    assert!(
+        !output.status.success(),
+        "command should still fail without a real database"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("missing field `cache`"),
+        "once mode should progress past config loading without cache config, got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_mode_serves_metrics_until_sigterm_then_exits() {
     let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
     if !docker_available() {
@@ -84,6 +131,38 @@ async fn run_mode_serves_metrics_until_sigterm_then_exits() {
         "metrics body missing worker loop counter: {metrics}"
     );
 
+    harness.send_sigterm();
+    harness.wait_for_exit(Duration::from_secs(5));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_mode_dead_letters_invalid_jobs_without_exiting() {
+    let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+    let mut harness = IngestionProcess::start_run("au_kpis_ingestion_poison_job").await;
+    let queue = ApalisPgQueue::new(harness.pool().clone());
+    let job_id = queue
+        .push(Job::discover(SourceId::new("rba").expect("valid source id")).with_max_attempts(1))
+        .await
+        .expect("push unsupported queue job");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if queue.dead_lettered(job_id).await.is_ok() {
+            break;
+        }
+        harness.assert_running();
+        assert!(
+            Instant::now() < deadline,
+            "worker did not dead-letter invalid job before timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    harness.assert_running();
     harness.send_sigterm();
     harness.wait_for_exit(Duration::from_secs(5));
 }
@@ -126,6 +205,22 @@ async fn once_mode_rejects_unsupported_dataflow_before_external_io() {
     assert!(
         stderr.contains("unsupported dataflow"),
         "stderr should explain unsupported dataflow, got: {stderr}"
+    );
+}
+
+#[test]
+fn dockerfile_defaults_to_run_but_keeps_cli_overridable() {
+    let dockerfile_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../infra/docker/au-kpis-ingestion.Dockerfile");
+    let dockerfile = std::fs::read_to_string(dockerfile_path).expect("read ingestion Dockerfile");
+
+    assert!(
+        dockerfile.contains("ENTRYPOINT [\"/usr/local/bin/au-kpis-ingestion\"]"),
+        "image entrypoint should stay on the binary so callers can override the command"
+    );
+    assert!(
+        dockerfile.contains("CMD [\"run\"]"),
+        "image should default to run mode via CMD"
     );
 }
 
@@ -187,13 +282,13 @@ async fn write_response(stream: &mut tokio::net::TcpStream, content_type: &str, 
 
 struct IngestionProcess {
     database_url: String,
-    cache_url: String,
+    cache_url: Option<String>,
     addr: String,
     startup_file: PathBuf,
     child: Child,
     pool: sqlx::PgPool,
     _timescale: TimescaleHarness,
-    _redis: RedisHarness,
+    _redis: Option<RedisHarness>,
 }
 
 impl IngestionProcess {
@@ -206,7 +301,7 @@ impl IngestionProcess {
         seed_cpi_reference_data(&pool).await;
         Self {
             database_url: timescale.url().to_string(),
-            cache_url: redis.url().to_string(),
+            cache_url: Some(redis.url().to_string()),
             addr: String::new(),
             startup_file: unique_startup_file(),
             child: Command::new("true")
@@ -214,7 +309,28 @@ impl IngestionProcess {
                 .expect("spawn completed placeholder"),
             pool,
             _timescale: timescale,
-            _redis: redis,
+            _redis: Some(redis),
+        }
+        .with_abs_fixture(fixture_base_url)
+    }
+
+    async fn for_once_without_cache(database: &str, fixture_base_url: &str) -> Self {
+        let timescale = start_timescale(database)
+            .await
+            .expect("start timescale test container");
+        let pool = connect_with_retry(timescale.url()).await;
+        seed_cpi_reference_data(&pool).await;
+        Self {
+            database_url: timescale.url().to_string(),
+            cache_url: None,
+            addr: String::new(),
+            startup_file: unique_startup_file(),
+            child: Command::new("true")
+                .spawn()
+                .expect("spawn completed placeholder"),
+            pool,
+            _timescale: timescale,
+            _redis: None,
         }
         .with_abs_fixture(fixture_base_url)
     }
@@ -233,7 +349,7 @@ impl IngestionProcess {
         let startup_file = unique_startup_file();
         let mut command = base_command(
             timescale.url(),
-            redis.url(),
+            Some(redis.url()),
             &startup_file,
             "http://127.0.0.1:1/rest",
         );
@@ -247,13 +363,13 @@ impl IngestionProcess {
         let addr = wait_for_startup_file(&startup_file, &mut child);
         Self {
             database_url: timescale.url().to_string(),
-            cache_url: redis.url().to_string(),
+            cache_url: Some(redis.url().to_string()),
             addr,
             startup_file,
             child,
             pool,
             _timescale: timescale,
-            _redis: redis,
+            _redis: Some(redis),
         }
     }
 
@@ -265,7 +381,7 @@ impl IngestionProcess {
     fn command(&self) -> Command {
         base_command(
             &self.database_url,
-            &self.cache_url,
+            self.cache_url.as_deref(),
             &self.startup_file,
             &self.addr,
         )
@@ -281,6 +397,12 @@ impl IngestionProcess {
             .status()
             .expect("send SIGTERM");
         assert!(kill.success(), "SIGTERM failed: {kill:?}");
+    }
+
+    fn assert_running(&mut self) {
+        if let Some(status) = self.child.try_wait().expect("poll child") {
+            panic!("au-kpis-ingestion exited unexpectedly: {status}");
+        }
     }
 
     fn wait_for_exit(&mut self, within: Duration) -> Duration {
@@ -317,7 +439,7 @@ impl Drop for IngestionProcess {
 
 fn base_command(
     database_url: &str,
-    cache_url: &str,
+    cache_url: Option<&str>,
     startup_file: &PathBuf,
     abs_base_url: &str,
 ) -> Command {
@@ -325,12 +447,14 @@ fn base_command(
     command
         .env("AU_KPIS_HTTP__BIND", "127.0.0.1:0")
         .env("AU_KPIS_DATABASE__URL", database_url)
-        .env("AU_KPIS_CACHE__URL", cache_url)
         .env("AU_KPIS_ABS_BASE_URL", abs_base_url)
         .env("AU_KPIS_STARTUP_NOTIFY_FILE", startup_file)
         .env("LLVM_PROFILE_FILE", ignored_child_coverage_profile())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(cache_url) = cache_url {
+        command.env("AU_KPIS_CACHE__URL", cache_url);
+    }
     command
 }
 
