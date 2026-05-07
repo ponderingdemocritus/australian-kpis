@@ -322,6 +322,14 @@ fn dockerfile_defaults_to_run_but_keeps_cli_overridable() {
     );
 }
 
+#[test]
+fn minio_bucket_name_normalizes_test_identifiers() {
+    assert_eq!(
+        minio_bucket_name("au_kpis_ingestion_once"),
+        "au-kpis-ingestion-once-artifacts"
+    );
+}
+
 fn docker_available() -> bool {
     std::env::var_os("DOCKER_HOST").is_some()
         || std::path::Path::new("/var/run/docker.sock").exists()
@@ -397,7 +405,7 @@ impl IngestionProcess {
             .await
             .expect("start timescale test container");
         let redis = start_redis().await.expect("start redis test container");
-        let minio = start_minio(format!("{database}-artifacts"))
+        let minio = start_minio(minio_bucket_name(database))
             .await
             .expect("start minio test container");
         wait_for_object_store_ready(&ObjectStoreEnv::from_minio(&minio)).await;
@@ -424,7 +432,7 @@ impl IngestionProcess {
         let timescale = start_timescale(database)
             .await
             .expect("start timescale test container");
-        let minio = start_minio(format!("{database}-artifacts"))
+        let minio = start_minio(minio_bucket_name(database))
             .await
             .expect("start minio test container");
         wait_for_object_store_ready(&ObjectStoreEnv::from_minio(&minio)).await;
@@ -479,7 +487,7 @@ impl IngestionProcess {
             .await
             .expect("start timescale test container");
         let redis = start_redis().await.expect("start redis test container");
-        let minio = start_minio(format!("{database}-artifacts"))
+        let minio = start_minio(minio_bucket_name(database))
             .await
             .expect("start minio test container");
         wait_for_object_store_ready(&ObjectStoreEnv::from_minio(&minio)).await;
@@ -637,6 +645,18 @@ fn object_store_env() -> ObjectStoreEnv {
         region: "us-east-1".to_string(),
         allow_http: "true".to_string(),
     }
+}
+
+fn minio_bucket_name(database: &str) -> String {
+    let mut bucket: String = database
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | '0'..='9' => ch,
+            _ => '-',
+        })
+        .collect();
+    bucket.push_str("-artifacts");
+    bucket
 }
 
 async fn wait_for_object_store_ready(object_store: &ObjectStoreEnv) {
