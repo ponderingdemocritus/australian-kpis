@@ -16,6 +16,7 @@ use au_kpis_testing::{
     redis::{RedisHarness, start_redis},
     timescale::{TimescaleHarness, start_timescale},
 };
+use object_store::{Error as ObjectStoreError, ObjectStore, aws::AmazonS3Builder, path::Path};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -399,6 +400,7 @@ impl IngestionProcess {
         let minio = start_minio(format!("{database}-artifacts"))
             .await
             .expect("start minio test container");
+        wait_for_object_store_ready(&ObjectStoreEnv::from_minio(&minio)).await;
         let pool = connect_with_retry(timescale.url()).await;
         seed_cpi_reference_data(&pool).await;
         Self {
@@ -425,6 +427,7 @@ impl IngestionProcess {
         let minio = start_minio(format!("{database}-artifacts"))
             .await
             .expect("start minio test container");
+        wait_for_object_store_ready(&ObjectStoreEnv::from_minio(&minio)).await;
         let pool = connect_with_retry(timescale.url()).await;
         seed_cpi_reference_data(&pool).await;
         Self {
@@ -479,6 +482,7 @@ impl IngestionProcess {
         let minio = start_minio(format!("{database}-artifacts"))
             .await
             .expect("start minio test container");
+        wait_for_object_store_ready(&ObjectStoreEnv::from_minio(&minio)).await;
         let pool = connect_with_retry(timescale.url()).await;
         seed_cpi_reference_data(&pool).await;
         let startup_file = unique_startup_file();
@@ -633,6 +637,29 @@ fn object_store_env() -> ObjectStoreEnv {
         region: "us-east-1".to_string(),
         allow_http: "true".to_string(),
     }
+}
+
+async fn wait_for_object_store_ready(object_store: &ObjectStoreEnv) {
+    let store = AmazonS3Builder::new()
+        .with_endpoint(&object_store.endpoint)
+        .with_region(&object_store.region)
+        .with_bucket_name(&object_store.bucket)
+        .with_access_key_id(&object_store.access_key_id)
+        .with_secret_access_key(&object_store.secret_access_key)
+        .with_allow_http(object_store.allow_http == "true")
+        .with_virtual_hosted_style_request(false)
+        .build()
+        .expect("build AmazonS3 client");
+    let probe = Path::from("readiness-probe");
+
+    for _ in 0..20 {
+        match store.head(&probe).await {
+            Ok(_) | Err(ObjectStoreError::NotFound { .. }) => return,
+            Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+        }
+    }
+
+    panic!("object store did not become ready within the retry window");
 }
 
 fn clear_object_store_env(command: &mut Command) {
