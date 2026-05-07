@@ -653,10 +653,19 @@ async fn wait_for_object_store_ready(object_store: &ObjectStoreEnv) {
     let probe = Path::from("readiness-probe");
 
     for _ in 0..20 {
-        match store.head(&probe).await {
-            Ok(_) | Err(ObjectStoreError::NotFound { .. }) => return,
-            Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+        // Mirror the storage crate's own MinIO readiness check. The container
+        // can accept metadata requests before the full signed object path is
+        // ready, so exercise a write/read/delete cycle instead of `head` only.
+        if store.put(&probe, b"ready".to_vec().into()).await.is_ok()
+            && store.head(&probe).await.is_ok()
+            && matches!(
+                store.delete(&probe).await,
+                Ok(()) | Err(ObjectStoreError::NotFound { .. })
+            )
+        {
+            return;
         }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
     panic!("object store did not become ready within the retry window");
