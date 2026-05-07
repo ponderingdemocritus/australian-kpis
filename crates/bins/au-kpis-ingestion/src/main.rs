@@ -28,7 +28,7 @@ use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
 use clap::{Parser, Subcommand};
-use object_store::{aws::AmazonS3Builder, memory::InMemory};
+use object_store::aws::AmazonS3Builder;
 use tokio::{net::TcpListener, signal, time::Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -115,6 +115,31 @@ impl WorkerMetrics {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ObjectStoreConfig {
+    endpoint: Option<String>,
+    bucket: Option<String>,
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+    region: Option<String>,
+    allow_http: bool,
+}
+
+impl ObjectStoreConfig {
+    fn from_env() -> Self {
+        Self {
+            endpoint: env::var("AU_KPIS_OBJECT_STORE__ENDPOINT").ok(),
+            bucket: env::var("AU_KPIS_OBJECT_STORE__BUCKET").ok(),
+            access_key_id: env::var("AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID").ok(),
+            secret_access_key: env::var("AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY").ok(),
+            region: env::var("AU_KPIS_OBJECT_STORE__REGION").ok(),
+            allow_http: env::var("AU_KPIS_OBJECT_STORE__ALLOW_HTTP")
+                .ok()
+                .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes")),
+        }
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 async fn main() -> anyhow::Result<()> {
@@ -130,8 +155,19 @@ async fn main() -> anyhow::Result<()> {
         .context("connect postgres database")?;
     migrate(&db).await.context("apply database migrations")?;
 
+    let drain_window = Duration::from_secs(config.http.shutdown_grace_period_secs);
     let shutdown = CancellationToken::new();
     let metrics = Arc::new(WorkerMetrics::default());
+    let runtime = Runtime {
+        adapters: build_adapters()?,
+        db,
+        blob_store: build_blob_store(&mode, ObjectStoreConfig::from_env())?,
+        metrics,
+        pipeline_options: pipeline_options(drain_window),
+        shutdown: shutdown.clone(),
+        poll_interval: Duration::from_millis(cli.poll_interval_ms),
+        worker_id: cli.worker_id.unwrap_or_else(default_worker_id),
+    };
     let listener = TcpListener::bind(&config.http.bind)
         .await
         .with_context(|| format!("bind metrics listener on {}", config.http.bind))?;
@@ -140,23 +176,11 @@ async fn main() -> anyhow::Result<()> {
         .context("write startup notification")?;
     let metrics_server = tokio::spawn(serve_metrics(
         listener,
-        Arc::clone(&metrics),
+        Arc::clone(&runtime.metrics),
         shutdown.clone(),
     ));
     let shutdown_listener = shutdown_signal(shutdown.clone());
     tokio::pin!(shutdown_listener);
-
-    let runtime = Runtime {
-        adapters: build_adapters()?,
-        db,
-        blob_store: build_blob_store()?,
-        metrics,
-        shutdown: shutdown.clone(),
-        poll_interval: Duration::from_millis(cli.poll_interval_ms),
-        worker_id: cli.worker_id.unwrap_or_else(default_worker_id),
-    };
-
-    let drain_window = Duration::from_secs(config.http.shutdown_grace_period_secs);
     let work = run_mode(mode, runtime);
     tokio::pin!(work);
 
@@ -194,6 +218,7 @@ struct Runtime {
     db: au_kpis_db::PgPool,
     blob_store: BlobStore,
     metrics: Arc<WorkerMetrics>,
+    pipeline_options: PipelineOptions,
     shutdown: CancellationToken,
     poll_interval: Duration,
     worker_id: String,
@@ -254,7 +279,7 @@ async fn run_source_once(
         parse: ParseCtx::new(http, runtime.blob_store.clone(), started_at),
     };
     IngestionPipeline::new(runtime.adapters.clone(), runtime.db.clone())
-        .with_options(PipelineOptions::default())
+        .with_options(runtime.pipeline_options)
         .run_source(request.source_id.clone(), contexts, cancellation)
         .await
 }
@@ -471,35 +496,47 @@ fn build_adapters() -> anyhow::Result<Adapters> {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn build_blob_store() -> anyhow::Result<BlobStore> {
-    let endpoint = env::var("AU_KPIS_OBJECT_STORE__ENDPOINT").ok();
-    let bucket = env::var("AU_KPIS_OBJECT_STORE__BUCKET").ok();
-    let access_key = env::var("AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID").ok();
-    let secret_key = env::var("AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY").ok();
-
-    match (endpoint, bucket, access_key, secret_key) {
+fn build_blob_store(mode: &Mode, config: ObjectStoreConfig) -> anyhow::Result<BlobStore> {
+    match (
+        config.endpoint,
+        config.bucket,
+        config.access_key_id,
+        config.secret_access_key,
+    ) {
         (Some(endpoint), Some(bucket), Some(access_key), Some(secret_key)) => {
-            let region = env::var("AU_KPIS_OBJECT_STORE__REGION")
-                .unwrap_or_else(|_| "us-east-1".to_string());
-            let allow_http = env::var("AU_KPIS_OBJECT_STORE__ALLOW_HTTP")
-                .ok()
-                .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"));
             let store = AmazonS3Builder::new()
                 .with_endpoint(endpoint)
-                .with_region(region)
+                .with_region(config.region.unwrap_or_else(|| "us-east-1".to_string()))
                 .with_bucket_name(bucket)
                 .with_access_key_id(access_key)
                 .with_secret_access_key(secret_key)
-                .with_allow_http(allow_http)
+                .with_allow_http(config.allow_http)
                 .with_virtual_hosted_style_request(false)
                 .build()
                 .context("build S3-compatible object store")?;
             Ok(BlobStore::new(store))
         }
-        (None, None, None, None) => Ok(BlobStore::new(InMemory::new())),
+        (None, None, None, None) => durable_object_store_required(mode),
         _ => bail!(
             "object store config requires endpoint, bucket, access key id, and secret access key"
         ),
+    }
+}
+
+fn durable_object_store_required(mode: &Mode) -> anyhow::Result<BlobStore> {
+    let mode_name = match mode {
+        Mode::Once { .. } => "once mode",
+        Mode::Run => "run mode",
+    };
+    bail!(
+        "{mode_name} requires durable object store config: set AU_KPIS_OBJECT_STORE__ENDPOINT, AU_KPIS_OBJECT_STORE__BUCKET, AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID, and AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY"
+    )
+}
+
+fn pipeline_options(shutdown_grace: Duration) -> PipelineOptions {
+    PipelineOptions {
+        shutdown_grace,
+        ..PipelineOptions::default()
     }
 }
 
@@ -710,6 +747,28 @@ mod tests {
 
         assert!(body.contains("# TYPE au_kpis_ingestion_worker_loops_total counter"));
         assert!(body.contains("au_kpis_ingestion_worker_loops_total 7"));
+    }
+
+    #[test]
+    fn once_mode_requires_durable_object_store_config() {
+        let err = build_blob_store(
+            &Mode::Once {
+                source: "abs".to_string(),
+                dataflow: "cpi".to_string(),
+            },
+            ObjectStoreConfig::default(),
+        )
+        .expect_err("once mode should reject missing durable object store config")
+        .to_string();
+
+        assert!(err.contains("durable object store config"));
+    }
+
+    #[test]
+    fn configured_shutdown_grace_propagates_to_pipeline_options() {
+        let options = pipeline_options(Duration::from_secs(7));
+
+        assert_eq!(options.shutdown_grace, Duration::from_secs(7));
     }
 
     #[test]

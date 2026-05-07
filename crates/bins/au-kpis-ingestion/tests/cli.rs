@@ -12,6 +12,7 @@ use assert_cmd::cargo::cargo_bin;
 use au_kpis_domain::SourceId;
 use au_kpis_queue::{ApalisPgQueue, Job, Queue};
 use au_kpis_testing::{
+    minio::{MinioHarness, start_minio},
     redis::{RedisHarness, start_redis},
     timescale::{TimescaleHarness, start_timescale},
 };
@@ -91,6 +92,102 @@ async fn once_mode_runs_without_cache_config() {
         status.success(),
         "once mode should not require cache config: {status}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_mode_requires_object_store_config() {
+    let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+    let fixture_base_url = serve_abs_cpi_once().await;
+    let harness = IngestionProcess::for_once_without_object_store(
+        "au_kpis_ingestion_once_requires_object_store",
+        &fixture_base_url,
+    )
+    .await;
+
+    let output = harness
+        .command()
+        .args(["--once", "--source", "abs", "--dataflow", "cpi"])
+        .output()
+        .expect("run au-kpis-ingestion once without object store config");
+
+    assert!(
+        !output.status.success(),
+        "once mode should fail fast without durable object store config"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("durable object store config"),
+        "stderr should explain the missing durable object store config, got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_mode_requires_object_store_config() {
+    let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+    let timescale = start_timescale("au_kpis_ingestion_run_requires_object_store")
+        .await
+        .expect("start timescale test container");
+    let redis = start_redis().await.expect("start redis test container");
+    let pool = connect_with_retry(timescale.url()).await;
+    seed_cpi_reference_data(&pool).await;
+    let startup_file = unique_startup_file();
+    let object_store = object_store_env();
+    let mut command = base_command(
+        timescale.url(),
+        Some(redis.url()),
+        &startup_file,
+        "http://127.0.0.1:1/rest",
+    );
+    clear_object_store_env(&mut command);
+    let mut child = command
+        .arg("run")
+        .spawn()
+        .expect("spawn au-kpis-ingestion run without object store config");
+
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().expect("poll child") {
+            assert!(
+                !status.success(),
+                "run mode should fail fast without durable object store config"
+            );
+            assert!(
+                !startup_file.exists(),
+                "startup notification should not be written before startup validation succeeds"
+            );
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "run mode should exit quickly when object store config is missing"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut success_command = base_command(
+        timescale.url(),
+        Some(redis.url()),
+        &startup_file,
+        "http://127.0.0.1:1/rest",
+    );
+    apply_object_store_env(&mut success_command, &object_store);
+    let mut success_child = success_command
+        .arg("run")
+        .spawn()
+        .expect("spawn au-kpis-ingestion run with object store config");
+    wait_for_startup_file(&startup_file, &mut success_child);
+    let _ = Command::new("kill")
+        .args(["-TERM", &success_child.id().to_string()])
+        .status();
+    let _ = success_child.wait();
 }
 
 #[test]
@@ -283,12 +380,14 @@ async fn write_response(stream: &mut tokio::net::TcpStream, content_type: &str, 
 struct IngestionProcess {
     database_url: String,
     cache_url: Option<String>,
+    object_store: Option<ObjectStoreEnv>,
     addr: String,
     startup_file: PathBuf,
     child: Child,
     pool: sqlx::PgPool,
     _timescale: TimescaleHarness,
     _redis: Option<RedisHarness>,
+    _minio: Option<MinioHarness>,
 }
 
 impl IngestionProcess {
@@ -297,11 +396,15 @@ impl IngestionProcess {
             .await
             .expect("start timescale test container");
         let redis = start_redis().await.expect("start redis test container");
+        let minio = start_minio(format!("{database}-artifacts"))
+            .await
+            .expect("start minio test container");
         let pool = connect_with_retry(timescale.url()).await;
         seed_cpi_reference_data(&pool).await;
         Self {
             database_url: timescale.url().to_string(),
             cache_url: Some(redis.url().to_string()),
+            object_store: Some(ObjectStoreEnv::from_minio(&minio)),
             addr: String::new(),
             startup_file: unique_startup_file(),
             child: Command::new("true")
@@ -310,6 +413,7 @@ impl IngestionProcess {
             pool,
             _timescale: timescale,
             _redis: Some(redis),
+            _minio: Some(minio),
         }
         .with_abs_fixture(fixture_base_url)
     }
@@ -318,11 +422,15 @@ impl IngestionProcess {
         let timescale = start_timescale(database)
             .await
             .expect("start timescale test container");
+        let minio = start_minio(format!("{database}-artifacts"))
+            .await
+            .expect("start minio test container");
         let pool = connect_with_retry(timescale.url()).await;
         seed_cpi_reference_data(&pool).await;
         Self {
             database_url: timescale.url().to_string(),
             cache_url: None,
+            object_store: Some(ObjectStoreEnv::from_minio(&minio)),
             addr: String::new(),
             startup_file: unique_startup_file(),
             child: Command::new("true")
@@ -331,6 +439,30 @@ impl IngestionProcess {
             pool,
             _timescale: timescale,
             _redis: None,
+            _minio: Some(minio),
+        }
+        .with_abs_fixture(fixture_base_url)
+    }
+
+    async fn for_once_without_object_store(database: &str, fixture_base_url: &str) -> Self {
+        let timescale = start_timescale(database)
+            .await
+            .expect("start timescale test container");
+        let pool = connect_with_retry(timescale.url()).await;
+        seed_cpi_reference_data(&pool).await;
+        Self {
+            database_url: timescale.url().to_string(),
+            cache_url: None,
+            object_store: None,
+            addr: String::new(),
+            startup_file: unique_startup_file(),
+            child: Command::new("true")
+                .spawn()
+                .expect("spawn completed placeholder"),
+            pool,
+            _timescale: timescale,
+            _redis: None,
+            _minio: None,
         }
         .with_abs_fixture(fixture_base_url)
     }
@@ -344,6 +476,9 @@ impl IngestionProcess {
             .await
             .expect("start timescale test container");
         let redis = start_redis().await.expect("start redis test container");
+        let minio = start_minio(format!("{database}-artifacts"))
+            .await
+            .expect("start minio test container");
         let pool = connect_with_retry(timescale.url()).await;
         seed_cpi_reference_data(&pool).await;
         let startup_file = unique_startup_file();
@@ -359,17 +494,20 @@ impl IngestionProcess {
                 shutdown_grace_secs.to_string(),
             )
             .arg("run");
+        apply_object_store_env(&mut command, &ObjectStoreEnv::from_minio(&minio));
         let mut child = command.spawn().expect("spawn au-kpis-ingestion run");
         let addr = wait_for_startup_file(&startup_file, &mut child);
         Self {
             database_url: timescale.url().to_string(),
             cache_url: Some(redis.url().to_string()),
+            object_store: Some(ObjectStoreEnv::from_minio(&minio)),
             addr,
             startup_file,
             child,
             pool,
             _timescale: timescale,
             _redis: Some(redis),
+            _minio: Some(minio),
         }
     }
 
@@ -379,12 +517,16 @@ impl IngestionProcess {
     }
 
     fn command(&self) -> Command {
-        base_command(
+        let mut command = base_command(
             &self.database_url,
             self.cache_url.as_deref(),
             &self.startup_file,
             &self.addr,
-        )
+        );
+        if let Some(object_store) = &self.object_store {
+            apply_object_store_env(&mut command, object_store);
+        }
+        command
     }
 
     fn pool(&self) -> &sqlx::PgPool {
@@ -427,6 +569,29 @@ impl IngestionProcess {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ObjectStoreEnv {
+    endpoint: String,
+    bucket: String,
+    access_key_id: String,
+    secret_access_key: String,
+    region: String,
+    allow_http: String,
+}
+
+impl ObjectStoreEnv {
+    fn from_minio(minio: &MinioHarness) -> Self {
+        Self {
+            endpoint: minio.endpoint().to_string(),
+            bucket: minio.bucket().to_string(),
+            access_key_id: minio.access_key().to_string(),
+            secret_access_key: minio.secret_key().to_string(),
+            region: "us-east-1".to_string(),
+            allow_http: "true".to_string(),
+        }
+    }
+}
+
 impl Drop for IngestionProcess {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.startup_file);
@@ -452,10 +617,51 @@ fn base_command(
         .env("LLVM_PROFILE_FILE", ignored_child_coverage_profile())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    clear_object_store_env(&mut command);
     if let Some(cache_url) = cache_url {
         command.env("AU_KPIS_CACHE__URL", cache_url);
     }
     command
+}
+
+fn object_store_env() -> ObjectStoreEnv {
+    ObjectStoreEnv {
+        endpoint: "http://127.0.0.1:9000".to_string(),
+        bucket: "ambient-object-store".to_string(),
+        access_key_id: "ambient-key".to_string(),
+        secret_access_key: "ambient-secret".to_string(),
+        region: "us-east-1".to_string(),
+        allow_http: "true".to_string(),
+    }
+}
+
+fn clear_object_store_env(command: &mut Command) {
+    for key in [
+        "AU_KPIS_OBJECT_STORE__ENDPOINT",
+        "AU_KPIS_OBJECT_STORE__BUCKET",
+        "AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID",
+        "AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY",
+        "AU_KPIS_OBJECT_STORE__REGION",
+        "AU_KPIS_OBJECT_STORE__ALLOW_HTTP",
+    ] {
+        command.env_remove(key);
+    }
+}
+
+fn apply_object_store_env(command: &mut Command, object_store: &ObjectStoreEnv) {
+    command
+        .env("AU_KPIS_OBJECT_STORE__ENDPOINT", &object_store.endpoint)
+        .env("AU_KPIS_OBJECT_STORE__BUCKET", &object_store.bucket)
+        .env(
+            "AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID",
+            &object_store.access_key_id,
+        )
+        .env(
+            "AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY",
+            &object_store.secret_access_key,
+        )
+        .env("AU_KPIS_OBJECT_STORE__REGION", &object_store.region)
+        .env("AU_KPIS_OBJECT_STORE__ALLOW_HTTP", &object_store.allow_http);
 }
 
 async fn connect_with_retry(database_url: &str) -> sqlx::PgPool {
