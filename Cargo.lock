@@ -538,6 +538,22 @@ dependencies = [
 [[package]]
 name = "au-kpis-scheduler"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "au-kpis-config",
+ "au-kpis-db",
+ "au-kpis-domain",
+ "au-kpis-queue",
+ "au-kpis-telemetry",
+ "au-kpis-testing",
+ "axum 0.7.9",
+ "clap",
+ "sqlx",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
 
 [[package]]
 name = "au-kpis-schema"
