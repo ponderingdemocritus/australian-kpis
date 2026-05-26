@@ -8,3 +8,37 @@ repository.workspace = true
 description = "Discovery cron binary."
 
 [dependencies]
+anyhow = "1"
+au-kpis-config = { workspace = true }
+au-kpis-db = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-queue = { workspace = true }
+au-kpis-telemetry = { workspace = true }
+# Reuse the API/ingestion HTTP stack for the Prometheus metrics endpoint.
+axum = "0.7"
+# CLI parsing is binary-local; no workspace helper handles scheduler flags.
+clap = { version = "4", features = ["derive", "env"] }
+# Needed for session-scoped Postgres advisory locks.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+
+[dev-dependencies]
+assert_cmd = "2"
+au-kpis-config = { workspace = true }
+au-kpis-db = { workspace = true }
+au-kpis-testing = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
