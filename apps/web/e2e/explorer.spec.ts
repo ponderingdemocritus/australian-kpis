@@ -20,9 +20,7 @@ test('renders the national CPI chart journey with state comparison', async ({ pa
 
   await expect(page.getByTestId('latest-observation')).toContainText('139.2')
   await expect(page.getByRole('table', { name: 'Observations' })).toContainText('New South Wales')
-  await expect(page).toHaveScreenshot('explorer-national-cpi.png', {
-    fullPage: true,
-  })
+  await expect(page).toHaveScreenshot('explorer-national-cpi.png')
 })
 
 test('has no WCAG AA accessibility violations in the loaded Explorer state', async ({ page }) => {
