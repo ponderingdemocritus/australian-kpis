@@ -318,12 +318,19 @@ name = "au-kpis-api-http"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "au-kpis-cache",
  "au-kpis-config",
+ "au-kpis-db",
+ "au-kpis-domain",
  "au-kpis-error",
  "au-kpis-telemetry",
+ "au-kpis-testing",
  "axum 0.7.9",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
  "http",
  "jsonschema",
  "serde",
@@ -335,6 +342,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "url",
  "utoipa",
 ]
 

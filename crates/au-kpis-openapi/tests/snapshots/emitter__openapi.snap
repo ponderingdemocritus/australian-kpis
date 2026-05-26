@@ -5,6 +5,17 @@ expression: emitted_spec()
 {
   "components": {
     "schemas": {
+      "ArtifactId": {
+        "description": "Lowercase hex-encoded SHA-256 digest (64 chars).",
+        "format": "sha256-hex",
+        "maxLength": 64,
+        "minLength": 64,
+        "type": "string"
+      },
+      "DataflowId": {
+        "description": "Identifier for a dataflow (e.g. `abs.cpi`).",
+        "type": "string"
+      },
       "HealthResponse": {
         "description": "Health endpoint response.",
         "properties": {
@@ -16,6 +27,174 @@ expression: emitted_spec()
         "required": [
           "status"
         ],
+        "type": "object"
+      },
+      "ObservationStatus": {
+        "description": "Observation status flags sourced from SDMX. Subset in use across Australian\npublishers; extend as new codes appear in upstream feeds.",
+        "enum": [
+          "normal",
+          "estimated",
+          "forecast",
+          "imputed",
+          "missing",
+          "provisional",
+          "revised",
+          "break"
+        ],
+        "type": "string"
+      },
+      "ObservationsMetadata": {
+        "description": "Attribution and licensing metadata that applies to an observations page.",
+        "properties": {
+          "attribution": {
+            "description": "Required source acknowledgement to display with derived charts.",
+            "type": "string"
+          },
+          "dataflow": {
+            "$ref": "#/components/schemas/DataflowId",
+            "description": "Requested dataflow identifier."
+          },
+          "license": {
+            "description": "Data license identifier, e.g. `CC-BY-4.0`.",
+            "type": "string"
+          },
+          "source_url": {
+            "description": "Canonical citation URL for the upstream source.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataflow",
+          "attribution",
+          "license",
+          "source_url"
+        ],
+        "type": "object"
+      },
+      "ObservationsResponse": {
+        "description": "JSON response envelope for `/v1/observations`.",
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/ObservationsMetadata",
+            "description": "Dataflow attribution and license metadata."
+          },
+          "observations": {
+            "description": "Observation rows in ascending `(time, series_key)` order.",
+            "items": {
+              "$ref": "#/components/schemas/ObservationsRow"
+            },
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata",
+            "description": "Cursor for continuing the query."
+          }
+        },
+        "required": [
+          "metadata",
+          "observations",
+          "pagination"
+        ],
+        "type": "object"
+      },
+      "ObservationsRow": {
+        "description": "One observation row returned by `/v1/observations`.",
+        "properties": {
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Free-form source attributes for this observation.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "dimensions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Series dimension values keyed by dimension id.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "ingested_at": {
+            "description": "Ingestion timestamp for this revision.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "measure_id": {
+            "description": "Measure identifier for the series.",
+            "type": "string"
+          },
+          "revision_no": {
+            "description": "Revision number, where zero is the original publication.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "series_key": {
+            "$ref": "#/components/schemas/SeriesKey",
+            "description": "Deterministic series key."
+          },
+          "source_artifact_id": {
+            "$ref": "#/components/schemas/ArtifactId",
+            "description": "Content-addressed source artifact identifier."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus",
+            "description": "Observation status."
+          },
+          "time": {
+            "description": "Observation timestamp.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "time_precision": {
+            "$ref": "#/components/schemas/TimePrecision",
+            "description": "Temporal precision of the timestamp."
+          },
+          "unit": {
+            "description": "Unit for the series values.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Numeric value; null when status is `missing`.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "series_key",
+          "time",
+          "time_precision",
+          "status",
+          "revision_no",
+          "attributes",
+          "ingested_at",
+          "source_artifact_id",
+          "dimensions",
+          "measure_id",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "PaginationMetadata": {
+        "description": "Cursor metadata for the current observations page.",
+        "properties": {
+          "next_cursor": {
+            "description": "Opaque cursor for the next page, or null when the page is complete.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "ProblemDetails": {
@@ -56,6 +235,24 @@ expression: emitted_spec()
           "status"
         ],
         "type": "object"
+      },
+      "SeriesKey": {
+        "description": "Lowercase hex-encoded SHA-256 digest (64 chars).",
+        "format": "sha256-hex",
+        "maxLength": 64,
+        "minLength": 64,
+        "type": "string"
+      },
+      "TimePrecision": {
+        "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
+        "enum": [
+          "day",
+          "week",
+          "month",
+          "quarter",
+          "year"
+        ],
+        "type": "string"
       }
     }
   },
@@ -99,6 +296,182 @@ expression: emitted_spec()
         "tags": []
       }
     },
+    "/v1/observations": {
+      "get": {
+        "operationId": "listObservations",
+        "parameters": [
+          {
+            "description": "Required dataflow id, e.g. abs.cpi.",
+            "in": "query",
+            "name": "dataflow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Dimension filters as repeated key=value values. The handler also accepts dimensions[region]=AUS.",
+            "in": "query",
+            "name": "dimensions[]",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Inclusive lower time bound as YYYY-MM-DD or RFC3339.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive upper time bound as YYYY-MM-DD or RFC3339.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional dataflow frequency filter.",
+            "in": "query",
+            "name": "frequency",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Response format: json or csv.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, maximum 10000.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationsResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Observation page.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public CDN cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Weak entity tag for this page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's cached page is still fresh.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public CDN cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Weak entity tag for this page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid query string."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Dataflow not found."
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal server error."
+          }
+        },
+        "summary": "`GET /v1/observations`.",
+        "tags": [
+          "observations"
+        ]
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "operationId": "openapi",
@@ -138,5 +511,11 @@ expression: emitted_spec()
         "tags": []
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "description": "Time-series observations",
+      "name": "observations"
+    }
+  ]
 }

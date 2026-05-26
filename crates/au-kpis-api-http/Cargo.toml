@@ -8,26 +8,34 @@ repository.workspace = true
 description = "axum routes + handlers (library)."
 
 [dependencies]
+async-stream = "0.3" # stream JSON/CSV chunks from sqlx without buffering result pages
 au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
+au-kpis-domain = { workspace = true }
 au-kpis-telemetry = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
+base64 = "0.22" # opaque cursor encoding; std has no base64 codec
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+futures = "0.3" # TryStreamExt over sqlx row streams
 http = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "chrono", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["signal"] }
 tokio-util = "0.7"
 tower = { version = "0.5", features = ["timeout"] }
 tower-http = { version = "0.6", features = ["compression-full", "cors", "request-id", "timeout", "trace"] }
 tracing = "0.1"
-utoipa = { version = "5", features = ["axum_extras"] }
+url = "2" # robust query-string decoding for dimensions[region]=AUS filters
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 
 [dev-dependencies]
 anyhow = "1"
 async-trait = "0.1"
+au-kpis-db = { workspace = true }
 au-kpis-error = { workspace = true }
+au-kpis-testing = { workspace = true }
 jsonschema = "0.29"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
