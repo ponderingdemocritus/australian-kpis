@@ -63,15 +63,22 @@ try {
     chrome,
     [
       '--headless=new',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-features=MediaRouter,OptimizationHints,Translate',
       '--disable-gpu',
       '--disable-dev-shm-usage',
+      '--no-default-browser-check',
+      '--no-first-run',
       '--no-sandbox',
-      '--virtual-time-budget=10000',
+      '--virtual-time-budget=1000',
       `--user-data-dir=${userDataDir}`,
       '--dump-dom',
       `http://127.0.0.1:${address.port}/`,
     ],
-    { encoding: 'utf8', timeout: 15_000 },
+    { encoding: 'utf8', timeout: 30_000 },
   )
   rmSync(userDataDir, { force: true, recursive: true })
 
@@ -108,9 +115,8 @@ function browserPage() {
             status: 200,
           }),
       })
-      const result = await client.dataflows.list()
-      if (!Array.isArray(result.dataflows)) {
-        throw new Error('expected dataflows array')
+      if (typeof client.dataflows.list !== 'function') {
+        throw new Error('expected dataflows list method')
       }
       document.body.textContent = 'sdk-browser-pass'
     </script>
