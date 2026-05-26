@@ -22,12 +22,17 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+pub mod dataflows;
 pub mod docs;
 pub mod error;
 pub mod observations;
 pub mod routes;
 pub mod state;
 
+pub use dataflows::{
+    DataflowCodelistResponse, DataflowDetailResponse, DataflowsQuery, DataflowsResponse,
+    get_dataflow, get_dataflow_codelist, list_dataflows,
+};
 pub use docs::ApiDoc;
 pub use error::{ApiError, ProblemDetails};
 pub use observations::{
@@ -69,6 +74,12 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
     router_with(
         Router::<AppState>::new()
             .route("/v1/health", get(health))
+            .route("/v1/dataflows", get(dataflows::list_dataflows))
+            .route("/v1/dataflows/:id", get(dataflows::get_dataflow))
+            .route(
+                "/v1/dataflows/:id/codelists/:dim",
+                get(dataflows::get_dataflow_codelist),
+            )
             .route("/v1/observations", get(observations::list_observations))
             .route("/v1/openapi.json", get(openapi)),
         state,

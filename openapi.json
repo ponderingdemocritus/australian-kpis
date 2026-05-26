@@ -10,6 +10,198 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/dataflows": {
+      "get": {
+        "tags": ["dataflows"],
+        "summary": "`GET /v1/dataflows`.",
+        "operationId": "listDataflows",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Optional source id filter, e.g. abs.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "frequency",
+            "in": "query",
+            "description": "Optional publication frequency filter.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dataflow catalog page.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataflowsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dataflows/{id}": {
+      "get": {
+        "tags": ["dataflows"],
+        "summary": "`GET /v1/dataflows/{id}`.",
+        "operationId": "getDataflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Dataflow id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dataflow metadata and dimensions.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataflowDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Dataflow not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dataflows/{id}/codelists/{dim}": {
+      "get": {
+        "tags": ["dataflows"],
+        "summary": "`GET /v1/dataflows/{id}/codelists/{dim}`.",
+        "operationId": "getDataflowCodelist",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Dataflow id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dim",
+            "in": "path",
+            "description": "Dimension id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Codelist for the requested dimension.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataflowCodelistResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Dataflow or dimension not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/health": {
       "get": {
         "tags": [],
@@ -262,9 +454,240 @@
         "maxLength": 64,
         "minLength": 64
       },
+      "Code": {
+        "type": "object",
+        "description": "A single code within a codelist (e.g. `VIC` → \"Victoria\").",
+        "required": ["id", "codelist_id", "name"],
+        "properties": {
+          "codelist_id": {
+            "$ref": "#/components/schemas/CodelistId",
+            "description": "The codelist this code belongs to. Denormalised here so a `Code`\nemitted from the API is self-contained."
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/CodeId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CodeId",
+                "description": "Optional parent code id for hierarchical codelists (e.g. regions with\nstate → LGA containment)."
+              }
+            ]
+          }
+        }
+      },
+      "CodeId": {
+        "type": "string",
+        "description": "Identifier for a code within a codelist (e.g. `VIC`)."
+      },
+      "Codelist": {
+        "type": "object",
+        "description": "A reusable vocabulary of codes attached to dimensions.",
+        "required": ["id", "name", "codes"],
+        "properties": {
+          "codes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/CodelistId"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CodelistId": {
+        "type": "string",
+        "description": "Identifier for a codelist (e.g. `CL_STATE_AU`)."
+      },
+      "Dataflow": {
+        "type": "object",
+        "description": "A dataflow — a named collection of series sharing dimensions and measures.",
+        "required": [
+          "id",
+          "source_id",
+          "name",
+          "dimensions",
+          "measures",
+          "frequency",
+          "license",
+          "attribution",
+          "source_url"
+        ],
+        "properties": {
+          "attribution": {
+            "type": "string",
+            "description": "Required attribution string shown to end-users alongside derived charts."
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionId"
+            },
+            "description": "Ordered list of dimension ids that key series within this dataflow."
+          },
+          "frequency": {
+            "$ref": "#/components/schemas/Frequency"
+          },
+          "id": {
+            "$ref": "#/components/schemas/DataflowId"
+          },
+          "license": {
+            "$ref": "#/components/schemas/License"
+          },
+          "measures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeasureId"
+            },
+            "description": "Measures published by this dataflow (index, rate, count, ...)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_id": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "source_url": {
+            "type": "string",
+            "description": "Canonical citation URL."
+          }
+        }
+      },
+      "DataflowCodelistResponse": {
+        "type": "object",
+        "description": "Response envelope for `GET /v1/dataflows/{id}/codelists/{dim}`.",
+        "required": ["dataflow_id", "dimension_id", "codelist"],
+        "properties": {
+          "codelist": {
+            "$ref": "#/components/schemas/Codelist",
+            "description": "Codelist attached to the requested dimension."
+          },
+          "dataflow_id": {
+            "$ref": "#/components/schemas/DataflowId",
+            "description": "Requested dataflow id."
+          },
+          "dimension_id": {
+            "$ref": "#/components/schemas/DimensionId",
+            "description": "Requested dimension id."
+          }
+        }
+      },
+      "DataflowDetailResponse": {
+        "type": "object",
+        "description": "Response envelope for `GET /v1/dataflows/{id}`.",
+        "required": ["dataflow", "dimensions"],
+        "properties": {
+          "dataflow": {
+            "$ref": "#/components/schemas/Dataflow",
+            "description": "Dataflow metadata."
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Dimension"
+            },
+            "description": "Ordered dimension metadata for the dataflow."
+          }
+        }
+      },
       "DataflowId": {
         "type": "string",
         "description": "Identifier for a dataflow (e.g. `abs.cpi`)."
+      },
+      "DataflowsQuery": {
+        "type": "object",
+        "description": "Query parameters for `GET /v1/dataflows`.",
+        "properties": {
+          "frequency": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Frequency",
+                "description": "Optional publication frequency filter."
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceId",
+                "description": "Optional source id filter, e.g. `abs`."
+              }
+            ]
+          }
+        }
+      },
+      "DataflowsResponse": {
+        "type": "object",
+        "description": "Response envelope for `GET /v1/dataflows`.",
+        "required": ["dataflows"],
+        "properties": {
+          "dataflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Dataflow"
+            },
+            "description": "Matching dataflows, ordered by source then dataflow id."
+          }
+        }
+      },
+      "Dimension": {
+        "type": "object",
+        "description": "A single dimension within a dataflow. Binds a dimension id to a codelist\nthat enumerates the permitted values.",
+        "required": ["id", "name", "codelist_id", "position"],
+        "properties": {
+          "codelist_id": {
+            "$ref": "#/components/schemas/CodelistId"
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "id": {
+            "$ref": "#/components/schemas/DimensionId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position of this dimension in the dataflow's canonical dimension order.\nAdapters must emit dimensions in this order so series-key derivation is\nstable across codebases (see `Spec.md § Data model`).",
+            "minimum": 0
+          }
+        }
+      },
+      "DimensionId": {
+        "type": "string",
+        "description": "Identifier for a dimension within a dataflow (e.g. `region`)."
+      },
+      "Frequency": {
+        "type": "string",
+        "description": "Cadence at which a dataflow publishes new observations. Informational —\nused by the scheduler to pick discovery intervals and by the SLO alerting\nrule `dataflow-no-new-observations`.",
+        "enum": ["daily", "weekly", "monthly", "quarterly", "annual", "irregular"]
       },
       "HealthResponse": {
         "type": "object",
@@ -276,6 +699,42 @@
             "description": "Current service health."
           }
         }
+      },
+      "License": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": ["CC-BY-4.0"]
+          },
+          {
+            "type": "string",
+            "enum": ["CC-BY-ND-4.0"]
+          },
+          {
+            "type": "string",
+            "enum": ["CC-BY-SA-4.0"]
+          },
+          {
+            "type": "string",
+            "enum": ["public-domain"]
+          },
+          {
+            "type": "object",
+            "description": "Escape hatch for licenses not yet enumerated. Carries the SPDX-style id.",
+            "required": ["other"],
+            "properties": {
+              "other": {
+                "type": "string",
+                "description": "Escape hatch for licenses not yet enumerated. Carries the SPDX-style id."
+              }
+            }
+          }
+        ],
+        "description": "Canonical license identifier. Ingestion refuses to load a dataflow whose\n`license` field is absent (see `Spec.md § Data licensing and attribution`)."
+      },
+      "MeasureId": {
+        "type": "string",
+        "description": "Identifier for a measure (e.g. `unemployment_rate`)."
       },
       "ObservationStatus": {
         "type": "string",
@@ -466,6 +925,10 @@
         "maxLength": 64,
         "minLength": 64
       },
+      "SourceId": {
+        "type": "string",
+        "description": "Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`)."
+      },
       "TimePrecision": {
         "type": "string",
         "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
@@ -474,6 +937,10 @@
     }
   },
   "tags": [
+    {
+      "name": "dataflows",
+      "description": "Dataflow catalog and codelists"
+    },
     {
       "name": "observations",
       "description": "Time-series observations"
