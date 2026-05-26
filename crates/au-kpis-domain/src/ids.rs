@@ -379,7 +379,7 @@ impl ObservationId {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
 
     use proptest::prelude::*;
 
@@ -426,6 +426,36 @@ mod tests {
 
         let different = SeriesKey::derive(&df, [("region", "VIC"), ("measure", "index")]);
         assert_ne!(a, different);
+    }
+
+    #[test]
+    fn series_key_has_no_collisions_over_one_million_dimension_combos() {
+        const CASES: usize = 1_000_000;
+
+        let mut seen = HashSet::with_capacity(CASES);
+        let mut seed = 0xa11c_e551_5eed_u64;
+
+        for case in 0..CASES {
+            let dataflow =
+                DataflowId::new(format!("df.{:04}", next_u64(&mut seed) % 10_000)).unwrap();
+            let case_code = format!("C{case:06}");
+            let region = format!("R{:05}", next_u64(&mut seed) % 100_000);
+            let measure = format!("M{:05}", next_u64(&mut seed) % 100_000);
+            let dimensions = [
+                ("case", case_code.as_str()),
+                ("region", region.as_str()),
+                ("measure", measure.as_str()),
+            ];
+
+            let forward = SeriesKey::derive(&dataflow, dimensions);
+            let reverse = SeriesKey::derive(&dataflow, dimensions.into_iter().rev());
+
+            assert_eq!(forward, reverse, "series key changed with dimension order");
+            assert!(
+                seen.insert(forward),
+                "series key collision after {case} unique dimension combinations: {forward}"
+            );
+        }
     }
 
     #[test]
@@ -546,5 +576,10 @@ mod tests {
 
             prop_assert_eq!(forward, backward);
         }
+    }
+
+    fn next_u64(seed: &mut u64) -> u64 {
+        *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        *seed
     }
 }

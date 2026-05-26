@@ -160,6 +160,25 @@ fn ts(year: i32, month: u32, day: u32) -> DateTime<Utc> {
         .unwrap()
 }
 
+fn permutations<T: Clone>(values: &[T]) -> Vec<Vec<T>> {
+    if values.is_empty() {
+        return vec![Vec::new()];
+    }
+
+    let mut result = Vec::new();
+    for index in 0..values.len() {
+        let mut remaining = values.to_vec();
+        let value = remaining.remove(index);
+        for mut suffix in permutations(&remaining) {
+            let mut order = Vec::with_capacity(values.len());
+            order.push(value.clone());
+            order.append(&mut suffix);
+            result.push(order);
+        }
+    }
+    result
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn upserts_series_and_latest_revision() {
     let _guard = TEST_LOCK.lock().await;
@@ -201,6 +220,49 @@ async fn upserts_series_and_latest_revision() {
     assert_eq!(row.get::<DateTime<Utc>, _>("last_observed"), time);
     assert_eq!(row.get::<i32, _>("revision_no"), 1);
     assert_eq!(row.get::<Option<f64>, _>("value"), Some(135.0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn latest_revision_wins_for_every_insertion_order() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let artifact_id = ArtifactId::of_content(b"loader revision permutation fixture");
+    seed_reference_data(pool, artifact_id).await;
+    let aus = descriptor("AUS");
+    let revisions = [(0_u32, 134.2), (1, 135.0), (2, 133.9), (3, 136.4)];
+    let orders = permutations(&revisions);
+
+    for (case, order) in orders.iter().enumerate() {
+        let time = ts(2024, 3, 1) + ChronoDuration::days(case as i64);
+        let rows = order
+            .iter()
+            .map(|(revision_no, value)| item(&aus, artifact_id, time, *revision_no, *value))
+            .collect();
+        let stats = load_batch(pool, rows)
+            .await
+            .expect("load revision permutation");
+
+        assert_eq!(stats.observations_loaded, revisions.len() as u64);
+        assert_eq!(stats.parse_errors, 0);
+    }
+
+    let rows = sqlx::query(
+        "SELECT time, revision_no, value
+         FROM observations_latest
+         WHERE series_key = $1
+         ORDER BY time",
+    )
+    .bind(aus.series_key.digest().as_bytes().as_slice())
+    .fetch_all(pool)
+    .await
+    .expect("fetch latest revisions");
+
+    assert_eq!(rows.len(), orders.len());
+    for row in rows {
+        assert_eq!(row.get::<i32, _>("revision_no"), 3);
+        assert_eq!(row.get::<Option<f64>, _>("value"), Some(136.4));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

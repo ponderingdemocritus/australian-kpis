@@ -56,7 +56,9 @@ pub struct Observation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::DataflowId;
+    use crate::ids::{ArtifactId, DataflowId, SeriesKey, Sha256Digest};
+    use chrono::TimeZone;
+    use proptest::{collection::btree_map, prelude::*};
 
     #[test]
     fn roundtrips() {
@@ -122,5 +124,89 @@ mod tests {
             serde_json::to_string(&ObservationStatus::Provisional).unwrap(),
             "\"provisional\""
         );
+    }
+
+    fn arb_datetime() -> impl Strategy<Value = DateTime<Utc>> {
+        (946_684_800_i64..1_893_456_000_i64, 0_u32..1_000_000_000_u32)
+            .prop_map(|(secs, nanos)| Utc.timestamp_opt(secs, nanos).single().unwrap())
+    }
+
+    fn arb_time_precision() -> impl Strategy<Value = TimePrecision> {
+        prop_oneof![
+            Just(TimePrecision::Day),
+            Just(TimePrecision::Week),
+            Just(TimePrecision::Month),
+            Just(TimePrecision::Quarter),
+            Just(TimePrecision::Year),
+        ]
+    }
+
+    fn arb_observation_status() -> impl Strategy<Value = ObservationStatus> {
+        prop_oneof![
+            Just(ObservationStatus::Normal),
+            Just(ObservationStatus::Estimated),
+            Just(ObservationStatus::Forecast),
+            Just(ObservationStatus::Imputed),
+            Just(ObservationStatus::Provisional),
+            Just(ObservationStatus::Revised),
+            Just(ObservationStatus::Break),
+        ]
+    }
+
+    fn arb_observation() -> impl Strategy<Value = Observation> {
+        (
+            any::<[u8; 32]>(),
+            arb_datetime(),
+            arb_time_precision(),
+            prop::option::of(
+                (-1_000_000_000_i64..1_000_000_000_i64).prop_map(|value| value as f64 / 100.0),
+            ),
+            arb_observation_status(),
+            0_u32..1_000,
+            btree_map("[A-Z_]{1,16}", "[A-Za-z0-9 ._:/-]{0,48}", 0..8),
+            arb_datetime(),
+            any::<[u8; 32]>(),
+        )
+            .prop_map(
+                |(
+                    series_key,
+                    time,
+                    time_precision,
+                    value,
+                    status,
+                    revision_no,
+                    attributes,
+                    ingested_at,
+                    artifact_id,
+                )| Observation {
+                    series_key: SeriesKey::from_digest(Sha256Digest::from_bytes(series_key)),
+                    time,
+                    time_precision,
+                    value,
+                    status: if value.is_some() {
+                        status
+                    } else {
+                        ObservationStatus::Missing
+                    },
+                    revision_no,
+                    attributes,
+                    ingested_at,
+                    source_artifact_id: ArtifactId::from_digest(Sha256Digest::from_bytes(
+                        artifact_id,
+                    )),
+                },
+            )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+        #[test]
+        fn observation_json_roundtrips_for_generated_values(obs in arb_observation()) {
+            let json = serde_json::to_string(&obs).unwrap();
+            let back: Observation = serde_json::from_str(&json).unwrap();
+
+            prop_assert_eq!(obs, back);
+        }
     }
 }

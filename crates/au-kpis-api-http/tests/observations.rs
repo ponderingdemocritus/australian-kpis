@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use au_kpis_api_http::{AppState, router};
+use au_kpis_api_http::{AppState, ObservationsResponse, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
 use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
@@ -140,11 +140,60 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
     assert!(body.contains("# next_cursor="));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paginated_observations_concatenate_to_the_full_result() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_observations_pagination").await;
+    seed_observations(db.pool()).await;
+    let artifact = ArtifactId::of_content(b"api observations fixture");
+    seed_extra_pagination_observations(db.pool(), artifact).await;
+    let app = router(test_state(db.pool().clone())).expect("router");
+
+    let full = get_observations_json(app.clone(), "/v1/observations?dataflow=abs.cpi&limit=100")
+        .await
+        .observations;
+    assert!(full.len() > 8, "fixture should exercise multiple pages");
+
+    for limit in 1..=5 {
+        let mut cursor = None;
+        let mut paged = Vec::new();
+        for _ in 0..20 {
+            let uri = match &cursor {
+                Some(cursor) => {
+                    format!("/v1/observations?dataflow=abs.cpi&limit={limit}&cursor={cursor}")
+                }
+                None => format!("/v1/observations?dataflow=abs.cpi&limit={limit}"),
+            };
+            let page = get_observations_json(app.clone(), &uri).await;
+            cursor = page.pagination.next_cursor;
+            paged.extend(page.observations);
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(paged, full, "page size {limit} did not concatenate cleanly");
+    }
+}
+
 fn request(uri: &str) -> Request<Body> {
     Request::builder()
         .uri(uri)
         .body(Body::empty())
         .expect("request")
+}
+
+async fn get_observations_json(app: axum::Router, uri: &str) -> ObservationsResponse {
+    let response = app.oneshot(request(uri)).await.expect("json response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("json body");
+    serde_json::from_slice(&body).expect("observations response")
 }
 
 fn test_state(db: PgPool) -> AppState {
@@ -285,6 +334,32 @@ async fn seed_observations(pool: &PgPool) {
         ObservationSeed::new(nsw_key, artifact, (2024, 3, 1), 0, 137.1),
     )
     .await;
+}
+
+async fn seed_extra_pagination_observations(pool: &PgPool, artifact: ArtifactId) {
+    for (region, base) in [("VIC", 140.0), ("QLD", 150.0)] {
+        let key = insert_series(pool, region).await;
+        for (offset, date) in [
+            (0.0, (2024, 3, 1)),
+            (1.0, (2024, 6, 1)),
+            (2.0, (2024, 9, 1)),
+        ] {
+            insert_observation(
+                pool,
+                ObservationSeed::new(key, artifact, date, 0, base + offset),
+            )
+            .await;
+        }
+    }
+
+    let aus = SeriesKey::derive(&DataflowId::new("abs.cpi").unwrap(), [("region", "AUS")]);
+    for (offset, date) in [(0.0, (2024, 9, 1)), (1.0, (2024, 12, 1))] {
+        insert_observation(
+            pool,
+            ObservationSeed::new(aus, artifact, date, 0, 138.0 + offset),
+        )
+        .await;
+    }
 }
 
 async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
