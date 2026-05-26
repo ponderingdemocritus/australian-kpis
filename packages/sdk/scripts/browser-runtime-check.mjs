@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync, rmSync, statSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -17,8 +17,47 @@ if (chrome === undefined) {
   throw new Error('Chrome or Chromium executable is required for browser runtime check')
 }
 
+let reportBrowserResult
+const browserResult = new Promise((resolve, reject) => {
+  reportBrowserResult = { reject, resolve }
+})
+
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+
+  if (request.method === 'POST' && url.pathname === '/pass') {
+    readBody(request)
+      .then((body) => {
+        response.writeHead(204)
+        response.end()
+        if (body === 'sdk-browser-pass') {
+          reportBrowserResult.resolve()
+        } else {
+          reportBrowserResult.reject(new Error(`unexpected browser pass body: ${body}`))
+        }
+      })
+      .catch((error) => {
+        response.writeHead(500)
+        response.end()
+        reportBrowserResult.reject(error)
+      })
+    return
+  }
+
+  if (request.method === 'POST' && url.pathname === '/fail') {
+    readBody(request)
+      .then((body) => {
+        response.writeHead(204)
+        response.end()
+        reportBrowserResult.reject(new Error(`browser runtime check failed: ${body}`))
+      })
+      .catch((error) => {
+        response.writeHead(500)
+        response.end()
+        reportBrowserResult.reject(error)
+      })
+    return
+  }
 
   if (url.pathname === '/') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
@@ -59,42 +98,44 @@ try {
   }
 
   const userDataDir = await mkdtemp(join(tmpdir(), 'au-kpis-sdk-browser-'))
-  const result = spawnSync(
-    chrome,
-    [
-      '--headless=new',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-extensions',
-      '--disable-features=MediaRouter,OptimizationHints,Translate',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-      '--no-default-browser-check',
-      '--no-first-run',
-      '--no-sandbox',
-      '--virtual-time-budget=1000',
-      `--user-data-dir=${userDataDir}`,
-      '--dump-dom',
-      `http://127.0.0.1:${address.port}/`,
-    ],
-    { encoding: 'utf8', timeout: 30_000 },
-  )
-  rmSync(userDataDir, { force: true, recursive: true })
+  const browser = spawn(chrome, [
+    '--headless=new',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-features=MediaRouter,OptimizationHints,Translate',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--no-default-browser-check',
+    '--no-first-run',
+    '--no-sandbox',
+    `--user-data-dir=${userDataDir}`,
+    `http://127.0.0.1:${address.port}/`,
+  ])
 
-  if (result.error !== undefined) {
-    process.stderr.write(result.stderr)
-    throw result.error
-  }
+  let browserStderr = ''
+  browser.stderr.on('data', (chunk) => {
+    browserStderr = `${browserStderr}${chunk.toString('utf8')}`.slice(-6_000)
+  })
 
-  if (result.status !== 0) {
-    process.stderr.write(result.stderr)
-    throw new Error(`browser runtime check failed with exit code ${result.status}`)
-  }
+  const browserExit = new Promise((_, reject) => {
+    browser.once('error', reject)
+    browser.once('exit', (code, signal) => {
+      reject(
+        new Error(
+          `browser exited before reporting success (${code ?? signal ?? 'unknown'})\n${browserStderr}`,
+        ),
+      )
+    })
+  })
+  browserExit.catch(() => {})
 
-  if (!result.stdout.includes('sdk-browser-pass')) {
-    process.stderr.write(result.stdout)
-    throw new Error('browser runtime check did not report success')
+  try {
+    await withTimeout(Promise.race([browserResult, browserExit]), 30_000, () => browserStderr)
+  } finally {
+    await stopBrowser(browser)
+    rmSync(userDataDir, { force: true, recursive: true })
   }
 } finally {
   server.close()
@@ -106,6 +147,16 @@ function browserPage() {
   <body>
     <script type="module">
       import { createClient } from '/packages/sdk/dist/index.js'
+
+      const report = (path, body) =>
+        fetch(path, { body, method: 'POST' }).catch(() => {})
+
+      window.addEventListener('error', (event) => {
+        void report('/fail', event.message ?? 'unknown browser error')
+      })
+      window.addEventListener('unhandledrejection', (event) => {
+        void report('/fail', String(event.reason ?? 'unknown rejected promise'))
+      })
 
       const client = createClient({
         baseUrl: 'https://api.example.test',
@@ -119,9 +170,18 @@ function browserPage() {
         throw new Error('expected dataflows list method')
       }
       document.body.textContent = 'sdk-browser-pass'
+      await report('/pass', 'sdk-browser-pass')
     </script>
   </body>
 </html>`
+}
+
+async function readBody(request) {
+  const chunks = []
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 function findExecutable(candidates) {
@@ -145,5 +205,39 @@ function contentType(file) {
       return 'application/json; charset=utf-8'
     default:
       return 'application/octet-stream'
+  }
+}
+
+function withTimeout(promise, ms, stderr) {
+  let timeout
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(`browser runtime check timed out\n${stderr()}`))
+      }, ms)
+    }),
+  ]).finally(() => {
+    clearTimeout(timeout)
+  })
+}
+
+async function stopBrowser(browser) {
+  if (browser.exitCode !== null || browser.signalCode !== null) {
+    return
+  }
+
+  browser.kill('SIGTERM')
+  await Promise.race([
+    new Promise((resolve) => {
+      browser.once('exit', resolve)
+    }),
+    new Promise((resolve) => {
+      setTimeout(resolve, 2_000)
+    }),
+  ])
+
+  if (browser.exitCode === null && browser.signalCode === null) {
+    browser.kill('SIGKILL')
   }
 }
