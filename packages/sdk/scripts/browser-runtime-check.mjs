@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url'
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageRoot, '../..')
 const chrome =
-  process.env.CHROME_BIN ??
-  findExecutable(['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium'])
+  process.env.CHROME_BIN && process.env.CHROME_BIN.length > 0
+    ? process.env.CHROME_BIN
+    : findExecutable(['google-chrome-stable', 'google-chrome', 'chromium-browser', 'chromium'])
 
 if (chrome === undefined) {
   throw new Error('Chrome or Chromium executable is required for browser runtime check')
@@ -63,14 +64,21 @@ try {
     [
       '--headless=new',
       '--disable-gpu',
+      '--disable-dev-shm-usage',
       '--no-sandbox',
+      '--virtual-time-budget=10000',
       `--user-data-dir=${userDataDir}`,
       '--dump-dom',
       `http://127.0.0.1:${address.port}/`,
     ],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', timeout: 15_000 },
   )
   rmSync(userDataDir, { force: true, recursive: true })
+
+  if (result.error !== undefined) {
+    process.stderr.write(result.stderr)
+    throw result.error
+  }
 
   if (result.status !== 0) {
     process.stderr.write(result.stderr)
