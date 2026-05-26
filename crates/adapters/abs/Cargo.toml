@@ -27,8 +27,13 @@ tracing = "0.1"
 dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
+criterion.workspace = true
 insta = { version = "1", features = ["json"] }
 object_store = "0.11"
 proptest = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread"] }
+
+[[bench]]
+name = "sdmx_parse"
+harness = false
