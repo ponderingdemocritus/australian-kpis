@@ -4,6 +4,57 @@
  */
 
 export interface paths {
+    "/v1/dataflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/dataflows`. */
+        get: operations["listDataflows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/dataflows/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/dataflows/{id}`. */
+        get: operations["getDataflow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/dataflows/{id}/codelists/{dim}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/dataflows/{id}/codelists/{dim}`. */
+        get: operations["getDataflowCodelist"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -13,6 +64,23 @@ export interface paths {
         };
         /** `GET /v1/health`. */
         get: operations["health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/observations`. */
+        get: operations["listObservations"];
         put?: never;
         post?: never;
         delete?: never;
@@ -38,14 +106,242 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/series/{dataflow}/{series_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/series/{dataflow}/{series_key}`. */
+        get: operations["getSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Format: sha256-hex
+         * @description Lowercase hex-encoded SHA-256 digest (64 chars).
+         */
+        ArtifactId: string;
+        /** @description A single code within a codelist (e.g. `VIC` → "Victoria"). */
+        Code: {
+            /**
+             * @description The codelist this code belongs to. Denormalised here so a `Code`
+             *     emitted from the API is self-contained.
+             */
+            codelist_id: components["schemas"]["CodelistId"];
+            description?: string | null;
+            id: components["schemas"]["CodeId"];
+            name: string;
+            parent_id?: null | components["schemas"]["CodeId"];
+        };
+        /** @description Identifier for a code within a codelist (e.g. `VIC`). */
+        CodeId: string;
+        /** @description A reusable vocabulary of codes attached to dimensions. */
+        Codelist: {
+            codes: components["schemas"]["Code"][];
+            description?: string | null;
+            id: components["schemas"]["CodelistId"];
+            name: string;
+        };
+        /** @description Identifier for a codelist (e.g. `CL_STATE_AU`). */
+        CodelistId: string;
+        /** @description A dataflow — a named collection of series sharing dimensions and measures. */
+        Dataflow: {
+            /** @description Required attribution string shown to end-users alongside derived charts. */
+            attribution: string;
+            description?: string | null;
+            /** @description Ordered list of dimension ids that key series within this dataflow. */
+            dimensions: components["schemas"]["DimensionId"][];
+            frequency: components["schemas"]["Frequency"];
+            id: components["schemas"]["DataflowId"];
+            license: components["schemas"]["License"];
+            /** @description Measures published by this dataflow (index, rate, count, ...). */
+            measures: components["schemas"]["MeasureId"][];
+            name: string;
+            source_id: components["schemas"]["SourceId"];
+            /** @description Canonical citation URL. */
+            source_url: string;
+        };
+        /** @description Response envelope for `GET /v1/dataflows/{id}/codelists/{dim}`. */
+        DataflowCodelistResponse: {
+            /** @description Codelist attached to the requested dimension. */
+            codelist: components["schemas"]["Codelist"];
+            /** @description Requested dataflow id. */
+            dataflow_id: components["schemas"]["DataflowId"];
+            /** @description Requested dimension id. */
+            dimension_id: components["schemas"]["DimensionId"];
+        };
+        /** @description Response envelope for `GET /v1/dataflows/{id}`. */
+        DataflowDetailResponse: {
+            /** @description Dataflow metadata. */
+            dataflow: components["schemas"]["Dataflow"];
+            /** @description Ordered dimension metadata for the dataflow. */
+            dimensions: components["schemas"]["Dimension"][];
+        };
+        /** @description Identifier for a dataflow (e.g. `abs.cpi`). */
+        DataflowId: string;
+        /** @description Query parameters for `GET /v1/dataflows`. */
+        DataflowsQuery: {
+            frequency?: null | components["schemas"]["Frequency"];
+            source?: null | components["schemas"]["SourceId"];
+        };
+        /** @description Response envelope for `GET /v1/dataflows`. */
+        DataflowsResponse: {
+            /** @description Matching dataflows, ordered by source then dataflow id. */
+            dataflows: components["schemas"]["Dataflow"][];
+        };
+        /**
+         * @description A single dimension within a dataflow. Binds a dimension id to a codelist
+         *     that enumerates the permitted values.
+         */
+        Dimension: {
+            codelist_id: components["schemas"]["CodelistId"];
+            description?: string | null;
+            id: components["schemas"]["DimensionId"];
+            name: string;
+            /**
+             * Format: int32
+             * @description Position of this dimension in the dataflow's canonical dimension order.
+             *     Adapters must emit dimensions in this order so series-key derivation is
+             *     stable across codebases (see `Spec.md § Data model`).
+             */
+            position: number;
+        };
+        /** @description Identifier for a dimension within a dataflow (e.g. `region`). */
+        DimensionId: string;
+        /**
+         * @description Cadence at which a dataflow publishes new observations. Informational —
+         *     used by the scheduler to pick discovery intervals and by the SLO alerting
+         *     rule `dataflow-no-new-observations`.
+         * @enum {string}
+         */
+        Frequency: "daily" | "weekly" | "monthly" | "quarterly" | "annual" | "irregular";
         /** @description Health endpoint response. */
         HealthResponse: {
             /** @description Current service health. */
             status: string;
+        };
+        /**
+         * @description Canonical license identifier. Ingestion refuses to load a dataflow whose
+         *     `license` field is absent (see `Spec.md § Data licensing and attribution`).
+         */
+        License: "CC-BY-4.0" | "CC-BY-ND-4.0" | "CC-BY-SA-4.0" | "public-domain" | {
+            /** @description Escape hatch for licenses not yet enumerated. Carries the SPDX-style id. */
+            other: string;
+        };
+        /** @description Identifier for a measure (e.g. `unemployment_rate`). */
+        MeasureId: string;
+        /** @description One observation — a single row in the `observations` hypertable. */
+        Observation: {
+            /**
+             * @description Free-form attributes attached to this observation (e.g. SDMX `OBS_STATUS`
+             *     or adapter-specific annotations).
+             */
+            attributes: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            ingested_at: string;
+            /**
+             * Format: int32
+             * @description `0` for the original publication; `N` for the Nth revision.
+             */
+            revision_no: number;
+            series_key: components["schemas"]["SeriesKey"];
+            source_artifact_id: components["schemas"]["ArtifactId"];
+            status: components["schemas"]["ObservationStatus"];
+            /** Format: date-time */
+            time: string;
+            time_precision: components["schemas"]["TimePrecision"];
+            /**
+             * Format: double
+             * @description `None` when `status = Missing`.
+             */
+            value?: number | null;
+        };
+        /**
+         * @description Observation status flags sourced from SDMX. Subset in use across Australian
+         *     publishers; extend as new codes appear in upstream feeds.
+         * @enum {string}
+         */
+        ObservationStatus: "normal" | "estimated" | "forecast" | "imputed" | "missing" | "provisional" | "revised" | "break";
+        /** @description Attribution and licensing metadata that applies to an observations page. */
+        ObservationsMetadata: {
+            /** @description Required source acknowledgement to display with derived charts. */
+            attribution: string;
+            /** @description Requested dataflow identifier. */
+            dataflow: components["schemas"]["DataflowId"];
+            /** @description Data license identifier, e.g. `CC-BY-4.0`. */
+            license: string;
+            /** @description Canonical citation URL for the upstream source. */
+            source_url: string;
+        };
+        /** @description JSON response envelope for `/v1/observations`. */
+        ObservationsResponse: {
+            /** @description Dataflow attribution and license metadata. */
+            metadata: components["schemas"]["ObservationsMetadata"];
+            /** @description Observation rows in ascending `(time, series_key)` order. */
+            observations: components["schemas"]["ObservationsRow"][];
+            /** @description Cursor for continuing the query. */
+            pagination: components["schemas"]["PaginationMetadata"];
+        };
+        /** @description One observation row returned by `/v1/observations`. */
+        ObservationsRow: {
+            /** @description Free-form source attributes for this observation. */
+            attributes: {
+                [key: string]: string;
+            };
+            /** @description Series dimension values keyed by dimension id. */
+            dimensions: {
+                [key: string]: string;
+            };
+            /**
+             * Format: date-time
+             * @description Ingestion timestamp for this revision.
+             */
+            ingested_at: string;
+            /** @description Measure identifier for the series. */
+            measure_id: string;
+            /**
+             * Format: int32
+             * @description Revision number, where zero is the original publication.
+             */
+            revision_no: number;
+            /** @description Deterministic series key. */
+            series_key: components["schemas"]["SeriesKey"];
+            /** @description Content-addressed source artifact identifier. */
+            source_artifact_id: components["schemas"]["ArtifactId"];
+            /** @description Observation status. */
+            status: components["schemas"]["ObservationStatus"];
+            /**
+             * Format: date-time
+             * @description Observation timestamp.
+             */
+            time: string;
+            /** @description Temporal precision of the timestamp. */
+            time_precision: components["schemas"]["TimePrecision"];
+            /** @description Unit for the series values. */
+            unit: string;
+            /**
+             * Format: double
+             * @description Numeric value; null when status is `missing`.
+             */
+            value?: number | null;
+        };
+        /** @description Cursor metadata for the current observations page. */
+        PaginationMetadata: {
+            /** @description Opaque cursor for the next page, or null when the page is complete. */
+            next_cursor?: string | null;
         };
         /** @description RFC 7807 problem details body. */
         ProblemDetails: {
@@ -63,6 +359,71 @@ export interface components {
             /** @description Problem type URI. */
             type: string;
         };
+        /**
+         * @description One time series within a dataflow. `dimensions` is the sorted bag of
+         *     `(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
+         */
+        Series: {
+            /**
+             * @description Whether the upstream source still publishes this series. Inactive
+             *     series are retained for historical queries but excluded from the
+             *     default `/v1/series` listing.
+             */
+            active: boolean;
+            dataflow_id: components["schemas"]["DataflowId"];
+            /**
+             * @description Dimension values keyed by typed dimension ids and code ids. Stored
+             *     sorted (via `BTreeMap`) so iteration order is stable across
+             *     serialisation + re-hashing.
+             */
+            dimensions: {
+                [key: string]: components["schemas"]["CodeId"];
+            };
+            /** Format: date-time */
+            first_observed?: string | null;
+            /** Format: date-time */
+            last_observed?: string | null;
+            measure_id: components["schemas"]["MeasureId"];
+            series_key: components["schemas"]["SeriesKey"];
+            unit: string;
+        };
+        /**
+         * Format: sha256-hex
+         * @description Lowercase hex-encoded SHA-256 digest (64 chars).
+         */
+        SeriesKey: string;
+        /** @description Response envelope for `GET /v1/series/{dataflow}/{series_key}`. */
+        SeriesLookupResponse: {
+            latest_observation?: null | components["schemas"]["Observation"];
+            revision?: null | components["schemas"]["SeriesRevisionMetadata"];
+            /** @description Series metadata. */
+            series: components["schemas"]["Series"];
+        };
+        /** @description Revision details for the latest observation returned with a series lookup. */
+        SeriesRevisionMetadata: {
+            /**
+             * Format: date-time
+             * @description When this revision was ingested.
+             */
+            ingested_at: string;
+            /** @description Whether this observation supersedes the original publication. */
+            is_revision: boolean;
+            /**
+             * Format: int32
+             * @description Latest revision number for the observation timestamp.
+             */
+            revision_no: number;
+            /** @description Source artifact that produced this revision. */
+            source_artifact_id: components["schemas"]["ArtifactId"];
+        };
+        /** @description Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`). */
+        SourceId: string;
+        /**
+         * @description Temporal granularity of an observation's timestamp. Matches the SDMX
+         *     `@FREQ` facet on a coarse scale.
+         * @enum {string}
+         */
+        TimePrecision: "day" | "week" | "month" | "quarter" | "year";
     };
     responses: never;
     parameters: never;
@@ -72,6 +433,139 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listDataflows: {
+        parameters: {
+            query?: {
+                /** @description Optional source id filter, e.g. abs. */
+                source?: string;
+                /** @description Optional publication frequency filter. */
+                frequency?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dataflow catalog page. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataflowsResponse"];
+                };
+            };
+            /** @description Invalid query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getDataflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Dataflow id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dataflow metadata and dimensions. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataflowDetailResponse"];
+                };
+            };
+            /** @description Dataflow not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getDataflowCodelist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Dataflow id. */
+                id: string;
+                /** @description Dimension id. */
+                dim: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Codelist for the requested dimension. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataflowCodelistResponse"];
+                };
+            };
+            /** @description Dataflow or dimension not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
@@ -92,6 +586,95 @@ export interface operations {
             };
             /** @description Request timed out. */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    listObservations: {
+        parameters: {
+            query: {
+                /** @description Required dataflow id, e.g. abs.cpi. */
+                dataflow: string;
+                /** @description Dimension filters as repeated key=value values. The handler also accepts dimensions[region]=AUS. */
+                "dimensions[]"?: string[];
+                /** @description Inclusive lower time bound as YYYY-MM-DD or RFC3339. */
+                since?: string;
+                /** @description Inclusive upper time bound as YYYY-MM-DD or RFC3339. */
+                until?: string;
+                /** @description Optional dataflow frequency filter. */
+                frequency?: string;
+                /** @description Response format: json or csv. */
+                format?: string;
+                /** @description Opaque cursor from the previous page. */
+                cursor?: string;
+                /** @description Page size, maximum 10000. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Observation page. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Weak entity tag for this page. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationsResponse"];
+                    "text/csv": string;
+                };
+            };
+            /** @description The client's cached page is still fresh. */
+            304: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Weak entity tag for this page. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query string. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Dataflow not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Request timed out. */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -129,6 +712,58 @@ export interface operations {
                 };
             };
             /** @description OpenAPI generation failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Dataflow id. */
+                dataflow: string;
+                /** @description 64-character series key hex digest. */
+                series_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Series metadata and latest observation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesLookupResponse"];
+                };
+            };
+            /** @description Invalid path parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Series not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal error. */
             500: {
                 headers: {
                     [name: string]: unknown;

@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.build.json --pretty false",
     "typecheck": "tsc -b tsconfig.json --pretty false",
-    "test": "tsc -b tsconfig.json --pretty false"
+    "test": "tsc -b tsconfig.json --pretty false && node dist/client.runtime.test.js"
   },
   "dependencies": {
     "@au-kpis/sdk-generated": "workspace:*"
