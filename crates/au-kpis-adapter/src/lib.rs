@@ -281,6 +281,8 @@ pub struct DiscoveryCtx {
     pub known_revisions: BTreeMap<String, UpstreamRevision>,
     /// W3C trace-parent tying discovery output to downstream fetch, parse, and load work.
     trace_parent: Option<String>,
+    /// Optional dataflow scope when discovery should emit only one dataflow's jobs.
+    requested_dataflow_id: Option<DataflowId>,
 }
 
 impl DiscoveryCtx {
@@ -292,6 +294,7 @@ impl DiscoveryCtx {
             started_at,
             known_revisions: BTreeMap::new(),
             trace_parent: None,
+            requested_dataflow_id: None,
         }
     }
 
@@ -313,6 +316,13 @@ impl DiscoveryCtx {
         self
     }
 
+    /// Return a context scoped to one requested dataflow.
+    #[must_use]
+    pub fn with_requested_dataflow_id(mut self, dataflow_id: DataflowId) -> Self {
+        self.requested_dataflow_id = Some(dataflow_id);
+        self
+    }
+
     /// Borrow the stored upstream revisions for this discovery run.
     #[must_use]
     pub const fn known_revisions(&self) -> &BTreeMap<String, UpstreamRevision> {
@@ -323,6 +333,12 @@ impl DiscoveryCtx {
     #[must_use]
     pub fn trace_parent(&self) -> Option<&str> {
         self.trace_parent.as_deref()
+    }
+
+    /// Optional dataflow scope for this discovery run.
+    #[must_use]
+    pub fn requested_dataflow_id(&self) -> Option<&DataflowId> {
+        self.requested_dataflow_id.as_ref()
     }
 }
 

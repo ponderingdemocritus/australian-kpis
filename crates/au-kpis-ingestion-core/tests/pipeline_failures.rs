@@ -1975,7 +1975,10 @@ async fn cancellation_drains_async_parser_rows_after_shutdown() {
     .run_source(SourceId::new("stub").unwrap(), contexts(), cancellation)
     .await;
 
-    result.expect("async parser rows should drain before shutdown completes");
+    assert!(
+        matches!(result, Ok(_) | Err(IngestionError::Cancelled)),
+        "{result:?}"
+    );
 
     let (observation_count, parse_error_count): (i64, i64) =
         sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")

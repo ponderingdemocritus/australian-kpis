@@ -38,7 +38,7 @@ use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 /// Prefix applied to every environment variable consumed by [`load`].
@@ -89,6 +89,23 @@ pub struct AppConfig {
     /// Redis cache configuration — consumed by `au-kpis-cache`.
     pub cache: CacheConfig,
     /// Telemetry configuration — consumed by `au-kpis-telemetry`.
+    pub telemetry: TelemetryConfig,
+}
+
+/// Config consumed by the ingestion worker binary.
+///
+/// The ingestion worker shares HTTP, database, and telemetry config with the
+/// rest of the monorepo, but it does not currently require Redis/cache wiring.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IngestionConfig {
+    /// HTTP server configuration for the metrics endpoint.
+    pub http: HttpConfig,
+    /// Database connection configuration.
+    pub database: DatabaseConfig,
+    /// Optional cache configuration. Present when a future ingestion feature
+    /// needs it, absent for today's one-shot and queue-worker modes.
+    pub cache: Option<CacheConfig>,
+    /// Telemetry configuration.
     pub telemetry: TelemetryConfig,
 }
 
@@ -181,15 +198,30 @@ struct Defaults {
 ///   else; nested fields use [`ENV_NESTED_SEPARATOR`]
 ///   (`AU_KPIS_HTTP__BIND=0.0.0.0:9000`).
 pub fn load(toml_path: Option<&Path>) -> Result<AppConfig, ConfigError> {
+    load_from_figment(toml_path)
+}
+
+/// Load [`IngestionConfig`] using the standard **defaults → TOML → env**
+/// precedence.
+pub fn load_ingestion(toml_path: Option<&Path>) -> Result<IngestionConfig, ConfigError> {
+    load_from_figment(toml_path)
+}
+
+fn load_from_figment<T>(toml_path: Option<&Path>) -> Result<T, ConfigError>
+where
+    T: DeserializeOwned,
+{
+    Ok(config_figment(toml_path).extract()?)
+}
+
+fn config_figment(toml_path: Option<&Path>) -> Figment {
     let mut fig = Figment::from(Serialized::defaults(Defaults::default()));
 
     if let Some(path) = toml_path {
         fig = fig.merge(Toml::file_exact(path));
     }
 
-    fig = fig.merge(Env::prefixed(ENV_PREFIX).split(ENV_NESTED_SEPARATOR));
-
-    Ok(fig.extract()?)
+    fig.merge(Env::prefixed(ENV_PREFIX).split(ENV_NESTED_SEPARATOR))
 }
 
 #[cfg(test)]
@@ -246,6 +278,18 @@ mod tests {
             assert_eq!(cfg.telemetry.service_name, "au-kpis");
             assert_eq!(cfg.telemetry.log_format, LogFormat::Json);
             assert!(cfg.telemetry.otlp_endpoint.is_none());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn ingestion_env_allows_missing_cache_url() {
+        Jail::expect_with(|jail| {
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            let cfg = load_ingestion(None).expect("ingestion config without cache url");
+            assert_eq!(cfg.database.url, "postgres://env/db");
+            assert!(cfg.cache.is_none());
+            assert_eq!(cfg.http.bind, "0.0.0.0:3000");
             Ok(())
         });
     }
