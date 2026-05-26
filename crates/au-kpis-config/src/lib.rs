@@ -283,6 +283,29 @@ mod tests {
     }
 
     #[test]
+    fn env_parses_cors_allowed_origins_list() {
+        Jail::expect_with(|jail| {
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+            jail.set_env(
+                "AU_KPIS_HTTP__CORS_ALLOWED_ORIGINS",
+                r#"["http://127.0.0.1:4173","http://localhost:4173"]"#,
+            );
+
+            let cfg = load(None).expect("env supplies cors origins");
+
+            assert_eq!(
+                cfg.http.cors_allowed_origins,
+                vec![
+                    "http://127.0.0.1:4173".to_string(),
+                    "http://localhost:4173".to_string(),
+                ]
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
     fn ingestion_env_allows_missing_cache_url() {
         Jail::expect_with(|jail| {
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");

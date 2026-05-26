@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use au_kpis_config::{LogFormat, TelemetryConfig};
 use au_kpis_telemetry::init;
+use figment::Jail;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -25,13 +26,21 @@ async fn init_flushes_emitted_spans_to_otlp() {
         let _ = tx.send(buffer[..bytes_read].to_vec());
     });
 
-    let telemetry = init(&TelemetryConfig {
-        service_name: "au-kpis-test".into(),
-        log_format: LogFormat::Json,
-        log_level: "info".into(),
-        otlp_endpoint: Some(endpoint),
-    })
-    .expect("telemetry init");
+    let mut telemetry = None;
+    Jail::expect_with(|jail| {
+        jail.set_env("RUST_LOG", "info");
+        telemetry = Some(
+            init(&TelemetryConfig {
+                service_name: "au-kpis-test".into(),
+                log_format: LogFormat::Json,
+                log_level: "info".into(),
+                otlp_endpoint: Some(endpoint),
+            })
+            .expect("telemetry init"),
+        );
+        Ok(())
+    });
+    let telemetry = telemetry.expect("telemetry jail");
 
     let span = tracing::info_span!("integration_span", request_id = "req-123");
     let _entered = span.enter();
