@@ -13,6 +13,7 @@ use crate::{
         PaginationMetadata,
     },
     routes::{__path_health, __path_openapi, HealthResponse},
+    series::{__path_get_series, SeriesLookupResponse, SeriesRevisionMetadata},
 };
 
 /// Root OpenAPI document for the API handlers in this crate.
@@ -29,13 +30,16 @@ use crate::{
         list_dataflows,
         get_dataflow,
         get_dataflow_codelist,
-        list_observations
+        list_observations,
+        get_series
     ),
     components(schemas(
         au_kpis_domain::Code,
         au_kpis_domain::Codelist,
         au_kpis_domain::Dataflow,
         au_kpis_domain::Dimension,
+        au_kpis_domain::Observation,
+        au_kpis_domain::Series,
         DataflowCodelistResponse,
         DataflowDetailResponse,
         DataflowsQuery,
@@ -45,11 +49,14 @@ use crate::{
         ObservationsResponse,
         ObservationsRow,
         PaginationMetadata,
-        ProblemDetails
+        ProblemDetails,
+        SeriesLookupResponse,
+        SeriesRevisionMetadata
     )),
     tags(
         (name = "dataflows", description = "Dataflow catalog and codelists"),
-        (name = "observations", description = "Time-series observations")
+        (name = "observations", description = "Time-series observations"),
+        (name = "series", description = "Series metadata lookups")
     )
 )]
 pub struct ApiDoc;
