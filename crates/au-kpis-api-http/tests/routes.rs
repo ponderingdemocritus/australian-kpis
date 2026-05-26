@@ -151,6 +151,10 @@ async fn openapi_route_serves_generated_spec() {
         "openapi"
     );
     assert_eq!(
+        parsed["paths"]["/v1/observations"]["get"]["operationId"],
+        "listObservations"
+    );
+    assert_eq!(
         parsed["paths"]["/v1/health"]["get"]["responses"]["408"]["content"]["application/problem+json"]
             ["schema"]["$ref"],
         "#/components/schemas/ProblemDetails"
@@ -170,6 +174,37 @@ async fn openapi_route_serves_generated_spec() {
     assert!(
         output.is_ok(),
         "expected live /v1/openapi.json payload to validate, got {output:?}"
+    );
+}
+
+#[tokio::test]
+async fn observations_route_validates_required_dataflow_before_db_access() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/v1/observations?limit=10")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert!(
+        parsed
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("dataflow"))
     );
 }
 

@@ -1,0 +1,371 @@
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
+
+use au_kpis_api_http::{AppState, router};
+use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
+use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+use au_kpis_telemetry::Telemetry;
+use axum::{
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+};
+use chrono::{TimeZone, Utc};
+use serde_json::json;
+use sqlx::PgPool;
+use tokio_util::sync::CancellationToken;
+use tower::ServiceExt;
+
+#[derive(Debug, Default)]
+struct NoopCacheBackend;
+
+#[async_trait::async_trait]
+impl CacheBackend for NoopCacheBackend {
+    async fn get(&self, _key: &str) -> Result<Option<String>, CacheError> {
+        Ok(None)
+    }
+
+    async fn set(&self, _key: &str, _value: String, _ttl: Duration) -> Result<(), CacheError> {
+        Ok(())
+    }
+
+    async fn delete(&self, _key: &str) -> Result<bool, CacheError> {
+        Ok(false)
+    }
+
+    async fn take_token_bucket(
+        &self,
+        _key: &str,
+        _config: TokenBucketConfig,
+        _requested: u32,
+        _now_ms: u64,
+    ) -> Result<RateLimitDecision, CacheError> {
+        Ok(RateLimitDecision {
+            allowed: true,
+            remaining: 0,
+            retry_after: Duration::ZERO,
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_observations").await;
+    seed_observations(db.pool()).await;
+    let app = router(test_state(db.pool().clone())).expect("router");
+
+    let first = app
+        .clone()
+        .oneshot(request(
+            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01&until=2024-12-31&limit=1",
+        ))
+        .await
+        .expect("json response");
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=60, stale-while-revalidate=300"
+    );
+    let etag = first.headers().get(header::ETAG).unwrap().clone();
+    let body = to_bytes(first.into_body(), usize::MAX)
+        .await
+        .expect("json body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    assert_eq!(parsed["metadata"]["license"], "CC-BY-4.0");
+    assert_eq!(
+        parsed["metadata"]["attribution"],
+        "Source: Australian Bureau of Statistics"
+    );
+    assert_eq!(parsed["observations"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["observations"][0]["value"], 135.0);
+    let cursor = parsed["pagination"]["next_cursor"]
+        .as_str()
+        .expect("next cursor")
+        .to_string();
+
+    let second = app
+        .clone()
+        .oneshot(request(&format!(
+            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&cursor={cursor}&limit=10"
+        )))
+        .await
+        .expect("second page response");
+    let body = to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("second body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    assert_eq!(parsed["observations"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["observations"][0]["value"], 136.2);
+    assert!(parsed["pagination"]["next_cursor"].is_null());
+
+    let cached = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01&until=2024-12-31&limit=1")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("cached response");
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+
+    let csv = app
+        .oneshot(request(
+            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&format=csv&limit=1",
+        ))
+        .await
+        .expect("csv response");
+    assert_eq!(csv.status(), StatusCode::OK);
+    assert_eq!(
+        csv.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/csv; charset=utf-8"
+    );
+    let body = String::from_utf8(
+        to_bytes(csv.into_body(), usize::MAX)
+            .await
+            .expect("csv body")
+            .to_vec(),
+    )
+    .expect("csv utf-8");
+    assert!(body.starts_with("# dataflow=abs.cpi,license=CC-BY-4.0"));
+    assert!(body.contains("series_key,time,time_precision,value,status,revision_no"));
+    assert!(body.contains(",135,normal,1,"));
+    assert!(body.contains("# next_cursor="));
+}
+
+fn request(uri: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .body(Body::empty())
+        .expect("request")
+}
+
+fn test_state(db: PgPool) -> AppState {
+    AppState::new(
+        db,
+        Arc::new(CacheClient::from_backend(NoopCacheBackend)),
+        Arc::new(AppConfig {
+            http: HttpConfig {
+                bind: "127.0.0.1:0".into(),
+                cors_allowed_origins: Vec::new(),
+                shutdown_grace_period_secs: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgres://postgres:postgres@localhost/au_kpis".into(),
+            },
+            cache: au_kpis_config::CacheConfig {
+                url: "redis://127.0.0.1:6379".into(),
+            },
+            telemetry: TelemetryConfig {
+                service_name: "au-kpis-test".into(),
+                log_format: LogFormat::Json,
+                log_level: "info".into(),
+                otlp_endpoint: None,
+            },
+        }),
+        Arc::new(Telemetry::disabled()),
+        CancellationToken::new(),
+    )
+}
+
+#[derive(Debug)]
+struct TestDb {
+    pool: PgPool,
+    _timescale: au_kpis_testing::timescale::TimescaleHarness,
+}
+
+impl TestDb {
+    async fn start(database: &str) -> Self {
+        let timescale = au_kpis_testing::timescale::start_timescale(database)
+            .await
+            .expect("start timescale test container");
+        let cfg = DatabaseConfig {
+            url: timescale.url().to_string(),
+        };
+
+        let mut last_err = None;
+        for _ in 0..10 {
+            match au_kpis_db::connect(&cfg).await {
+                Ok(pool) => {
+                    au_kpis_db::migrate(&pool).await.expect("apply migrations");
+                    return Self {
+                        pool,
+                        _timescale: timescale,
+                    };
+                }
+                Err(err) => {
+                    last_err = Some(err);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+        panic!("timescaledb did not accept connections: {last_err:?}");
+    }
+
+    fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+}
+
+async fn seed_observations(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO sources (id, name, homepage, description)
+         VALUES ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL)",
+    )
+    .execute(pool)
+    .await
+    .expect("insert source");
+
+    sqlx::query(
+        "INSERT INTO measures (id, name, description, unit, scale)
+         VALUES ('index', 'CPI index', NULL, 'index', NULL)",
+    )
+    .execute(pool)
+    .await
+    .expect("insert measure");
+
+    sqlx::query(
+        "INSERT INTO dataflows (
+             id, source_id, name, description, dimensions, measures,
+             frequency, license, attribution, source_url
+         )
+         VALUES (
+             'abs.cpi', 'abs', 'Consumer Price Index', NULL,
+             ARRAY['region'], ARRAY['index'], 'quarterly', 'CC-BY-4.0',
+             'Source: Australian Bureau of Statistics',
+             'https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia'
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("insert dataflow");
+
+    let artifact = ArtifactId::of_content(b"api observations fixture");
+    sqlx::query(
+        "INSERT INTO artifacts (
+             id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         )
+         VALUES ($1, 'abs', 'https://example.test/cpi.json', 'application/json',
+                 '{}'::jsonb, 128, $2, $3)",
+    )
+    .bind(artifact.digest().as_bytes().as_slice())
+    .bind(format!("artifacts/{artifact}"))
+    .bind(Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap())
+    .execute(pool)
+    .await
+    .expect("insert artifact");
+
+    let aus_key = insert_series(pool, "AUS").await;
+    let nsw_key = insert_series(pool, "NSW").await;
+    insert_observation(
+        pool,
+        ObservationSeed::new(aus_key, artifact, (2024, 3, 1), 0, 134.2),
+    )
+    .await;
+    insert_observation(
+        pool,
+        ObservationSeed::new(aus_key, artifact, (2024, 3, 1), 1, 135.0),
+    )
+    .await;
+    insert_observation(
+        pool,
+        ObservationSeed::new(aus_key, artifact, (2024, 6, 1), 0, 136.2),
+    )
+    .await;
+    insert_observation(
+        pool,
+        ObservationSeed::new(nsw_key, artifact, (2024, 3, 1), 0, 137.1),
+    )
+    .await;
+}
+
+async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
+    let dataflow = DataflowId::new("abs.cpi").unwrap();
+    let dimensions: BTreeMap<String, String> = [("region".to_string(), region.to_string())]
+        .into_iter()
+        .collect();
+    let key = SeriesKey::derive(
+        &dataflow,
+        dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    sqlx::query(
+        "INSERT INTO series (
+             series_key, dataflow_id, measure_id, dimensions, unit,
+             first_observed, last_observed, active
+         )
+         VALUES ($1, 'abs.cpi', 'index', $2, 'index', $3, $4, true)",
+    )
+    .bind(key.digest().as_bytes().as_slice())
+    .bind(json!(dimensions))
+    .bind(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap())
+    .bind(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap())
+    .execute(pool)
+    .await
+    .expect("insert series");
+    key
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ObservationSeed {
+    series_key: SeriesKey,
+    artifact: ArtifactId,
+    date: (i32, u32, u32),
+    revision_no: i32,
+    value: f64,
+}
+
+impl ObservationSeed {
+    fn new(
+        series_key: SeriesKey,
+        artifact: ArtifactId,
+        date: (i32, u32, u32),
+        revision_no: i32,
+        value: f64,
+    ) -> Self {
+        Self {
+            series_key,
+            artifact,
+            date,
+            revision_no,
+            value,
+        }
+    }
+}
+
+async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
+    sqlx::query(
+        "INSERT INTO observations (
+             series_key, time, revision_no, time_precision, value, status,
+             attributes, ingested_at, source_artifact_id
+         )
+         VALUES ($1, $2, $3, 'quarter', $4, 'normal',
+                 '{}'::jsonb, $5, $6)",
+    )
+    .bind(seed.series_key.digest().as_bytes().as_slice())
+    .bind(
+        Utc.with_ymd_and_hms(seed.date.0, seed.date.1, seed.date.2, 0, 0, 0)
+            .unwrap(),
+    )
+    .bind(seed.revision_no)
+    .bind(seed.value)
+    .bind(Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap())
+    .bind(seed.artifact.digest().as_bytes().as_slice())
+    .execute(pool)
+    .await
+    .expect("insert observation");
+}
+
+fn docker_available() -> bool {
+    std::env::var_os("DOCKER_HOST").is_some()
+        || std::path::Path::new("/var/run/docker.sock").exists()
+}

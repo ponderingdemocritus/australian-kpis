@@ -4,6 +4,10 @@ use utoipa::OpenApi;
 
 use crate::{
     error::ProblemDetails,
+    observations::{
+        __path_list_observations, ObservationsMetadata, ObservationsResponse, ObservationsRow,
+        PaginationMetadata,
+    },
     routes::{__path_health, __path_openapi, HealthResponse},
 };
 
@@ -15,7 +19,15 @@ use crate::{
         version = "0.1.0",
         description = "Unified API for Australian public economic data."
     ),
-    paths(health, openapi),
-    components(schemas(HealthResponse, ProblemDetails))
+    paths(health, openapi, list_observations),
+    components(schemas(
+        HealthResponse,
+        ObservationsMetadata,
+        ObservationsResponse,
+        ObservationsRow,
+        PaginationMetadata,
+        ProblemDetails
+    )),
+    tags((name = "observations", description = "Time-series observations"))
 )]
 pub struct ApiDoc;

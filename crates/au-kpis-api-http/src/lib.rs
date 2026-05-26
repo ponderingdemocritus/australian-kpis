@@ -24,11 +24,16 @@ use tower_http::{
 
 pub mod docs;
 pub mod error;
+pub mod observations;
 pub mod routes;
 pub mod state;
 
 pub use docs::ApiDoc;
 pub use error::{ApiError, ProblemDetails};
+pub use observations::{
+    ObservationsMetadata, ObservationsResponse, ObservationsRow, PaginationMetadata,
+    list_observations,
+};
 pub use routes::{HealthResponse, health, openapi};
 pub use state::AppState;
 
@@ -64,6 +69,7 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
     router_with(
         Router::<AppState>::new()
             .route("/v1/health", get(health))
+            .route("/v1/observations", get(observations::list_observations))
             .route("/v1/openapi.json", get(openapi)),
         state,
     )
