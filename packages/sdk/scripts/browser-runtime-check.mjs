@@ -135,7 +135,7 @@ try {
     await withTimeout(Promise.race([browserResult, browserExit]), 30_000, () => browserStderr)
   } finally {
     await stopBrowser(browser)
-    rmSync(userDataDir, { force: true, recursive: true })
+    cleanupDirectory(userDataDir)
   }
 } finally {
   server.close()
@@ -239,5 +239,18 @@ async function stopBrowser(browser) {
 
   if (browser.exitCode === null && browser.signalCode === null) {
     browser.kill('SIGKILL')
+  }
+}
+
+function cleanupDirectory(path) {
+  try {
+    rmSync(path, {
+      force: true,
+      maxRetries: 5,
+      recursive: true,
+      retryDelay: 100,
+    })
+  } catch (error) {
+    console.warn(`warning: failed to remove browser profile ${path}: ${error}`)
   }
 }
