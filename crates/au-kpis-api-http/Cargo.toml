@@ -36,9 +36,14 @@ async-trait = "0.1"
 au-kpis-db = { workspace = true }
 au-kpis-error = { workspace = true }
 au-kpis-testing = { workspace = true }
+criterion.workspace = true
 jsonschema = "0.29"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
+
+[[bench]]
+name = "observations_handler"
+harness = false
 
 [lints]
 workspace = true

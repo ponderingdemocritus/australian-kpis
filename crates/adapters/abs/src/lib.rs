@@ -17,13 +17,13 @@ use au_kpis_adapter::{
     capture_response_headers, retry_after_delta,
 };
 use au_kpis_domain::{
-    Artifact, CodeId, DataflowId, DimensionId, MeasureId, Observation, ObservationStatus,
-    SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
+    Artifact, ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, Observation,
+    ObservationStatus, SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
 };
 use au_kpis_error::CoreError;
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use bytes::Bytes;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use futures::{StreamExt, stream};
 use serde::{
     Deserialize,
@@ -294,7 +294,7 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     let blob_store = ctx.blob_store.clone();
     let started_at = ctx.started_at;
     let cancellation = ctx.cancellation().clone();
-    let (row_tx, row_rx) = tokio::sync::mpsc::channel(64);
+    let (row_tx, row_rx) = tokio::sync::mpsc::channel(4_096);
 
     tokio::spawn(async move {
         let key = StorageKey::from_persisted(artifact.storage_key.clone());
@@ -534,6 +534,49 @@ fn parse_sdmx_json<R: Read>(
     .map_err(map_sdmx_json_error)?;
     deserializer.end().map_err(map_sdmx_json_error)?;
     Ok(outcome)
+}
+
+/// Parse an SDMX-JSON reader through the production parser core and return the
+/// number of emitted observations.
+///
+/// This is intentionally hidden from the public adapter API; it exists so the
+/// Criterion parser benchmark can measure SDMX decoding without including
+/// object-store reads, artifact identity verification, or async receiver
+/// scheduling in the micro-benchmark budget.
+#[doc(hidden)]
+pub fn parse_sdmx_json_observation_count_for_benchmark<R: Read>(
+    reader: R,
+) -> Result<usize, AdapterError> {
+    let artifact_id = ArtifactId::of_content(b"abs sdmx parser benchmark");
+    let artifact = ArtifactRef {
+        id: artifact_id,
+        source_id: SourceId::new("abs").expect("static source id is valid"),
+        source_url:
+            "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"
+                .into(),
+        content_type: DATA_JSON_ACCEPT.into(),
+        response_headers: BTreeMap::new(),
+        storage_key: StorageKey::canonical_for(&artifact_id).to_string(),
+        size_bytes: 0,
+        fetched_at: Utc
+            .with_ymd_and_hms(2024, 4, 24, 0, 0, 0)
+            .single()
+            .expect("valid benchmark timestamp"),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel(1_000_000);
+    match parse_sdmx_json(
+        reader,
+        artifact,
+        Utc.with_ymd_and_hms(2024, 4, 30, 0, 0, 0)
+            .single()
+            .expect("valid benchmark timestamp"),
+        tx,
+    )? {
+        ParseOutcome::Complete => Ok(rx.len()),
+        ParseOutcome::DataSetsBeforeStructure(_) => Err(AdapterError::FormatDrift(
+            "benchmark SDMX fixture must place structure before dataSets".into(),
+        )),
+    }
 }
 
 fn map_sdmx_json_error(err: serde_json::Error) -> AdapterError {
@@ -1182,9 +1225,18 @@ impl<'de> Visitor<'de> for ObservationsVisitor {
                     self.ingested_at,
                 )
                 .map_err(de::Error::custom)?;
-            self.tx
-                .blocking_send(Ok((self.descriptor.clone(), observation)))
-                .map_err(|_| de::Error::custom("ABS parse receiver was dropped"))?;
+            let row = Ok((self.descriptor.clone(), observation));
+            match self.tx.try_send(row) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(row)) => {
+                    self.tx
+                        .blocking_send(row)
+                        .map_err(|_| de::Error::custom("ABS parse receiver was dropped"))?;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(de::Error::custom("ABS parse receiver was dropped"));
+                }
+            }
         }
         Ok(())
     }
@@ -1343,11 +1395,11 @@ impl ParsedStructure {
                 time_dimension.id.as_str()
             ));
         }
-        let period = time_dimension
-            .values
-            .get(indexes[0])
+        let (time, time_precision) = time_dimension
+            .time_values
+            .as_ref()
+            .and_then(|periods| periods.get(indexes[0]).copied())
             .ok_or_else(|| format!("observation key `{key}` references missing time period"))?;
-        let (time, time_precision) = parse_time_period(period.as_str())?;
         let attributes = self.attributes(&tuple)?;
         let status = observation_status(tuple.value, attributes.get("OBS_STATUS"))?;
         let value = if status == ObservationStatus::Missing {
@@ -1412,6 +1464,7 @@ impl ParsedStructure {
 struct ParsedDimension {
     id: DimensionId,
     values: Vec<CodeId>,
+    time_values: Option<Vec<(DateTime<Utc>, TimePrecision)>>,
 }
 
 impl ParsedDimension {
@@ -1432,6 +1485,7 @@ impl ParsedDimension {
                     CodeId::new(code_id).map_err(|err| err.to_string())
                 })
                 .collect::<Result<_, _>>()?,
+            time_values: None,
         })
     }
 }
@@ -1440,13 +1494,26 @@ impl TryFrom<SdmxDimension> for ParsedDimension {
     type Error = String;
 
     fn try_from(value: SdmxDimension) -> Result<Self, Self::Error> {
+        let id = DimensionId::new(value.id).map_err(|err| err.to_string())?;
+        let values = value
+            .values
+            .into_iter()
+            .map(|code| CodeId::new(code.id).map_err(|err| err.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let time_values = if id.as_str().eq_ignore_ascii_case("TIME_PERIOD") {
+            Some(
+                values
+                    .iter()
+                    .map(|code| parse_time_period(code.as_str()))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            None
+        };
         Ok(Self {
-            id: DimensionId::new(value.id).map_err(|err| err.to_string())?,
-            values: value
-                .values
-                .into_iter()
-                .map(|code| CodeId::new(code.id).map_err(|err| err.to_string()))
-                .collect::<Result<_, _>>()?,
+            id,
+            values,
+            time_values,
         })
     }
 }

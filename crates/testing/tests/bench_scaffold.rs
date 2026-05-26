@@ -29,13 +29,90 @@ fn benchmark_scaffold_matches_issue_contract() {
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
     assert!(
         pr_workflow.contains(
-            "cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline pr"
+            "cargo bench -p au-kpis-domain --bench observation_json --locked -- --save-baseline"
         ),
-        "PR workflow should run the criterion bench and save the PR baseline"
+        "PR workflow should run the observation JSON criterion bench"
+    );
+    assert!(
+        pr_workflow.contains(
+            "cargo bench -p au-kpis-adapter-abs --bench sdmx_parse --locked -- --save-baseline"
+        ),
+        "PR workflow should run the ABS SDMX parse criterion bench"
+    );
+    assert!(
+        pr_workflow.contains(
+            "cargo bench -p au-kpis-loader --bench copy_upsert --locked -- --save-baseline"
+        ),
+        "PR workflow should run the loader COPY criterion bench"
+    );
+    assert!(
+        pr_workflow.contains(
+            "cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline"
+        ),
+        "PR workflow should run the API observations handler criterion bench"
     );
     assert!(
         pr_workflow.contains("critcmp main pr --threshold 5"),
-        "PR workflow should run advisory critcmp comparison"
+        "PR workflow should run blocking critcmp comparison"
+    );
+}
+
+#[test]
+fn issue_37_benchmark_contract_is_wired() {
+    let root = repo_root();
+
+    for bench in [
+        "crates/adapters/abs/benches/sdmx_parse.rs",
+        "crates/au-kpis-loader/benches/copy_upsert.rs",
+        "crates/au-kpis-api-http/benches/observations_handler.rs",
+    ] {
+        assert!(
+            root.join(bench).is_file(),
+            "issue #37 should provide benchmark target `{bench}`"
+        );
+    }
+
+    let baseline = fs::read_to_string(root.join("benches/baselines/issue-37.md"))
+        .expect("issue #37 benchmark baseline summary should be committed");
+    for expected in [
+        "SDMX parse bench",
+        ">500k observations/s",
+        "Loader COPY bench",
+        "10k rows <500 ms",
+        "API handler overhead",
+        "<5 ms above DB",
+    ] {
+        assert!(
+            baseline.contains(expected),
+            "baseline summary should document `{expected}`"
+        );
+    }
+
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    assert!(
+        pr_workflow.contains("merge_group:"),
+        "benchmark regression gate should run for merge queue batches"
+    );
+    assert!(
+        pr_workflow.contains("name: Bench Regression"),
+        "benchmark job should be blocking, not advisory"
+    );
+    assert!(
+        !pr_workflow.contains("Bench Advisory"),
+        "benchmark job should no longer be named advisory"
+    );
+    assert!(
+        !pr_workflow.contains("continue-on-error: true\n    permissions:\n      contents: read"),
+        "benchmark job should not be configured as continue-on-error"
+    );
+    assert!(
+        pr_workflow.contains("run_benchmarks pr"),
+        "benchmark workflow should save a PR baseline for every committed criterion bench"
+    );
+    assert!(
+        pr_workflow.contains("critcmp main pr --threshold 5"),
+        "benchmark workflow should block on >5% regressions"
     );
 }
 
@@ -80,19 +157,17 @@ fn contract_workflow_builds_server_before_readiness_polling() {
 }
 
 #[test]
-fn bench_workflow_skips_missing_base_benchmark() {
+fn bench_workflow_runs_workspace_baselines_without_first_bench_skip() {
     let root = repo_root();
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
 
     assert!(
-        pr_workflow.contains("if [ -f crates/au-kpis-domain/benches/observation_json.rs ]; then"),
-        "bench workflow should guard the main baseline when the base branch lacks the bench target"
+        pr_workflow.contains("run_benchmarks main"),
+        "bench workflow should capture a main baseline"
     );
     assert!(
-        pr_workflow.contains(
-            "Base branch has no observation_json bench yet; skipping main benchmark baseline."
-        ),
-        "bench workflow should explain why the first baseline capture is skipped"
+        !pr_workflow.contains("skipping advisory critcmp comparison"),
+        "bench workflow should not skip regression comparison now that benchmarks are blocking"
     );
 }

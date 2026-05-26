@@ -7,9 +7,12 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  merge_group:
+    types:
+      - checks_requested
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('merge-{0}', github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -496,9 +499,8 @@ jobs:
           fi
 
   bench:
-    name: Bench Advisory
+    name: Bench Regression
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       contents: read
     steps:
@@ -522,22 +524,77 @@ jobs:
           pr_sha="$(git rev-parse HEAD)"
           git fetch --depth=1 origin "${BASE_REF}"
           git checkout --detach FETCH_HEAD
-          if [ -f crates/au-kpis-domain/benches/observation_json.rs ]; then
-            cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline main
-          else
-            echo "Base branch has no observation_json bench yet; skipping main benchmark baseline."
-          fi
+          run_benchmarks() {
+            local baseline="$1"
+            cargo bench -p au-kpis-domain --bench observation_json --locked -- --save-baseline "${baseline}"
+            if [ -f crates/adapters/abs/benches/sdmx_parse.rs ]; then
+              cargo bench -p au-kpis-adapter-abs --bench sdmx_parse --locked -- --save-baseline "${baseline}"
+            fi
+            if [ -f crates/au-kpis-loader/benches/copy_upsert.rs ]; then
+              cargo bench -p au-kpis-loader --bench copy_upsert --locked -- --save-baseline "${baseline}"
+            fi
+            if [ -f crates/au-kpis-api-http/benches/observations_handler.rs ]; then
+              cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline "${baseline}"
+            fi
+          }
+          run_benchmarks main
           git checkout --detach "${pr_sha}"
 
-      - name: Run advisory benchmark comparison
+      - name: Run benchmark regression comparison
         run: |
           set -euo pipefail
-          cargo bench -p au-kpis-domain --bench observation_json -- --save-baseline pr
-          if find target/criterion -path '*/base/main' -type d | grep -q .; then
-            critcmp main pr --threshold 5
+          run_benchmarks() {
+            local baseline="$1"
+            cargo bench -p au-kpis-domain --bench observation_json --locked -- --save-baseline "${baseline}"
+            cargo bench -p au-kpis-adapter-abs --bench sdmx_parse --locked -- --save-baseline "${baseline}"
+            cargo bench -p au-kpis-loader --bench copy_upsert --locked -- --save-baseline "${baseline}"
+            cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline "${baseline}"
+          }
+          run_benchmarks pr
+          set +e
+          critcmp_output="$(critcmp main pr --threshold 5 --list 2>&1)"
+          critcmp_status=$?
+          set -e
+          if [ "${critcmp_status}" -eq 0 ]; then
+            printf '%s\n' "${critcmp_output}"
+          elif [ "${critcmp_output}" = "no benchmark comparisons to show" ]; then
+            printf '%s\n' "${critcmp_output}"
           else
-            echo "No main benchmark baseline exists yet; skipping advisory critcmp comparison for the first bench scaffold."
+            printf '%s\n' "${critcmp_output}" >&2
+            exit "${critcmp_status}"
           fi
+          critcmp --export main > target/criterion-main.json
+          critcmp --export pr > target/criterion-pr.json
+          python3 <<'PY'
+          import json
+          import sys
+
+          with open("target/criterion-main.json", encoding="utf-8") as handle:
+              main = json.load(handle)["benchmarks"]
+          with open("target/criterion-pr.json", encoding="utf-8") as handle:
+              pr = json.load(handle)["benchmarks"]
+
+          common = sorted(set(main) & set(pr))
+          if not common:
+              print("No common Criterion benchmarks to compare.", file=sys.stderr)
+              sys.exit(1)
+
+          regressions = []
+          for name in common:
+              main_mean = main[name]["criterion_estimates_v1"]["mean"]["point_estimate"]
+              pr_mean = pr[name]["criterion_estimates_v1"]["mean"]["point_estimate"]
+              ratio = pr_mean / main_mean
+              if ratio > 1.05:
+                  regressions.append((name, ratio))
+
+          if regressions:
+              print("Criterion regressions above 5%:", file=sys.stderr)
+              for name, ratio in regressions:
+                  print(f"- {name}: {(ratio - 1) * 100:.2f}% slower", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"No Criterion regressions above 5% across {len(common)} common benchmark(s).")
+          PY
 
   nextest:
     name: Rust Tests (nextest)
