@@ -167,6 +167,10 @@ async fn openapi_route_serves_generated_spec() {
         "getDataflowCodelist"
     );
     assert_eq!(
+        parsed["paths"]["/v1/series/{dataflow}/{series_key}"]["get"]["operationId"],
+        "getSeries"
+    );
+    assert_eq!(
         parsed["paths"]["/v1/health"]["get"]["responses"]["408"]["content"]["application/problem+json"]
             ["schema"]["$ref"],
         "#/components/schemas/ProblemDetails"
@@ -248,6 +252,37 @@ async fn dataflows_route_validates_frequency_before_db_access() {
             .detail
             .as_deref()
             .is_some_and(|detail| detail.contains("frequency"))
+    );
+}
+
+#[tokio::test]
+async fn series_route_validates_series_key_before_db_access() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/v1/series/abs.cpi/not-a-hex-key")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert!(
+        parsed
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("series_key"))
     );
 }
 

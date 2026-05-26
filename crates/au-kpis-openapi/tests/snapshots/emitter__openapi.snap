@@ -347,6 +347,66 @@ expression: emitted_spec()
         "description": "Identifier for a measure (e.g. `unemployment_rate`).",
         "type": "string"
       },
+      "Observation": {
+        "description": "One observation — a single row in the `observations` hypertable.",
+        "properties": {
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Free-form attributes attached to this observation (e.g. SDMX `OBS_STATUS`\nor adapter-specific annotations).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "ingested_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision_no": {
+            "description": "`0` for the original publication; `N` for the Nth revision.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "series_key": {
+            "$ref": "#/components/schemas/SeriesKey"
+          },
+          "source_artifact_id": {
+            "$ref": "#/components/schemas/ArtifactId"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          },
+          "time": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "time_precision": {
+            "$ref": "#/components/schemas/TimePrecision"
+          },
+          "value": {
+            "description": "`None` when `status = Missing`.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "series_key",
+          "time",
+          "time_precision",
+          "status",
+          "revision_no",
+          "attributes",
+          "ingested_at",
+          "source_artifact_id"
+        ],
+        "type": "object"
+      },
       "ObservationStatus": {
         "description": "Observation status flags sourced from SDMX. Subset in use across Australian\npublishers; extend as new codes appear in upstream feeds.",
         "enum": [
@@ -554,12 +614,133 @@ expression: emitted_spec()
         ],
         "type": "object"
       },
+      "Series": {
+        "description": "One time series within a dataflow. `dimensions` is the sorted bag of\n`(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.",
+        "properties": {
+          "active": {
+            "description": "Whether the upstream source still publishes this series. Inactive\nseries are retained for historical queries but excluded from the\ndefault `/v1/series` listing.",
+            "type": "boolean"
+          },
+          "dataflow_id": {
+            "$ref": "#/components/schemas/DataflowId"
+          },
+          "dimensions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CodeId"
+            },
+            "description": "Dimension values keyed by typed dimension ids and code ids. Stored\nsorted (via `BTreeMap`) so iteration order is stable across\nserialisation + re-hashing.",
+            "propertyNames": {
+              "description": "Identifier for a dimension within a dataflow (e.g. `region`).",
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "first_observed": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_observed": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "measure_id": {
+            "$ref": "#/components/schemas/MeasureId"
+          },
+          "series_key": {
+            "$ref": "#/components/schemas/SeriesKey"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "series_key",
+          "dataflow_id",
+          "measure_id",
+          "dimensions",
+          "unit",
+          "active"
+        ],
+        "type": "object"
+      },
       "SeriesKey": {
         "description": "Lowercase hex-encoded SHA-256 digest (64 chars).",
         "format": "sha256-hex",
         "maxLength": 64,
         "minLength": 64,
         "type": "string"
+      },
+      "SeriesLookupResponse": {
+        "description": "Response envelope for `GET /v1/series/{dataflow}/{series_key}`.",
+        "properties": {
+          "latest_observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Observation",
+                "description": "Latest observation by timestamp, using `observations_latest` revision selection."
+              }
+            ]
+          },
+          "revision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SeriesRevisionMetadata",
+                "description": "Revision metadata for `latest_observation`."
+              }
+            ]
+          },
+          "series": {
+            "$ref": "#/components/schemas/Series",
+            "description": "Series metadata."
+          }
+        },
+        "required": [
+          "series"
+        ],
+        "type": "object"
+      },
+      "SeriesRevisionMetadata": {
+        "description": "Revision details for the latest observation returned with a series lookup.",
+        "properties": {
+          "ingested_at": {
+            "description": "When this revision was ingested.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "is_revision": {
+            "description": "Whether this observation supersedes the original publication.",
+            "type": "boolean"
+          },
+          "revision_no": {
+            "description": "Latest revision number for the observation timestamp.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_artifact_id": {
+            "$ref": "#/components/schemas/ArtifactId",
+            "description": "Source artifact that produced this revision."
+          }
+        },
+        "required": [
+          "revision_no",
+          "is_revision",
+          "ingested_at",
+          "source_artifact_id"
+        ],
+        "type": "object"
       },
       "SourceId": {
         "description": "Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`).",
@@ -1030,6 +1211,77 @@ expression: emitted_spec()
         "summary": "`GET /v1/openapi.json`.",
         "tags": []
       }
+    },
+    "/v1/series/{dataflow}/{series_key}": {
+      "get": {
+        "operationId": "getSeries",
+        "parameters": [
+          {
+            "description": "Dataflow id.",
+            "in": "path",
+            "name": "dataflow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "64-character series key hex digest.",
+            "in": "path",
+            "name": "series_key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeriesLookupResponse"
+                }
+              }
+            },
+            "description": "Series metadata and latest observation."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid path parameter."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Series not found."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal error."
+          }
+        },
+        "summary": "`GET /v1/series/{dataflow}/{series_key}`.",
+        "tags": [
+          "series"
+        ]
+      }
     }
   },
   "tags": [
@@ -1040,6 +1292,10 @@ expression: emitted_spec()
     {
       "description": "Time-series observations",
       "name": "observations"
+    },
+    {
+      "description": "Series metadata lookups",
+      "name": "series"
     }
   ]
 }

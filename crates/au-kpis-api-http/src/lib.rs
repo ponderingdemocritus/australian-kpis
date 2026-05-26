@@ -27,6 +27,7 @@ pub mod docs;
 pub mod error;
 pub mod observations;
 pub mod routes;
+pub mod series;
 pub mod state;
 
 pub use dataflows::{
@@ -40,6 +41,7 @@ pub use observations::{
     list_observations,
 };
 pub use routes::{HealthResponse, health, openapi};
+pub use series::{SeriesLookupResponse, SeriesRevisionMetadata, get_series};
 pub use state::AppState;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -81,6 +83,7 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
                 get(dataflows::get_dataflow_codelist),
             )
             .route("/v1/observations", get(observations::list_observations))
+            .route("/v1/series/:dataflow/:series_key", get(series::get_series))
             .route("/v1/openapi.json", get(openapi)),
         state,
     )
