@@ -288,23 +288,38 @@ async fn run_source_once(
 async fn run_worker(runtime: Runtime) -> anyhow::Result<()> {
     let queue = ApalisPgQueue::new(runtime.db.clone());
     let worker_id = WorkerId::new(runtime.worker_id.clone()).context("build queue worker id")?;
+    let shutdown = runtime.shutdown.clone();
+    let metrics = Arc::clone(&runtime.metrics);
 
+    run_worker_loop(shutdown, runtime.poll_interval, metrics, || {
+        process_one_job(&runtime, &queue, worker_id.clone())
+    })
+    .await
+}
+
+async fn run_worker_loop<P, Fut>(
+    shutdown: CancellationToken,
+    poll_interval: Duration,
+    metrics: Arc<WorkerMetrics>,
+    mut process_next: P,
+) -> anyhow::Result<()>
+where
+    P: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<WorkerStep>>,
+{
     loop {
-        runtime
-            .metrics
-            .worker_loops_total
-            .fetch_add(1, Ordering::Relaxed);
-        tokio::select! {
-            () = runtime.shutdown.cancelled() => return Ok(()),
-            result = process_one_job(&runtime, &queue, worker_id.clone()) => {
-                match result? {
-                    WorkerStep::Processed => {}
-                    WorkerStep::Idle => {
-                        tokio::select! {
-                            () = runtime.shutdown.cancelled() => return Ok(()),
-                            () = tokio::time::sleep(runtime.poll_interval) => {}
-                        }
-                    }
+        metrics.worker_loops_total.fetch_add(1, Ordering::Relaxed);
+
+        if shutdown.is_cancelled() {
+            return Ok(());
+        }
+
+        match process_next().await? {
+            WorkerStep::Processed => {}
+            WorkerStep::Idle => {
+                tokio::select! {
+                    () = shutdown.cancelled() => return Ok(()),
+                    () = tokio::time::sleep(poll_interval) => {}
                 }
             }
         }
@@ -833,6 +848,69 @@ mod tests {
         assert!(
             renewals.load(AtomicOrdering::Relaxed) > 0,
             "lease renewer should call renew at least once"
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_loop_drains_in_flight_step_after_shutdown() {
+        let shutdown = CancellationToken::new();
+        let metrics = Arc::new(WorkerMetrics::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let worker = tokio::spawn({
+            let shutdown = shutdown.clone();
+            let metrics = Arc::clone(&metrics);
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            let completed = Arc::clone(&completed);
+            let calls = Arc::clone(&calls);
+            async move {
+                run_worker_loop(shutdown, Duration::from_millis(5), metrics, move || {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    let completed = Arc::clone(&completed);
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, AtomicOrdering::Relaxed);
+                        started.notify_one();
+                        release.notified().await;
+                        completed.fetch_add(1, AtomicOrdering::Relaxed);
+                        Ok(WorkerStep::Processed)
+                    }
+                })
+                .await
+            }
+        });
+
+        started.notified().await;
+        shutdown.cancel();
+        sleep(Duration::from_millis(20)).await;
+
+        assert!(
+            !worker.is_finished(),
+            "worker loop should not drop in-flight work on shutdown"
+        );
+        assert_eq!(
+            completed.load(AtomicOrdering::Relaxed),
+            0,
+            "test work should still be waiting for its drain handoff"
+        );
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("worker loop should exit after in-flight work drains")
+            .expect("worker task should not panic")
+            .expect("worker loop should succeed");
+
+        assert_eq!(completed.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            1,
+            "worker loop should not admit a second job after shutdown"
         );
     }
 
