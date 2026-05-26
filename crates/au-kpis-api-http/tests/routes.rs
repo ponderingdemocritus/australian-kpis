@@ -155,6 +155,18 @@ async fn openapi_route_serves_generated_spec() {
         "listObservations"
     );
     assert_eq!(
+        parsed["paths"]["/v1/dataflows"]["get"]["operationId"],
+        "listDataflows"
+    );
+    assert_eq!(
+        parsed["paths"]["/v1/dataflows/{id}"]["get"]["operationId"],
+        "getDataflow"
+    );
+    assert_eq!(
+        parsed["paths"]["/v1/dataflows/{id}/codelists/{dim}"]["get"]["operationId"],
+        "getDataflowCodelist"
+    );
+    assert_eq!(
         parsed["paths"]["/v1/health"]["get"]["responses"]["408"]["content"]["application/problem+json"]
             ["schema"]["$ref"],
         "#/components/schemas/ProblemDetails"
@@ -205,6 +217,37 @@ async fn observations_route_validates_required_dataflow_before_db_access() {
             .detail
             .as_deref()
             .is_some_and(|detail| detail.contains("dataflow"))
+    );
+}
+
+#[tokio::test]
+async fn dataflows_route_validates_frequency_before_db_access() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/v1/dataflows?frequency=hourly")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert!(
+        parsed
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("frequency"))
     );
 }
 
