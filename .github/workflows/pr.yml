@@ -53,6 +53,174 @@ jobs:
       - name: Test TypeScript packages
         run: pnpm turbo run test --cache-dir=.turbo
 
+  sdk-runtime:
+    name: SDK Runtime (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime:
+          - node
+          - bun
+          - deno
+          - browser
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Set up Bun
+        if: matrix.runtime == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Deno
+        if: matrix.runtime == 'deno'
+        uses: denoland/setup-deno@v2
+
+      - name: Set up Chrome
+        id: setup-chrome
+        if: matrix.runtime == 'browser'
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Compile SDK test artifacts
+        run: pnpm --filter @au-kpis/sdk exec tsc -b tsconfig.json --pretty false
+
+      - name: Run Node SDK runtime test
+        if: matrix.runtime == 'node'
+        run: node packages/sdk/dist/client.runtime.test.js
+
+      - name: Run Bun SDK runtime test
+        if: matrix.runtime == 'bun'
+        run: bun packages/sdk/dist/client.runtime.test.js
+
+      - name: Run Deno SDK runtime test
+        if: matrix.runtime == 'deno'
+        run: deno run --allow-read --node-modules-dir=auto packages/sdk/dist/client.runtime.test.js
+
+      - name: Run browser SDK runtime test
+        if: matrix.runtime == 'browser'
+        env:
+          CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: node packages/sdk/scripts/browser-runtime-check.mjs
+
+  sdk-integration:
+    name: SDK Integration (compose)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Build SDK packages
+        run: pnpm turbo run build --filter=@au-kpis/sdk --cache-dir=.turbo
+
+      - name: Start compose stack
+        run: docker compose -f infra/compose/docker-compose.yml up -d --build
+
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                pg_isready -U au_kpis -d au_kpis; then
+              break
+            fi
+            sleep 1
+          done
+          cat infra/migrations/*.up.sql \
+            | docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
+
+      - name: Seed SDK fixture data
+        run: |
+          set -euo pipefail
+          docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis <<'SQL'
+          INSERT INTO sources (id, name, homepage, description)
+          VALUES ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL);
+
+          INSERT INTO codelists (id, name, description)
+          VALUES ('CL_REGION', 'Regions', NULL);
+
+          INSERT INTO codes (codelist_id, id, name, description, parent_id)
+          VALUES ('CL_REGION', 'AUS', 'Australia', NULL, NULL);
+
+          INSERT INTO measures (id, name, description, unit, scale)
+          VALUES ('index', 'CPI index', NULL, 'index', NULL);
+
+          INSERT INTO dataflows (
+              id, source_id, name, description, dimensions, measures,
+              frequency, license, attribution, source_url
+          )
+          VALUES (
+              'abs.cpi', 'abs', 'Consumer Price Index', NULL,
+              ARRAY['region'], ARRAY['index'], 'quarterly', 'CC-BY-4.0',
+              'Source: Australian Bureau of Statistics',
+              'https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia'
+          );
+
+          INSERT INTO dimensions (dataflow_id, id, name, description, codelist_id, position)
+          VALUES ('abs.cpi', 'region', 'Region', NULL, 'CL_REGION', 0);
+
+          INSERT INTO series (
+              series_key, dataflow_id, measure_id, dimensions, unit,
+              first_observed, last_observed, active
+          )
+          VALUES (
+              decode(repeat('a', 64), 'hex'), 'abs.cpi', 'index',
+              '{"region":"AUS"}'::jsonb, 'index',
+              '2024-06-01T00:00:00Z', '2024-06-01T00:00:00Z', true
+          );
+
+          INSERT INTO artifacts (
+              id, source_id, source_url, content_type, response_headers,
+              size_bytes, storage_key, fetched_at
+          )
+          VALUES (
+              decode(repeat('b', 64), 'hex'), 'abs',
+              'https://example.test/cpi.json', 'application/json',
+              '{}'::jsonb, 128, 'artifacts/sdk-compose-fixture',
+              '2024-07-24T00:00:00Z'
+          );
+
+          INSERT INTO observations (
+              series_key, time, revision_no, time_precision, value, status,
+              attributes, ingested_at, source_artifact_id
+          )
+          VALUES (
+              decode(repeat('a', 64), 'hex'), '2024-06-01T00:00:00Z', 1,
+              'quarter', 136.9, 'normal', '{}'::jsonb,
+              '2024-07-24T00:00:00Z', decode(repeat('b', 64), 'hex')
+          );
+          SQL
+
+      - name: Wait for API readiness
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            if curl -fsS "http://127.0.0.1:3000/v1/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose -f infra/compose/docker-compose.yml logs api >&2 || true
+          exit 1
+
+      - name: Run SDK integration
+        run: node packages/sdk/scripts/compose-integration.mjs
+
+      - name: Stop compose stack
+        if: always()
+        run: docker compose -f infra/compose/docker-compose.yml down -v
+
   lint-format:
     name: Lint and Format
     runs-on: ubuntu-latest
@@ -1040,6 +1208,8 @@ jobs:
     needs:
       - rust-check
       - typescript
+      - sdk-runtime
+      - sdk-integration
       - lint-format
       - openapi
       - supply-chain

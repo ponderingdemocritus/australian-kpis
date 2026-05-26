@@ -1,6 +1,9 @@
 export {
   ApiRequestError,
+  ApiValidationError,
   createClient,
   type AuKpisClient,
   type CreateClientOptions,
-} from './client'
+  type ObservationLatestParams,
+  type ObservationsListParams,
+} from './client.js'
