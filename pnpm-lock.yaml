@@ -39,7 +39,11 @@ importers:
         specifier: workspace:*
         version: link:../sdk-generated
 
-  packages/sdk-generated: {}
+  packages/sdk-generated:
+    dependencies:
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
 
 packages:
 
