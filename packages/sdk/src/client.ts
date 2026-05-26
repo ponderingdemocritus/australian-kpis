@@ -107,7 +107,7 @@ type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
 let schemaModule: Promise<SchemaModule> | undefined
 
 export function createClient(options: CreateClientOptions = {}): AuKpisClient {
-  const fetchImpl = options.fetch ?? globalThis.fetch
+  const fetchImpl = options.fetch ?? globalThis.fetch?.bind(globalThis)
 
   if (fetchImpl === undefined) {
     throw new Error('createClient requires a fetch implementation')

@@ -221,6 +221,68 @@ jobs:
         if: always()
         run: docker compose -f infra/compose/docker-compose.yml down -v
 
+  web-e2e:
+    name: Web E2E (Playwright)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+
+      - name: Build web app and dependencies
+        run: pnpm turbo run build --filter=@au-kpis/web --cache-dir=.turbo
+
+      - name: Install Playwright browser
+        run: pnpm --filter @au-kpis/web exec playwright install --with-deps chromium
+
+      - name: Start compose stack
+        run: docker compose -f infra/compose/docker-compose.yml up -d --build
+
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                pg_isready -U au_kpis -d au_kpis; then
+              break
+            fi
+            sleep 1
+          done
+          cat infra/migrations/*.up.sql \
+            | docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
+
+      - name: Seed Explorer fixture data
+        run: |
+          docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
+            < apps/web/e2e/fixtures/explorer.sql
+
+      - name: Wait for API readiness
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            if curl -fsS "http://127.0.0.1:3000/v1/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose -f infra/compose/docker-compose.yml logs api >&2 || true
+          exit 1
+
+      - name: Run Explorer Playwright suite
+        env:
+          VITE_AU_KPIS_API_BASE_URL: http://127.0.0.1:3000
+        run: pnpm --filter @au-kpis/web exec playwright test
+
+      - name: Stop compose stack
+        if: always()
+        run: docker compose -f infra/compose/docker-compose.yml down -v
+
   lint-format:
     name: Lint and Format
     runs-on: ubuntu-latest
@@ -1210,6 +1272,7 @@ jobs:
       - typescript
       - sdk-runtime
       - sdk-integration
+      - web-e2e
       - lint-format
       - openapi
       - supply-chain

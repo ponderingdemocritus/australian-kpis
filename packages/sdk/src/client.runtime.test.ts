@@ -51,6 +51,27 @@ await run('dataflow methods call catalog endpoints and attach api key', async ()
   assertEqual(new Headers(mock.calls[0]?.init?.headers).get('x-api-key'), 'test-key')
 })
 
+await run('default global fetch is bound before requests are made', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    globalThis.fetch = function defaultFetchGuard(this: typeof globalThis) {
+      if (this !== globalThis) {
+        throw new Error('expected default fetch to be bound to globalThis')
+      }
+      return Promise.resolve(jsonResponse({ dataflows: [] }))
+    } as typeof fetch
+
+    const client = createClient({
+      baseUrl: 'https://api.example.test',
+      retry: { sleep: async () => undefined },
+    })
+
+    await client.dataflows.list()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 await run('observations.list encodes dimensions and returns the response envelope', async () => {
   const page = observationsPage({ nextCursor: 'cursor-2' })
   const mock = mockFetch([jsonResponse(page)])

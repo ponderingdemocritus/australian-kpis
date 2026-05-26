@@ -251,7 +251,9 @@ mod tests {
 
     #[test]
     fn json_logs_include_span_fields() {
-        Jail::expect_with(|_jail| {
+        Jail::expect_with(|jail| {
+            jail.set_env("RUST_LOG", "info");
+
             let sink = SharedBuffer::default();
             let (subscriber, _telemetry) =
                 build_subscriber(&base_config(), sink.make_writer()).expect("subscriber");

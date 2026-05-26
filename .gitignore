@@ -17,6 +17,8 @@ build/
 .output/
 .vite/
 coverage/
+test-results/
+*.tsbuildinfo
 
 # pnpm
 .pnpm-store/
@@ -42,6 +44,8 @@ Thumbs.db
 
 # Testing
 **/__snapshots__/
+!apps/web/e2e/__snapshots__/
+!apps/web/e2e/__snapshots__/**
 .insta-rejected
 tarpaulin-report.html
 lcov.info
