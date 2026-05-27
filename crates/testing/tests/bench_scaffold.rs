@@ -154,9 +154,9 @@ fn issue_38_k6_smoke_contract_is_wired() {
     );
     assert!(
         pr_workflow.contains(
-            "docker compose -f infra/compose/docker-compose.yml up -d postgres redis minio pdf-extractor influxdb"
+            "docker compose -f infra/compose/docker-compose.yml up -d --wait --wait-timeout 120 postgres redis minio pdf-extractor influxdb"
         ),
-        "PR smoke workflow should start compose dependencies with InfluxDB before migrating"
+        "PR smoke workflow should start and wait for compose dependencies with InfluxDB before migrating"
     );
     assert!(
         pr_workflow
@@ -307,6 +307,11 @@ fn smoke_workflow_migrates_before_starting_api() {
     assert!(
         dependencies < migrations && migrations < seed && seed < api,
         "smoke workflow should start dependencies, migrate, seed, then start the API"
+    );
+    assert!(
+        smoke_workflow
+            .contains("--wait --wait-timeout 120 postgres redis minio pdf-extractor influxdb"),
+        "smoke workflow should wait for dependency health checks before migrating"
     );
     assert!(
         smoke_workflow.contains("SELECT 1"),

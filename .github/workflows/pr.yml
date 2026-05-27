@@ -477,7 +477,7 @@ jobs:
 
       - name: Start compose smoke dependencies
         if: github.event_name != 'merge_group'
-        run: docker compose -f infra/compose/docker-compose.yml up -d postgres redis minio pdf-extractor influxdb
+        run: docker compose -f infra/compose/docker-compose.yml up -d --wait --wait-timeout 120 postgres redis minio pdf-extractor influxdb
 
       - name: Start merge-queue metrics store
         if: github.event_name == 'merge_group'
