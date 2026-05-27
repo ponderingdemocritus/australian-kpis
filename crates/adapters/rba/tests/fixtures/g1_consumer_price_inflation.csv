@@ -1,0 +1,9 @@
+Title,Consumer Price Inflation - G1
+Table,G1
+Frequency,Quarterly
+Source,Reserve Bank of Australia
+Series ID,GCPIAG,GCPIUR
+Units,Annual percentage change,Annual percentage change
+Date,Consumer price inflation,Underlying inflation
+2023-Q4,4.1,4.2
+2024-Q1,3.6,4.0

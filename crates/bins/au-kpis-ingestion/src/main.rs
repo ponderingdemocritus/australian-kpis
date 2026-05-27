@@ -18,6 +18,7 @@ use std::{
 use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
+use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
 use au_kpis_domain::ids::{DataflowId, SourceId};
@@ -34,6 +35,8 @@ use tokio_util::sync::CancellationToken;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
+const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
+const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 /// Command-line arguments for `au-kpis-ingestion`.
@@ -507,6 +510,11 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => AbsAdapter::default(),
     };
     builder.register(abs).context("register ABS adapter")?;
+    let rba = match env::var("AU_KPIS_RBA_INDEX_URL") {
+        Ok(index_url) => RbaAdapter::builder().index_url(index_url).build(),
+        Err(_) => RbaAdapter::default(),
+    };
+    builder.register(rba).context("register RBA adapter")?;
     Ok(builder.build())
 }
 
@@ -581,21 +589,31 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
 
 fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
     validate_supported_source(source)?;
-    if dataflow != ABS_CPI_DATAFLOW_SLUG {
-        bail!(
+    match source {
+        "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
+        "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
+        "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
-        );
+        ),
+        "rba" => bail!(
+            "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
+        ),
+        _ => unreachable!("source was validated above"),
     }
-    Ok(())
 }
 
 fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> {
     validate_once_target(source, dataflow)?;
+    let dataflow_id = match source {
+        "abs" => ABS_CPI_DATAFLOW_ID,
+        "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
+        _ => unreachable!("source was validated above"),
+    };
     Ok(RunRequest {
         source_id: SourceId::new(source)
             .map_err(|err| au_kpis_adapter::AdapterError::Validation(err.to_string()))?,
         dataflow_id: Some(
-            DataflowId::new(ABS_CPI_DATAFLOW_ID)
+            DataflowId::new(dataflow_id)
                 .map_err(|err| au_kpis_adapter::AdapterError::Validation(err.to_string()))?,
         ),
         trace_parent: None,
@@ -631,8 +649,8 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 }
 
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
-    if source != "abs" {
-        bail!("unsupported source `{source}`; supported source: abs");
+    if !matches!(source, "abs" | "rba") {
+        bail!("unsupported source `{source}`; supported sources: abs, rba");
     }
     Ok(())
 }
@@ -641,8 +659,11 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "rba" && dataflow_id == RBA_STAT_TABLES_DATAFLOW_ID {
+        return Ok(());
+    }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflow: {ABS_CPI_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}"
     );
 }
 
@@ -797,11 +818,23 @@ mod tests {
 
     #[test]
     fn unsupported_source_reports_specific_error() {
-        let err = validate_once_target("rba", "cpi")
+        let err = validate_once_target("aemo", "cpi")
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs"));
+        assert!(err.contains("abs, rba"));
+    }
+
+    #[test]
+    fn rba_once_mode_resolves_statistical_tables_dataflow() {
+        let request = once_run_request("rba", "statistical-tables")
+            .expect("RBA statistical tables are supported");
+
+        assert_eq!(request.source_id.as_str(), "rba");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("rba.statistical_tables").unwrap())
+        );
     }
 
     #[test]

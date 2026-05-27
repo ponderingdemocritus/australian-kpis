@@ -1,0 +1,98 @@
+---
+source: crates/adapters/rba/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "FIRMMCRTD",
+      "series_name": "Cash Rate Target",
+      "table": "F1"
+    },
+    "unit": "Per cent",
+    "time": "2024-01-02T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 4.35,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Daily",
+      "rba_series_id": "FIRMMCRTD",
+      "rba_series_name": "Cash Rate Target",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/f01d.csv",
+      "table_title": "Interest Rates and Yields - Money Market - Daily - F1"
+    },
+    "source_artifact_id": "c70d1fdf73e6a64bbd42deb40c9da4dff4a61551919aa86c250714693f89f6de"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "FIRMMCRI",
+      "series_name": "Interbank Overnight Cash Rate",
+      "table": "F1"
+    },
+    "unit": "Per cent",
+    "time": "2024-01-02T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 4.34,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Daily",
+      "rba_series_id": "FIRMMCRI",
+      "rba_series_name": "Interbank Overnight Cash Rate",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/f01d.csv",
+      "table_title": "Interest Rates and Yields - Money Market - Daily - F1"
+    },
+    "source_artifact_id": "c70d1fdf73e6a64bbd42deb40c9da4dff4a61551919aa86c250714693f89f6de"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "FIRMMCRTD",
+      "series_name": "Cash Rate Target",
+      "table": "F1"
+    },
+    "unit": "Per cent",
+    "time": "2024-01-03T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 4.35,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Daily",
+      "rba_series_id": "FIRMMCRTD",
+      "rba_series_name": "Cash Rate Target",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/f01d.csv",
+      "table_title": "Interest Rates and Yields - Money Market - Daily - F1"
+    },
+    "source_artifact_id": "c70d1fdf73e6a64bbd42deb40c9da4dff4a61551919aa86c250714693f89f6de"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "FIRMMCRI",
+      "series_name": "Interbank Overnight Cash Rate",
+      "table": "F1"
+    },
+    "unit": "Per cent",
+    "time": "2024-01-03T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 4.34,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Daily",
+      "rba_series_id": "FIRMMCRI",
+      "rba_series_name": "Interbank Overnight Cash Rate",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/f01d.csv",
+      "table_title": "Interest Rates and Yields - Money Market - Daily - F1"
+    },
+    "source_artifact_id": "c70d1fdf73e6a64bbd42deb40c9da4dff4a61551919aa86c250714693f89f6de"
+  }
+]

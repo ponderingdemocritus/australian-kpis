@@ -1,0 +1,98 @@
+---
+source: crates/adapters/rba/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "ARBAAST",
+      "series_name": "Assets",
+      "table": "A1"
+    },
+    "unit": "$ million",
+    "time": "2024-01-03T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 612345.0,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Weekly",
+      "rba_series_id": "ARBAAST",
+      "rba_series_name": "Assets",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/xls/a01hist.xlsx",
+      "table_title": "RBA Balance Sheet - A1"
+    },
+    "source_artifact_id": "711e1cc7ea7edd288bcf8925e2650670b5fd3aed37d5ed5098dff04d6b88a6b0"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "ARBALBL",
+      "series_name": "Liabilities",
+      "table": "A1"
+    },
+    "unit": "$ million",
+    "time": "2024-01-03T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 601234.0,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Weekly",
+      "rba_series_id": "ARBALBL",
+      "rba_series_name": "Liabilities",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/xls/a01hist.xlsx",
+      "table_title": "RBA Balance Sheet - A1"
+    },
+    "source_artifact_id": "711e1cc7ea7edd288bcf8925e2650670b5fd3aed37d5ed5098dff04d6b88a6b0"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "ARBAAST",
+      "series_name": "Assets",
+      "table": "A1"
+    },
+    "unit": "$ million",
+    "time": "2024-01-10T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 613210.0,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Weekly",
+      "rba_series_id": "ARBAAST",
+      "rba_series_name": "Assets",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/xls/a01hist.xlsx",
+      "table_title": "RBA Balance Sheet - A1"
+    },
+    "source_artifact_id": "711e1cc7ea7edd288bcf8925e2650670b5fd3aed37d5ed5098dff04d6b88a6b0"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "ARBALBL",
+      "series_name": "Liabilities",
+      "table": "A1"
+    },
+    "unit": "$ million",
+    "time": "2024-01-10T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 602100.0,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Weekly",
+      "rba_series_id": "ARBALBL",
+      "rba_series_name": "Liabilities",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/xls/a01hist.xlsx",
+      "table_title": "RBA Balance Sheet - A1"
+    },
+    "source_artifact_id": "711e1cc7ea7edd288bcf8925e2650670b5fd3aed37d5ed5098dff04d6b88a6b0"
+  }
+]
