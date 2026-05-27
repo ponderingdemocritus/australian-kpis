@@ -36,6 +36,9 @@ pub struct ProblemDetails {
 /// API-layer errors rendered as RFC 7807 responses.
 #[derive(Debug, Error)]
 pub enum ApiError {
+    /// Client did not supply a valid API key.
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
     /// Requested resource was not found.
     #[error("not found: {0}")]
     NotFound(String),
@@ -71,6 +74,17 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, problem, rate_limit) = match self {
+            ApiError::Unauthorized(detail) => (
+                StatusCode::UNAUTHORIZED,
+                ProblemDetails {
+                    r#type: "about:blank".into(),
+                    title: "Unauthorized".into(),
+                    status: StatusCode::UNAUTHORIZED.as_u16(),
+                    detail: Some(detail),
+                    instance: None,
+                },
+                None,
+            ),
             ApiError::NotFound(detail) => (
                 StatusCode::NOT_FOUND,
                 ProblemDetails {

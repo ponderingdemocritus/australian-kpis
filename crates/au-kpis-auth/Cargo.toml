@@ -8,3 +8,31 @@ repository.workspace = true
 description = "API key validation, Redis rate limiter."
 
 [dependencies]
+argon2 = { version = "0.5", features = ["std"] }
+au-kpis-cache = { workspace = true }
+au-kpis-error = { workspace = true }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "uuid",
+] }
+subtle = "2"
+thiserror = "2"
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+au-kpis-config = { workspace = true }
+au-kpis-db = { workspace = true }
+au-kpis-testing = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -174,6 +174,7 @@ async fn migration_creates_hypertable_and_compression_policy() {
     .expect("list tables");
     let table_names: Vec<&str> = tables.iter().map(|t| t.0.as_str()).collect();
     for expected in [
+        "api_key_audit_log",
         "api_keys",
         "artifacts",
         "codelists",
