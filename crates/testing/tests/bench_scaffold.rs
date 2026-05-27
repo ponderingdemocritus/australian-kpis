@@ -308,6 +308,10 @@ fn smoke_workflow_migrates_before_starting_api() {
         dependencies < migrations && migrations < seed && seed < api,
         "smoke workflow should start dependencies, migrate, seed, then start the API"
     );
+    assert!(
+        smoke_workflow.contains("SELECT 1"),
+        "smoke workflow should wait for a stable SQL round trip before migrating"
+    );
 }
 
 #[test]

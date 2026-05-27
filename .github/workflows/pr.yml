@@ -487,13 +487,19 @@ jobs:
         if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
+          ready=0
           for _ in $(seq 1 60); do
             if docker compose -f infra/compose/docker-compose.yml exec -T postgres \
-                pg_isready -U au_kpis -d au_kpis; then
+                psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis -c 'SELECT 1' >/dev/null 2>&1; then
+              ready=1
               break
             fi
             sleep 1
           done
+          if [ "${ready}" -ne 1 ]; then
+            docker compose -f infra/compose/docker-compose.yml logs postgres >&2 || true
+            exit 1
+          fi
           cat infra/migrations/*.up.sql \
             | docker compose -f infra/compose/docker-compose.yml exec -T postgres \
                 psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
