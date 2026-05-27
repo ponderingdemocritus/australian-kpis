@@ -806,6 +806,117 @@ fn parquet_to_api_error(err: ParquetError) -> ApiError {
     ApiError::Internal
 }
 
+/// Helpers used by the dedicated Parquet streaming benchmark and DHAT profile.
+#[doc(hidden)]
+pub mod benchmark_support {
+    use std::time::Duration;
+
+    use futures::Stream;
+
+    use super::*;
+
+    /// The Phase 3 Parquet benchmark row count.
+    pub const PARQUET_STREAM_BENCHMARK_ROWS: usize = 1_000_000;
+    /// The Phase 3 Parquet benchmark wall-clock budget.
+    pub const PARQUET_STREAM_BENCHMARK_BUDGET: Duration = Duration::from_secs(30);
+    /// The Phase 3 Parquet benchmark peak heap budget.
+    pub const PARQUET_STREAM_DHAT_HEAP_BUDGET_BYTES: usize = 100 * 1024 * 1024;
+
+    /// Summary of a drained synthetic Parquet stream.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ParquetStreamBenchmarkStats {
+        /// Number of synthetic rows requested from the writer.
+        pub rows: usize,
+        /// Number of Parquet bytes emitted by the stream.
+        pub bytes: usize,
+        /// Number of chunks emitted through the response channel.
+        pub chunks: usize,
+    }
+
+    /// Stream one million production-shaped rows through the Parquet writer and
+    /// drain the response channel without retaining emitted bytes.
+    pub async fn drain_synthetic_parquet_stream(
+        row_count: usize,
+    ) -> Result<ParquetStreamBenchmarkStats, ApiError> {
+        let (tx, mut rx) = mpsc::channel(8);
+        let rows = synthetic_observation_rows(row_count);
+        let writer = tokio::spawn(write_parquet_rows(
+            rows,
+            benchmark_metadata(),
+            row_count,
+            tx,
+            PARQUET_ROW_GROUP_TARGET_BYTES,
+        ));
+
+        let mut bytes = 0_usize;
+        let mut chunks = 0_usize;
+        while let Some(chunk) = rx.recv().await {
+            let chunk = chunk?;
+            bytes += chunk.len();
+            chunks += 1;
+        }
+
+        writer.await.map_err(|err| {
+            tracing::error!(error = %err, "parquet benchmark writer task failed");
+            ApiError::Internal
+        })??;
+
+        Ok(ParquetStreamBenchmarkStats {
+            rows: row_count,
+            bytes,
+            chunks,
+        })
+    }
+
+    fn benchmark_metadata() -> ObservationsMetadata {
+        ObservationsMetadata {
+            dataflow: DataflowId::new("abs.cpi").expect("benchmark dataflow id is valid"),
+            attribution: "Source: Australian Bureau of Statistics".to_string(),
+            license: "CC-BY-4.0".to_string(),
+            source_url: "https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia".to_string(),
+        }
+    }
+
+    fn synthetic_observation_rows(
+        row_count: usize,
+    ) -> impl Stream<Item = Result<ObservationsRow, ApiError>> + Send + 'static {
+        async_stream::try_stream! {
+            let dataflow = DataflowId::new("abs.cpi").expect("benchmark dataflow id is valid");
+            let artifact = ArtifactId::of_content(b"parquet 1m benchmark artifact");
+            let ingested_at = DateTime::from_timestamp(1_714_000_000, 0)
+                .expect("benchmark ingested timestamp is valid");
+            let observed_at = DateTime::from_timestamp(1_577_836_800, 0)
+                .expect("benchmark observation timestamp is valid");
+            let regions = ["AUS", "NSW", "VIC", "QLD", "WA"];
+
+            for idx in 0..row_count {
+                let region = regions[idx % regions.len()];
+                let dimensions: BTreeMap<String, String> =
+                    [("region".to_string(), region.to_string())].into_iter().collect();
+                let series_key = SeriesKey::derive(&dataflow, [("region", region)]);
+                yield ObservationsRow {
+                    series_key,
+                    time: observed_at + chrono::Duration::seconds(idx as i64),
+                    time_precision: TimePrecision::Day,
+                    value: Some(100.0 + (idx as f64 / 10.0)),
+                    status: ObservationStatus::Normal,
+                    revision_no: 0,
+                    attributes: BTreeMap::new(),
+                    ingested_at,
+                    source_artifact_id: artifact,
+                    dimensions,
+                    measure_id: "index".to_string(),
+                    unit: "index".to_string(),
+                };
+
+                if idx % PARQUET_BATCH_ROWS == 0 {
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    }
+}
+
 fn fetch_observation_rows(
     pool: PgPool,
     query: ParsedObservationsQuery,

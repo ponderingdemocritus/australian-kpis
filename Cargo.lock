@@ -470,6 +470,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "criterion",
+ "dhat",
  "futures",
  "http",
  "jsonschema",
