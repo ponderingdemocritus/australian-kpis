@@ -1,0 +1,142 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    - cron: "0 6 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: cargo-mutants-weekly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_RUSTC_WRAPPER: sccache
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: 2G
+  MUTATION_MIN_SCORE: "70"
+
+jobs:
+  cargo-mutants:
+    name: cargo-mutants weekly
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --version 0.9.100 --locked
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --version 26.0.0 --locked
+
+      - name: Run cargo-mutants
+        id: mutants
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p target/mutation
+          cargo mutants --workspace \
+            --test-workspace true \
+            --test-tool nextest \
+            --jobs 2 \
+            --minimum-test-timeout 120 \
+            --timeout-multiplier 3 \
+            --output target/mutation \
+            --no-times \
+            --colors never \
+            -- --profile ci
+
+      - name: Build mutation report
+        id: report
+        if: always()
+        run: |
+          set +e
+          python3 tools/ci/mutation_report.py \
+            --out-dir target/mutation/mutants.out \
+            --min-score "${MUTATION_MIN_SCORE}" \
+            --markdown target/mutation/report.md \
+            --json target/mutation/mutation-report.json \
+            --issue-body target/mutation/add-test-issue.md
+          report_status="$?"
+          echo "report_status=${report_status}" >> "${GITHUB_OUTPUT}"
+          python3 - <<'PY' >> "${GITHUB_OUTPUT}"
+          import json
+          from pathlib import Path
+
+          path = Path("target/mutation/mutation-report.json")
+          if not path.is_file():
+              print("missed=0")
+              print("score=0")
+              print("passed=false")
+          else:
+              report = json.loads(path.read_text())
+              print(f"missed={report['missed'] + report['timeout']}")
+              print(f"score={report['score']}")
+              print(f"passed={str(report['passed']).lower()}")
+          PY
+
+      - name: Create add test issue for surviving cargo-mutants
+        if: always() && steps.report.outputs.missed != '0'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs')
+            const report = JSON.parse(fs.readFileSync('target/mutation/mutation-report.json', 'utf8'))
+            const body = [
+              `<!-- cargo-mutants-survivors:${context.runId} -->`,
+              fs.readFileSync('target/mutation/add-test-issue.md', 'utf8'),
+              '',
+              `Report artifact: cargo-mutants-report from workflow run ${context.runId}`,
+            ].join('\n')
+            const { owner, repo } = context.repo
+            try {
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: 'add test',
+                color: 'fef2c0',
+                description: 'Follow-up test coverage requested by mutation testing',
+              })
+            } catch (error) {
+              if (error.status !== 422) throw error
+            }
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: `test: add coverage for surviving cargo-mutants results (${new Date().toISOString().slice(0, 10)})`,
+              body,
+              labels: ['type:test', 'add test'],
+            })
+            core.info(`Created add test issue for ${report.missed + report.timeout} surviving cargo-mutants results.`)
+
+      - name: Upload cargo-mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-mutants-report
+          path: |
+            target/mutation/mutants.out
+            target/mutation/report.md
+            target/mutation/mutation-report.json
+            target/mutation/add-test-issue.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Enforce mutation score
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.report.outputs.report_status }}" != "0" ]; then
+            echo "cargo-mutants mutation score was below ${MUTATION_MIN_SCORE}% or report generation failed." >&2
+            exit 1
+          fi

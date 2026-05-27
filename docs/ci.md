@@ -56,6 +56,19 @@ Adding the `perf:regression` label to a PR runs the same staging load suite,
 downloads the latest successful scheduled summary when available, and posts a
 `k6 load comparison` PR comment through `actions/github-script`.
 
+## Weekly cargo-mutants
+
+`.github/workflows/mutation-weekly.yml` runs at `0 6 * * 0` on `main`. The job
+installs `cargo-mutants` and `cargo-nextest`, then runs `cargo mutants
+--workspace` with `--test-workspace true` so each mutant is checked against the
+full workspace test suite. The mutation score threshold is 70%.
+
+The workflow always writes a Markdown report, machine-readable JSON, and the raw
+`mutants.out` directory to the retained `cargo-mutants-report` artifact. If any
+mutants survive or time out, `tools/ci/mutation_report.py` generates a
+follow-up body and the workflow creates an `add test` issue that lists the
+surviving cargo-mutants locations and replacements.
+
 ## Contract fuzzing
 
 The pull request `Contract (schemathesis)` job starts the docker-compose API
