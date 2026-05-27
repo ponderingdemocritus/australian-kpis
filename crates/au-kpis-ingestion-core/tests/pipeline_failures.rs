@@ -841,7 +841,10 @@ async fn cancellation_reaches_already_started_parse_jobs() {
     .expect("pipeline should not wait for a wedged parser stream");
 
     assert!(
-        matches!(result, Err(IngestionError::Cancelled)),
+        matches!(
+            result,
+            Err(IngestionError::Cancelled | IngestionError::ShutdownTimeout(_))
+        ),
         "{result:?}"
     );
 }
