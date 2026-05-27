@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, str};
 
 use au_kpis_adapter::{AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
-use au_kpis_adapter_state_budgets::NswBudgetAdapter;
+use au_kpis_adapter_state_budgets::{NswBudgetAdapter, VicBudgetAdapter};
 use au_kpis_domain::{ArtifactId, DataflowId, SourceId};
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
@@ -17,6 +17,7 @@ use tokio::{
 
 const BP1_2025_26: &[u8] = b"%PDF-1.7\n% nsw budget fixture 2025-26\n%%EOF\n";
 const BP1_2024_25: &[u8] = b"%PDF-1.7\n% nsw budget fixture 2024-25\n%%EOF\n";
+const VIC_BP5_2026_27: &[u8] = b"%PDF-1.7\n% vic budget fixture 2026-27\n%%EOF\n";
 
 #[derive(Debug, Serialize)]
 struct FixtureSnapshot {
@@ -181,6 +182,33 @@ fn parse_metadata(case: FixtureCase) -> BTreeMap<String, String> {
     ])
 }
 
+fn vic_parse_metadata() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("artifact_date".into(), "2026-05-05".into()),
+        (
+            "attribution".into(),
+            "© Copyright State Government of Victoria".into(),
+        ),
+        ("budget_year".into(), "2026-27".into()),
+        ("jurisdiction".into(), "VIC".into()),
+        (
+            "license".into(),
+            "Creative Commons Attribution 4.0 International licence".into(),
+        ),
+        (
+            "license_url".into(),
+            "https://creativecommons.org/licenses/by/4.0/".into(),
+        ),
+        ("paper".into(), "Budget Paper No. 5".into()),
+        ("paper_slug".into(), "bp5-statement-of-finances".into()),
+        (
+            "schema_drift_policy".into(),
+            "hash-pdf-table-candidates".into(),
+        ),
+        ("title".into(), "Statement of Finances".into()),
+    ])
+}
+
 async fn snapshot_fixture(case: FixtureCase, blob_store: BlobStore) -> FixtureSnapshot {
     let artifact = artifact_for(&blob_store, case.bytes, case.source_url).await;
     let sidecar_url = serve_sidecar_once(
@@ -209,6 +237,70 @@ async fn snapshot_fixture(case: FixtureCase, blob_store: BlobStore) -> FixtureSn
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .expect("parse NSW budget fixture through sidecar");
+
+    let observation_count = rows.len();
+    let series_count = rows
+        .iter()
+        .map(|(series, _)| series.series_key)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let first_rows: Vec<SnapshotRow> = rows
+        .into_iter()
+        .take(10)
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect();
+
+    FixtureSnapshot {
+        observation_count,
+        series_count,
+        first_rows,
+    }
+}
+
+async fn vic_snapshot_fixture(blob_store: BlobStore, cells: &[&[&str]]) -> FixtureSnapshot {
+    let source_url = "https://s3.ap-southeast-2.amazonaws.com/vicbudgetfiles2026.27vicbudget/2026-27+State+Budget+-+Statement+of+Finances.pdf";
+    let artifact = artifact_for(&blob_store, VIC_BP5_2026_27, source_url).await;
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        "2026-05-05",
+        sidecar_response(&artifact.storage_key, cells),
+    )
+    .await;
+    let adapter = VicBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.vic_budget").unwrap(),
+        vic_parse_metadata(),
+    );
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse VIC budget fixture through sidecar");
 
     let observation_count = rows.len();
     let series_count = rows
@@ -296,6 +388,34 @@ async fn parses_nsw_budget_pdf_fixtures_through_sidecar_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_vic_budget_pdf_fixture_through_sidecar_contract() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let cells: &[&[&str]] = &[
+        &[
+            "Table 1.1: Estimated financial statements for the general government sector ($ million)",
+            "",
+            "",
+            "",
+            "",
+        ][..],
+        &[
+            "Line item",
+            "2025-26 Revised",
+            "2026-27 Budget",
+            "2027-28 Forward Estimate",
+            "2028-29 Forward Estimate",
+        ][..],
+        &["Revenue", "97,522", "101,402", "105,888", "110,345"][..],
+        &["Expenses", "102,467", "104,910", "108,001", "111,220"][..],
+    ];
+
+    let snapshot = vic_snapshot_fixture(blob_store, cells).await;
+
+    assert!(snapshot.observation_count > 0);
+    insta::assert_json_snapshot!("vic_bp5_statement_of_finances_2026_27", snapshot);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_rejects_nsw_schema_hash_drift() {
     let blob_store = BlobStore::new(InMemory::new());
     let case = FixtureCase {
@@ -335,6 +455,58 @@ async fn parse_rejects_nsw_schema_hash_drift() {
     .with_expected_dataflow(
         DataflowId::new("state_budgets.nsw_budget").unwrap(),
         parse_metadata(case),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("schema drift should fail");
+
+    assert!(err.to_string().contains("schema hash drift"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_vic_schema_hash_drift() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let source_url = "https://s3.ap-southeast-2.amazonaws.com/vicbudgetfiles2026.27vicbudget/2026-27+State+Budget+-+Statement+of+Finances.pdf";
+    let artifact = artifact_for(&blob_store, VIC_BP5_2026_27, source_url).await;
+    let cells: &[&[&str]] = &[
+        &[
+            "Table 1.1: Estimated financial statements for the general government sector ($ million)",
+            "",
+            "",
+            "",
+            "",
+        ][..],
+        &[
+            "Line item",
+            "2025-26 Actual",
+            "2026-27 Budget",
+            "2027-28 Forward Estimate",
+            "2028-29 Forward Estimate",
+        ][..],
+        &["Revenue", "97,522", "101,402", "105,888", "110,345"][..],
+    ];
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        "2026-05-05",
+        sidecar_response(&artifact.storage_key, cells),
+    )
+    .await;
+    let adapter = VicBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.vic_budget").unwrap(),
+        vic_parse_metadata(),
     );
 
     let err = adapter

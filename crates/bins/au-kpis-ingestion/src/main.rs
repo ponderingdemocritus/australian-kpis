@@ -21,7 +21,7 @@ use au_kpis_adapter::{AdapterError, AdapterHttpClient, Adapters, DiscoveryCtx, P
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
-use au_kpis_adapter_state_budgets::NswBudgetAdapter;
+use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
@@ -45,6 +45,8 @@ const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
 const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
 const STATE_BUDGETS_NSW_DATAFLOW_SLUG: &str = "nsw-budget";
 const STATE_BUDGETS_NSW_DATAFLOW_ID: &str = "state_budgets.nsw_budget";
+const STATE_BUDGETS_VIC_DATAFLOW_SLUG: &str = "vic-budget";
+const STATE_BUDGETS_VIC_DATAFLOW_ID: &str = "state_budgets.vic_budget";
 const TREASURY_BUDGET_DATAFLOW_SLUG: &str = "budget-papers";
 const TREASURY_BUDGET_DATAFLOW_ID: &str = "treasury.budget_papers";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -596,17 +598,17 @@ fn build_adapters() -> anyhow::Result<Adapters> {
     builder
         .register(treasury.try_build().context("build Treasury adapter")?)
         .context("register Treasury adapter")?;
-    let mut nsw_budget = NswBudgetAdapter::builder();
+    let mut state_budgets = StateBudgetsAdapter::builder();
     if let Ok(pdf_base_url) = env::var("AU_KPIS_PDF_BASE_URL") {
-        nsw_budget = nsw_budget.pdf_base_url(pdf_base_url);
+        state_budgets = state_budgets.pdf_base_url(pdf_base_url);
     }
     builder
         .register(
-            nsw_budget
+            state_budgets
                 .try_build()
-                .context("build NSW state budget adapter")?,
+                .context("build state budgets adapter")?,
         )
-        .context("register NSW state budget adapter")?;
+        .context("register state budgets adapter")?;
     Ok(builder.build())
 }
 
@@ -685,7 +687,14 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
         "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
-        "state-budgets" if dataflow == STATE_BUDGETS_NSW_DATAFLOW_SLUG => Ok(()),
+        "state-budgets"
+            if matches!(
+                dataflow,
+                STATE_BUDGETS_NSW_DATAFLOW_SLUG | STATE_BUDGETS_VIC_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "treasury" if dataflow == TREASURY_BUDGET_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
@@ -697,7 +706,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
         ),
         "state-budgets" => bail!(
-            "unsupported dataflow `{dataflow}` for source `state-budgets`; supported dataflow: {STATE_BUDGETS_NSW_DATAFLOW_SLUG}"
+            "unsupported dataflow `{dataflow}` for source `state-budgets`; supported dataflows: {STATE_BUDGETS_NSW_DATAFLOW_SLUG}, {STATE_BUDGETS_VIC_DATAFLOW_SLUG}"
         ),
         "treasury" => bail!(
             "unsupported dataflow `{dataflow}` for source `treasury`; supported dataflow: {TREASURY_BUDGET_DATAFLOW_SLUG}"
@@ -712,7 +721,12 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         "abs" => ABS_CPI_DATAFLOW_ID,
         "apra" => APRA_QUARTERLY_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
-        "state-budgets" => STATE_BUDGETS_NSW_DATAFLOW_ID,
+        "state-budgets" if dataflow == STATE_BUDGETS_NSW_DATAFLOW_SLUG => {
+            STATE_BUDGETS_NSW_DATAFLOW_ID
+        }
+        "state-budgets" if dataflow == STATE_BUDGETS_VIC_DATAFLOW_SLUG => {
+            STATE_BUDGETS_VIC_DATAFLOW_ID
+        }
         "treasury" => TREASURY_BUDGET_DATAFLOW_ID,
         _ => unreachable!("source was validated above"),
     };
@@ -780,11 +794,14 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "state-budgets" && dataflow_id == STATE_BUDGETS_NSW_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "state-budgets" && dataflow_id == STATE_BUDGETS_VIC_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "treasury" && dataflow_id == TREASURY_BUDGET_DATAFLOW_ID {
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1016,6 +1033,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("state_budgets.nsw_budget").unwrap())
+        );
+    }
+
+    #[test]
+    fn state_budgets_once_mode_resolves_vic_budget_dataflow() {
+        let request =
+            once_run_request("state-budgets", "vic-budget").expect("VIC state budget is supported");
+
+        assert_eq!(request.source_id.as_str(), "state-budgets");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("state_budgets.vic_budget").unwrap())
         );
     }
 

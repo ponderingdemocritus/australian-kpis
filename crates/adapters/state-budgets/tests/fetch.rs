@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, ArtifactRecorder, FetchCtx, SourceAdapter};
-use au_kpis_adapter_state_budgets::{NswBudgetAdapter, NswBudgetPublication};
+use au_kpis_adapter_state_budgets::{
+    NswBudgetAdapter, NswBudgetPublication, VicBudgetAdapter, VicBudgetPublication,
+};
 use au_kpis_domain::{Artifact, ArtifactId};
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
@@ -14,6 +16,7 @@ use tokio::{
 };
 
 const PDF_FIXTURE: &[u8] = b"%PDF-1.7\n% nsw budget fixture\n%%EOF\n";
+const VIC_PDF_FIXTURE: &[u8] = b"%PDF-1.7\n% vic budget fixture\n%%EOF\n";
 
 #[derive(Debug, Default)]
 struct RecordingArtifactRecorder {
@@ -146,5 +149,106 @@ async fn fetch_persists_raw_nsw_budget_pdf_with_response_headers() {
         .await
         .expect("artifact bytes");
     assert_eq!(stored, Bytes::from_static(PDF_FIXTURE));
+    assert_eq!(recorder.artifacts.lock().await.len(), 1);
+}
+
+async fn serve_vic_artifact_once(body: &'static [u8]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(
+            request.starts_with(
+                "GET /vicbudgetfiles2026.27vicbudget/2026-27+State+Budget+-+Statement+of+Finances.pdf HTTP/1.1"
+            ),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-state-budgets/")
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\nx-vic-budget-fixture: bp5\r\ncontent-length: {}\r\n\r\n",
+            body.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response headers");
+        stream.write_all(body).await.expect("write response body");
+    });
+
+    format!(
+        "http://{addr}/vicbudgetfiles2026.27vicbudget/2026-27+State+Budget+-+Statement+of+Finances.pdf"
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_persists_raw_vic_budget_pdf_with_response_headers() {
+    let source_url = serve_vic_artifact_once(VIC_PDF_FIXTURE).await;
+    let publication = VicBudgetPublication {
+        budget_year: "2026-27".into(),
+        paper: "Budget Paper No. 5".into(),
+        paper_slug: "bp5-statement-of-finances".into(),
+        title: "Statement of Finances".into(),
+        source_url,
+        last_updated: Some("2026-05-05".into()),
+    };
+    let adapter = VicBudgetAdapter::builder()
+        .publications(vec![publication.clone()])
+        .build();
+    let job = VicBudgetAdapter::current_jobs_with_started_at(
+        &[publication],
+        Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap(),
+    )
+    .into_iter()
+    .next()
+    .expect("job emitted");
+    let recorder = recording_recorder();
+    let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let blob_store = BlobStore::from_arc(object_store.clone());
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = FetchCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+        recorder.clone(),
+    );
+
+    let artifact = adapter
+        .fetch(job.clone(), &ctx)
+        .await
+        .expect("fetch VIC PDF");
+
+    assert_eq!(artifact.source_id.as_str(), "state-budgets");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "application/pdf");
+    assert_eq!(
+        artifact.response_headers["x-vic-budget-fixture"],
+        vec!["bp5"]
+    );
+    assert_eq!(artifact.size_bytes, VIC_PDF_FIXTURE.len() as u64);
+    assert_eq!(artifact.id, ArtifactId::of_content(VIC_PDF_FIXTURE));
+    assert_eq!(
+        artifact.storage_key,
+        StorageKey::canonical_for(&artifact.id).to_string()
+    );
+
+    let stored = object_store
+        .get(&ObjectPath::from(artifact.storage_key.clone()))
+        .await
+        .expect("stored artifact")
+        .bytes()
+        .await
+        .expect("artifact bytes");
+    assert_eq!(stored, Bytes::from_static(VIC_PDF_FIXTURE));
     assert_eq!(recorder.artifacts.lock().await.len(), 1);
 }

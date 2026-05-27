@@ -29,6 +29,7 @@ const DEFAULT_PDF_BASE_URL: &str = "http://127.0.0.1:8010";
 const USER_AGENT: &str = concat!("au-kpis-adapter-state-budgets/", env!("CARGO_PKG_VERSION"));
 const SOURCE_ID: &str = "state-budgets";
 const DATAFLOW_ID: &str = "state_budgets.nsw_budget";
+const VIC_DATAFLOW_ID: &str = "state_budgets.vic_budget";
 const JURISDICTION: &str = "NSW";
 const JURISDICTION_NAME: &str = "New South Wales";
 const SOURCE_NAME: &str = "NSW Treasury";
@@ -43,6 +44,102 @@ const TARGET_TITLE: &str = "Budget Statement";
 const NSW_KEY_AGGREGATES_SCHEMA_KEY: &str = "table_1_1_key_fiscal_aggregates_m";
 const NSW_KEY_AGGREGATES_SCHEMA_HASH: &str =
     "61014127d5e49374262775674f0abd3bf87731a276cc1deecb69381d4bf811aa";
+const VIC_KEY_AGGREGATES_SCHEMA_KEY: &str =
+    "table_1_1_estimated_financial_statements_for_the_general_government_sector_million";
+const VIC_KEY_AGGREGATES_SCHEMA_HASH: &str =
+    "25df1806f48ed1a256abeb5778785adddf4d5e970eb211b6d47965aecde36c6b";
+const VIC_JURISDICTION: &str = "VIC";
+const VIC_JURISDICTION_NAME: &str = "Victoria";
+const VIC_SOURCE_NAME: &str = "Department of Treasury and Finance Victoria";
+const VIC_ATTRIBUTION: &str = "© Copyright State Government of Victoria";
+const VIC_LICENSE_NAME: &str = "Creative Commons Attribution 4.0 International licence";
+const VIC_LICENSE_URL: &str = "https://creativecommons.org/licenses/by/4.0/";
+const VIC_SOURCE_INDEX_URL: &str = "https://www.budget.vic.gov.au/budget-papers";
+const VIC_BUDGET_PDF_URL: &str = "https://s3.ap-southeast-2.amazonaws.com/vicbudgetfiles2026.27vicbudget/2026-27+State+Budget+-+Statement+of+Finances.pdf";
+const VIC_PAPER: &str = "Budget Paper No. 5";
+const VIC_PAPER_SLUG: &str = "bp5-statement-of-finances";
+const VIC_TARGET_TITLE: &str = "Statement of Finances";
+
+#[derive(Debug, Clone, Copy)]
+struct BudgetConfig {
+    dataflow_id: &'static str,
+    dataflow_name: &'static str,
+    dataflow_description: &'static str,
+    jurisdiction: &'static str,
+    jurisdiction_name: &'static str,
+    source_name: &'static str,
+    attribution: &'static str,
+    license: BudgetLicense,
+    license_name: &'static str,
+    license_url: &'static str,
+    source_index_url: &'static str,
+    default_budget_pdf_url: &'static str,
+    default_last_updated: &'static str,
+    paper: &'static str,
+    paper_slug: &'static str,
+    target_title: &'static str,
+    schema_key: &'static str,
+    schema_hash: &'static str,
+    official_parse_hosts: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BudgetLicense {
+    CcBy40,
+    Other(&'static str),
+}
+
+const NSW_CONFIG: BudgetConfig = BudgetConfig {
+    dataflow_id: DATAFLOW_ID,
+    dataflow_name: "NSW state budget",
+    dataflow_description: "Annual New South Wales budget aggregates parsed from NSW Treasury budget PDFs.",
+    jurisdiction: JURISDICTION,
+    jurisdiction_name: JURISDICTION_NAME,
+    source_name: SOURCE_NAME,
+    attribution: ATTRIBUTION,
+    license: BudgetLicense::Other(LICENSE_NAME),
+    license_name: LICENSE_NAME,
+    license_url: LICENSE_URL,
+    source_index_url: DEFAULT_SOURCE_INDEX_URL,
+    default_budget_pdf_url: DEFAULT_BUDGET_PDF_URL,
+    default_last_updated: "2025-06-24",
+    paper: PAPER,
+    paper_slug: PAPER_SLUG,
+    target_title: TARGET_TITLE,
+    schema_key: NSW_KEY_AGGREGATES_SCHEMA_KEY,
+    schema_hash: NSW_KEY_AGGREGATES_SCHEMA_HASH,
+    official_parse_hosts: &[
+        "budget.nsw.gov.au",
+        "www.budget.nsw.gov.au",
+        "www.nsw.gov.au",
+    ],
+};
+
+const VIC_CONFIG: BudgetConfig = BudgetConfig {
+    dataflow_id: VIC_DATAFLOW_ID,
+    dataflow_name: "VIC state budget",
+    dataflow_description: "Annual Victorian budget aggregates parsed from Victorian Budget statement of finances PDFs.",
+    jurisdiction: VIC_JURISDICTION,
+    jurisdiction_name: VIC_JURISDICTION_NAME,
+    source_name: VIC_SOURCE_NAME,
+    attribution: VIC_ATTRIBUTION,
+    license: BudgetLicense::CcBy40,
+    license_name: VIC_LICENSE_NAME,
+    license_url: VIC_LICENSE_URL,
+    source_index_url: VIC_SOURCE_INDEX_URL,
+    default_budget_pdf_url: VIC_BUDGET_PDF_URL,
+    default_last_updated: "2026-05-05",
+    paper: VIC_PAPER,
+    paper_slug: VIC_PAPER_SLUG,
+    target_title: VIC_TARGET_TITLE,
+    schema_key: VIC_KEY_AGGREGATES_SCHEMA_KEY,
+    schema_hash: VIC_KEY_AGGREGATES_SCHEMA_HASH,
+    official_parse_hosts: &[
+        "budget.vic.gov.au",
+        "www.budget.vic.gov.au",
+        "s3.ap-southeast-2.amazonaws.com",
+    ],
+};
 
 /// NSW state budget PDF adapter.
 #[derive(Debug, Clone)]
@@ -83,6 +180,7 @@ impl NswBudgetAdapter {
         trace_parent: Option<&str>,
     ) -> Vec<DiscoveredJob> {
         discoverable_jobs_with_source_index(
+            &NSW_CONFIG,
             current,
             known_revisions,
             started_at,
@@ -94,27 +192,7 @@ impl NswBudgetAdapter {
     /// Static metadata for the NSW state budget dataflow.
     #[must_use]
     pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
-        vec![Dataflow {
-            id: dataflow_id(),
-            source_id: source_id(),
-            name: "NSW state budget".into(),
-            description: Some(
-                "Annual New South Wales budget aggregates parsed from NSW Treasury budget PDFs."
-                    .into(),
-            ),
-            dimensions: vec![
-                DimensionId::new("jurisdiction").expect("static dimension id is valid"),
-                DimensionId::new("budget_year").expect("static dimension id is valid"),
-                DimensionId::new("paper").expect("static dimension id is valid"),
-                DimensionId::new("table").expect("static dimension id is valid"),
-                DimensionId::new("line_item").expect("static dimension id is valid"),
-            ],
-            measures: vec![MeasureId::new("value").expect("static measure id is valid")],
-            frequency: Frequency::Annual,
-            license: License::Other(LICENSE_NAME.into()),
-            attribution: ATTRIBUTION.into(),
-            source_url: DEFAULT_SOURCE_INDEX_URL.into(),
-        }]
+        state_budget_dataflow_metadata(&NSW_CONFIG)
     }
 
     fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<(), AdapterError> {
@@ -135,12 +213,14 @@ impl NswBudgetAdapter {
                 job.dataflow_id.as_str()
             )));
         }
-        nsw_budget_provenance_for_fetch(&job.source_url, &job.metadata).ok_or_else(|| {
-            AdapterError::Validation(format!(
-                "NSW budget fetch URL `{}` is not a curated NSW budget PDF artifact",
-                job.source_url
-            ))
-        })?;
+        budget_provenance_for_fetch(&NSW_CONFIG, &job.source_url, &job.metadata).ok_or_else(
+            || {
+                AdapterError::Validation(format!(
+                    "NSW budget fetch URL `{}` is not a curated NSW budget PDF artifact",
+                    job.source_url
+                ))
+            },
+        )?;
         Ok(())
     }
 }
@@ -159,16 +239,17 @@ impl SourceAdapter for NswBudgetAdapter {
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
         if ctx
             .requested_dataflow_id()
-            .is_some_and(|requested| requested != &dataflow_id())
+            .is_some_and(|requested| requested != &dataflow_id(&NSW_CONFIG))
         {
             return Ok(Vec::new());
         }
         Ok(discoverable_jobs_with_source_index(
+            &NSW_CONFIG,
             &self.publications,
             ctx.known_revisions(),
             ctx.started_at,
             ctx.trace_parent(),
-            DEFAULT_SOURCE_INDEX_URL,
+            NSW_CONFIG.source_index_url,
         ))
     }
 
@@ -221,16 +302,317 @@ impl SourceAdapter for NswBudgetAdapter {
     }
 
     fn parse<'a>(&'a self, artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
-        parse_artifact_stream(self.pdf_client.clone(), artifact, ctx)
+        parse_artifact_stream(&NSW_CONFIG, self.pdf_client.clone(), artifact, ctx)
     }
 }
 
-fn parse_artifact_stream(
+/// VIC state budget PDF adapter.
+#[derive(Debug, Clone)]
+pub struct VicBudgetAdapter {
+    manifest: AdapterManifest,
+    publications: Vec<VicBudgetPublication>,
+    pdf_client: PdfClient,
+}
+
+impl Default for VicBudgetAdapter {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+impl VicBudgetAdapter {
+    /// Start building a VIC budget adapter.
+    #[must_use]
+    pub fn builder() -> VicBudgetAdapterBuilder {
+        VicBudgetAdapterBuilder::default()
+    }
+
+    /// Convert current curated publications into jobs for the supplied timestamp.
+    #[must_use]
+    pub fn current_jobs_with_started_at(
+        current: &[VicBudgetPublication],
+        started_at: DateTime<Utc>,
+    ) -> Vec<DiscoveredJob> {
+        Self::discoverable_jobs_with_started_at(current, &BTreeMap::new(), started_at, None)
+    }
+
+    /// Diff current VIC publications against stored upstream revisions.
+    #[must_use]
+    pub fn discoverable_jobs_with_started_at(
+        current: &[VicBudgetPublication],
+        known_revisions: &BTreeMap<String, UpstreamRevision>,
+        started_at: DateTime<Utc>,
+        trace_parent: Option<&str>,
+    ) -> Vec<DiscoveredJob> {
+        discoverable_jobs_with_source_index(
+            &VIC_CONFIG,
+            current,
+            known_revisions,
+            started_at,
+            trace_parent,
+            VIC_CONFIG.source_index_url,
+        )
+    }
+
+    /// Static metadata for the VIC state budget dataflow.
+    #[must_use]
+    pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        state_budget_dataflow_metadata(&VIC_CONFIG)
+    }
+
+    fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<(), AdapterError> {
+        if job.source_id != self.manifest.source_id {
+            return Err(AdapterError::Validation(format!(
+                "VIC budget fetch received job for source `{}`",
+                job.source_id.as_str()
+            )));
+        }
+        if !self
+            .manifest
+            .dataflows
+            .iter()
+            .any(|dataflow_id| dataflow_id == &job.dataflow_id)
+        {
+            return Err(AdapterError::Validation(format!(
+                "VIC budget fetch received unsupported dataflow `{}`",
+                job.dataflow_id.as_str()
+            )));
+        }
+        budget_provenance_for_fetch(&VIC_CONFIG, &job.source_url, &job.metadata).ok_or_else(
+            || {
+                AdapterError::Validation(format!(
+                    "VIC budget fetch URL `{}` is not a curated VIC budget PDF artifact",
+                    job.source_url
+                ))
+            },
+        )?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SourceAdapter for VicBudgetAdapter {
+    fn id(&self) -> &'static str {
+        SOURCE_ID
+    }
+
+    fn manifest(&self) -> &AdapterManifest {
+        &self.manifest
+    }
+
+    #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
+    async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+        if ctx
+            .requested_dataflow_id()
+            .is_some_and(|requested| requested != &dataflow_id(&VIC_CONFIG))
+        {
+            return Ok(Vec::new());
+        }
+        Ok(discoverable_jobs_with_source_index(
+            &VIC_CONFIG,
+            &self.publications,
+            ctx.known_revisions(),
+            ctx.started_at,
+            ctx.trace_parent(),
+            VIC_CONFIG.source_index_url,
+        ))
+    }
+
+    #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
+    async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
+        self.validate_fetch_job(&job)?;
+        let response = ctx
+            .http
+            .execute(
+                ctx.http
+                    .raw_artifact()
+                    .get(&job.source_url)
+                    .header("user-agent", USER_AGENT)
+                    .header("accept", "application/pdf"),
+            )
+            .await?;
+        let response_headers = capture_response_headers(response.headers());
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AdapterError::UpstreamStatus {
+                status,
+                retry_after: retry_after_delta(&response_headers),
+                response_headers,
+            });
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map_or_else(|| "application/pdf".to_string(), str::to_string);
+
+        let staged = ctx
+            .blob_store
+            .stage_artifact_stream(response.bytes_stream().boxed())
+            .await?;
+        let id = staged.id();
+        let storage_key = StorageKey::canonical_for(&id).to_string();
+        let artifact = Artifact {
+            id,
+            source_id: job.source_id,
+            source_url: job.source_url,
+            content_type,
+            response_headers,
+            storage_key,
+            size_bytes: staged.size_bytes(),
+            fetched_at: Utc::now(),
+        };
+        ctx.blob_store.commit_staged_artifact(&staged).await?;
+        ctx.persist_artifact(artifact).await
+    }
+
+    fn parse<'a>(&'a self, artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
+        parse_artifact_stream(&VIC_CONFIG, self.pdf_client.clone(), artifact, ctx)
+    }
+}
+
+/// Combined state budgets adapter registered under the shared `state-budgets` source.
+#[derive(Debug, Clone)]
+pub struct StateBudgetsAdapter {
+    manifest: AdapterManifest,
+    nsw: NswBudgetAdapter,
+    vic: VicBudgetAdapter,
+}
+
+impl Default for StateBudgetsAdapter {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+impl StateBudgetsAdapter {
+    /// Start building a combined state budgets adapter.
+    #[must_use]
+    pub fn builder() -> StateBudgetsAdapterBuilder {
+        StateBudgetsAdapterBuilder::default()
+    }
+
+    /// Build a combined adapter from its state-specific adapters.
+    #[must_use]
+    pub fn new(nsw: NswBudgetAdapter, vic: VicBudgetAdapter) -> Self {
+        Self {
+            manifest: AdapterManifest {
+                source_id: source_id(),
+                name: "Australian state budgets".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                rate_limit: RateLimit::new(20, Duration::from_secs(60))
+                    .expect("static state budget rate limit is valid"),
+                dataflows: vec![dataflow_id(&NSW_CONFIG), dataflow_id(&VIC_CONFIG)],
+            },
+            nsw,
+            vic,
+        }
+    }
+
+    /// Static metadata for all registered state budget dataflows.
+    #[must_use]
+    pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        let mut dataflows = self.nsw.dataflow_metadata();
+        dataflows.extend(self.vic.dataflow_metadata());
+        dataflows
+    }
+}
+
+#[async_trait]
+impl SourceAdapter for StateBudgetsAdapter {
+    fn id(&self) -> &'static str {
+        SOURCE_ID
+    }
+
+    fn manifest(&self) -> &AdapterManifest {
+        &self.manifest
+    }
+
+    #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
+    async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+        if let Some(requested) = ctx.requested_dataflow_id() {
+            if requested == &dataflow_id(&NSW_CONFIG) {
+                return self.nsw.discover(ctx).await;
+            }
+            if requested == &dataflow_id(&VIC_CONFIG) {
+                return self.vic.discover(ctx).await;
+            }
+            return Ok(Vec::new());
+        }
+
+        let mut jobs = self.nsw.discover(ctx).await?;
+        jobs.extend(self.vic.discover(ctx).await?);
+        Ok(jobs)
+    }
+
+    #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
+    async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
+        if job.dataflow_id == dataflow_id(&NSW_CONFIG) {
+            return self.nsw.fetch(job, ctx).await;
+        }
+        if job.dataflow_id == dataflow_id(&VIC_CONFIG) {
+            return self.vic.fetch(job, ctx).await;
+        }
+        Err(AdapterError::Validation(format!(
+            "state budgets fetch received unsupported dataflow `{}`",
+            job.dataflow_id.as_str()
+        )))
+    }
+
+    fn parse<'a>(&'a self, artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
+        if let Some(expected) = ctx.expected_dataflow_id() {
+            if expected == &dataflow_id(&NSW_CONFIG) {
+                return self.nsw.parse(artifact, ctx);
+            }
+            if expected == &dataflow_id(&VIC_CONFIG) {
+                return self.vic.parse(artifact, ctx);
+            }
+            let expected = expected.as_str().to_string();
+            return Box::pin(stream::once(async move {
+                Err(AdapterError::Validation(format!(
+                    "state budgets parse received unsupported dataflow `{expected}`"
+                )))
+            }));
+        }
+        if budget_provenance_for_parse(&NSW_CONFIG, &artifact.source_url, ctx.metadata()).is_some()
+        {
+            return self.nsw.parse(artifact, ctx);
+        }
+        self.vic.parse(artifact, ctx)
+    }
+}
+
+fn state_budget_dataflow_metadata(config: &BudgetConfig) -> Vec<Dataflow> {
+    vec![Dataflow {
+        id: dataflow_id(config),
+        source_id: source_id(),
+        name: config.dataflow_name.into(),
+        description: Some(config.dataflow_description.into()),
+        dimensions: vec![
+            DimensionId::new("jurisdiction").expect("static dimension id is valid"),
+            DimensionId::new("budget_year").expect("static dimension id is valid"),
+            DimensionId::new("paper").expect("static dimension id is valid"),
+            DimensionId::new("table").expect("static dimension id is valid"),
+            DimensionId::new("line_item").expect("static dimension id is valid"),
+        ],
+        measures: vec![MeasureId::new("value").expect("static measure id is valid")],
+        frequency: Frequency::Annual,
+        license: match config.license {
+            BudgetLicense::CcBy40 => License::CcBy40,
+            BudgetLicense::Other(name) => License::Other(name.into()),
+        },
+        attribution: config.attribution.into(),
+        source_url: config.source_index_url.into(),
+    }]
+}
+
+fn parse_artifact_stream<'a>(
+    config: &'static BudgetConfig,
     pdf_client: PdfClient,
     artifact: ArtifactRef,
-    ctx: &ParseCtx,
-) -> ObservationStream<'_> {
-    let provenance = match validate_parse_artifact(&artifact, ctx) {
+    ctx: &'a ParseCtx,
+) -> ObservationStream<'a> {
+    let provenance = match validate_parse_artifact(config, &artifact, ctx) {
         Ok(provenance) => provenance,
         Err(err) => return Box::pin(stream::once(async move { Err(err) })),
     };
@@ -244,15 +626,22 @@ fn parse_artifact_stream(
         let key = StorageKey::from_persisted(artifact.storage_key.clone());
         let identity = tokio::select! {
             () = cancellation.cancelled() => Err(cancelled_parse_error()),
-            result = verify_parse_artifact_identity(&blob_store, &key, &artifact) => result,
+            result = verify_parse_artifact_identity(config, &blob_store, &key, &artifact) => result,
         };
         if let Err(err) = identity {
             let _ = row_tx.send(Err(err)).await;
             return;
         }
 
-        let result =
-            parse_pdf_artifact(pdf_client, artifact, provenance, started_at, row_tx.clone()).await;
+        let result = parse_pdf_artifact(
+            config,
+            pdf_client,
+            artifact,
+            provenance,
+            started_at,
+            row_tx.clone(),
+        )
+        .await;
         if let Err(err) = result {
             let _ = row_tx.send(Err(err)).await;
         }
@@ -264,9 +653,10 @@ fn parse_artifact_stream(
 }
 
 async fn parse_pdf_artifact(
+    config: &'static BudgetConfig,
     pdf_client: PdfClient,
     artifact: ArtifactRef,
-    provenance: NswBudgetProvenance,
+    provenance: BudgetProvenance,
     ingested_at: DateTime<Utc>,
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
@@ -281,18 +671,18 @@ async fn parse_pdf_artifact(
         .map_err(pdf_client_error)?;
     if response.artifact_key != artifact.storage_key {
         return Err(AdapterError::Validation(format!(
-            "NSW budget sidecar returned artifact key `{}` for requested artifact `{}`",
-            response.artifact_key, artifact.storage_key
+            "{} budget sidecar returned artifact key `{}` for requested artifact `{}`",
+            config.jurisdiction, response.artifact_key, artifact.storage_key
         )));
     }
     if response.backend.kind != ExtractionBackendKind::Deterministic {
         return Err(AdapterError::FormatDrift(format!(
-            "NSW budget sidecar used unsupported backend `{}`",
-            response.backend.name
+            "{} budget sidecar used unsupported backend `{}`",
+            config.jurisdiction, response.backend.name
         )));
     }
 
-    let rows = parse_table_candidates(response, &artifact, &provenance, ingested_at)?;
+    let rows = parse_table_candidates(config, response, &artifact, &provenance, ingested_at)?;
     for row in rows {
         if tx.send(Ok(row)).await.is_err() {
             return Ok(());
@@ -302,35 +692,44 @@ async fn parse_pdf_artifact(
 }
 
 fn parse_table_candidates(
+    config: &'static BudgetConfig,
     response: ExtractionResponse,
     artifact: &ArtifactRef,
-    provenance: &NswBudgetProvenance,
+    provenance: &BudgetProvenance,
     ingested_at: DateTime<Utc>,
 ) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
     let backend = response.backend;
     let mut parsed = Vec::new();
     for (index, table) in response.tables.iter().enumerate() {
-        if let Some(rows) =
-            parse_nsw_budget_table(table, index, &backend, artifact, provenance, ingested_at)?
-        {
+        if let Some(rows) = parse_state_budget_table(
+            config,
+            table,
+            index,
+            &backend,
+            artifact,
+            provenance,
+            ingested_at,
+        )? {
             parsed.extend(rows);
         }
     }
 
     if parsed.is_empty() {
-        return Err(AdapterError::FormatDrift(
-            "NSW budget PDF sidecar returned no recognised budget tables".into(),
-        ));
+        return Err(AdapterError::FormatDrift(format!(
+            "{} budget PDF sidecar returned no recognised budget tables",
+            config.jurisdiction
+        )));
     }
     Ok(parsed)
 }
 
-fn parse_nsw_budget_table(
+fn parse_state_budget_table(
+    config: &'static BudgetConfig,
     table: &TableCandidate,
     table_index: usize,
     backend: &BackendInfo,
     artifact: &ArtifactRef,
-    provenance: &NswBudgetProvenance,
+    provenance: &BudgetProvenance,
     ingested_at: DateTime<Utc>,
 ) -> Result<Option<Vec<(SeriesDescriptor, Observation)>>, AdapterError> {
     let rows = table
@@ -343,7 +742,7 @@ fn parse_nsw_budget_table(
     };
     let table_title = table_title_for_candidate(&rows, periods.row_index, table.page, table_index);
     let schema_key = slugify_code(&table_title);
-    if schema_key != NSW_KEY_AGGREGATES_SCHEMA_KEY {
+    if schema_key != config.schema_key {
         return Ok(None);
     }
     let schema_hash = schema_hash_for_candidate(&table_title, &rows[periods.row_index]);
@@ -351,10 +750,10 @@ fn parse_nsw_budget_table(
     let parser_version = select_parser_version(&versions, artifact_date_for_version(provenance)?)?;
     let expected = ExpectedSchemaHash::new(
         source_id(),
-        dataflow_id(),
+        dataflow_id(config),
         parser_version.name(),
         schema_key.clone(),
-        NSW_KEY_AGGREGATES_SCHEMA_HASH,
+        config.schema_hash,
     )?;
     validate_schema_hash(&expected, &schema_hash)?;
 
@@ -398,6 +797,7 @@ fn parse_nsw_budget_table(
         }
         for (period, value, status) in row_values {
             parsed.push(build_row(BuildRow {
+                config,
                 provenance,
                 table_title: &table_title,
                 table_page: table.page,
@@ -425,7 +825,8 @@ fn parse_nsw_budget_table(
 }
 
 struct BuildRow<'a> {
-    provenance: &'a NswBudgetProvenance,
+    config: &'static BudgetConfig,
+    provenance: &'a BudgetProvenance,
     table_title: &'a str,
     table_page: u32,
     line_item: &'a str,
@@ -443,27 +844,28 @@ struct BuildRow<'a> {
 }
 
 fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), AdapterError> {
-    let dataflow_id = dataflow_id();
+    let config = input.config;
+    let dataflow_id = dataflow_id(config);
     let dimensions = BTreeMap::from([
         (
             DimensionId::new("jurisdiction").expect("static dimension id is valid"),
-            nsw_code_id("jurisdiction", JURISDICTION)?,
+            budget_code_id(config, "jurisdiction", config.jurisdiction)?,
         ),
         (
             DimensionId::new("budget_year").expect("static dimension id is valid"),
-            nsw_code_id("budget_year", &input.provenance.budget_year)?,
+            budget_code_id(config, "budget_year", &input.provenance.budget_year)?,
         ),
         (
             DimensionId::new("paper").expect("static dimension id is valid"),
-            nsw_code_id("paper", &input.provenance.paper_slug)?,
+            budget_code_id(config, "paper", &input.provenance.paper_slug)?,
         ),
         (
             DimensionId::new("table").expect("static dimension id is valid"),
-            nsw_code_id("table", &slugify_code(input.table_title))?,
+            budget_code_id(config, "table", &slugify_code(input.table_title))?,
         ),
         (
             DimensionId::new("line_item").expect("static dimension id is valid"),
-            nsw_code_id("line_item", &slugify_code(input.line_item))?,
+            budget_code_id(config, "line_item", &slugify_code(input.line_item))?,
         ),
     ]);
     let series_key = SeriesKey::derive(
@@ -480,13 +882,13 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
         unit: input.unit.to_string(),
     };
     let mut attributes = BTreeMap::from([
-        ("source".into(), SOURCE_NAME.into()),
+        ("source".into(), config.source_name.into()),
         ("source_url".into(), input.artifact.source_url.clone()),
-        ("license".into(), LICENSE_NAME.into()),
-        ("license_url".into(), LICENSE_URL.into()),
-        ("attribution".into(), ATTRIBUTION.into()),
-        ("jurisdiction".into(), JURISDICTION.into()),
-        ("jurisdiction_name".into(), JURISDICTION_NAME.into()),
+        ("license".into(), config.license_name.into()),
+        ("license_url".into(), config.license_url.into()),
+        ("attribution".into(), config.attribution.into()),
+        ("jurisdiction".into(), config.jurisdiction.into()),
+        ("jurisdiction_name".into(), config.jurisdiction_name.into()),
         ("budget_year".into(), input.provenance.budget_year.clone()),
         ("paper".into(), input.provenance.paper.clone()),
         ("paper_slug".into(), input.provenance.paper_slug.clone()),
@@ -495,14 +897,20 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
         ("table_page".into(), input.table_page.to_string()),
         ("parser_version".into(), input.parser_version.to_string()),
         ("schema_hash".into(), input.schema_hash.to_string()),
-        ("nsw_line_item".into(), input.line_item.to_string()),
-        ("nsw_period_label".into(), input.period_label.to_string()),
         ("extraction_backend".into(), input.backend.name.clone()),
         (
             "extraction_backend_version".into(),
             input.backend.version.clone(),
         ),
     ]);
+    attributes.insert(
+        format!("{}_line_item", config.jurisdiction.to_ascii_lowercase()),
+        input.line_item.to_string(),
+    );
+    attributes.insert(
+        format!("{}_period_label", config.jurisdiction.to_ascii_lowercase()),
+        input.period_label.to_string(),
+    );
     if let Some(artifact_date) = &input.provenance.artifact_date {
         attributes.insert("artifact_date".into(), artifact_date.clone());
     }
@@ -524,34 +932,38 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
 }
 
 fn validate_parse_artifact(
+    config: &'static BudgetConfig,
     artifact: &ArtifactRef,
     ctx: &ParseCtx,
-) -> Result<NswBudgetProvenance, AdapterError> {
+) -> Result<BudgetProvenance, AdapterError> {
     if artifact.source_id.as_str() != SOURCE_ID {
         return Err(AdapterError::Validation(format!(
-            "NSW budget parse received artifact for source `{}`",
+            "{} budget parse received artifact for source `{}`",
+            config.jurisdiction,
             artifact.source_id.as_str()
         )));
     }
     if let Some(expected) = ctx.expected_dataflow_id() {
-        let actual = dataflow_id();
+        let actual = dataflow_id(config);
         if expected != &actual {
             return Err(AdapterError::Validation(format!(
-                "NSW budget parse expected dataflow `{}` but adapter emits `{}`",
+                "{} budget parse expected dataflow `{}` but adapter emits `{}`",
+                config.jurisdiction,
                 expected.as_str(),
                 actual.as_str()
             )));
         }
     }
-    nsw_budget_provenance_for_parse(&artifact.source_url, ctx.metadata()).ok_or_else(|| {
+    budget_provenance_for_parse(config, &artifact.source_url, ctx.metadata()).ok_or_else(|| {
         AdapterError::Validation(format!(
-            "NSW budget parse artifact `{}` is missing curated NSW budget provenance",
-            artifact.source_url
+            "{} budget parse artifact `{}` is missing curated state budget provenance",
+            config.jurisdiction, artifact.source_url
         ))
     })
 }
 
 async fn verify_parse_artifact_identity(
+    config: &'static BudgetConfig,
     blob_store: &BlobStore,
     key: &StorageKey,
     artifact: &ArtifactRef,
@@ -563,8 +975,8 @@ async fn verify_parse_artifact_identity(
 
     if artifact.storage_key.starts_with("artifacts/") {
         return Err(AdapterError::Validation(format!(
-            "NSW budget parse artifact storage key `{}` does not match artifact id `{}`",
-            artifact.storage_key, artifact.id
+            "{} budget parse artifact storage key `{}` does not match artifact id `{}`",
+            config.jurisdiction, artifact.storage_key, artifact.id
         )));
     }
 
@@ -572,14 +984,14 @@ async fn verify_parse_artifact_identity(
         Ok(())
     } else {
         Err(AdapterError::Validation(format!(
-            "NSW budget parse artifact storage key `{}` does not match artifact id `{}`",
-            artifact.storage_key, artifact.id
+            "{} budget parse artifact storage key `{}` does not match artifact id `{}`",
+            config.jurisdiction, artifact.storage_key, artifact.id
         )))
     }
 }
 
 #[derive(Debug, Clone)]
-struct NswBudgetProvenance {
+struct BudgetProvenance {
     budget_year: String,
     paper: String,
     paper_slug: String,
@@ -587,33 +999,31 @@ struct NswBudgetProvenance {
     artifact_date: Option<String>,
 }
 
-fn nsw_budget_provenance_for_fetch(
+fn budget_provenance_for_fetch(
+    config: &'static BudgetConfig,
     source_url: &str,
     metadata: &BTreeMap<String, String>,
-) -> Option<NswBudgetProvenance> {
-    nsw_budget_provenance(source_url, metadata, false)
+) -> Option<BudgetProvenance> {
+    budget_provenance(config, source_url, metadata, false)
 }
 
-fn nsw_budget_provenance_for_parse(
+fn budget_provenance_for_parse(
+    config: &'static BudgetConfig,
     source_url: &str,
     metadata: &BTreeMap<String, String>,
-) -> Option<NswBudgetProvenance> {
-    nsw_budget_provenance(source_url, metadata, true)
+) -> Option<BudgetProvenance> {
+    budget_provenance(config, source_url, metadata, true)
 }
 
-fn nsw_budget_provenance(
+fn budget_provenance(
+    config: &'static BudgetConfig,
     source_url: &str,
     metadata: &BTreeMap<String, String>,
     require_nsw_host: bool,
-) -> Option<NswBudgetProvenance> {
+) -> Option<BudgetProvenance> {
     let (_, after_scheme) = source_url.split_once("://")?;
     let (host, path_with_suffix) = after_scheme.split_once('/')?;
-    if require_nsw_host
-        && !matches!(
-            host,
-            "budget.nsw.gov.au" | "www.budget.nsw.gov.au" | "www.nsw.gov.au"
-        )
-    {
+    if require_nsw_host && !config.official_parse_hosts.contains(&host) {
         return None;
     }
     let path = path_with_suffix
@@ -626,10 +1036,10 @@ fn nsw_budget_provenance(
     if !path.ends_with(".pdf") {
         return None;
     }
-    if metadata.get("jurisdiction").map(String::as_str) != Some(JURISDICTION) {
+    if metadata.get("jurisdiction").map(String::as_str) != Some(config.jurisdiction) {
         return None;
     }
-    if metadata.get("paper_slug").map(String::as_str) != Some(PAPER_SLUG) {
+    if metadata.get("paper_slug").map(String::as_str) != Some(config.paper_slug) {
         return None;
     }
     let budget_year = metadata
@@ -640,25 +1050,26 @@ fn nsw_budget_provenance(
         .get("artifact_date")
         .filter(|value| !value.trim().is_empty())
         .cloned();
-    Some(NswBudgetProvenance {
+    Some(BudgetProvenance {
         budget_year,
         paper: metadata
             .get("paper")
             .filter(|value| !value.trim().is_empty())
             .cloned()
-            .unwrap_or_else(|| PAPER.into()),
-        paper_slug: PAPER_SLUG.into(),
+            .unwrap_or_else(|| config.paper.into()),
+        paper_slug: config.paper_slug.into(),
         title: metadata
             .get("title")
             .filter(|value| !value.trim().is_empty())
             .cloned()
-            .unwrap_or_else(|| TARGET_TITLE.into()),
+            .unwrap_or_else(|| config.target_title.into()),
         artifact_date,
     })
 }
 
 fn discoverable_jobs_with_source_index(
-    current: &[NswBudgetPublication],
+    config: &'static BudgetConfig,
+    current: &[StateBudgetPublication],
     known_revisions: &BTreeMap<String, UpstreamRevision>,
     started_at: DateTime<Utc>,
     trace_parent: Option<&str>,
@@ -676,9 +1087,16 @@ fn discoverable_jobs_with_source_index(
         .filter_map(|publication| {
             let revision = publication.revision(started_at);
             known_revisions
-                .get(&publication.revision_key())
+                .get(&publication.revision_key(config))
                 .is_none_or(|known| known != &revision)
-                .then(|| publication.to_discovered_job(started_at, trace_parent, source_index_url))
+                .then(|| {
+                    publication.to_discovered_job(
+                        config,
+                        started_at,
+                        trace_parent,
+                        source_index_url,
+                    )
+                })
         })
         .collect()
 }
@@ -935,13 +1353,16 @@ fn slugify_code(value: &str) -> String {
     slug
 }
 
-fn nsw_code_id(field: &str, value: &str) -> Result<CodeId, AdapterError> {
+fn budget_code_id(config: &BudgetConfig, field: &str, value: &str) -> Result<CodeId, AdapterError> {
     CodeId::new(value.to_string()).map_err(|err| {
-        AdapterError::FormatDrift(format!("invalid NSW budget {field} code `{value}`: {err}"))
+        AdapterError::FormatDrift(format!(
+            "invalid {} budget {field} code `{value}`: {err}",
+            config.jurisdiction
+        ))
     })
 }
 
-fn artifact_date_for_version(provenance: &NswBudgetProvenance) -> Result<NaiveDate, AdapterError> {
+fn artifact_date_for_version(provenance: &BudgetProvenance) -> Result<NaiveDate, AdapterError> {
     if let Some(artifact_date) = &provenance.artifact_date {
         return NaiveDate::parse_from_str(artifact_date, "%Y-%m-%d").map_err(|err| {
             AdapterError::FormatDrift(format!(
@@ -984,8 +1405,8 @@ fn source_id() -> SourceId {
     SourceId::new(SOURCE_ID).expect("static source id is valid")
 }
 
-fn dataflow_id() -> DataflowId {
-    DataflowId::new(DATAFLOW_ID).expect("static dataflow id is valid")
+fn dataflow_id(config: &BudgetConfig) -> DataflowId {
+    DataflowId::new(config.dataflow_id).expect("static dataflow id is valid")
 }
 
 fn pdf_client_error(err: PdfClientError) -> AdapterError {
@@ -1006,15 +1427,23 @@ fn cancelled_parse_error() -> AdapterError {
     .into()
 }
 
-fn default_publications() -> Vec<NswBudgetPublication> {
-    vec![NswBudgetPublication {
-        budget_year: "2025-26".into(),
-        paper: PAPER.into(),
-        paper_slug: PAPER_SLUG.into(),
-        title: TARGET_TITLE.into(),
-        source_url: DEFAULT_BUDGET_PDF_URL.into(),
-        last_updated: Some("2025-06-24".into()),
+fn default_publications(config: &BudgetConfig) -> Vec<StateBudgetPublication> {
+    vec![StateBudgetPublication {
+        budget_year: default_budget_year(config),
+        paper: config.paper.into(),
+        paper_slug: config.paper_slug.into(),
+        title: config.target_title.into(),
+        source_url: config.default_budget_pdf_url.into(),
+        last_updated: Some(config.default_last_updated.into()),
     }]
+}
+
+fn default_budget_year(config: &BudgetConfig) -> String {
+    config
+        .default_budget_pdf_url
+        .split(['/', '+', ' '])
+        .find_map(find_fiscal_year)
+        .unwrap_or_else(|| config.default_last_updated[..4].to_string())
 }
 
 /// Builder for [`NswBudgetAdapter`].
@@ -1028,7 +1457,7 @@ pub struct NswBudgetAdapterBuilder {
 impl Default for NswBudgetAdapterBuilder {
     fn default() -> Self {
         Self {
-            publications: default_publications(),
+            publications: default_publications(&NSW_CONFIG),
             pdf_base_url: DEFAULT_PDF_BASE_URL.into(),
             pdf_client: None,
         }
@@ -1083,7 +1512,7 @@ impl NswBudgetAdapterBuilder {
                 version: env!("CARGO_PKG_VERSION").into(),
                 rate_limit: RateLimit::new(20, Duration::from_secs(60))
                     .expect("static NSW budget rate limit is valid"),
-                dataflows: vec![dataflow_id()],
+                dataflows: vec![dataflow_id(&NSW_CONFIG)],
             },
             publications,
             pdf_client,
@@ -1098,12 +1527,137 @@ impl NswBudgetAdapterBuilder {
     }
 }
 
+/// Builder for [`VicBudgetAdapter`].
+#[derive(Debug, Clone)]
+pub struct VicBudgetAdapterBuilder {
+    publications: Vec<VicBudgetPublication>,
+    pdf_base_url: String,
+    pdf_client: Option<PdfClient>,
+}
+
+impl Default for VicBudgetAdapterBuilder {
+    fn default() -> Self {
+        Self {
+            publications: default_publications(&VIC_CONFIG),
+            pdf_base_url: DEFAULT_PDF_BASE_URL.into(),
+            pdf_client: None,
+        }
+    }
+}
+
+impl VicBudgetAdapterBuilder {
+    /// Override the curated VIC budget publications, usually for fixture tests.
+    #[must_use]
+    pub fn publications(mut self, publications: Vec<VicBudgetPublication>) -> Self {
+        self.publications = publications;
+        self
+    }
+
+    /// Override the PDF sidecar base URL.
+    #[must_use]
+    pub fn pdf_base_url(mut self, pdf_base_url: impl Into<String>) -> Self {
+        self.pdf_base_url = pdf_base_url.into();
+        self
+    }
+
+    /// Inject a prebuilt PDF client, usually for tests.
+    #[must_use]
+    pub fn pdf_client(mut self, pdf_client: PdfClient) -> Self {
+        self.pdf_client = Some(pdf_client);
+        self
+    }
+
+    /// Build the adapter, returning validation errors for invalid sidecar URLs.
+    pub fn try_build(self) -> Result<VicBudgetAdapter, AdapterError> {
+        if self.publications.is_empty() {
+            return Err(AdapterError::Validation(
+                "at least one VIC budget publication must be configured".into(),
+            ));
+        }
+        let pdf_client = match self.pdf_client {
+            Some(pdf_client) => pdf_client,
+            None => PdfClient::new(&self.pdf_base_url).map_err(pdf_client_error)?,
+        };
+        let mut publications = self.publications;
+        publications.sort_by(|left, right| {
+            left.budget_year
+                .cmp(&right.budget_year)
+                .then(left.paper_slug.cmp(&right.paper_slug))
+                .then(left.source_url.cmp(&right.source_url))
+        });
+        publications.dedup_by(|left, right| left.source_url == right.source_url);
+        Ok(VicBudgetAdapter {
+            manifest: AdapterManifest {
+                source_id: source_id(),
+                name: "Australian state budgets".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                rate_limit: RateLimit::new(20, Duration::from_secs(60))
+                    .expect("static VIC budget rate limit is valid"),
+                dataflows: vec![dataflow_id(&VIC_CONFIG)],
+            },
+            publications,
+            pdf_client,
+        })
+    }
+
+    /// Build the adapter.
+    #[must_use]
+    pub fn build(self) -> VicBudgetAdapter {
+        self.try_build()
+            .expect("valid static VIC budget adapter configuration")
+    }
+}
+
+/// Builder for [`StateBudgetsAdapter`].
+#[derive(Debug, Clone)]
+pub struct StateBudgetsAdapterBuilder {
+    pdf_base_url: String,
+}
+
+impl Default for StateBudgetsAdapterBuilder {
+    fn default() -> Self {
+        Self {
+            pdf_base_url: DEFAULT_PDF_BASE_URL.into(),
+        }
+    }
+}
+
+impl StateBudgetsAdapterBuilder {
+    /// Override the PDF sidecar base URL for all state budget parsers.
+    #[must_use]
+    pub fn pdf_base_url(mut self, pdf_base_url: impl Into<String>) -> Self {
+        self.pdf_base_url = pdf_base_url.into();
+        self
+    }
+
+    /// Build the adapter, returning validation errors for invalid sidecar URLs.
+    pub fn try_build(self) -> Result<StateBudgetsAdapter, AdapterError> {
+        let nsw = NswBudgetAdapter::builder()
+            .pdf_base_url(self.pdf_base_url.clone())
+            .try_build()?;
+        let vic = VicBudgetAdapter::builder()
+            .pdf_base_url(self.pdf_base_url)
+            .try_build()?;
+        Ok(StateBudgetsAdapter::new(nsw, vic))
+    }
+
+    /// Build the adapter.
+    #[must_use]
+    pub fn build(self) -> StateBudgetsAdapter {
+        self.try_build()
+            .expect("valid static state budgets adapter configuration")
+    }
+}
+
 /// Stored revision type for NSW budget PDF links.
 pub type NswBudgetRevision = UpstreamRevision;
 
-/// One NSW budget PDF publication from the curated adapter inventory.
+/// Stored revision type for VIC budget PDF links.
+pub type VicBudgetRevision = UpstreamRevision;
+
+/// One state budget PDF publication from the curated adapter inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NswBudgetPublication {
+pub struct StateBudgetPublication {
     /// Fiscal year of the budget publication, such as `2025-26`.
     pub budget_year: String,
     /// Human paper name.
@@ -1118,9 +1672,18 @@ pub struct NswBudgetPublication {
     pub last_updated: Option<String>,
 }
 
-impl NswBudgetPublication {
-    fn revision_key(&self) -> String {
-        format!("NSW:{}:{}", self.paper_slug, self.budget_year)
+/// One NSW budget PDF publication from the curated adapter inventory.
+pub type NswBudgetPublication = StateBudgetPublication;
+
+/// One VIC budget PDF publication from the curated adapter inventory.
+pub type VicBudgetPublication = StateBudgetPublication;
+
+impl StateBudgetPublication {
+    fn revision_key(&self, config: &BudgetConfig) -> String {
+        format!(
+            "{}:{}:{}",
+            config.jurisdiction, self.paper_slug, self.budget_year
+        )
     }
 
     fn revision(&self, _started_at: DateTime<Utc>) -> UpstreamRevision {
@@ -1133,38 +1696,42 @@ impl NswBudgetPublication {
 
     fn to_discovered_job(
         &self,
+        config: &BudgetConfig,
         started_at: DateTime<Utc>,
         trace_parent: Option<&str>,
         source_index_url: &str,
     ) -> DiscoveredJob {
         let revision = self.revision(started_at);
         let revision_version = revision.version().to_string();
-        let revision_key = self.revision_key();
+        let revision_key = self.revision_key(config);
         let artifact_date = self
             .last_updated
             .clone()
             .unwrap_or_else(|| self.budget_year.clone());
         DiscoveredJob {
             id: format!(
-                "state-budgets:nsw:{}:{}:{}",
-                self.paper_slug, self.budget_year, revision_version
+                "state-budgets:{}:{}:{}:{}",
+                config.jurisdiction.to_ascii_lowercase(),
+                self.paper_slug,
+                self.budget_year,
+                revision_version
             ),
             source_id: source_id(),
-            dataflow_id: dataflow_id(),
+            dataflow_id: dataflow_id(config),
             source_url: self.source_url.clone(),
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
                 ("adapter".into(), "state-budgets".into()),
                 ("artifact_date".into(), artifact_date),
                 ("artifact_format".into(), "pdf".into()),
-                ("attribution".into(), ATTRIBUTION.into()),
+                ("attribution".into(), config.attribution.into()),
                 ("budget_year".into(), self.budget_year.clone()),
                 ("cadence".into(), "annual".into()),
-                ("dataflow_id".into(), DATAFLOW_ID.into()),
-                ("jurisdiction".into(), JURISDICTION.into()),
-                ("jurisdiction_name".into(), JURISDICTION_NAME.into()),
-                ("license".into(), LICENSE_NAME.into()),
-                ("license_url".into(), LICENSE_URL.into()),
+                ("dataflow_id".into(), config.dataflow_id.into()),
+                ("jurisdiction".into(), config.jurisdiction.into()),
+                ("jurisdiction_name".into(), config.jurisdiction_name.into()),
+                ("license".into(), config.license_name.into()),
+                ("license_url".into(), config.license_url.into()),
                 ("paper".into(), self.paper.clone()),
                 ("paper_slug".into(), self.paper_slug.clone()),
                 ("revision_key".into(), revision_key),
@@ -1223,7 +1790,7 @@ mod tests {
     #[test]
     fn fetch_job_validation_rejects_wrong_provenance() {
         let adapter = NswBudgetAdapter::default();
-        let publication = default_publications()
+        let publication = default_publications(&NSW_CONFIG)
             .into_iter()
             .next()
             .expect("default publication");
@@ -1279,28 +1846,32 @@ mod tests {
         ]);
 
         assert!(
-            nsw_budget_provenance_for_fetch(
+            budget_provenance_for_fetch(
+                &NSW_CONFIG,
                 "http://127.0.0.1:3000/bp1-budget-statement-nsw-budget-2025-26.pdf",
                 &metadata,
             )
             .is_some()
         );
         assert!(
-            nsw_budget_provenance_for_parse(
+            budget_provenance_for_parse(
+                &NSW_CONFIG,
                 "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf",
                 &metadata,
             )
             .is_some()
         );
         assert!(
-            nsw_budget_provenance_for_parse(
+            budget_provenance_for_parse(
+                &NSW_CONFIG,
                 "https://mirror.example.invalid/bp1-budget-statement-nsw-budget-2025-26.pdf",
                 &metadata,
             )
             .is_none()
         );
         assert!(
-            nsw_budget_provenance_for_fetch(
+            budget_provenance_for_fetch(
+                &NSW_CONFIG,
                 "http://127.0.0.1:3000/bp1-budget-statement-nsw-budget-2025-26.docx",
                 &metadata,
             )
@@ -1310,7 +1881,8 @@ mod tests {
         let mut missing_jurisdiction = metadata;
         missing_jurisdiction.remove("jurisdiction");
         assert!(
-            nsw_budget_provenance_for_fetch(
+            budget_provenance_for_fetch(
+                &NSW_CONFIG,
                 "http://127.0.0.1:3000/bp1-budget-statement-nsw-budget-2025-26.pdf",
                 &missing_jurisdiction,
             )
