@@ -199,6 +199,17 @@ services:
     ports:
       - "127.0.0.1:9091:9091"
 
+  influxdb:
+    profiles: ["observability"]
+    image: influxdb:1.8
+    environment:
+      INFLUXDB_DB: k6
+      INFLUXDB_HTTP_AUTH_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb
+
   tempo:
     profiles: ["observability"]
     image: grafana/tempo:2.7.0
@@ -269,6 +280,8 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+      influxdb:
+        condition: service_started
       tempo:
         condition: service_started
       loki:
@@ -279,6 +292,7 @@ volumes:
   redis-data:
   minio-data:
   prometheus-data:
+  influxdb-data:
   tempo-data:
   loki-data:
   grafana-data:

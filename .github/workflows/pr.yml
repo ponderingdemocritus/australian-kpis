@@ -429,74 +429,120 @@ jobs:
           format: table
 
   smoke:
-    name: Smoke
+    name: Smoke (k6)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
-      AU_KPIS_CONTRACT_ADDR: 127.0.0.1:38081
+      LOCAL_K6_OUT: influxdb=http://127.0.0.1:8086/k6
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: "0.54.0"
 
-      - name: Set up Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: Build SDK packages
-        run: pnpm turbo run build --cache-dir=.turbo
-
-      - name: Build smoke server
-        run: cargo build -p au-kpis-api-http --example contract_server --locked
-
-      - name: Start smoke server
+      - name: Configure k6 output
+        env:
+          K6_INFLUXDB_ADDR: ${{ vars.K6_INFLUXDB_ADDR }}
         run: |
           set -euo pipefail
-          mkdir -p target/smoke
-          ./target/debug/examples/contract_server > target/smoke/server.log 2>&1 &
-          echo $! > target/smoke/server.pid
+          if [ -n "${K6_INFLUXDB_ADDR:-}" ]; then
+            echo "K6_OUT=influxdb=${K6_INFLUXDB_ADDR}" >> "$GITHUB_ENV"
+          else
+            echo "K6_OUT=${LOCAL_K6_OUT}" >> "$GITHUB_ENV"
+          fi
 
-      - name: Wait for API readiness
+      - name: Configure local smoke target
+        if: github.event_name != 'merge_group'
+        run: |
+          set -euo pipefail
+          echo "AU_KPIS_BASE_URL=http://127.0.0.1:3000" >> "$GITHUB_ENV"
+          echo "K6_ENVIRONMENT=pr-compose" >> "$GITHUB_ENV"
+
+      - name: Configure staging smoke target
+        if: github.event_name == 'merge_group'
+        env:
+          AU_KPIS_STAGING_BASE_URL: ${{ vars.AU_KPIS_STAGING_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AU_KPIS_STAGING_BASE_URL:-}" ]; then
+            echo "AU_KPIS_STAGING_BASE_URL repository variable is required for merge queue smoke." >&2
+            exit 1
+          fi
+          echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
+          echo "K6_ENVIRONMENT=staging" >> "$GITHUB_ENV"
+
+      - name: Start compose smoke stack
+        if: github.event_name != 'merge_group'
+        run: docker compose -f infra/compose/docker-compose.yml up -d --build api influxdb
+
+      - name: Start merge-queue metrics store
+        if: github.event_name == 'merge_group'
+        run: docker compose -f infra/compose/docker-compose.yml up -d influxdb
+
+      - name: Apply migrations
+        if: github.event_name != 'merge_group'
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                pg_isready -U au_kpis -d au_kpis; then
+              break
+            fi
+            sleep 1
+          done
+          cat infra/migrations/*.up.sql \
+            | docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
+
+      - name: Seed smoke fixture data
+        if: github.event_name != 'merge_group'
+        run: |
+          docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
+            < apps/web/e2e/fixtures/explorer.sql
+
+      - name: Wait for local API readiness
+        if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
           for _ in $(seq 1 120); do
-            if curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/health" >/dev/null; then
+            if curl -fsS "http://127.0.0.1:3000/v1/health" >/dev/null; then
               exit 0
             fi
             sleep 1
           done
-          echo "Smoke server did not become ready" >&2
-          cat target/smoke/server.log >&2 || true
+          docker compose -f infra/compose/docker-compose.yml logs api >&2 || true
           exit 1
 
-      - name: Run curl smoke checks
+      - name: Wait for k6 metrics store
         run: |
           set -euo pipefail
-          curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/health" | jq -e '.status == "ok"'
-          curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/openapi.json" | jq -e '.openapi'
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:8086/ping" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose -f infra/compose/docker-compose.yml logs influxdb >&2 || true
+          exit 1
 
-      - name: Run SDK smoke check
+      - name: Run k6 smoke scenario
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.AU_KPIS_SMOKE_API_KEY }}
         run: |
-          node --input-type=module <<'JS'
-          import { createClient } from './packages/sdk/dist/client.js'
+          set -euo pipefail
+          k6 run --out "${K6_OUT}" \
+            --tag environment="${K6_ENVIRONMENT}" \
+            --tag github_run_id="${GITHUB_RUN_ID}" \
+            apps/bench/smoke.js
 
-          const client = createClient({ baseUrl: `http://${process.env.AU_KPIS_CONTRACT_ADDR}` })
-          const health = await client.health()
-          if (health.status !== 'ok') {
-            throw new Error(`unexpected health status: ${health.status}`)
-          }
-          await client.openapi()
-          JS
-
-      - name: Stop smoke server
+      - name: Stop compose smoke stack
         if: always()
-        run: |
-          set -euo pipefail
-          if [ -f target/smoke/server.pid ]; then
-            kill "$(cat target/smoke/server.pid)" || true
-          fi
+        run: docker compose -f infra/compose/docker-compose.yml --profile observability down -v
 
   bench:
     name: Bench Regression
