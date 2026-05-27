@@ -31,7 +31,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use figment::{
@@ -90,6 +90,8 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     /// Telemetry configuration — consumed by `au-kpis-telemetry`.
     pub telemetry: TelemetryConfig,
+    /// API rate-limit tiers and anonymous request quota.
+    pub rate_limits: RateLimitConfig,
 }
 
 /// Config consumed by the ingestion worker binary.
@@ -168,6 +170,64 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// API rate-limit configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RateLimitConfig {
+    /// Tier name used when an API key references an unknown tier.
+    pub default_tier: String,
+    /// Named API-key rate-limit tiers.
+    pub tiers: BTreeMap<String, RateLimitTierConfig>,
+    /// Anonymous no-key per-IP quota.
+    pub anonymous: RateLimitQuotaConfig,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        let free = RateLimitTierConfig {
+            per_key: RateLimitQuotaConfig {
+                per_second: 60,
+                per_hour: 1_000,
+                burst_multiplier: 2,
+            },
+            per_ip: RateLimitQuotaConfig {
+                per_second: 10,
+                per_hour: 100,
+                burst_multiplier: 2,
+            },
+        };
+
+        Self {
+            default_tier: "free".into(),
+            tiers: BTreeMap::from([("free".into(), free)]),
+            anonymous: RateLimitQuotaConfig {
+                per_second: 10,
+                per_hour: 100,
+                burst_multiplier: 2,
+            },
+        }
+    }
+}
+
+/// API-key tier quota, enforced by both key and client IP.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RateLimitTierConfig {
+    /// Per-key quota.
+    pub per_key: RateLimitQuotaConfig,
+    /// Per-IP quota for requests carrying a key in this tier.
+    pub per_ip: RateLimitQuotaConfig,
+}
+
+/// Token-bucket quota shape.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct RateLimitQuotaConfig {
+    /// Refill rate for the one-second bucket.
+    pub per_second: u32,
+    /// Refill rate for the one-hour bucket.
+    pub per_hour: u32,
+    /// Bucket capacity multiplier over the refill rate.
+    pub burst_multiplier: u32,
+}
+
 /// Log output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -187,6 +247,7 @@ pub enum LogFormat {
 struct Defaults {
     http: HttpConfig,
     telemetry: TelemetryConfig,
+    rate_limits: RateLimitConfig,
 }
 
 /// Load [`AppConfig`] using the standard **defaults → TOML → env** precedence.
@@ -301,6 +362,77 @@ mod tests {
                     "http://localhost:4173".to_string(),
                 ]
             );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn default_rate_limits_match_free_tier_spec() {
+        Jail::expect_with(|jail| {
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+
+            let cfg = load(None).expect("env supplies required fields");
+            let free = cfg
+                .rate_limits
+                .tiers
+                .get("free")
+                .expect("free tier configured");
+
+            assert_eq!(free.per_key.per_second, 60);
+            assert_eq!(free.per_key.per_hour, 1_000);
+            assert_eq!(free.per_key.burst_multiplier, 2);
+            assert_eq!(cfg.rate_limits.anonymous.per_second, 10);
+            assert_eq!(cfg.rate_limits.anonymous.per_hour, 100);
+            assert_eq!(cfg.rate_limits.anonymous.burst_multiplier, 2);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn env_can_override_rate_limit_tiers() {
+        Jail::expect_with(|jail| {
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+            jail.set_env("AU_KPIS_RATE_LIMITS__DEFAULT_TIER", "internal");
+            jail.set_env(
+                "AU_KPIS_RATE_LIMITS__TIERS__internal__PER_KEY__PER_SECOND",
+                "120",
+            );
+            jail.set_env(
+                "AU_KPIS_RATE_LIMITS__TIERS__internal__PER_KEY__PER_HOUR",
+                "5000",
+            );
+            jail.set_env(
+                "AU_KPIS_RATE_LIMITS__TIERS__internal__PER_KEY__BURST_MULTIPLIER",
+                "3",
+            );
+            jail.set_env(
+                "AU_KPIS_RATE_LIMITS__TIERS__internal__PER_IP__PER_SECOND",
+                "20",
+            );
+            jail.set_env(
+                "AU_KPIS_RATE_LIMITS__TIERS__internal__PER_IP__PER_HOUR",
+                "500",
+            );
+            jail.set_env(
+                "AU_KPIS_RATE_LIMITS__TIERS__internal__PER_IP__BURST_MULTIPLIER",
+                "2",
+            );
+
+            let cfg = load(None).expect("env supplies rate-limit tiers");
+            let internal = cfg
+                .rate_limits
+                .tiers
+                .get("internal")
+                .expect("internal tier configured");
+
+            assert_eq!(cfg.rate_limits.default_tier, "internal");
+            assert_eq!(internal.per_key.per_second, 120);
+            assert_eq!(internal.per_key.per_hour, 5_000);
+            assert_eq!(internal.per_key.burst_multiplier, 3);
+            assert_eq!(internal.per_ip.per_second, 20);
+            assert_eq!(internal.per_ip.per_hour, 500);
             Ok(())
         });
     }

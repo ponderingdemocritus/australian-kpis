@@ -5,17 +5,12 @@ use std::time::Duration;
 use au_kpis_cache::CacheError;
 use axum::{
     Json,
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
-
-const X_RATE_LIMIT_LIMIT: header::HeaderName = header::HeaderName::from_static("x-ratelimit-limit");
-const X_RATE_LIMIT_REMAINING: header::HeaderName =
-    header::HeaderName::from_static("x-ratelimit-remaining");
-const X_RATE_LIMIT_RESET: header::HeaderName = header::HeaderName::from_static("x-ratelimit-reset");
 
 /// RFC 7807 problem details body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -152,21 +147,12 @@ impl IntoResponse for ApiError {
         );
 
         if let Some(rate_limit) = rate_limit {
-            insert_header(
+            crate::rate_limit::insert_rate_limit_error_headers(
                 response.headers_mut(),
-                header::RETRY_AFTER,
-                rate_limit.retry_after.as_secs(),
-            );
-            insert_header(response.headers_mut(), X_RATE_LIMIT_LIMIT, rate_limit.limit);
-            insert_header(
-                response.headers_mut(),
-                X_RATE_LIMIT_REMAINING,
+                rate_limit.retry_after,
+                rate_limit.limit,
                 rate_limit.remaining,
-            );
-            insert_header(
-                response.headers_mut(),
-                X_RATE_LIMIT_RESET,
-                rate_limit.reset_after.as_secs(),
+                rate_limit.reset_after,
             );
         }
 
@@ -199,36 +185,29 @@ fn internal_server_error(
     )
 }
 
-fn insert_header<T: std::fmt::Display>(
-    headers: &mut HeaderMap,
-    name: header::HeaderName,
-    value: T,
-) {
-    if let Ok(value) = HeaderValue::from_str(&value.to_string()) {
-        headers.insert(name, value);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use axum::http::header;
+    use std::time::Duration;
 
-    use super::insert_header;
+    use axum::http::{HeaderMap, header};
 
-    struct InvalidHeaderValue;
-
-    impl std::fmt::Display for InvalidHeaderValue {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("invalid\nheader")
-        }
-    }
+    use crate::rate_limit::insert_rate_limit_error_headers;
 
     #[test]
-    fn insert_header_ignores_invalid_display_values() {
-        let mut headers = axum::http::HeaderMap::new();
+    fn rate_limited_error_headers_round_up_retry_after() {
+        let mut headers = HeaderMap::new();
 
-        insert_header(&mut headers, header::RETRY_AFTER, InvalidHeaderValue);
+        insert_rate_limit_error_headers(
+            &mut headers,
+            Duration::from_millis(250),
+            10,
+            0,
+            Duration::from_secs(1),
+        );
 
-        assert!(!headers.contains_key(header::RETRY_AFTER));
+        assert_eq!(headers.get(header::RETRY_AFTER).unwrap(), "1");
+        assert_eq!(headers.get("x-ratelimit-limit").unwrap(), "10");
+        assert_eq!(headers.get("x-ratelimit-remaining").unwrap(), "0");
+        assert_eq!(headers.get("x-ratelimit-reset").unwrap(), "1");
     }
 }

@@ -2,7 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use au_kpis_api_http::{ApiError, AppState, ProblemDetails, router, router_with};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
-use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_config::{
+    AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
+};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     Router,
@@ -76,6 +78,7 @@ fn test_state_with_origins(cors_allowed_origins: Vec<String>) -> AppState {
             log_level: "info".into(),
             otlp_endpoint: None,
         },
+        rate_limits: RateLimitConfig::default(),
     };
 
     AppState::new(

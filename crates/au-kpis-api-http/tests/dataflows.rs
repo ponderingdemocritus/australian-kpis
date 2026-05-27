@@ -6,7 +6,9 @@ use std::{
 
 use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
-use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_config::{
+    AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
+};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
@@ -341,6 +343,7 @@ fn test_state(db: PgPool, cache: Arc<CacheClient>) -> AppState {
                 log_level: "info".into(),
                 otlp_endpoint: None,
             },
+            rate_limits: RateLimitConfig::default(),
         }),
         Arc::new(Telemetry::disabled()),
         CancellationToken::new(),

@@ -1,6 +1,6 @@
 //! API-key middleware for protected routes.
 
-use au_kpis_auth::{ApiKeyManager, AuthError};
+use au_kpis_auth::{ApiKeyManager, AuthError, VerifiedApiKey};
 use axum::{
     extract::{Request, State},
     middleware::Next,
@@ -15,6 +15,10 @@ pub async fn require_api_key(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if request.extensions().get::<VerifiedApiKey>().is_some() {
+        return next.run(request).await;
+    }
+
     let Some(header) = request.headers().get("x-api-key") else {
         return unauthorized().into_response();
     };

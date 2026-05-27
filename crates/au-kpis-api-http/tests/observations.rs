@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use arrow_array::{Float64Array, StringArray, UInt32Array};
 use au_kpis_api_http::{AppState, ObservationsResponse, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
-use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_config::{
+    AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
+};
 use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
 use au_kpis_telemetry::Telemetry;
 use axum::{
@@ -314,6 +316,7 @@ fn test_state(db: PgPool) -> AppState {
                 log_level: "info".into(),
                 otlp_endpoint: None,
             },
+            rate_limits: RateLimitConfig::default(),
         }),
         Arc::new(Telemetry::disabled()),
         CancellationToken::new(),
