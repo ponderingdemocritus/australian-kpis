@@ -1,7 +1,9 @@
 //! `/v1/observations` query handling and streaming renderers.
 
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, fmt, io, sync::Arc};
 
+use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use au_kpis_domain::{
     ObservationStatus, TimePrecision,
     ids::{ArtifactId, DataflowId, SeriesKey, Sha256Digest},
@@ -14,9 +16,19 @@ use axum::{
 };
 use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::{DateTime, NaiveDate, Utc};
-use futures::{Stream, TryStreamExt};
+use futures::{
+    Stream, TryStreamExt,
+    future::{BoxFuture, FutureExt},
+};
+use parquet::{
+    arrow::{AsyncArrowWriter, async_writer::AsyncFileWriter},
+    basic::Compression,
+    errors::ParquetError,
+    file::{metadata::KeyValue, properties::WriterProperties},
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgRow};
+use tokio::sync::mpsc;
 use utoipa::ToSchema;
 
 use crate::{AppState, error::ApiError};
@@ -24,6 +36,8 @@ use crate::{AppState, error::ApiError};
 const DEFAULT_LIMIT: usize = 1_000;
 const MAX_LIMIT: usize = 10_000;
 const CACHE_CONTROL_VALUE: &str = "public, max-age=60, stale-while-revalidate=300";
+const PARQUET_ROW_GROUP_TARGET_BYTES: usize = 1_000_000;
+const PARQUET_BATCH_ROWS: usize = 1_024;
 
 /// Attribution and licensing metadata that applies to an observations page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -96,7 +110,7 @@ pub struct ObservationsResponse {
         ("since" = Option<String>, Query, description = "Inclusive lower time bound as YYYY-MM-DD or RFC3339."),
         ("until" = Option<String>, Query, description = "Inclusive upper time bound as YYYY-MM-DD or RFC3339."),
         ("frequency" = Option<String>, Query, description = "Optional dataflow frequency filter."),
-        ("format" = Option<String>, Query, description = "Response format: json or csv."),
+        ("format" = Option<String>, Query, description = "Response format: json, csv, or parquet."),
         ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page."),
         ("limit" = Option<u32>, Query, description = "Page size, maximum 10000.")
     ),
@@ -106,7 +120,8 @@ pub struct ObservationsResponse {
             description = "Observation page.",
             content(
                 (ObservationsResponse = "application/json"),
-                (String = "text/csv")
+                (String = "text/csv"),
+                (String = "application/vnd.apache.parquet")
             ),
             headers(
                 ("ETag" = String, description = "Weak entity tag for this page."),
@@ -174,6 +189,7 @@ pub async fn list_observations(
     let content_type = match query.format {
         ResponseFormat::Json => HeaderValue::from_static("application/json"),
         ResponseFormat::Csv => HeaderValue::from_static("text/csv; charset=utf-8"),
+        ResponseFormat::Parquet => HeaderValue::from_static("application/vnd.apache.parquet"),
     };
     let stream = match query.format {
         ResponseFormat::Json => {
@@ -182,6 +198,11 @@ pub async fn list_observations(
         ResponseFormat::Csv => {
             Body::from_stream(csv_observations_stream(state.db.clone(), query, metadata))
         }
+        ResponseFormat::Parquet => Body::from_stream(parquet_observations_stream(
+            state.db.clone(),
+            query,
+            metadata,
+        )),
     };
 
     let mut response = Response::new(stream);
@@ -211,6 +232,7 @@ struct ParsedObservationsQuery {
 enum ResponseFormat {
     Json,
     Csv,
+    Parquet,
 }
 
 impl fmt::Display for ResponseFormat {
@@ -218,6 +240,7 @@ impl fmt::Display for ResponseFormat {
         match self {
             ResponseFormat::Json => f.write_str("json"),
             ResponseFormat::Csv => f.write_str("csv"),
+            ResponseFormat::Parquet => f.write_str("parquet"),
         }
     }
 }
@@ -343,9 +366,7 @@ fn parse_format(value: &str) -> Result<ResponseFormat, ApiError> {
     match value {
         "json" => Ok(ResponseFormat::Json),
         "csv" => Ok(ResponseFormat::Csv),
-        "parquet" => Err(ApiError::Validation(
-            "format=parquet is planned for phase 3".into(),
-        )),
+        "parquet" => Ok(ResponseFormat::Parquet),
         _ => Err(ApiError::Validation(format!(
             "unsupported format `{value}`"
         ))),
@@ -534,6 +555,255 @@ fn csv_observations_stream(
             yield Bytes::from(format!("# next_cursor={}\n", csv_escape(&next_cursor)));
         }
     }
+}
+
+fn parquet_observations_stream(
+    pool: PgPool,
+    query: ParsedObservationsQuery,
+    metadata: ObservationsMetadata,
+) -> impl Stream<Item = Result<Bytes, ApiError>> + Send + 'static {
+    let (tx, mut rx) = mpsc::channel(8);
+    let error_tx = tx.clone();
+    let limit = query.limit;
+    let rows = fetch_observation_rows(pool, query);
+
+    tokio::spawn(async move {
+        if let Err(err) =
+            write_parquet_rows(rows, metadata, limit, tx, PARQUET_ROW_GROUP_TARGET_BYTES).await
+        {
+            if !error_tx.is_closed() {
+                let _ = error_tx.send(Err(err)).await;
+            }
+        }
+    });
+
+    async_stream::stream! {
+        while let Some(chunk) = rx.recv().await {
+            yield chunk;
+        }
+    }
+}
+
+async fn write_parquet_rows<S>(
+    rows: S,
+    metadata: ObservationsMetadata,
+    limit: usize,
+    tx: mpsc::Sender<Result<Bytes, ApiError>>,
+    row_group_target_bytes: usize,
+) -> Result<(), ApiError>
+where
+    S: Stream<Item = Result<ObservationsRow, ApiError>> + Send,
+{
+    let schema = parquet_schema();
+    let writer = ChannelParquetWriter { tx: tx.clone() };
+    let props = parquet_writer_properties(&metadata);
+    let mut writer =
+        AsyncArrowWriter::try_new(writer, Arc::clone(&schema), Some(props)).map_err(|err| {
+            tracing::error!(error = %err, "parquet writer initialization failed");
+            ApiError::Internal
+        })?;
+    let mut batch = ParquetBatchBuilder::default();
+    let mut emitted = 0_usize;
+
+    futures::pin_mut!(rows);
+    loop {
+        if emitted == limit || tx.is_closed() {
+            break;
+        }
+
+        let Some(row) = (tokio::select! {
+            () = tx.closed() => None,
+            row = rows.try_next() => row?,
+        }) else {
+            break;
+        };
+
+        batch.push(row)?;
+        emitted += 1;
+        if batch.len() >= PARQUET_BATCH_ROWS {
+            write_parquet_batch(
+                &mut writer,
+                Arc::clone(&schema),
+                &mut batch,
+                row_group_target_bytes,
+            )
+            .await?;
+        }
+    }
+
+    if tx.is_closed() {
+        return Ok(());
+    }
+
+    write_parquet_batch(
+        &mut writer,
+        Arc::clone(&schema),
+        &mut batch,
+        row_group_target_bytes,
+    )
+    .await?;
+    if tx.is_closed() {
+        return Ok(());
+    }
+    writer.finish().await.map_err(parquet_to_api_error)?;
+    Ok(())
+}
+
+async fn write_parquet_batch(
+    writer: &mut AsyncArrowWriter<ChannelParquetWriter>,
+    schema: SchemaRef,
+    batch: &mut ParquetBatchBuilder,
+    row_group_target_bytes: usize,
+) -> Result<(), ApiError> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+
+    let record_batch = batch.finish(schema)?;
+    writer
+        .write(&record_batch)
+        .await
+        .map_err(parquet_to_api_error)?;
+    if writer.in_progress_size() >= row_group_target_bytes {
+        writer.flush().await.map_err(parquet_to_api_error)?;
+    }
+    Ok(())
+}
+
+fn parquet_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("series_key", DataType::Utf8, false),
+        Field::new("time", DataType::Utf8, false),
+        Field::new("time_precision", DataType::Utf8, false),
+        Field::new("value", DataType::Float64, true),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("revision_no", DataType::UInt32, false),
+        Field::new("dimensions", DataType::Utf8, false),
+        Field::new("attributes", DataType::Utf8, false),
+        Field::new("ingested_at", DataType::Utf8, false),
+        Field::new("source_artifact_id", DataType::Utf8, false),
+        Field::new("measure_id", DataType::Utf8, false),
+        Field::new("unit", DataType::Utf8, false),
+    ]))
+}
+
+fn parquet_writer_properties(metadata: &ObservationsMetadata) -> WriterProperties {
+    WriterProperties::builder()
+        .set_compression(Compression::ZSTD(Default::default()))
+        .set_key_value_metadata(Some(vec![
+            KeyValue::new(
+                "dataflow".to_string(),
+                metadata.dataflow.as_str().to_string(),
+            ),
+            KeyValue::new("license".to_string(), metadata.license.clone()),
+            KeyValue::new("attribution".to_string(), metadata.attribution.clone()),
+            KeyValue::new("source_url".to_string(), metadata.source_url.clone()),
+        ]))
+        .build()
+}
+
+#[derive(Debug, Default)]
+struct ParquetBatchBuilder {
+    series_key: Vec<String>,
+    time: Vec<String>,
+    time_precision: Vec<String>,
+    value: Vec<Option<f64>>,
+    status: Vec<String>,
+    revision_no: Vec<u32>,
+    dimensions: Vec<String>,
+    attributes: Vec<String>,
+    ingested_at: Vec<String>,
+    source_artifact_id: Vec<String>,
+    measure_id: Vec<String>,
+    unit: Vec<String>,
+}
+
+impl ParquetBatchBuilder {
+    fn push(&mut self, row: ObservationsRow) -> Result<(), ApiError> {
+        self.series_key.push(row.series_key.to_string());
+        self.time.push(row.time.to_rfc3339());
+        self.time_precision
+            .push(time_precision_label(row.time_precision).to_string());
+        self.value.push(row.value);
+        self.status
+            .push(observation_status_label(row.status).to_string());
+        self.revision_no.push(row.revision_no);
+        self.dimensions.push(serialize_json_chunk(&row.dimensions)?);
+        self.attributes.push(serialize_json_chunk(&row.attributes)?);
+        self.ingested_at.push(row.ingested_at.to_rfc3339());
+        self.source_artifact_id
+            .push(row.source_artifact_id.to_string());
+        self.measure_id.push(row.measure_id);
+        self.unit.push(row.unit);
+        Ok(())
+    }
+
+    fn len(&self) -> usize {
+        self.series_key.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.series_key.is_empty()
+    }
+
+    fn finish(&mut self, schema: SchemaRef) -> Result<RecordBatch, ApiError> {
+        let batch = std::mem::take(self);
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(batch.series_key)),
+            Arc::new(StringArray::from(batch.time)),
+            Arc::new(StringArray::from(batch.time_precision)),
+            Arc::new(Float64Array::from(batch.value)),
+            Arc::new(StringArray::from(batch.status)),
+            Arc::new(UInt32Array::from(batch.revision_no)),
+            Arc::new(StringArray::from(batch.dimensions)),
+            Arc::new(StringArray::from(batch.attributes)),
+            Arc::new(StringArray::from(batch.ingested_at)),
+            Arc::new(StringArray::from(batch.source_artifact_id)),
+            Arc::new(StringArray::from(batch.measure_id)),
+            Arc::new(StringArray::from(batch.unit)),
+        ];
+        RecordBatch::try_new(schema, columns).map_err(|err| {
+            tracing::error!(error = %err, "parquet record batch construction failed");
+            ApiError::Internal
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ChannelParquetWriter {
+    tx: mpsc::Sender<Result<Bytes, ApiError>>,
+}
+
+impl AsyncFileWriter for ChannelParquetWriter {
+    fn write(&mut self, bytes: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        async move {
+            if bytes.is_empty() {
+                return Ok(());
+            }
+            self.tx
+                .send(Ok(bytes))
+                .await
+                .map_err(|_| parquet_receiver_dropped())?;
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        async { Ok(()) }.boxed()
+    }
+}
+
+fn parquet_receiver_dropped() -> ParquetError {
+    ParquetError::External(Box::new(io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "parquet response receiver dropped",
+    )))
+}
+
+fn parquet_to_api_error(err: ParquetError) -> ApiError {
+    tracing::error!(error = %err, "parquet response serialization failed");
+    ApiError::Internal
 }
 
 fn fetch_observation_rows(
@@ -748,10 +1018,33 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
+fn time_precision_label(value: TimePrecision) -> &'static str {
+    match value {
+        TimePrecision::Day => "day",
+        TimePrecision::Week => "week",
+        TimePrecision::Month => "month",
+        TimePrecision::Quarter => "quarter",
+        TimePrecision::Year => "year",
+    }
+}
+
+fn observation_status_label(value: ObservationStatus) -> &'static str {
+    match value {
+        ObservationStatus::Normal => "normal",
+        ObservationStatus::Estimated => "estimated",
+        ObservationStatus::Forecast => "forecast",
+        ObservationStatus::Imputed => "imputed",
+        ObservationStatus::Missing => "missing",
+        ObservationStatus::Provisional => "provisional",
+        ObservationStatus::Revised => "revised",
+        ObservationStatus::Break => "break",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use au_kpis_domain::ids::{DataflowId, SeriesKey};
+    use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
     use chrono::{TimeZone, Utc};
 
     #[test]
@@ -789,6 +1082,55 @@ mod tests {
     }
 
     #[test]
+    fn parses_parquet_format() {
+        let query = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
+
+        assert_eq!(query.format, ResponseFormat::Parquet);
+    }
+
+    #[tokio::test]
+    async fn parquet_writer_returns_promptly_when_response_receiver_closes_mid_stream() {
+        let (tx, rx) = mpsc::channel(1);
+        let (pending_tx, pending_rx) = tokio::sync::oneshot::channel();
+        let metadata = ObservationsMetadata {
+            dataflow: DataflowId::new("abs.cpi").unwrap(),
+            attribution: "Source: Australian Bureau of Statistics".into(),
+            license: "CC-BY-4.0".into(),
+            source_url: "https://www.abs.gov.au/".into(),
+        };
+        let rows =
+            futures::stream::unfold((0_u8, Some(pending_tx)), |(step, pending_tx)| async move {
+                if step == 0 {
+                    return Some((Ok(test_observation_row()), (1, pending_tx)));
+                }
+                if let Some(pending_tx) = pending_tx {
+                    let _ = pending_tx.send(());
+                }
+                futures::future::pending::<Option<(Result<ObservationsRow, ApiError>, _)>>().await
+            });
+        let writer = tokio::spawn(write_parquet_rows(
+            rows,
+            metadata,
+            10,
+            tx,
+            PARQUET_ROW_GROUP_TARGET_BYTES,
+        ));
+
+        pending_rx
+            .await
+            .expect("writer should poll the second upstream row");
+        drop(rx);
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), writer).await;
+
+        assert!(
+            result.is_ok(),
+            "writer should not await an abandoned stream"
+        );
+        assert!(result.unwrap().expect("writer task").is_ok());
+    }
+
+    #[test]
     fn rejects_missing_dataflow_and_excessive_limits_before_db_access() {
         let missing = parse_observations_query(Some("limit=10")).unwrap_err();
         assert!(missing.to_string().contains("dataflow"));
@@ -809,5 +1151,23 @@ mod tests {
 
         assert!(!encoded.contains("2024-03-01"));
         assert_eq!(decode_cursor(&encoded).unwrap(), cursor);
+    }
+
+    fn test_observation_row() -> ObservationsRow {
+        let dataflow = DataflowId::new("abs.cpi").unwrap();
+        ObservationsRow {
+            series_key: SeriesKey::derive(&dataflow, [("region", "AUS")]),
+            time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            time_precision: TimePrecision::Quarter,
+            value: Some(135.0),
+            status: ObservationStatus::Normal,
+            revision_no: 1,
+            attributes: BTreeMap::new(),
+            ingested_at: Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap(),
+            source_artifact_id: ArtifactId::of_content(b"parquet cancellation fixture"),
+            dimensions: BTreeMap::from([("region".to_string(), "AUS".to_string())]),
+            measure_id: "cpi".into(),
+            unit: "index".into(),
+        }
     }
 }
