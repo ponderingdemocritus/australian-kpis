@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, str};
 
 use au_kpis_adapter::{AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
-use au_kpis_adapter_state_budgets::{NswBudgetAdapter, VicBudgetAdapter};
+use au_kpis_adapter_state_budgets::{NswBudgetAdapter, QldBudgetAdapter, VicBudgetAdapter};
 use au_kpis_domain::{ArtifactId, DataflowId, SourceId};
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
@@ -18,6 +18,7 @@ use tokio::{
 const BP1_2025_26: &[u8] = b"%PDF-1.7\n% nsw budget fixture 2025-26\n%%EOF\n";
 const BP1_2024_25: &[u8] = b"%PDF-1.7\n% nsw budget fixture 2024-25\n%%EOF\n";
 const VIC_BP5_2026_27: &[u8] = b"%PDF-1.7\n% vic budget fixture 2026-27\n%%EOF\n";
+const QLD_BP2_2025_26: &[u8] = b"%PDF-1.7\n% qld budget fixture 2025-26\n%%EOF\n";
 
 #[derive(Debug, Serialize)]
 struct FixtureSnapshot {
@@ -209,6 +210,30 @@ fn vic_parse_metadata() -> BTreeMap<String, String> {
     ])
 }
 
+fn qld_parse_metadata() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("artifact_date".into(), "2025-06-24".into()),
+        (
+            "attribution".into(),
+            "© The State of Queensland 2025 (Queensland Treasury)".into(),
+        ),
+        ("budget_year".into(), "2025-26".into()),
+        ("jurisdiction".into(), "QLD".into()),
+        ("license".into(), "Queensland Treasury copyright".into()),
+        (
+            "license_url".into(),
+            "https://www.treasury.qld.gov.au/legal/copyright/".into(),
+        ),
+        ("paper".into(), "Budget Paper No. 2".into()),
+        ("paper_slug".into(), "bp2-budget-strategy-outlook".into()),
+        (
+            "schema_drift_policy".into(),
+            "hash-pdf-table-candidates".into(),
+        ),
+        ("title".into(), "Budget Strategy and Outlook".into()),
+    ])
+}
+
 async fn snapshot_fixture(case: FixtureCase, blob_store: BlobStore) -> FixtureSnapshot {
     let artifact = artifact_for(&blob_store, case.bytes, case.source_url).await;
     let sidecar_url = serve_sidecar_once(
@@ -336,6 +361,71 @@ async fn vic_snapshot_fixture(blob_store: BlobStore, cells: &[&[&str]]) -> Fixtu
     }
 }
 
+async fn qld_snapshot_fixture(blob_store: BlobStore, cells: &[&[&str]]) -> FixtureSnapshot {
+    let source_url =
+        "https://budget.qld.gov.au/files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf";
+    let artifact = artifact_for(&blob_store, QLD_BP2_2025_26, source_url).await;
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        "2025-06-24",
+        sidecar_response(&artifact.storage_key, cells),
+    )
+    .await;
+    let adapter = QldBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.qld_budget").unwrap(),
+        qld_parse_metadata(),
+    );
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse QLD budget fixture through sidecar");
+
+    let observation_count = rows.len();
+    let series_count = rows
+        .iter()
+        .map(|(series, _)| series.series_key)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let first_rows: Vec<SnapshotRow> = rows
+        .into_iter()
+        .take(10)
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect();
+
+    FixtureSnapshot {
+        observation_count,
+        series_count,
+        first_rows,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parses_nsw_budget_pdf_fixtures_through_sidecar_contract() {
     let blob_store = BlobStore::new(InMemory::new());
@@ -413,6 +503,40 @@ async fn parses_vic_budget_pdf_fixture_through_sidecar_contract() {
 
     assert!(snapshot.observation_count > 0);
     insta::assert_json_snapshot!("vic_bp5_statement_of_finances_2026_27", snapshot);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_qld_budget_pdf_fixture_through_sidecar_contract() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let cells: &[&[&str]] = &[
+        &[
+            "Table 8.1: General Government Sector Operating Statement ($ million)",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ][..],
+        &[
+            "Section item",
+            "2024-25 Estimated Actual $ million",
+            "2025-26 Budget $ million",
+            "2026-27 Projection $ million",
+            "2027-28 Projection $ million",
+            "2028-29 Projection $ million",
+        ][..],
+        &[
+            "Revenue", "96,230", "98,442", "101,118", "104,009", "106,774",
+        ][..],
+        &[
+            "Expenses", "103,601", "107,014", "109,290", "111,531", "113,802",
+        ][..],
+    ];
+
+    let snapshot = qld_snapshot_fixture(blob_store, cells).await;
+
+    assert!(snapshot.observation_count > 0);
+    insta::assert_json_snapshot!("qld_bp2_budget_strategy_outlook_2025_26", snapshot);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -507,6 +631,63 @@ async fn parse_rejects_vic_schema_hash_drift() {
     .with_expected_dataflow(
         DataflowId::new("state_budgets.vic_budget").unwrap(),
         vic_parse_metadata(),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("schema drift should fail");
+
+    assert!(err.to_string().contains("schema hash drift"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_qld_schema_hash_drift() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let source_url =
+        "https://budget.qld.gov.au/files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf";
+    let artifact = artifact_for(&blob_store, QLD_BP2_2025_26, source_url).await;
+    let cells: &[&[&str]] = &[
+        &[
+            "Table 8.1: General Government Sector Operating Statement ($ million)",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ][..],
+        &[
+            "Section item",
+            "2024-25 Actual $ million",
+            "2025-26 Budget $ million",
+            "2026-27 Projection $ million",
+            "2027-28 Projection $ million",
+            "2028-29 Projection $ million",
+        ][..],
+        &[
+            "Revenue", "96,230", "98,442", "101,118", "104,009", "106,774",
+        ][..],
+    ];
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        "2025-06-24",
+        sidecar_response(&artifact.storage_key, cells),
+    )
+    .await;
+    let adapter = QldBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.qld_budget").unwrap(),
+        qld_parse_metadata(),
     );
 
     let err = adapter

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, ArtifactRecorder, FetchCtx, SourceAdapter};
 use au_kpis_adapter_state_budgets::{
-    NswBudgetAdapter, NswBudgetPublication, VicBudgetAdapter, VicBudgetPublication,
+    NswBudgetAdapter, NswBudgetPublication, QldBudgetAdapter, QldBudgetPublication,
+    VicBudgetAdapter, VicBudgetPublication,
 };
 use au_kpis_domain::{Artifact, ArtifactId};
 use au_kpis_storage::{BlobStore, StorageKey};
@@ -17,6 +18,7 @@ use tokio::{
 
 const PDF_FIXTURE: &[u8] = b"%PDF-1.7\n% nsw budget fixture\n%%EOF\n";
 const VIC_PDF_FIXTURE: &[u8] = b"%PDF-1.7\n% vic budget fixture\n%%EOF\n";
+const QLD_PDF_FIXTURE: &[u8] = b"%PDF-1.7\n% qld budget fixture\n%%EOF\n";
 
 #[derive(Debug, Default)]
 struct RecordingArtifactRecorder {
@@ -250,5 +252,103 @@ async fn fetch_persists_raw_vic_budget_pdf_with_response_headers() {
         .await
         .expect("artifact bytes");
     assert_eq!(stored, Bytes::from_static(VIC_PDF_FIXTURE));
+    assert_eq!(recorder.artifacts.lock().await.len(), 1);
+}
+
+async fn serve_qld_artifact_once(body: &'static [u8]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(
+            request
+                .starts_with("GET /files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-state-budgets/")
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\nx-qld-budget-fixture: bp2\r\ncontent-length: {}\r\n\r\n",
+            body.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response headers");
+        stream.write_all(body).await.expect("write response body");
+    });
+
+    format!("http://{addr}/files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_persists_raw_qld_budget_pdf_with_response_headers() {
+    let source_url = serve_qld_artifact_once(QLD_PDF_FIXTURE).await;
+    let publication = QldBudgetPublication {
+        budget_year: "2025-26".into(),
+        paper: "Budget Paper No. 2".into(),
+        paper_slug: "bp2-budget-strategy-outlook".into(),
+        title: "Budget Strategy and Outlook".into(),
+        source_url,
+        last_updated: Some("2025-06-24".into()),
+    };
+    let adapter = QldBudgetAdapter::builder()
+        .publications(vec![publication.clone()])
+        .build();
+    let job = QldBudgetAdapter::current_jobs_with_started_at(
+        &[publication],
+        Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap(),
+    )
+    .into_iter()
+    .next()
+    .expect("job emitted");
+    let recorder = recording_recorder();
+    let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let blob_store = BlobStore::from_arc(object_store.clone());
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = FetchCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+        recorder.clone(),
+    );
+
+    let artifact = adapter
+        .fetch(job.clone(), &ctx)
+        .await
+        .expect("fetch QLD PDF");
+
+    assert_eq!(artifact.source_id.as_str(), "state-budgets");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "application/pdf");
+    assert_eq!(
+        artifact.response_headers["x-qld-budget-fixture"],
+        vec!["bp2"]
+    );
+    assert_eq!(artifact.size_bytes, QLD_PDF_FIXTURE.len() as u64);
+    assert_eq!(artifact.id, ArtifactId::of_content(QLD_PDF_FIXTURE));
+    assert_eq!(
+        artifact.storage_key,
+        StorageKey::canonical_for(&artifact.id).to_string()
+    );
+
+    let stored = object_store
+        .get(&ObjectPath::from(artifact.storage_key.clone()))
+        .await
+        .expect("stored artifact")
+        .bytes()
+        .await
+        .expect("artifact bytes");
+    assert_eq!(stored, Bytes::from_static(QLD_PDF_FIXTURE));
     assert_eq!(recorder.artifacts.lock().await.len(), 1);
 }

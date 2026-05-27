@@ -30,6 +30,7 @@ const USER_AGENT: &str = concat!("au-kpis-adapter-state-budgets/", env!("CARGO_P
 const SOURCE_ID: &str = "state-budgets";
 const DATAFLOW_ID: &str = "state_budgets.nsw_budget";
 const VIC_DATAFLOW_ID: &str = "state_budgets.vic_budget";
+const QLD_DATAFLOW_ID: &str = "state_budgets.qld_budget";
 const JURISDICTION: &str = "NSW";
 const JURISDICTION_NAME: &str = "New South Wales";
 const SOURCE_NAME: &str = "NSW Treasury";
@@ -59,6 +60,22 @@ const VIC_BUDGET_PDF_URL: &str = "https://s3.ap-southeast-2.amazonaws.com/vicbud
 const VIC_PAPER: &str = "Budget Paper No. 5";
 const VIC_PAPER_SLUG: &str = "bp5-statement-of-finances";
 const VIC_TARGET_TITLE: &str = "Statement of Finances";
+const QLD_KEY_AGGREGATES_SCHEMA_KEY: &str =
+    "table_8_1_general_government_sector_operating_statement_million";
+const QLD_KEY_AGGREGATES_SCHEMA_HASH: &str =
+    "a8706dc9455aff8bc8474454cbf528b69daea0c13e2abf4805ff01fe10ead3a2";
+const QLD_JURISDICTION: &str = "QLD";
+const QLD_JURISDICTION_NAME: &str = "Queensland";
+const QLD_SOURCE_NAME: &str = "Queensland Treasury";
+const QLD_ATTRIBUTION: &str = "© The State of Queensland 2025 (Queensland Treasury)";
+const QLD_LICENSE_NAME: &str = "Queensland Treasury copyright";
+const QLD_LICENSE_URL: &str = "https://www.treasury.qld.gov.au/legal/copyright/";
+const QLD_SOURCE_INDEX_URL: &str = "https://budget.qld.gov.au/budget-papers/";
+const QLD_BUDGET_PDF_URL: &str =
+    "https://budget.qld.gov.au/files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf";
+const QLD_PAPER: &str = "Budget Paper No. 2";
+const QLD_PAPER_SLUG: &str = "bp2-budget-strategy-outlook";
+const QLD_TARGET_TITLE: &str = "Budget Strategy and Outlook";
 
 #[derive(Debug, Clone, Copy)]
 struct BudgetConfig {
@@ -139,6 +156,28 @@ const VIC_CONFIG: BudgetConfig = BudgetConfig {
         "www.budget.vic.gov.au",
         "s3.ap-southeast-2.amazonaws.com",
     ],
+};
+
+const QLD_CONFIG: BudgetConfig = BudgetConfig {
+    dataflow_id: QLD_DATAFLOW_ID,
+    dataflow_name: "QLD state budget",
+    dataflow_description: "Annual Queensland budget aggregates parsed from Queensland Treasury budget strategy and outlook PDFs.",
+    jurisdiction: QLD_JURISDICTION,
+    jurisdiction_name: QLD_JURISDICTION_NAME,
+    source_name: QLD_SOURCE_NAME,
+    attribution: QLD_ATTRIBUTION,
+    license: BudgetLicense::Other(QLD_LICENSE_NAME),
+    license_name: QLD_LICENSE_NAME,
+    license_url: QLD_LICENSE_URL,
+    source_index_url: QLD_SOURCE_INDEX_URL,
+    default_budget_pdf_url: QLD_BUDGET_PDF_URL,
+    default_last_updated: "2025-06-24",
+    paper: QLD_PAPER,
+    paper_slug: QLD_PAPER_SLUG,
+    target_title: QLD_TARGET_TITLE,
+    schema_key: QLD_KEY_AGGREGATES_SCHEMA_KEY,
+    schema_hash: QLD_KEY_AGGREGATES_SCHEMA_HASH,
+    official_parse_hosts: &["budget.qld.gov.au", "www.budget.qld.gov.au"],
 };
 
 /// NSW state budget PDF adapter.
@@ -471,12 +510,178 @@ impl SourceAdapter for VicBudgetAdapter {
     }
 }
 
+/// QLD state budget PDF adapter.
+#[derive(Debug, Clone)]
+pub struct QldBudgetAdapter {
+    manifest: AdapterManifest,
+    publications: Vec<QldBudgetPublication>,
+    pdf_client: PdfClient,
+}
+
+impl Default for QldBudgetAdapter {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+impl QldBudgetAdapter {
+    /// Start building a QLD budget adapter.
+    #[must_use]
+    pub fn builder() -> QldBudgetAdapterBuilder {
+        QldBudgetAdapterBuilder::default()
+    }
+
+    /// Convert current curated publications into jobs for the supplied timestamp.
+    #[must_use]
+    pub fn current_jobs_with_started_at(
+        current: &[QldBudgetPublication],
+        started_at: DateTime<Utc>,
+    ) -> Vec<DiscoveredJob> {
+        Self::discoverable_jobs_with_started_at(current, &BTreeMap::new(), started_at, None)
+    }
+
+    /// Diff current QLD publications against stored upstream revisions.
+    #[must_use]
+    pub fn discoverable_jobs_with_started_at(
+        current: &[QldBudgetPublication],
+        known_revisions: &BTreeMap<String, UpstreamRevision>,
+        started_at: DateTime<Utc>,
+        trace_parent: Option<&str>,
+    ) -> Vec<DiscoveredJob> {
+        discoverable_jobs_with_source_index(
+            &QLD_CONFIG,
+            current,
+            known_revisions,
+            started_at,
+            trace_parent,
+            QLD_CONFIG.source_index_url,
+        )
+    }
+
+    /// Static metadata for the QLD state budget dataflow.
+    #[must_use]
+    pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        state_budget_dataflow_metadata(&QLD_CONFIG)
+    }
+
+    fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<(), AdapterError> {
+        if job.source_id != self.manifest.source_id {
+            return Err(AdapterError::Validation(format!(
+                "QLD budget fetch received job for source `{}`",
+                job.source_id.as_str()
+            )));
+        }
+        if !self
+            .manifest
+            .dataflows
+            .iter()
+            .any(|dataflow_id| dataflow_id == &job.dataflow_id)
+        {
+            return Err(AdapterError::Validation(format!(
+                "QLD budget fetch received unsupported dataflow `{}`",
+                job.dataflow_id.as_str()
+            )));
+        }
+        budget_provenance_for_fetch(&QLD_CONFIG, &job.source_url, &job.metadata).ok_or_else(
+            || {
+                AdapterError::Validation(format!(
+                    "QLD budget fetch URL `{}` is not a curated QLD budget PDF artifact",
+                    job.source_url
+                ))
+            },
+        )?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SourceAdapter for QldBudgetAdapter {
+    fn id(&self) -> &'static str {
+        SOURCE_ID
+    }
+
+    fn manifest(&self) -> &AdapterManifest {
+        &self.manifest
+    }
+
+    #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
+    async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+        if ctx
+            .requested_dataflow_id()
+            .is_some_and(|requested| requested != &dataflow_id(&QLD_CONFIG))
+        {
+            return Ok(Vec::new());
+        }
+        Ok(discoverable_jobs_with_source_index(
+            &QLD_CONFIG,
+            &self.publications,
+            ctx.known_revisions(),
+            ctx.started_at,
+            ctx.trace_parent(),
+            QLD_CONFIG.source_index_url,
+        ))
+    }
+
+    #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
+    async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
+        self.validate_fetch_job(&job)?;
+        let response = ctx
+            .http
+            .execute(
+                ctx.http
+                    .raw_artifact()
+                    .get(&job.source_url)
+                    .header("user-agent", USER_AGENT)
+                    .header("accept", "application/pdf"),
+            )
+            .await?;
+        let response_headers = capture_response_headers(response.headers());
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AdapterError::UpstreamStatus {
+                status,
+                retry_after: retry_after_delta(&response_headers),
+                response_headers,
+            });
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map_or_else(|| "application/pdf".to_string(), str::to_string);
+
+        let staged = ctx
+            .blob_store
+            .stage_artifact_stream(response.bytes_stream().boxed())
+            .await?;
+        let id = staged.id();
+        let storage_key = StorageKey::canonical_for(&id).to_string();
+        let artifact = Artifact {
+            id,
+            source_id: job.source_id,
+            source_url: job.source_url,
+            content_type,
+            response_headers,
+            storage_key,
+            size_bytes: staged.size_bytes(),
+            fetched_at: Utc::now(),
+        };
+        ctx.blob_store.commit_staged_artifact(&staged).await?;
+        ctx.persist_artifact(artifact).await
+    }
+
+    fn parse<'a>(&'a self, artifact: ArtifactRef, ctx: &'a ParseCtx) -> ObservationStream<'a> {
+        parse_artifact_stream(&QLD_CONFIG, self.pdf_client.clone(), artifact, ctx)
+    }
+}
+
 /// Combined state budgets adapter registered under the shared `state-budgets` source.
 #[derive(Debug, Clone)]
 pub struct StateBudgetsAdapter {
     manifest: AdapterManifest,
     nsw: NswBudgetAdapter,
     vic: VicBudgetAdapter,
+    qld: QldBudgetAdapter,
 }
 
 impl Default for StateBudgetsAdapter {
@@ -494,7 +699,7 @@ impl StateBudgetsAdapter {
 
     /// Build a combined adapter from its state-specific adapters.
     #[must_use]
-    pub fn new(nsw: NswBudgetAdapter, vic: VicBudgetAdapter) -> Self {
+    pub fn new(nsw: NswBudgetAdapter, vic: VicBudgetAdapter, qld: QldBudgetAdapter) -> Self {
         Self {
             manifest: AdapterManifest {
                 source_id: source_id(),
@@ -502,10 +707,15 @@ impl StateBudgetsAdapter {
                 version: env!("CARGO_PKG_VERSION").into(),
                 rate_limit: RateLimit::new(20, Duration::from_secs(60))
                     .expect("static state budget rate limit is valid"),
-                dataflows: vec![dataflow_id(&NSW_CONFIG), dataflow_id(&VIC_CONFIG)],
+                dataflows: vec![
+                    dataflow_id(&NSW_CONFIG),
+                    dataflow_id(&VIC_CONFIG),
+                    dataflow_id(&QLD_CONFIG),
+                ],
             },
             nsw,
             vic,
+            qld,
         }
     }
 
@@ -514,6 +724,7 @@ impl StateBudgetsAdapter {
     pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
         let mut dataflows = self.nsw.dataflow_metadata();
         dataflows.extend(self.vic.dataflow_metadata());
+        dataflows.extend(self.qld.dataflow_metadata());
         dataflows
     }
 }
@@ -537,11 +748,15 @@ impl SourceAdapter for StateBudgetsAdapter {
             if requested == &dataflow_id(&VIC_CONFIG) {
                 return self.vic.discover(ctx).await;
             }
+            if requested == &dataflow_id(&QLD_CONFIG) {
+                return self.qld.discover(ctx).await;
+            }
             return Ok(Vec::new());
         }
 
         let mut jobs = self.nsw.discover(ctx).await?;
         jobs.extend(self.vic.discover(ctx).await?);
+        jobs.extend(self.qld.discover(ctx).await?);
         Ok(jobs)
     }
 
@@ -552,6 +767,9 @@ impl SourceAdapter for StateBudgetsAdapter {
         }
         if job.dataflow_id == dataflow_id(&VIC_CONFIG) {
             return self.vic.fetch(job, ctx).await;
+        }
+        if job.dataflow_id == dataflow_id(&QLD_CONFIG) {
+            return self.qld.fetch(job, ctx).await;
         }
         Err(AdapterError::Validation(format!(
             "state budgets fetch received unsupported dataflow `{}`",
@@ -567,6 +785,9 @@ impl SourceAdapter for StateBudgetsAdapter {
             if expected == &dataflow_id(&VIC_CONFIG) {
                 return self.vic.parse(artifact, ctx);
             }
+            if expected == &dataflow_id(&QLD_CONFIG) {
+                return self.qld.parse(artifact, ctx);
+            }
             let expected = expected.as_str().to_string();
             return Box::pin(stream::once(async move {
                 Err(AdapterError::Validation(format!(
@@ -578,7 +799,11 @@ impl SourceAdapter for StateBudgetsAdapter {
         {
             return self.nsw.parse(artifact, ctx);
         }
-        self.vic.parse(artifact, ctx)
+        if budget_provenance_for_parse(&VIC_CONFIG, &artifact.source_url, ctx.metadata()).is_some()
+        {
+            return self.vic.parse(artifact, ctx);
+        }
+        self.qld.parse(artifact, ctx)
     }
 }
 
@@ -1158,6 +1383,7 @@ fn parse_budget_period(value: &str) -> Result<Option<BudgetPeriod>, AdapterError
     } else if normalized.contains("estimate")
         || normalized.contains("budget")
         || normalized.contains("forward")
+        || normalized.contains("projection")
     {
         ObservationStatus::Forecast
     } else {
@@ -1608,6 +1834,87 @@ impl VicBudgetAdapterBuilder {
     }
 }
 
+/// Builder for [`QldBudgetAdapter`].
+#[derive(Debug, Clone)]
+pub struct QldBudgetAdapterBuilder {
+    publications: Vec<QldBudgetPublication>,
+    pdf_base_url: String,
+    pdf_client: Option<PdfClient>,
+}
+
+impl Default for QldBudgetAdapterBuilder {
+    fn default() -> Self {
+        Self {
+            publications: default_publications(&QLD_CONFIG),
+            pdf_base_url: DEFAULT_PDF_BASE_URL.into(),
+            pdf_client: None,
+        }
+    }
+}
+
+impl QldBudgetAdapterBuilder {
+    /// Override the curated QLD budget publications, usually for fixture tests.
+    #[must_use]
+    pub fn publications(mut self, publications: Vec<QldBudgetPublication>) -> Self {
+        self.publications = publications;
+        self
+    }
+
+    /// Override the PDF sidecar base URL.
+    #[must_use]
+    pub fn pdf_base_url(mut self, pdf_base_url: impl Into<String>) -> Self {
+        self.pdf_base_url = pdf_base_url.into();
+        self
+    }
+
+    /// Inject a prebuilt PDF client, usually for tests.
+    #[must_use]
+    pub fn pdf_client(mut self, pdf_client: PdfClient) -> Self {
+        self.pdf_client = Some(pdf_client);
+        self
+    }
+
+    /// Build the adapter, returning validation errors for invalid sidecar URLs.
+    pub fn try_build(self) -> Result<QldBudgetAdapter, AdapterError> {
+        if self.publications.is_empty() {
+            return Err(AdapterError::Validation(
+                "at least one QLD budget publication must be configured".into(),
+            ));
+        }
+        let pdf_client = match self.pdf_client {
+            Some(pdf_client) => pdf_client,
+            None => PdfClient::new(&self.pdf_base_url).map_err(pdf_client_error)?,
+        };
+        let mut publications = self.publications;
+        publications.sort_by(|left, right| {
+            left.budget_year
+                .cmp(&right.budget_year)
+                .then(left.paper_slug.cmp(&right.paper_slug))
+                .then(left.source_url.cmp(&right.source_url))
+        });
+        publications.dedup_by(|left, right| left.source_url == right.source_url);
+        Ok(QldBudgetAdapter {
+            manifest: AdapterManifest {
+                source_id: source_id(),
+                name: "Australian state budgets".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                rate_limit: RateLimit::new(20, Duration::from_secs(60))
+                    .expect("static QLD budget rate limit is valid"),
+                dataflows: vec![dataflow_id(&QLD_CONFIG)],
+            },
+            publications,
+            pdf_client,
+        })
+    }
+
+    /// Build the adapter.
+    #[must_use]
+    pub fn build(self) -> QldBudgetAdapter {
+        self.try_build()
+            .expect("valid static QLD budget adapter configuration")
+    }
+}
+
 /// Builder for [`StateBudgetsAdapter`].
 #[derive(Debug, Clone)]
 pub struct StateBudgetsAdapterBuilder {
@@ -1636,9 +1943,12 @@ impl StateBudgetsAdapterBuilder {
             .pdf_base_url(self.pdf_base_url.clone())
             .try_build()?;
         let vic = VicBudgetAdapter::builder()
+            .pdf_base_url(self.pdf_base_url.clone())
+            .try_build()?;
+        let qld = QldBudgetAdapter::builder()
             .pdf_base_url(self.pdf_base_url)
             .try_build()?;
-        Ok(StateBudgetsAdapter::new(nsw, vic))
+        Ok(StateBudgetsAdapter::new(nsw, vic, qld))
     }
 
     /// Build the adapter.
@@ -1654,6 +1964,9 @@ pub type NswBudgetRevision = UpstreamRevision;
 
 /// Stored revision type for VIC budget PDF links.
 pub type VicBudgetRevision = UpstreamRevision;
+
+/// Stored revision type for QLD budget PDF links.
+pub type QldBudgetRevision = UpstreamRevision;
 
 /// One state budget PDF publication from the curated adapter inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1677,6 +1990,9 @@ pub type NswBudgetPublication = StateBudgetPublication;
 
 /// One VIC budget PDF publication from the curated adapter inventory.
 pub type VicBudgetPublication = StateBudgetPublication;
+
+/// One QLD budget PDF publication from the curated adapter inventory.
+pub type QldBudgetPublication = StateBudgetPublication;
 
 impl StateBudgetPublication {
     fn revision_key(&self, config: &BudgetConfig) -> String {
@@ -1905,6 +2221,13 @@ mod tests {
         );
         assert_eq!(
             parse_budget_period("2025-26 Budget")
+                .unwrap()
+                .unwrap()
+                .status,
+            ObservationStatus::Forecast
+        );
+        assert_eq!(
+            parse_budget_period("2026-27 Projection")
                 .unwrap()
                 .unwrap()
                 .status,
