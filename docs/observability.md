@@ -12,7 +12,8 @@ docker compose -f infra/compose/docker-compose.yml --profile observability up -d
 
 Grafana is available at `http://127.0.0.1:3002` with local defaults `admin` / `admin`.
 The stack also exposes Prometheus on `:9090`, Alertmanager on `:9093`, Loki on `:3100`,
-Tempo on `:3200`, OTLP on `:4317`/`:4318`, and Pushgateway on `:9091`.
+Tempo on `:3200`, OTLP on `:4317`/`:4318`, Pushgateway on `:9091`, and the k6
+InfluxDB database on `:8086`.
 
 ## Signal Flow
 
@@ -20,7 +21,9 @@ Tempo on `:3200`, OTLP on `:4317`/`:4318`, and Pushgateway on `:9091`.
 - `otel-collector` writes traces to Tempo and exposes OTLP metrics for Prometheus.
 - The ingestion worker exposes `/metrics`; Prometheus scrapes it directly.
 - Promtail tails Compose container logs and pushes JSON log lines to Loki.
-- Grafana provisions Prometheus, Loki, and Tempo datasources plus the required dashboards.
+- The k6 smoke scenario writes request duration and failure-rate samples to InfluxDB.
+- Grafana provisions Prometheus, Loki, Tempo, and k6 InfluxDB datasources plus the
+  required dashboards.
 
 ## Dashboards
 
@@ -29,6 +32,7 @@ Tempo on `:3200`, OTLP on `:4317`/`:4318`, and Pushgateway on `:9091`.
 - API latency p50/p95/p99: `infra/observability/grafana/dashboards/api-latency.json`
 - Queue depth, worker saturation, and DB state: `infra/observability/grafana/dashboards/queue-db.json`
 - SLO burn rates and active page alerts: `infra/observability/grafana/dashboards/slo-burn-rates.json`
+- k6 smoke p95, failure rate, and endpoint request rate: `infra/observability/grafana/dashboards/k6-smoke.json`
 
 ## Alert Routing
 

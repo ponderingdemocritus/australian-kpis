@@ -117,19 +117,77 @@ fn issue_37_benchmark_contract_is_wired() {
 }
 
 #[test]
-fn smoke_workflow_builds_server_before_readiness_polling() {
+fn issue_38_k6_smoke_contract_is_wired() {
     let root = repo_root();
+    let smoke_script =
+        fs::read_to_string(root.join("apps/bench/smoke.js")).expect("read k6 smoke script");
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
 
+    for expected in [
+        "duration: '30s'",
+        "http_req_duration: ['p(95)<200']",
+        "http_req_failed: ['rate<0.01']",
+        "/v1/health",
+        "/v1/openapi.json",
+        "/v1/dataflows?source=abs&frequency=quarterly",
+        "/v1/dataflows/abs.cpi",
+        "/v1/dataflows/abs.cpi/codelists/region",
+        "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&limit=5",
+        "/v1/series/abs.cpi/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "/v1/search?q=price%20index",
+        "sleep(2)",
+    ] {
+        assert!(
+            smoke_script.contains(expected),
+            "k6 smoke script should cover `{expected}`"
+        );
+    }
+
     assert!(
-        pr_workflow.contains("cargo build -p au-kpis-api-http --example contract_server --locked"),
-        "smoke workflow should build the contract server before starting it"
+        pr_workflow.contains("name: Smoke (k6)"),
+        "smoke workflow should be the k6 PR and merge-queue gate"
     );
     assert!(
-        pr_workflow
-            .contains("./target/debug/examples/contract_server > target/smoke/server.log 2>&1 &"),
-        "smoke workflow should start the prebuilt contract server binary"
+        pr_workflow.contains(
+            "docker compose -f infra/compose/docker-compose.yml up -d --build api influxdb"
+        ),
+        "PR smoke workflow should run against the docker-compose API stack with InfluxDB"
+    );
+    assert!(
+        pr_workflow.contains("< apps/web/e2e/fixtures/explorer.sql"),
+        "PR smoke workflow should seed real endpoint data before k6 runs"
+    );
+    assert!(
+        pr_workflow.contains("grafana/setup-k6-action"),
+        "smoke workflow should install k6 explicitly"
+    );
+    assert!(
+        pr_workflow.contains("k6 run --out \"${K6_OUT}\"")
+            && pr_workflow.contains("influxdb=http://127.0.0.1:8086/k6"),
+        "smoke workflow should publish k6 results to InfluxDB for Grafana trending"
+    );
+    assert!(
+        pr_workflow.contains("AU_KPIS_STAGING_BASE_URL")
+            && pr_workflow.contains("github.event_name == 'merge_group'"),
+        "merge-queue smoke flow should target the configured staging API"
+    );
+
+    let compose = fs::read_to_string(root.join("infra/compose/docker-compose.yml"))
+        .expect("read compose file");
+    assert!(
+        compose.contains("influxdb:") && compose.contains("INFLUXDB_DB: k6"),
+        "compose stack should include an InfluxDB v1 database for k6 metrics"
+    );
+    assert!(
+        root.join("infra/observability/grafana/provisioning/datasources/k6-influxdb.yml")
+            .is_file(),
+        "Grafana should provision a k6 InfluxDB datasource"
+    );
+    assert!(
+        root.join("infra/observability/grafana/dashboards/k6-smoke.json")
+            .is_file(),
+        "Grafana should provision a k6 smoke trend dashboard"
     );
 }
 

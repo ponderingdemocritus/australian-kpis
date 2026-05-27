@@ -19,12 +19,27 @@ the single `CI OK` status check.
 - Supply-chain and secret scans: `cargo deny`, `cargo audit`,
   `pnpm audit --audit-level critical`, and gitleaks over full history
 - API container build plus Trivy HIGH/CRITICAL image scan
-- Curl and SDK smoke checks against the local contract server
+- k6 smoke checks against the docker-compose stack on pull requests and the
+  configured staging API in merge queue
 - Advisory Criterion bench comparison through `critcmp`
 - Advisory Codex structured review when repository secrets allow it
 
 Rust jobs install `sccache` and use the GitHub Actions backend. TypeScript jobs
 restore the pnpm store and `.turbo` cache before running Turborepo tasks.
+
+## k6 smoke gate
+
+The smoke job starts the compose API stack and an InfluxDB v1 metrics store for
+pull requests, applies migrations, seeds `apps/web/e2e/fixtures/explorer.sql`,
+and runs `apps/bench/smoke.js`. Merge-queue runs use
+`AU_KPIS_STAGING_BASE_URL` from repository variables as the API target and still
+publish k6 samples through the configured InfluxDB output.
+
+Set `K6_INFLUXDB_ADDR` as a repository variable when CI should post trend data
+to a shared InfluxDB/Grafana environment. If it is not set, the job posts to the
+local compose InfluxDB database at `http://127.0.0.1:8086/k6`. Set
+`AU_KPIS_SMOKE_API_KEY` as a repository secret when staging should run the smoke
+scenario with an API-key tier instead of anonymous quotas.
 
 ## Dependency and secret policy
 
