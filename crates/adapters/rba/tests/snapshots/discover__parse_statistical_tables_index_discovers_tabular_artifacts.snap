@@ -1,0 +1,27 @@
+---
+source: crates/adapters/rba/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "format": "csv",
+    "last_updated": "2026-05-20",
+    "source_url": "https://www.rba.gov.au/statistics/tables/csv/f01d.csv",
+    "table_id": "F1",
+    "title": "F1 - Data"
+  },
+  {
+    "format": "xls",
+    "last_updated": "2026-05-19",
+    "source_url": "https://www.rba.gov.au/statistics/tables/xls/f02d.xls",
+    "table_id": "F2",
+    "title": "F2 - Data"
+  },
+  {
+    "format": "csv",
+    "last_updated": null,
+    "source_url": "https://www.rba.gov.au/statistics/tables/csv/g01.csv",
+    "table_id": "G1",
+    "title": "G1 - Data"
+  }
+]

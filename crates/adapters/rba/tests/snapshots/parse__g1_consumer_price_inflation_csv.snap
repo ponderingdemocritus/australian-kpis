@@ -1,0 +1,98 @@
+---
+source: crates/adapters/rba/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "GCPIAG",
+      "series_name": "Consumer price inflation",
+      "table": "G1"
+    },
+    "unit": "Annual percentage change",
+    "time": "2023-10-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 4.1,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Quarterly",
+      "rba_series_id": "GCPIAG",
+      "rba_series_name": "Consumer price inflation",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/g01.csv",
+      "table_title": "Consumer Price Inflation - G1"
+    },
+    "source_artifact_id": "0f0b6e06a7e9c79681b658234f2ba55fde8cb1f4d67efe267bbe085d2b55eaae"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "GCPIUR",
+      "series_name": "Underlying inflation",
+      "table": "G1"
+    },
+    "unit": "Annual percentage change",
+    "time": "2023-10-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 4.2,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Quarterly",
+      "rba_series_id": "GCPIUR",
+      "rba_series_name": "Underlying inflation",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/g01.csv",
+      "table_title": "Consumer Price Inflation - G1"
+    },
+    "source_artifact_id": "0f0b6e06a7e9c79681b658234f2ba55fde8cb1f4d67efe267bbe085d2b55eaae"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "GCPIAG",
+      "series_name": "Consumer price inflation",
+      "table": "G1"
+    },
+    "unit": "Annual percentage change",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 3.6,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Quarterly",
+      "rba_series_id": "GCPIAG",
+      "rba_series_name": "Consumer price inflation",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/g01.csv",
+      "table_title": "Consumer Price Inflation - G1"
+    },
+    "source_artifact_id": "0f0b6e06a7e9c79681b658234f2ba55fde8cb1f4d67efe267bbe085d2b55eaae"
+  },
+  {
+    "dataflow_id": "rba.statistical_tables",
+    "measure_id": "value",
+    "dimensions": {
+      "series_id": "GCPIUR",
+      "series_name": "Underlying inflation",
+      "table": "G1"
+    },
+    "unit": "Annual percentage change",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 4.0,
+    "status": "Normal",
+    "attributes": {
+      "frequency": "Quarterly",
+      "rba_series_id": "GCPIUR",
+      "rba_series_name": "Underlying inflation",
+      "source": "Reserve Bank of Australia",
+      "source_url": "https://www.rba.gov.au/statistics/tables/csv/g01.csv",
+      "table_title": "Consumer Price Inflation - G1"
+    },
+    "source_artifact_id": "0f0b6e06a7e9c79681b658234f2ba55fde8cb1f4d67efe267bbe085d2b55eaae"
+  }
+]
