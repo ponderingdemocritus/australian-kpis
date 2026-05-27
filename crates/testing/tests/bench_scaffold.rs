@@ -171,3 +171,58 @@ fn bench_workflow_runs_workspace_baselines_without_first_bench_skip() {
         "bench workflow should not skip regression comparison now that benchmarks are blocking"
     );
 }
+
+#[test]
+fn issue_50_parquet_stream_benchmark_contract_is_wired() {
+    let root = repo_root();
+
+    assert!(
+        root.join("crates/au-kpis-api-http/benches/parquet_stream.rs")
+            .is_file(),
+        "issue #50 should provide a dedicated 1M-row Parquet Criterion bench"
+    );
+    assert!(
+        root.join("crates/au-kpis-api-http/tests/parquet_memory.rs")
+            .is_file(),
+        "issue #50 should provide a DHAT memory-budget test"
+    );
+
+    let api_manifest = fs::read_to_string(root.join("crates/au-kpis-api-http/Cargo.toml"))
+        .expect("read api-http manifest");
+    assert!(
+        api_manifest.contains("dhat-heap = [\"dep:dhat\"]"),
+        "api-http should expose a dhat-heap feature for the memory profile"
+    );
+    assert!(
+        api_manifest.contains("name = \"parquet_stream\""),
+        "api-http manifest should register the parquet_stream Criterion bench"
+    );
+
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    assert!(
+        pr_workflow.contains(
+            "cargo bench -p au-kpis-api-http --bench parquet_stream --locked -- --save-baseline"
+        ),
+        "benchmark workflow should run the 1M-row Parquet Criterion bench"
+    );
+    assert!(
+        pr_workflow.contains("cargo test -p au-kpis-api-http")
+            && pr_workflow.contains("--features dhat-heap")
+            && pr_workflow.contains("--test parquet_memory"),
+        "CI should enforce the 1M-row Parquet DHAT memory budget"
+    );
+    assert!(
+        pr_workflow.contains("critcmp main pr --threshold 5"),
+        "merge-queue benchmark regression threshold should remain 5%"
+    );
+
+    let baseline = fs::read_to_string(root.join("benches/baselines/issue-50.md"))
+        .expect("issue #50 benchmark baseline summary should be committed");
+    for expected in ["Parquet 1M-row stream", "<30 s", "<100 MB", "dhat"] {
+        assert!(
+            baseline.contains(expected),
+            "baseline summary should document `{expected}`"
+        );
+    }
+}

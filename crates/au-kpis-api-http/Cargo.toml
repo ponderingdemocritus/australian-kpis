@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "axum routes + handlers (library)."
 
+[features]
+dhat-heap = ["dep:dhat"]
+
 [dependencies]
 arrow-array = "58.3.0" # build RecordBatch values for streamed Parquet responses
 arrow-schema = "58.3.0" # define the Arrow schema exported by the Parquet endpoint
@@ -19,6 +22,7 @@ au-kpis-telemetry = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
 base64 = "0.22" # opaque cursor encoding; std has no base64 codec
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+dhat = { version = "0.3", optional = true }
 futures = "0.3" # TryStreamExt over sqlx row streams
 http = "1"
 parquet = { version = "58.3.0", default-features = false, features = ["arrow", "async", "zstd"] } # encode streamed Parquet responses with zstd and without unused codecs
@@ -47,6 +51,10 @@ tower = { version = "0.5", features = ["util"] }
 
 [[bench]]
 name = "observations_handler"
+harness = false
+
+[[bench]]
+name = "parquet_stream"
 harness = false
 
 [lints]

@@ -536,6 +536,9 @@ jobs:
             if [ -f crates/au-kpis-api-http/benches/observations_handler.rs ]; then
               cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline "${baseline}"
             fi
+            if [ -f crates/au-kpis-api-http/benches/parquet_stream.rs ]; then
+              cargo bench -p au-kpis-api-http --bench parquet_stream --locked -- --save-baseline "${baseline}"
+            fi
           }
           run_benchmarks main
           git checkout --detach "${pr_sha}"
@@ -549,6 +552,7 @@ jobs:
             cargo bench -p au-kpis-adapter-abs --bench sdmx_parse --locked -- --save-baseline "${baseline}"
             cargo bench -p au-kpis-loader --bench copy_upsert --locked -- --save-baseline "${baseline}"
             cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline "${baseline}"
+            cargo bench -p au-kpis-api-http --bench parquet_stream --locked -- --save-baseline "${baseline}"
           }
           run_benchmarks pr
           set +e
@@ -637,6 +641,11 @@ jobs:
           cargo test -p au-kpis-adapter-abs \
             --features dhat-heap \
             --test parse_memory \
+            -- --ignored --nocapture
+          cargo test -p au-kpis-api-http \
+            --release \
+            --features dhat-heap \
+            --test parquet_memory \
             -- --ignored --nocapture
 
   coverage:
