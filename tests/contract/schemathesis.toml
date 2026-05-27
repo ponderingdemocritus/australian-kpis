@@ -1,10 +1,18 @@
-base-url = "http://127.0.0.1:3000"
-generation.max-examples = 64
+hooks = "tests/contract/hooks.py"
+generation.max-examples = 8
 request-timeout = 5.0
 
 [phases]
 stateful.enabled = false
 
 [[operations]]
-include-path = "/v1/health"
-generation.max-examples = 16
+include-path = "/v1/dataflows/{id}/codelists/{dim}"
+parameters = { "path.id" = "abs.cpi", "path.dim" = "region" }
+
+[[operations]]
+include-path = "/v1/observations"
+parameters = { "query.dataflow" = "abs.cpi", "query.format" = "json" }
+
+[[operations]]
+include-path = "/v1/series/{dataflow}/{series_key}"
+parameters = { "path.dataflow" = "abs.cpi", "path.series_key" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }

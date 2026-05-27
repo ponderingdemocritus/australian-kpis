@@ -63,8 +63,8 @@ pub struct DataflowCodelistResponse {
     path = "/v1/dataflows",
     operation_id = "listDataflows",
     params(
-        ("source" = Option<String>, Query, description = "Optional source id filter, e.g. abs."),
-        ("frequency" = Option<String>, Query, description = "Optional publication frequency filter.")
+        ("source" = Option<String>, Query, min_length = 1, max_length = 128, description = "Optional source id filter, e.g. abs."),
+        ("frequency" = Option<String>, Query, min_length = 1, pattern = "^(annual|quarterly|monthly|weekly|daily|irregular)$", description = "Optional publication frequency filter.")
     ),
     responses(
         (status = 200, description = "Dataflow catalog page.", body = DataflowsResponse, content_type = "application/json", headers(
@@ -102,12 +102,13 @@ pub async fn list_dataflows(State(state): State<AppState>, uri: Uri) -> Result<R
     path = "/v1/dataflows/{id}",
     operation_id = "getDataflow",
     params(
-        ("id" = String, Path, description = "Dataflow id.")
+        ("id" = String, Path, min_length = 1, max_length = 128, description = "Dataflow id.")
     ),
     responses(
         (status = 200, description = "Dataflow metadata and dimensions.", body = DataflowDetailResponse, content_type = "application/json", headers(
             ("Cache-Control" = String, description = "Public CDN cache policy.")
         )),
+        (status = 400, description = "Invalid path parameter.", body = crate::ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = "Dataflow not found.", body = crate::ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal error.", body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
@@ -147,13 +148,14 @@ pub async fn get_dataflow(
     path = "/v1/dataflows/{id}/codelists/{dim}",
     operation_id = "getDataflowCodelist",
     params(
-        ("id" = String, Path, description = "Dataflow id."),
-        ("dim" = String, Path, description = "Dimension id.")
+        ("id" = String, Path, min_length = 1, max_length = 128, description = "Dataflow id."),
+        ("dim" = String, Path, min_length = 1, max_length = 128, description = "Dimension id.")
     ),
     responses(
         (status = 200, description = "Codelist for the requested dimension.", body = DataflowCodelistResponse, content_type = "application/json", headers(
             ("Cache-Control" = String, description = "Public CDN cache policy.")
         )),
+        (status = 400, description = "Invalid path parameter.", body = crate::ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = "Dataflow or dimension not found.", body = crate::ProblemDetails, content_type = "application/problem+json"),
         (status = 500, description = "Internal error.", body = crate::ProblemDetails, content_type = "application/problem+json")
     ),

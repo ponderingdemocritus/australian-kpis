@@ -15,7 +15,7 @@ the single `CI OK` status check.
 - Rust coverage with line and branch thresholds plus advisory Codecov upload
 - Snapshot checks with `cargo insta`
 - OpenAPI drift and `oasdiff breaking` checks against the base branch document
-- Schemathesis contract checks against the local contract server
+- Schemathesis contract checks against the docker-compose API stack
 - Supply-chain and secret scans: `cargo deny`, `cargo audit`,
   `pnpm audit --audit-level critical`, and gitleaks over full history
 - API container build plus Trivy HIGH/CRITICAL image scan
@@ -40,6 +40,31 @@ to a shared InfluxDB/Grafana environment. If it is not set, the job posts to the
 local compose InfluxDB database at `http://127.0.0.1:8086/k6`. Set
 `AU_KPIS_SMOKE_API_KEY` as a repository secret when staging should run the smoke
 scenario with an API-key tier instead of anonymous quotas.
+
+## Contract fuzzing
+
+The pull request `Contract (schemathesis)` job starts the docker-compose API
+stack, applies migrations, seeds `apps/web/e2e/fixtures/explorer.sql`, validates
+the live `/v1/openapi.json` document against the OpenAPI 3.1 schema, and runs
+`tests/contract/schemathesis.toml` against every documented API operation. The
+PR profile uses a small deterministic budget so this gate can stay blocking
+without dominating CI time. The config uses `tests/contract/hooks.py` to
+deserialize CSV and Parquet observation responses for response-schema checks,
+and seeds known fixture IDs for resource-specific paths. It excludes Schemathesis'
+`positive_data_acceptance` check because several parameters, such as pagination
+cursors, are opaque tokens that cannot be generated as arbitrary valid strings;
+status-code, content-type, response-schema, server-error, and negative-data
+checks remain active.
+
+Nightly schemathesis deep fuzzing lives in
+`.github/workflows/contract-nightly.yml` and runs at `0 4 * * *` against the
+configured staging API with `tests/contract/schemathesis.deep.toml`. Set
+`AU_KPIS_STAGING_BASE_URL` as a repository variable. Set
+`AU_KPIS_SMOKE_API_KEY` as a repository secret when staging should use an API-key
+tier for the deeper request volume. If staging uses different fixture data from
+the local smoke seed, set `AU_KPIS_CONTRACT_DATAFLOW`,
+`AU_KPIS_CONTRACT_DIMENSION`, and `AU_KPIS_CONTRACT_SERIES_KEY` repository
+variables so resource-specific fuzz cases reach existing records.
 
 ## Dependency and secret policy
 

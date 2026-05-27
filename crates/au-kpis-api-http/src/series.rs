@@ -50,8 +50,8 @@ pub struct SeriesLookupResponse {
     path = "/v1/series/{dataflow}/{series_key}",
     operation_id = "getSeries",
     params(
-        ("dataflow" = String, Path, description = "Dataflow id."),
-        ("series_key" = String, Path, description = "64-character series key hex digest.")
+        ("dataflow" = String, Path, min_length = 1, max_length = 128, description = "Dataflow id."),
+        ("series_key" = String, Path, min_length = 64, max_length = 64, pattern = "^[0-9a-f]{64}$", description = "64-character series key hex digest.")
     ),
     responses(
         (status = 200, description = "Series metadata and latest observation.", body = SeriesLookupResponse, content_type = "application/json"),

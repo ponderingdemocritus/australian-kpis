@@ -1,0 +1,75 @@
+name: Contract Deep Fuzz
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: contract-deep-fuzz
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  schemathesis-deep:
+    name: Schemathesis deep fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Schemathesis
+        run: python -m pip install "schemathesis==4.15.2"
+
+      - name: Configure staging target
+        env:
+          AU_KPIS_STAGING_BASE_URL: ${{ vars.AU_KPIS_STAGING_BASE_URL }}
+          AU_KPIS_CONTRACT_DATAFLOW: ${{ vars.AU_KPIS_CONTRACT_DATAFLOW }}
+          AU_KPIS_CONTRACT_DIMENSION: ${{ vars.AU_KPIS_CONTRACT_DIMENSION }}
+          AU_KPIS_CONTRACT_SERIES_KEY: ${{ vars.AU_KPIS_CONTRACT_SERIES_KEY }}
+        run: |
+          set -euo pipefail
+          test -f tests/contract/hooks.py
+          if [ -z "${AU_KPIS_STAGING_BASE_URL:-}" ]; then
+            echo "AU_KPIS_STAGING_BASE_URL repository variable is required for nightly contract fuzzing." >&2
+            exit 1
+          fi
+          echo "AU_KPIS_STAGING_BASE_URL=${AU_KPIS_STAGING_BASE_URL%/}" >> "$GITHUB_ENV"
+          echo "AU_KPIS_CONTRACT_DATAFLOW=${AU_KPIS_CONTRACT_DATAFLOW:-abs.cpi}" >> "$GITHUB_ENV"
+          echo "AU_KPIS_CONTRACT_DIMENSION=${AU_KPIS_CONTRACT_DIMENSION:-region}" >> "$GITHUB_ENV"
+          echo "AU_KPIS_CONTRACT_SERIES_KEY=${AU_KPIS_CONTRACT_SERIES_KEY:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" >> "$GITHUB_ENV"
+
+      - name: Run Schemathesis deep fuzz
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.AU_KPIS_SMOKE_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/contract
+          args=(
+            --checks all
+            --exclude-checks positive_data_acceptance
+            --rate-limit 20/s
+            --report junit
+            --report-junit-path target/contract/schemathesis-deep.xml
+            --url "${AU_KPIS_STAGING_BASE_URL}"
+          )
+          if [ -n "${AU_KPIS_API_KEY:-}" ]; then
+            args+=(--header "X-API-Key:${AU_KPIS_API_KEY}")
+          fi
+          args+=("${AU_KPIS_STAGING_BASE_URL}/v1/openapi.json")
+          schemathesis --config-file tests/contract/schemathesis.deep.toml run "${args[@]}"
+
+      - name: Upload Schemathesis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemathesis-deep-report
+          path: target/contract/schemathesis-deep.xml
+          if-no-files-found: ignore

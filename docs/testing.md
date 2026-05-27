@@ -18,8 +18,25 @@ cargo llvm-cov nextest --workspace --profile ci --lcov --output-path target/llvm
 cargo insta test --workspace --check
 
 # Contract fuzzing against a running API
-schemathesis --config-file tests/contract/schemathesis.toml run http://127.0.0.1:3000/v1/openapi.json
+schemathesis --config-file tests/contract/schemathesis.toml run \
+  --checks all \
+  --exclude-checks positive_data_acceptance \
+  --url http://127.0.0.1:3000 \
+  http://127.0.0.1:3000/v1/openapi.json
+
+# Nightly staging profile, matching the scheduled deep-fuzz workflow
+export AU_KPIS_CONTRACT_DATAFLOW="${AU_KPIS_CONTRACT_DATAFLOW:-abs.cpi}"
+export AU_KPIS_CONTRACT_DIMENSION="${AU_KPIS_CONTRACT_DIMENSION:-region}"
+export AU_KPIS_CONTRACT_SERIES_KEY="${AU_KPIS_CONTRACT_SERIES_KEY:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+schemathesis --config-file tests/contract/schemathesis.deep.toml run \
+  --checks all \
+  --exclude-checks positive_data_acceptance \
+  --url "$AU_KPIS_STAGING_BASE_URL" \
+  "$AU_KPIS_STAGING_BASE_URL/v1/openapi.json"
 ```
+
+The Schemathesis configs load `tests/contract/hooks.py` so CSV and Parquet
+observation responses are still deserialized for schema checks.
 
 ## Shared Docker harnesses
 

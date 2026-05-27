@@ -192,25 +192,142 @@ fn issue_38_k6_smoke_contract_is_wired() {
 }
 
 #[test]
-fn contract_workflow_builds_server_before_readiness_polling() {
+fn issue_39_schemathesis_contract_is_wired() {
+    let root = repo_root();
+
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let contract_config = fs::read_to_string(root.join("tests/contract/schemathesis.toml"))
+        .expect("read schemathesis PR config");
+    let deep_config = fs::read_to_string(root.join("tests/contract/schemathesis.deep.toml"))
+        .expect("read schemathesis deep-fuzz config");
+    let nightly_workflow = fs::read_to_string(root.join(".github/workflows/contract-nightly.yml"))
+        .expect("read nightly contract workflow");
+    let ci_docs = fs::read_to_string(root.join("docs/ci.md")).expect("read CI docs");
+    let testing_docs = fs::read_to_string(root.join("docs/testing.md")).expect("read testing docs");
+
+    assert!(
+        pr_workflow
+            .contains("docker compose -f infra/compose/docker-compose.yml up -d --build api"),
+        "PR contract workflow should fuzz the docker-compose API stack"
+    );
+    assert!(
+        pr_workflow.contains("< apps/web/e2e/fixtures/explorer.sql"),
+        "PR contract workflow should seed representative API data before fuzzing"
+    );
+    assert!(
+        pr_workflow.contains("schemathesis --config-file tests/contract/schemathesis.toml run"),
+        "PR contract workflow should run the committed schemathesis config"
+    );
+    assert!(
+        pr_workflow.contains("--report-junit-path target/contract/schemathesis.xml"),
+        "PR contract workflow should emit a JUnit report artifact"
+    );
+    assert!(
+        pr_workflow.contains("merge_group:") && pr_workflow.contains("- contract"),
+        "contract checks should remain blocking in merge queue batches through CI OK"
+    );
+
+    for expected in [
+        "generation.max-examples = 8",
+        "request-timeout = 5.0",
+        "hooks = \"tests/contract/hooks.py\"",
+        "stateful.enabled = false",
+    ] {
+        assert!(
+            contract_config.contains(expected),
+            "PR schemathesis config should contain `{expected}`"
+        );
+    }
+    for expected in [
+        "include-path = \"/v1/dataflows/{id}/codelists/{dim}\"",
+        "parameters = { \"path.id\" = \"abs.cpi\", \"path.dim\" = \"region\" }",
+        "include-path = \"/v1/observations\"",
+        "parameters = { \"query.dataflow\" = \"abs.cpi\", \"query.format\" = \"json\" }",
+        "include-path = \"/v1/series/{dataflow}/{series_key}\"",
+        "parameters = { \"path.dataflow\" = \"abs.cpi\", \"path.series_key\" = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }",
+    ] {
+        assert!(
+            contract_config.contains(expected),
+            "PR schemathesis config should provide realistic seeded data via `{expected}`"
+        );
+    }
+    for expected in [
+        "parameters = { \"path.id\" = \"$AU_KPIS_CONTRACT_DATAFLOW\", \"path.dim\" = \"$AU_KPIS_CONTRACT_DIMENSION\" }",
+        "parameters = { \"query.dataflow\" = \"$AU_KPIS_CONTRACT_DATAFLOW\", \"query.format\" = \"json\" }",
+        "parameters = { \"path.dataflow\" = \"$AU_KPIS_CONTRACT_DATAFLOW\", \"path.series_key\" = \"$AU_KPIS_CONTRACT_SERIES_KEY\" }",
+    ] {
+        assert!(
+            deep_config.contains(expected),
+            "deep-fuzz schemathesis config should provide staging-overridable seeded data via `{expected}`"
+        );
+    }
+    assert!(
+        !contract_config.contains("include-path = \"/v1/health\""),
+        "PR schemathesis config should not narrow coverage to only the health endpoint"
+    );
+
+    for expected in [
+        "generation.max-examples = 256",
+        "request-timeout = 10.0",
+        "hooks = \"tests/contract/hooks.py\"",
+        "stateful.enabled = false",
+    ] {
+        assert!(
+            deep_config.contains(expected),
+            "deep-fuzz schemathesis config should contain `{expected}`"
+        );
+    }
+
+    for expected in [
+        "cron: \"0 4 * * *\"",
+        "AU_KPIS_STAGING_BASE_URL",
+        "tests/contract/schemathesis.deep.toml",
+        "tests/contract/hooks.py",
+        "AU_KPIS_CONTRACT_SERIES_KEY",
+        "schemathesis --config-file tests/contract/schemathesis.deep.toml run",
+        "--url \"${AU_KPIS_STAGING_BASE_URL}\"",
+    ] {
+        assert!(
+            nightly_workflow.contains(expected),
+            "nightly contract workflow should contain `{expected}`"
+        );
+    }
+
+    assert!(
+        ci_docs.contains("Nightly schemathesis deep fuzzing")
+            && testing_docs.contains("schemathesis.deep.toml"),
+        "CI and testing docs should document PR and nightly contract fuzzing"
+    );
+}
+
+#[test]
+fn contract_workflow_uses_compose_api_before_fuzzing() {
     let root = repo_root();
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let contract_job = pr_workflow
+        .find("  contract:")
+        .expect("PR workflow should define a contract job");
+    let contract_workflow = &pr_workflow[contract_job..];
+
+    let compose_stack = contract_workflow
+        .find("Start compose contract stack")
+        .expect("contract workflow should start the compose API stack");
+    let readiness = contract_workflow
+        .find("Wait for API readiness")
+        .expect("contract workflow should poll API readiness");
+    let schemathesis = contract_workflow
+        .find("name: Run Schemathesis")
+        .expect("contract workflow should run schemathesis");
 
     assert!(
-        pr_workflow.contains("cargo build -p au-kpis-api-http --example contract_server --locked"),
-        "contract workflow should build the contract server before starting it"
+        compose_stack < readiness && readiness < schemathesis,
+        "contract workflow should start compose, wait for readiness, then fuzz"
     );
     assert!(
-        pr_workflow.contains(
-            "./target/debug/examples/contract_server > target/contract/server.log 2>&1 &"
-        ),
-        "contract workflow should start the prebuilt contract server binary"
-    );
-    assert!(
-        pr_workflow.contains("AU_KPIS_CONTRACT_ADDR=\"127.0.0.1:0\"")
-            && pr_workflow.contains("AU_KPIS_CONTRACT_ADDR_FILE=\"target/contract/server.addr\""),
-        "contract workflow should let the server bind port 0 and report the selected address"
+        !pr_workflow.contains("contract_server"),
+        "contract workflow should use the real compose API instead of the legacy contract server"
     );
 }
 

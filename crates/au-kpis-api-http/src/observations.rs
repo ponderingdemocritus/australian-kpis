@@ -105,14 +105,14 @@ pub struct ObservationsResponse {
     operation_id = "listObservations",
     path = "/v1/observations",
     params(
-        ("dataflow" = String, Query, description = "Required dataflow id, e.g. abs.cpi."),
+        ("dataflow" = String, Query, min_length = 1, max_length = 128, description = "Required dataflow id, e.g. abs.cpi."),
         ("dimensions[]" = Option<Vec<String>>, Query, description = "Dimension filters as repeated key=value values. The handler also accepts dimensions[region]=AUS."),
-        ("since" = Option<String>, Query, description = "Inclusive lower time bound as YYYY-MM-DD or RFC3339."),
-        ("until" = Option<String>, Query, description = "Inclusive upper time bound as YYYY-MM-DD or RFC3339."),
-        ("frequency" = Option<String>, Query, description = "Optional dataflow frequency filter."),
-        ("format" = Option<String>, Query, description = "Response format: json, csv, or parquet."),
-        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page."),
-        ("limit" = Option<u32>, Query, description = "Page size, maximum 10000.")
+        ("since" = Option<String>, Query, format = Date, min_length = 1, description = "Inclusive lower time bound as YYYY-MM-DD or RFC3339."),
+        ("until" = Option<String>, Query, format = Date, min_length = 1, description = "Inclusive upper time bound as YYYY-MM-DD or RFC3339."),
+        ("frequency" = Option<String>, Query, min_length = 1, pattern = "^(annual|quarterly|monthly|weekly|daily|irregular)$", description = "Optional dataflow frequency filter."),
+        ("format" = Option<String>, Query, min_length = 3, max_length = 7, pattern = "^(json|csv|parquet)$", description = "Response format: json, csv, or parquet."),
+        ("cursor" = Option<String>, Query, min_length = 1, description = "Opaque cursor from the previous page."),
+        ("limit" = Option<u32>, Query, maximum = 10000, description = "Page size, maximum 10000.")
     ),
     responses(
         (

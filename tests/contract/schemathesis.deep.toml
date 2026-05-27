@@ -1,0 +1,20 @@
+hooks = "tests/contract/hooks.py"
+generation.max-examples = 256
+request-timeout = 10.0
+max-failures = 20
+continue-on-failure = true
+
+[phases]
+stateful.enabled = false
+
+[[operations]]
+include-path = "/v1/dataflows/{id}/codelists/{dim}"
+parameters = { "path.id" = "$AU_KPIS_CONTRACT_DATAFLOW", "path.dim" = "$AU_KPIS_CONTRACT_DIMENSION" }
+
+[[operations]]
+include-path = "/v1/observations"
+parameters = { "query.dataflow" = "$AU_KPIS_CONTRACT_DATAFLOW", "query.format" = "json" }
+
+[[operations]]
+include-path = "/v1/series/{dataflow}/{series_key}"
+parameters = { "path.dataflow" = "$AU_KPIS_CONTRACT_DATAFLOW", "path.series_key" = "$AU_KPIS_CONTRACT_SERIES_KEY" }
