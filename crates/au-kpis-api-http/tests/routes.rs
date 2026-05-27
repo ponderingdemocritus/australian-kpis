@@ -263,6 +263,68 @@ async fn dataflows_route_validates_frequency_before_db_access() {
 }
 
 #[tokio::test]
+async fn dataflows_route_rejects_invalid_source_before_db_access() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/v1/dataflows?source=fL%C3%A0%C3%BD%00%C3%AD%C3%B6%C2%96%C3%A9")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert!(
+        parsed
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("source"))
+    );
+}
+
+#[tokio::test]
+async fn search_route_rejects_nul_query_before_db_access() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/v1/search?q=inflation%00")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
+    assert!(
+        parsed
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("search query"))
+    );
+}
+
+#[tokio::test]
 async fn series_route_validates_series_key_before_db_access() {
     let response = router(test_state())
         .expect("router")

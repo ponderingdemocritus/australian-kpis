@@ -41,6 +41,21 @@ local compose InfluxDB database at `http://127.0.0.1:8086/k6`. Set
 `AU_KPIS_SMOKE_API_KEY` as a repository secret when staging should run the smoke
 scenario with an API-key tier instead of anonymous quotas.
 
+## Nightly k6 load tests
+
+`.github/workflows/k6-nightly.yml` runs at `0 2 * * *` against staging. It
+executes `apps/bench/sustained.js` and `apps/bench/burst.js`, requires
+`AU_KPIS_STAGING_BASE_URL`, and writes k6 samples through `K6_OUT` to the shared
+InfluxDB datasource configured by `K6_INFLUXDB_ADDR`. The sustained scenario
+uses 100 virtual users for 10 minutes. The burst scenario ramps to 2000 virtual
+users, holds, and ramps down while enforcing the 429 and 5xx budgets from the
+benchmarking spec.
+
+The workflow uploads `k6-load-summary` artifacts for historical comparison.
+Adding the `perf:regression` label to a PR runs the same staging load suite,
+downloads the latest successful scheduled summary when available, and posts a
+`k6 load comparison` PR comment through `actions/github-script`.
+
 ## Contract fuzzing
 
 The pull request `Contract (schemathesis)` job starts the docker-compose API

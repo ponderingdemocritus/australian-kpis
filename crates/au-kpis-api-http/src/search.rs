@@ -133,6 +133,11 @@ fn parse_search_query(raw: Option<&str>) -> Result<SearchQuery, ApiError> {
             "search query `q` must not be blank".into(),
         ));
     }
+    if q.contains('\0') {
+        return Err(ApiError::Validation(
+            "search query `q` must not contain NUL bytes".into(),
+        ));
+    }
 
     Ok(SearchQuery { q, limit })
 }

@@ -1,0 +1,187 @@
+name: k6 Nightly Load
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Scenario to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - sustained
+          - burst
+      pr_number:
+        description: Optional PR number for a comparison comment
+        required: false
+        type: string
+  pull_request:
+    types:
+      - labeled
+
+concurrency:
+  group: k6-load-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  REQUESTED_SCENARIO: ${{ github.event.inputs.scenario || 'all' }}
+
+jobs:
+  staging-load:
+    name: k6 staging load
+    if: github.event_name != 'pull_request' || github.event.label.name == 'perf:regression'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: "0.54.0"
+
+      - name: Configure staging target
+        env:
+          AU_KPIS_STAGING_BASE_URL: ${{ vars.AU_KPIS_STAGING_BASE_URL }}
+          K6_INFLUXDB_ADDR: ${{ vars.K6_INFLUXDB_ADDR }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AU_KPIS_STAGING_BASE_URL:-}" ]; then
+            echo "AU_KPIS_STAGING_BASE_URL repository variable is required for nightly k6." >&2
+            exit 1
+          fi
+          if [ -z "${K6_INFLUXDB_ADDR:-}" ]; then
+            echo "K6_INFLUXDB_ADDR repository variable is required for historical k6 load trends." >&2
+            exit 1
+          fi
+          echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
+          echo "K6_OUT=influxdb=${K6_INFLUXDB_ADDR}" >> "$GITHUB_ENV"
+
+      - name: Prepare k6 output directory
+        run: mkdir -p target/k6
+
+      - name: Run sustained load
+        id: sustained
+        if: env.REQUESTED_SCENARIO == 'all' || env.REQUESTED_SCENARIO == 'sustained'
+        continue-on-error: true
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.AU_KPIS_SMOKE_API_KEY }}
+        run: |
+          set -euo pipefail
+          k6 run --out "${K6_OUT}" \
+            --summary-export target/k6/sustained-summary.json \
+            --tag environment=staging \
+            --tag github_run_id="${GITHUB_RUN_ID}" \
+            apps/bench/sustained.js
+
+      - name: Run burst load
+        id: burst
+        if: env.REQUESTED_SCENARIO == 'all' || env.REQUESTED_SCENARIO == 'burst'
+        continue-on-error: true
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.AU_KPIS_SMOKE_API_KEY }}
+        run: |
+          set -euo pipefail
+          k6 run --out "${K6_OUT}" \
+            --summary-export target/k6/burst-summary.json \
+            --tag environment=staging \
+            --tag github_run_id="${GITHUB_RUN_ID}" \
+            apps/bench/burst.js
+
+      - name: Download latest nightly baseline
+        if: github.event_name == 'pull_request' || github.event.inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/k6/baseline
+          baseline_run="$(
+            gh run list \
+              --workflow k6-nightly.yml \
+              --event schedule \
+              --status success \
+              --branch main \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty'
+          )"
+          if [ -n "${baseline_run}" ]; then
+            gh run download "${baseline_run}" \
+              --name k6-load-summary \
+              --dir target/k6/baseline || true
+          fi
+
+      - name: Build PR comparison comment
+        if: always()
+        env:
+          K6_PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          python3 tools/ci/k6_pr_comment.py \
+            --current target/k6 \
+            --baseline target/k6/baseline \
+            --output target/k6/comment.md \
+            --pr "${K6_PR_NUMBER:-}"
+
+      - name: Comment k6 comparison on PR
+        if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
+        uses: actions/github-script@v8
+        env:
+          K6_PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs')
+            const marker = '<!-- k6 load comparison -->'
+            const body = fs.readFileSync('target/k6/comment.md', 'utf8')
+            const issue_number = Number(process.env.K6_PR_NUMBER)
+            if (!issue_number) {
+              core.setFailed('A PR number is required for the k6 load comparison comment.')
+              return
+            }
+            const { owner, repo } = context.repo
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            })
+            const existing = comments.data.find(
+              (comment) => comment.user.type === 'Bot' && comment.body.includes(marker),
+            )
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              })
+            }
+
+      - name: Upload k6 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-load-summary
+          path: |
+            target/k6/*-summary.json
+            target/k6/comment.md
+          retention-days: 30
+
+      - name: Fail on k6 threshold regression
+        if: steps.sustained.outcome == 'failure' || steps.burst.outcome == 'failure'
+        run: exit 1

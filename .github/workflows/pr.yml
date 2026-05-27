@@ -475,9 +475,9 @@ jobs:
           echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
           echo "K6_ENVIRONMENT=staging" >> "$GITHUB_ENV"
 
-      - name: Start compose smoke stack
+      - name: Start compose smoke dependencies
         if: github.event_name != 'merge_group'
-        run: docker compose -f infra/compose/docker-compose.yml up -d --build api influxdb
+        run: docker compose -f infra/compose/docker-compose.yml up -d --wait --wait-timeout 120 postgres redis minio pdf-extractor influxdb
 
       - name: Start merge-queue metrics store
         if: github.event_name == 'merge_group'
@@ -487,13 +487,19 @@ jobs:
         if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
+          ready=0
           for _ in $(seq 1 60); do
             if docker compose -f infra/compose/docker-compose.yml exec -T postgres \
-                pg_isready -U au_kpis -d au_kpis; then
+                psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis -c 'SELECT 1' >/dev/null 2>&1; then
+              ready=1
               break
             fi
             sleep 1
           done
+          if [ "${ready}" -ne 1 ]; then
+            docker compose -f infra/compose/docker-compose.yml logs postgres >&2 || true
+            exit 1
+          fi
           cat infra/migrations/*.up.sql \
             | docker compose -f infra/compose/docker-compose.yml exec -T postgres \
                 psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
@@ -504,6 +510,10 @@ jobs:
           docker compose -f infra/compose/docker-compose.yml exec -T postgres \
             psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
             < apps/web/e2e/fixtures/explorer.sql
+
+      - name: Start local smoke API
+        if: github.event_name != 'merge_group'
+        run: docker compose -f infra/compose/docker-compose.yml up -d --build api
 
       - name: Wait for local API readiness
         if: github.event_name != 'merge_group'
@@ -606,6 +616,9 @@ jobs:
           critcmp_status=$?
           set -e
           printf '%s\n' "${critcmp_output}"
+          if [ "${critcmp_status}" -ne 0 ]; then
+            echo "critcmp threshold check exited with status ${critcmp_status}; verifying confidence bounds."
+          fi
           critcmp --export main > target/criterion-main.json
           critcmp --export pr > target/criterion-pr.json
           python3 <<'PY'
