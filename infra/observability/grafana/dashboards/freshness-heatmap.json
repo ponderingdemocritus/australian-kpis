@@ -1,0 +1,53 @@
+{
+  "uid": "au-kpis-freshness",
+  "title": "Freshness Heatmap",
+  "tags": ["au-kpis", "freshness", "slo"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Hours Since Last Load by Dataflow",
+      "type": "heatmap",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "au_kpis_ingestion_lag_seconds / 3600",
+          "legendFormat": "{{dataflow}}"
+        }
+      ],
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Worker Polling",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(au_kpis_ingestion_worker_loops_total[5m])",
+          "legendFormat": "loops/s"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "id": 3,
+      "title": "Stale Series Watch",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "au_kpis_series_silent_total",
+          "legendFormat": "{{dataflow}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 }
+    }
+  ]
+}
