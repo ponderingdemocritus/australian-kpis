@@ -154,9 +154,14 @@ fn issue_38_k6_smoke_contract_is_wired() {
     );
     assert!(
         pr_workflow.contains(
-            "docker compose -f infra/compose/docker-compose.yml up -d --build api influxdb"
+            "docker compose -f infra/compose/docker-compose.yml up -d postgres redis minio pdf-extractor influxdb"
         ),
-        "PR smoke workflow should run against the docker-compose API stack with InfluxDB"
+        "PR smoke workflow should start compose dependencies with InfluxDB before migrating"
+    );
+    assert!(
+        pr_workflow
+            .contains("docker compose -f infra/compose/docker-compose.yml up -d --build api"),
+        "PR smoke workflow should start the docker-compose API stack after seeding"
     );
     assert!(
         pr_workflow.contains("< apps/web/e2e/fixtures/explorer.sql"),
@@ -273,6 +278,35 @@ fn issue_49_k6_nightly_load_contract_is_wired() {
         observability_docs.contains("k6 sustained and burst")
             && observability_docs.contains("k6-load.json"),
         "observability docs should document historical k6 load trending"
+    );
+}
+
+#[test]
+fn smoke_workflow_migrates_before_starting_api() {
+    let root = repo_root();
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let smoke_job = pr_workflow
+        .find("  smoke:")
+        .expect("PR workflow should define a smoke job");
+    let smoke_workflow = &pr_workflow[smoke_job..];
+
+    let dependencies = smoke_workflow
+        .find("Start compose smoke dependencies")
+        .expect("smoke workflow should start dependencies before migrations");
+    let migrations = smoke_workflow
+        .find("Apply migrations")
+        .expect("smoke workflow should apply migrations");
+    let seed = smoke_workflow
+        .find("Seed smoke fixture data")
+        .expect("smoke workflow should seed fixture data");
+    let api = smoke_workflow
+        .find("Start local smoke API")
+        .expect("smoke workflow should start the API after seeding");
+
+    assert!(
+        dependencies < migrations && migrations < seed && seed < api,
+        "smoke workflow should start dependencies, migrate, seed, then start the API"
     );
 }
 

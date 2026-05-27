@@ -475,9 +475,9 @@ jobs:
           echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
           echo "K6_ENVIRONMENT=staging" >> "$GITHUB_ENV"
 
-      - name: Start compose smoke stack
+      - name: Start compose smoke dependencies
         if: github.event_name != 'merge_group'
-        run: docker compose -f infra/compose/docker-compose.yml up -d --build api influxdb
+        run: docker compose -f infra/compose/docker-compose.yml up -d postgres redis minio pdf-extractor influxdb
 
       - name: Start merge-queue metrics store
         if: github.event_name == 'merge_group'
@@ -504,6 +504,10 @@ jobs:
           docker compose -f infra/compose/docker-compose.yml exec -T postgres \
             psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
             < apps/web/e2e/fixtures/explorer.sql
+
+      - name: Start local smoke API
+        if: github.event_name != 'merge_group'
+        run: docker compose -f infra/compose/docker-compose.yml up -d --build api
 
       - name: Wait for local API readiness
         if: github.event_name != 'merge_group'
@@ -606,6 +610,9 @@ jobs:
           critcmp_status=$?
           set -e
           printf '%s\n' "${critcmp_output}"
+          if [ "${critcmp_status}" -ne 0 ]; then
+            echo "critcmp threshold check exited with status ${critcmp_status}; verifying confidence bounds."
+          fi
           critcmp --export main > target/criterion-main.json
           critcmp --export pr > target/criterion-pr.json
           python3 <<'PY'
