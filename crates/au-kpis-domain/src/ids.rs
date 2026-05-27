@@ -26,6 +26,8 @@ pub enum IdError {
     Empty,
     #[error("identifier exceeds {max} bytes")]
     TooLong { max: usize },
+    #[error("identifier must not contain NUL bytes")]
+    ContainsNul,
     #[error("hash must be {expected} hex characters, got {actual}")]
     HashLength { expected: usize, actual: usize },
     #[error("hash contains non-hex characters")]
@@ -45,6 +47,9 @@ fn validate_slug(s: &str) -> Result<(), IdError> {
     }
     if s.len() > MAX_ID_LEN {
         return Err(IdError::TooLong { max: MAX_ID_LEN });
+    }
+    if s.contains('\0') {
+        return Err(IdError::ContainsNul);
     }
     Ok(())
 }
@@ -398,6 +403,11 @@ mod tests {
             SourceId::new(too_long),
             Err(IdError::TooLong { max: MAX_ID_LEN })
         );
+    }
+
+    #[test]
+    fn slug_id_rejects_nul_bytes() {
+        assert_eq!(SourceId::new("abs\0cpi"), Err(IdError::ContainsNul));
     }
 
     #[test]
