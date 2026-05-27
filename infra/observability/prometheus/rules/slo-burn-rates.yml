@@ -1,0 +1,165 @@
+groups:
+  - name: au-kpis-slo-burn-rates
+    interval: 30s
+    rules:
+      - alert: AuKpisApiAvailabilityFastBurn
+        expr: |
+          (
+            sum(rate(au_kpis_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(au_kpis_http_requests_total[5m])), 1)
+          ) > (14.4 * 0.001)
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: api-availability
+          window: fast
+        annotations:
+          summary: API availability fast burn
+          description: API 5xx ratio is consuming the 99.9% availability budget too quickly.
+
+      - alert: AuKpisApiAvailabilitySlowBurn
+        expr: |
+          (
+            sum(rate(au_kpis_http_requests_total{status=~"5.."}[1h]))
+            /
+            clamp_min(sum(rate(au_kpis_http_requests_total[1h])), 1)
+          ) > (6 * 0.001)
+        for: 30m
+        labels:
+          severity: page
+          team: data-platform
+          slo: api-availability
+          window: slow
+        annotations:
+          summary: API availability slow burn
+          description: API 5xx ratio is consuming the 99.9% availability budget over the slow window.
+
+      - alert: AuKpisApiLatencyFastBurn
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(au_kpis_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: api-latency
+          window: fast
+        annotations:
+          summary: API latency fast burn
+          description: GET request p95 is above the cold-read 500 ms SLO.
+
+      - alert: AuKpisApiLatencySlowBurn
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(au_kpis_http_request_duration_seconds_bucket[1h])) by (le)
+          ) > 0.5
+        for: 30m
+        labels:
+          severity: page
+          team: data-platform
+          slo: api-latency
+          window: slow
+        annotations:
+          summary: API latency slow burn
+          description: API p95 remains above the cold-read 500 ms SLO.
+
+      - alert: AuKpisFreshnessFastBurn
+        expr: max by (dataflow) (au_kpis_ingestion_lag_seconds) > (2 * 24 * 60 * 60)
+        for: 15m
+        labels:
+          severity: page
+          team: data-platform
+          slo: data-freshness
+          window: fast
+        annotations:
+          summary: Dataflow freshness fast burn
+          description: Dataflow {{ $labels.dataflow }} is older than twice its expected cadence.
+
+      - alert: AuKpisFreshnessSlowBurn
+        expr: max by (dataflow) (avg_over_time(au_kpis_ingestion_lag_seconds[6h])) > (2 * 24 * 60 * 60)
+        for: 1h
+        labels:
+          severity: page
+          team: data-platform
+          slo: data-freshness
+          window: slow
+        annotations:
+          summary: Dataflow freshness slow burn
+          description: Dataflow {{ $labels.dataflow }} has stayed stale across the slow burn window.
+
+      - alert: AuKpisIngestionErrorFastBurn
+        expr: |
+          (
+            sum by (source) (rate(au_kpis_fetch_errors_total[5m]))
+            /
+            clamp_min(sum by (source) (rate(au_kpis_fetch_requests_total[5m])), 1)
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: ingestion-error-rate
+          window: fast
+        annotations:
+          summary: Ingestion error-rate fast burn
+          description: Source {{ $labels.source }} fetch errors are above 20% in the fast window.
+
+      - alert: AuKpisIngestionErrorSlowBurn
+        expr: |
+          (
+            sum by (source) (rate(au_kpis_fetch_errors_total[1h]))
+            /
+            clamp_min(sum by (source) (rate(au_kpis_fetch_requests_total[1h])), 1)
+          ) > 0.05
+        for: 30m
+        labels:
+          severity: page
+          team: data-platform
+          slo: ingestion-error-rate
+          window: slow
+        annotations:
+          summary: Ingestion error-rate slow burn
+          description: Source {{ $labels.source }} fetch errors remain elevated over the slow window.
+
+      - alert: AuKpisParquetDownloadTooSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(au_kpis_parquet_stream_duration_seconds_bucket[5m])) by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: parquet-download
+          window: fast
+        annotations:
+          summary: Parquet stream duration exceeded SLO
+          description: The 1M-row Parquet stream p95 is above 30 seconds.
+
+      - alert: AuKpisParquetHeapTooHigh
+        expr: max_over_time(au_kpis_parquet_stream_peak_heap_bytes[5m]) > 104857600
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: parquet-memory
+          window: fast
+        annotations:
+          summary: Parquet stream heap exceeded SLO
+          description: The 1M-row Parquet stream peak heap is above 100 MB.
+
+      - alert: AuKpisChaosDrillCanaryFiring
+        expr: au_kpis_chaos_error_ratio > 0.01
+        for: 0m
+        labels:
+          severity: page
+          team: data-platform
+        annotations:
+          summary: Chaos drill canary fired
+          description: Synthetic chaos drill metric for {{ $labels.service }} exceeded the canary threshold.

@@ -80,8 +80,9 @@ services:
       AU_KPIS_DATABASE__URL: postgres://au_kpis:au_kpis@postgres:5432/au_kpis
       AU_KPIS_CACHE__URL: redis://redis:6379
       AU_KPIS_TELEMETRY__SERVICE_NAME: au-kpis-api
-      AU_KPIS_TELEMETRY__LOG_FORMAT: pretty
+      AU_KPIS_TELEMETRY__LOG_FORMAT: json
       AU_KPIS_TELEMETRY__LOG_LEVEL: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -100,7 +101,184 @@ services:
       retries: 20
       start_period: 10s
 
+  ingestion:
+    profiles: ["observability"]
+    build:
+      context: ../..
+      dockerfile: infra/docker/au-kpis-ingestion.Dockerfile
+      target: local
+    command: ["run"]
+    environment:
+      AU_KPIS_HTTP__BIND: 0.0.0.0:3000
+      AU_KPIS_DATABASE__URL: postgres://au_kpis:au_kpis@postgres:5432/au_kpis
+      AU_KPIS_OBJECT_STORE__ENDPOINT: http://minio:9000
+      AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-local
+      AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID: au_kpis_minio
+      AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY: au_kpis_minio_dev_password
+      AU_KPIS_OBJECT_STORE__REGION: us-east-1
+      AU_KPIS_OBJECT_STORE__ALLOW_HTTP: "true"
+      AU_KPIS_TELEMETRY__SERVICE_NAME: au-kpis-ingestion
+      AU_KPIS_TELEMETRY__LOG_FORMAT: json
+      AU_KPIS_TELEMETRY__LOG_LEVEL: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  otel-collector:
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    volumes:
+      - ../observability/otel-collector.yml:/etc/otelcol-contrib/config.yml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:9464:9464"
+    depends_on:
+      tempo:
+        condition: service_started
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.0.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      alertmanager:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+      pushgateway:
+        condition: service_started
+
+  alertmanager:
+    profiles: ["observability"]
+    image: prom/alertmanager:v0.28.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed \
+          -e "s|__SLACK_WEBHOOK_URL__|$${SLACK_WEBHOOK_URL}|g" \
+          -e "s|__SLACK_CHANNEL__|$${SLACK_CHANNEL}|g" \
+          -e "s|__PAGERDUTY_ROUTING_KEY__|$${PAGERDUTY_ROUTING_KEY}|g" \
+          /etc/alertmanager/alertmanager.yml > /tmp/alertmanager.yml
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+    environment:
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-http://127.0.0.1:9/slack-disabled}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-#au-kpis-alerts}
+      PAGERDUTY_ROUTING_KEY: ${PAGERDUTY_ROUTING_KEY:-00000000000000000000000000000000}
+    volumes:
+      - ../observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+
+  pushgateway:
+    profiles: ["observability"]
+    image: prom/pushgateway:v1.11.1
+    ports:
+      - "127.0.0.1:9091:9091"
+
+  tempo:
+    profiles: ["observability"]
+    image: grafana/tempo:2.7.0
+    user: "0:0"
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ../observability/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/tmp/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+
+  loki:
+    profiles: ["observability"]
+    image: grafana/loki:3.3.2
+    user: "0:0"
+    command: ["-config.file=/etc/loki/local-config.yml"]
+    volumes:
+      - ../observability/loki.yml:/etc/loki/local-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  promtail:
+    profiles: ["observability"]
+    image: grafana/promtail:3.3.2
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ../observability/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      loki:
+        condition: service_started
+
+  postgres-exporter:
+    profiles: ["observability"]
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    environment:
+      DATA_SOURCE_NAME: postgres://au_kpis:au_kpis@postgres:5432/au_kpis?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-exporter:
+    profiles: ["observability"]
+    image: oliver006/redis_exporter:v1.67.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3002:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+
 volumes:
   postgres-data:
   redis-data:
   minio-data:
+  prometheus-data:
+  tempo-data:
+  loki-data:
+  grafana-data:

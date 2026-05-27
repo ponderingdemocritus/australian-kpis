@@ -1,0 +1,53 @@
+{
+  "uid": "au-kpis-error-rate",
+  "title": "Error Rate",
+  "tags": ["au-kpis", "errors"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "API 5xx Ratio",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(au_kpis_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(au_kpis_http_requests_total[5m])), 1)",
+          "legendFormat": "5xx ratio"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Fetch Error Rate by Source",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (source) (rate(au_kpis_fetch_errors_total[5m])) / clamp_min(sum by (source) (rate(au_kpis_fetch_requests_total[5m])), 1)",
+          "legendFormat": "{{source}}"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "Worker Job Failures",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(au_kpis_ingestion_jobs_failed_total[5m])",
+          "legendFormat": "failed jobs/s"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 }
+    }
+  ]
+}

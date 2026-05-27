@@ -1,0 +1,63 @@
+{
+  "uid": "au-kpis-api-latency",
+  "title": "API Latency",
+  "tags": ["au-kpis", "api", "latency"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "GET /v1/observations p50 p95 p99",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(au_kpis_http_request_duration_seconds_bucket{route=\"/v1/observations\"}[5m])) by (le, route))",
+          "legendFormat": "p50 {{route}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(au_kpis_http_request_duration_seconds_bucket{route=\"/v1/observations\"}[5m])) by (le, route))",
+          "legendFormat": "p95 {{route}}"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(au_kpis_http_request_duration_seconds_bucket{route=\"/v1/observations\"}[5m])) by (le, route))",
+          "legendFormat": "p99 {{route}}"
+        }
+      ],
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Parquet Stream Duration",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(au_kpis_parquet_stream_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "1M-row p95"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "id": 3,
+      "title": "Parquet Peak Heap",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "au_kpis_parquet_stream_peak_heap_bytes / 1024 / 1024",
+          "legendFormat": "MB"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 }
+    }
+  ]
+}

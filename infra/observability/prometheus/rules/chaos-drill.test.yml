@@ -1,0 +1,22 @@
+rule_files:
+  - slo-burn-rates.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'au_kpis_chaos_error_ratio{service="chaos-drill"}'
+        values: "0 0.02 0.02"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AuKpisChaosDrillCanaryFiring
+        exp_alerts:
+          - exp_labels:
+              alertname: AuKpisChaosDrillCanaryFiring
+              service: chaos-drill
+              severity: page
+              team: data-platform
+            exp_annotations:
+              summary: Chaos drill canary fired
+              description: Synthetic chaos drill metric for chaos-drill exceeded the canary threshold.
