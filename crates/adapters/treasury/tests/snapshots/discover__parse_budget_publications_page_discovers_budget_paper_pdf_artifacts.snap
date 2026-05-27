@@ -1,0 +1,30 @@
+---
+source: crates/adapters/treasury/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "budget_year": "2024-25",
+    "last_updated": "2024-05-14",
+    "paper": "Budget Paper No. 4",
+    "paper_slug": "bp4-agency-resourcing",
+    "source_url": "https://archive.budget.gov.au/2024-25/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+    "title": "Agency resourcing table"
+  },
+  {
+    "budget_year": "2025-26",
+    "last_updated": "2025-05-13",
+    "paper": "Budget Paper No. 4",
+    "paper_slug": "bp4-agency-resourcing",
+    "source_url": "https://archive.budget.gov.au/2025-26/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+    "title": "Agency resourcing table"
+  },
+  {
+    "budget_year": "2026-27",
+    "last_updated": "2026-05-12",
+    "paper": "Budget Paper No. 4",
+    "paper_slug": "bp4-agency-resourcing",
+    "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+    "title": "Agency resourcing table"
+  }
+]

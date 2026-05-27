@@ -20,6 +20,7 @@ use au_kpis_adapter::{AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
+use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
 use au_kpis_domain::ids::{DataflowId, SourceId};
@@ -40,6 +41,8 @@ const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
 const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
 const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
 const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
+const TREASURY_BUDGET_DATAFLOW_SLUG: &str = "budget-papers";
+const TREASURY_BUDGET_DATAFLOW_ID: &str = "treasury.budget_papers";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 /// Command-line arguments for `au-kpis-ingestion`.
@@ -523,6 +526,16 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => RbaAdapter::default(),
     };
     builder.register(rba).context("register RBA adapter")?;
+    let mut treasury = TreasuryAdapter::builder();
+    if let Ok(budget_url) = env::var("AU_KPIS_TREASURY_BUDGET_URL") {
+        treasury = treasury.budget_url(budget_url);
+    }
+    if let Ok(pdf_base_url) = env::var("AU_KPIS_PDF_BASE_URL") {
+        treasury = treasury.pdf_base_url(pdf_base_url);
+    }
+    builder
+        .register(treasury.try_build().context("build Treasury adapter")?)
+        .context("register Treasury adapter")?;
     Ok(builder.build())
 }
 
@@ -601,6 +614,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
         "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
+        "treasury" if dataflow == TREASURY_BUDGET_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
         ),
@@ -609,6 +623,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         ),
         "rba" => bail!(
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
+        ),
+        "treasury" => bail!(
+            "unsupported dataflow `{dataflow}` for source `treasury`; supported dataflow: {TREASURY_BUDGET_DATAFLOW_SLUG}"
         ),
         _ => unreachable!("source was validated above"),
     }
@@ -620,6 +637,7 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         "abs" => ABS_CPI_DATAFLOW_ID,
         "apra" => APRA_QUARTERLY_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
+        "treasury" => TREASURY_BUDGET_DATAFLOW_ID,
         _ => unreachable!("source was validated above"),
     };
     Ok(RunRequest {
@@ -662,8 +680,8 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 }
 
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
-    if !matches!(source, "abs" | "apra" | "rba") {
-        bail!("unsupported source `{source}`; supported sources: abs, apra, rba");
+    if !matches!(source, "abs" | "apra" | "rba" | "treasury") {
+        bail!("unsupported source `{source}`; supported sources: abs, apra, rba, treasury");
     }
     Ok(())
 }
@@ -678,8 +696,11 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "rba" && dataflow_id == RBA_STAT_TABLES_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "treasury" && dataflow_id == TREASURY_BUDGET_DATAFLOW_ID {
+        return Ok(());
+    }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -838,7 +859,7 @@ mod tests {
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs, apra, rba"));
+        assert!(err.contains("abs, apra, rba, treasury"));
     }
 
     #[test]
@@ -862,6 +883,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("apra.quarterly_statistics").unwrap())
+        );
+    }
+
+    #[test]
+    fn treasury_once_mode_resolves_budget_papers_dataflow() {
+        let request = once_run_request("treasury", "budget-papers")
+            .expect("Treasury budget papers are supported");
+
+        assert_eq!(request.source_id.as_str(), "treasury");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("treasury.budget_papers").unwrap())
         );
     }
 
