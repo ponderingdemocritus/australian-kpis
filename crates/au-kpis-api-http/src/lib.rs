@@ -22,6 +22,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+pub mod auth;
 pub mod dataflows;
 pub mod docs;
 pub mod error;
@@ -31,6 +32,7 @@ pub mod search;
 pub mod series;
 pub mod state;
 
+pub use auth::require_api_key;
 pub use dataflows::{
     DataflowCodelistResponse, DataflowDetailResponse, DataflowsQuery, DataflowsResponse,
     get_dataflow, get_dataflow_codelist, list_dataflows,

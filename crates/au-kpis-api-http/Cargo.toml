@@ -11,6 +11,7 @@ description = "axum routes + handlers (library)."
 arrow-array = "58.3.0" # build RecordBatch values for streamed Parquet responses
 arrow-schema = "58.3.0" # define the Arrow schema exported by the Parquet endpoint
 async-stream = "0.3" # stream JSON/CSV chunks from sqlx without buffering result pages
+au-kpis-auth = { workspace = true }
 au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-domain = { workspace = true }
