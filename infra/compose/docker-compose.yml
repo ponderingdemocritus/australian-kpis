@@ -50,20 +50,31 @@ services:
       start_period: 10s
 
   pdf-extractor:
-    image: python:3.12-slim
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: infra/docker/au-kpis-pdf-extractor.Dockerfile
+      target: runtime
     init: true
-    command: ["python", "/app/pdf-extractor-stub.py"]
+    environment:
+      AU_KPIS_OBJECT_STORE__ENDPOINT: http://minio:9000
+      AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-local
+      AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID: au_kpis_minio
+      AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY: au_kpis_minio_dev_password
+      AU_KPIS_OBJECT_STORE__REGION: us-east-1
+      AU_KPIS_PDF_EXTRACTOR__MAX_PAGES: ${AU_KPIS_PDF_EXTRACTOR__MAX_PAGES:-}
     ports:
       - "127.0.0.1:8010:8000"
-    volumes:
-      - ./pdf-extractor-stub.py:/app/pdf-extractor-stub.py:ro
+    depends_on:
+      minio:
+        condition: service_healthy
     healthcheck:
       test:
         [
           "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()",
+          "curl",
+          "-fsS",
+          "http://127.0.0.1:8000/health",
         ]
       interval: 5s
       timeout: 3s
