@@ -21,7 +21,7 @@ use au_kpis_domain::{
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -165,6 +165,233 @@ pub struct AdapterManifest {
     pub rate_limit: RateLimit,
     /// Dataflows this adapter can emit.
     pub dataflows: Vec<DataflowId>,
+}
+
+/// Inclusive-start, exclusive-end artifact date range for parser version routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactDateRange {
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+}
+
+impl ArtifactDateRange {
+    /// Match artifacts before `end`.
+    #[must_use]
+    pub const fn before(end: NaiveDate) -> Self {
+        Self {
+            start: None,
+            end: Some(end),
+        }
+    }
+
+    /// Match artifacts from `start` onward.
+    #[must_use]
+    pub const fn from(start: NaiveDate) -> Self {
+        Self {
+            start: Some(start),
+            end: None,
+        }
+    }
+
+    /// Match artifacts from `start`, excluding `end`.
+    #[must_use]
+    pub const fn between(start: NaiveDate, end: NaiveDate) -> Self {
+        Self {
+            start: Some(start),
+            end: Some(end),
+        }
+    }
+
+    /// `true` when `artifact_date` is inside this range.
+    #[must_use]
+    pub fn contains(self, artifact_date: NaiveDate) -> bool {
+        let after_start = match self.start {
+            Some(start) => artifact_date >= start,
+            None => true,
+        };
+        let before_end = match self.end {
+            Some(end) => artifact_date < end,
+            None => true,
+        };
+        after_start && before_end
+    }
+}
+
+/// One named parser version and the artifact dates it owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserVersion {
+    name: String,
+    artifact_dates: ArtifactDateRange,
+}
+
+impl ParserVersion {
+    /// Construct a parser version selector.
+    #[must_use]
+    pub fn new(name: impl Into<String>, artifact_dates: ArtifactDateRange) -> Self {
+        Self {
+            name: name.into(),
+            artifact_dates,
+        }
+    }
+
+    /// Stable parser version name, commonly `parse_v1` or `parse_v2`.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Date range owned by this parser version.
+    #[must_use]
+    pub const fn artifact_dates(&self) -> ArtifactDateRange {
+        self.artifact_dates
+    }
+}
+
+/// Select exactly one parser version for an artifact date.
+pub fn select_parser_version(
+    versions: &[ParserVersion],
+    artifact_date: NaiveDate,
+) -> Result<&ParserVersion, AdapterError> {
+    if versions.is_empty() {
+        return Err(AdapterError::Validation(
+            "at least one parser version must be configured".into(),
+        ));
+    }
+    for version in versions {
+        if version.name.trim().is_empty() {
+            return Err(AdapterError::Validation(
+                "parser version name must not be empty".into(),
+            ));
+        }
+    }
+
+    let matching = versions
+        .iter()
+        .filter(|version| version.artifact_dates.contains(artifact_date))
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [version] => Ok(*version),
+        [] => Err(AdapterError::FormatDrift(format!(
+            "no parser version covers artifact date `{artifact_date}`"
+        ))),
+        many => Err(AdapterError::Validation(format!(
+            "parser version date ranges overlap for artifact date `{artifact_date}`: {}",
+            many.iter()
+                .map(|version| version.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// Expected schema hash for one source-specific parser/table shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedSchemaHash {
+    source_id: SourceId,
+    dataflow_id: DataflowId,
+    parser_version: String,
+    schema_key: String,
+    expected_hash: String,
+}
+
+impl ExpectedSchemaHash {
+    /// Construct and validate a schema-hash expectation.
+    pub fn new(
+        source_id: SourceId,
+        dataflow_id: DataflowId,
+        parser_version: impl Into<String>,
+        schema_key: impl Into<String>,
+        expected_hash: impl Into<String>,
+    ) -> Result<Self, AdapterError> {
+        let parser_version = parser_version.into();
+        let schema_key = schema_key.into();
+        let expected_hash = expected_hash.into();
+        for (field, value) in [
+            ("parser version", parser_version.as_str()),
+            ("schema key", schema_key.as_str()),
+            ("expected schema hash", expected_hash.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(AdapterError::Validation(format!(
+                    "{field} must not be empty for schema drift detection"
+                )));
+            }
+        }
+        Ok(Self {
+            source_id,
+            dataflow_id,
+            parser_version,
+            schema_key,
+            expected_hash,
+        })
+    }
+}
+
+/// Structured context for a schema-hash drift event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaHashDrift {
+    /// Source whose parser observed drift.
+    pub source_id: SourceId,
+    /// Dataflow being parsed when drift was detected.
+    pub dataflow_id: DataflowId,
+    /// Parser version selected for the artifact date.
+    pub parser_version: String,
+    /// Source-specific table, sheet, or schema identifier.
+    pub schema_key: String,
+    /// Committed schema hash expected by the selected parser.
+    pub expected_hash: String,
+    /// Schema hash observed on the artifact.
+    pub actual_hash: String,
+}
+
+impl fmt::Display for SchemaHashDrift {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "schema hash drift for source `{}` dataflow `{}` parser `{}` schema `{}`: expected `{}`, got `{}`",
+            self.source_id.as_str(),
+            self.dataflow_id.as_str(),
+            self.parser_version,
+            self.schema_key,
+            self.expected_hash,
+            self.actual_hash
+        )
+    }
+}
+
+/// Validate an observed schema hash against the selected parser's expectation.
+pub fn validate_schema_hash(
+    expected: &ExpectedSchemaHash,
+    actual_hash: &str,
+) -> Result<(), AdapterError> {
+    if actual_hash.trim().is_empty() {
+        return Err(AdapterError::Validation(
+            "actual schema hash must not be empty for schema drift detection".into(),
+        ));
+    }
+    if expected.expected_hash == actual_hash {
+        return Ok(());
+    }
+
+    let drift = SchemaHashDrift {
+        source_id: expected.source_id.clone(),
+        dataflow_id: expected.dataflow_id.clone(),
+        parser_version: expected.parser_version.clone(),
+        schema_key: expected.schema_key.clone(),
+        expected_hash: expected.expected_hash.clone(),
+        actual_hash: actual_hash.to_string(),
+    };
+    tracing::error!(
+        target: "au_kpis_adapter::schema_hash",
+        source = drift.source_id.as_str(),
+        dataflow = drift.dataflow_id.as_str(),
+        parser_version = drift.parser_version.as_str(),
+        schema_key = drift.schema_key.as_str(),
+        expected_hash = drift.expected_hash.as_str(),
+        actual_hash = drift.actual_hash.as_str(),
+        "schema hash drift detected"
+    );
+    Err(AdapterError::SchemaHashDrift(Box::new(drift)))
 }
 
 /// Rate-limited HTTP client shared by adapter contexts.
@@ -816,6 +1043,10 @@ pub enum AdapterError {
     #[error("format drift: {0}")]
     FormatDrift(String),
 
+    /// Observed schema hash changed for the selected source parser version.
+    #[error("{0}")]
+    SchemaHashDrift(Box<SchemaHashDrift>),
+
     /// Caller-supplied or adapter-produced data violated a precondition.
     #[error("validation: {0}")]
     Validation(String),
@@ -856,7 +1087,8 @@ impl Classify for AdapterError {
             AdapterError::Storage(err) => err.class(),
             AdapterError::UnknownAdapter(_)
             | AdapterError::DuplicateAdapter(_)
-            | AdapterError::FormatDrift(_) => ErrorClass::Permanent,
+            | AdapterError::FormatDrift(_)
+            | AdapterError::SchemaHashDrift(_) => ErrorClass::Permanent,
             AdapterError::Validation(_) => ErrorClass::Validation,
         }
     }
