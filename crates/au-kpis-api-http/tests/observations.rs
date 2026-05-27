@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use arrow_array::{Float64Array, StringArray, UInt32Array};
 use au_kpis_api_http::{AppState, ObservationsResponse, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
@@ -10,6 +11,7 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use chrono::{TimeZone, Utc};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::json;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
@@ -138,6 +140,100 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
     assert!(body.contains("series_key,time,time_precision,value,status,revision_no"));
     assert!(body.contains(",135,normal,1,"));
     assert!(body.contains("# next_cursor="));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observations_endpoint_streams_decodable_parquet_with_headers() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_observations_parquet").await;
+    seed_observations(db.pool()).await;
+    let app = router(test_state(db.pool().clone())).expect("router");
+
+    let response = app
+        .oneshot(request(
+            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&format=parquet&limit=10",
+        ))
+        .await
+        .expect("parquet response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/vnd.apache.parquet"
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=60, stale-while-revalidate=300"
+    );
+    assert!(response.headers().contains_key(header::ETAG));
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("parquet body");
+    assert_eq!(&body[..4], b"PAR1");
+    assert_eq!(&body[body.len() - 4..], b"PAR1");
+
+    let reader = ParquetRecordBatchReaderBuilder::try_new(body)
+        .expect("parquet reader")
+        .build()
+        .expect("record batch reader");
+    let batches = reader
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parquet batches");
+    let batch = batches.first().expect("at least one batch");
+    assert_eq!(
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "series_key",
+            "time",
+            "time_precision",
+            "value",
+            "status",
+            "revision_no",
+            "dimensions",
+            "attributes",
+            "ingested_at",
+            "source_artifact_id",
+            "measure_id",
+            "unit",
+        ]
+    );
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        2
+    );
+
+    let value = batch
+        .column_by_name("value")
+        .expect("value column")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("value float64");
+    let revision_no = batch
+        .column_by_name("revision_no")
+        .expect("revision column")
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .expect("revision uint32");
+    let dimensions = batch
+        .column_by_name("dimensions")
+        .expect("dimensions column")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("dimensions string");
+
+    assert_eq!(value.value(0), 135.0);
+    assert_eq!(revision_no.value(0), 1);
+    assert_eq!(dimensions.value(0), "{\"region\":\"AUS\"}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -666,7 +666,7 @@ export interface operations {
                 until?: string;
                 /** @description Optional dataflow frequency filter. */
                 frequency?: string;
-                /** @description Response format: json or csv. */
+                /** @description Response format: json, csv, or parquet. */
                 format?: string;
                 /** @description Opaque cursor from the previous page. */
                 cursor?: string;
@@ -691,6 +691,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ObservationsResponse"];
                     "text/csv": string;
+                    "application/vnd.apache.parquet": string;
                 };
             };
             /** @description The client's cached page is still fresh. */

@@ -1156,7 +1156,7 @@ expression: emitted_spec()
             }
           },
           {
-            "description": "Response format: json or csv.",
+            "description": "Response format: json, csv, or parquet.",
             "in": "query",
             "name": "format",
             "required": false,
@@ -1191,6 +1191,11 @@ expression: emitted_spec()
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ObservationsResponse"
+                }
+              },
+              "application/vnd.apache.parquet": {
+                "schema": {
+                  "type": "string"
                 }
               },
               "text/csv": {

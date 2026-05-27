@@ -288,7 +288,7 @@
           {
             "name": "format",
             "in": "query",
-            "description": "Response format: json or csv.",
+            "description": "Response format: json, csv, or parquet.",
             "required": false,
             "schema": {
               "type": "string"
@@ -339,6 +339,11 @@
                 }
               },
               "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/vnd.apache.parquet": {
                 "schema": {
                   "type": "string"
                 }

@@ -549,7 +549,7 @@ until?: string;
  */
 frequency?: string;
 /**
- * Response format: json or csv.
+ * Response format: json, csv, or parquet.
  */
 format?: string;
 /**
