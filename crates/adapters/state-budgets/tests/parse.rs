@@ -1,0 +1,489 @@
+use std::{collections::BTreeMap, str};
+
+use au_kpis_adapter::{AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
+use au_kpis_adapter_state_budgets::NswBudgetAdapter;
+use au_kpis_domain::{ArtifactId, DataflowId, SourceId};
+use au_kpis_storage::{BlobStore, StorageKey};
+use bytes::Bytes;
+use chrono::{TimeZone, Utc};
+use futures::StreamExt;
+use object_store::memory::InMemory;
+use serde::Serialize;
+use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
+
+const BP1_2025_26: &[u8] = b"%PDF-1.7\n% nsw budget fixture 2025-26\n%%EOF\n";
+const BP1_2024_25: &[u8] = b"%PDF-1.7\n% nsw budget fixture 2024-25\n%%EOF\n";
+
+#[derive(Debug, Serialize)]
+struct FixtureSnapshot {
+    observation_count: usize,
+    series_count: usize,
+    first_rows: Vec<SnapshotRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotRow {
+    dataflow_id: String,
+    measure_id: String,
+    dimensions: BTreeMap<String, String>,
+    unit: String,
+    time: String,
+    time_precision: String,
+    value: Option<f64>,
+    status: String,
+    attributes: BTreeMap<String, String>,
+    source_artifact_id: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FixtureCase {
+    name: &'static str,
+    bytes: &'static [u8],
+    source_url: &'static str,
+    budget_year: &'static str,
+    artifact_date: &'static str,
+    cells: &'static [&'static [&'static str]],
+}
+
+async fn artifact_for(
+    blob_store: &BlobStore,
+    bytes: &'static [u8],
+    source_url: &str,
+) -> ArtifactRef {
+    let id = blob_store
+        .put_artifact(Bytes::from_static(bytes))
+        .await
+        .expect("store fixture artifact");
+    ArtifactRef {
+        id,
+        source_id: SourceId::new("state-budgets").unwrap(),
+        source_url: source_url.into(),
+        content_type: "application/pdf".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: StorageKey::canonical_for(&id).to_string(),
+        size_bytes: bytes.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap(),
+    }
+}
+
+async fn serve_sidecar_once(
+    expected_storage_key: String,
+    expected_artifact_date: &'static str,
+    response_body: String,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind sidecar fixture server");
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let request = read_http_request(&mut stream).await;
+        assert!(request.starts_with("POST /extract HTTP/1.1"), "{request}");
+        let body = request.split("\r\n\r\n").nth(1).expect("request body");
+        let json: Value = serde_json::from_str(body).expect("extract request json");
+        assert_eq!(json["s3_key"], expected_storage_key);
+        assert_eq!(json["source_id"], "state-budgets");
+        assert_eq!(json["artifact_date"], expected_artifact_date);
+        assert_eq!(json["strategy"], "deterministic");
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write sidecar response");
+    });
+
+    format!("http://{addr}")
+}
+
+async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+    let mut buffer = Vec::new();
+    loop {
+        let mut chunk = [0_u8; 1024];
+        let read = stream.read(&mut chunk).await.expect("read request");
+        assert_ne!(read, 0, "connection closed before request completed");
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Some(header_end) = find_header_end(&buffer) {
+            let headers = str::from_utf8(&buffer[..header_end]).expect("utf8 headers");
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if buffer.len() >= header_end + 4 + content_length {
+                return String::from_utf8(buffer).expect("utf8 request");
+            }
+        }
+    }
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn sidecar_response(storage_key: &str, cells: &[&[&str]]) -> String {
+    let rows = cells
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.to_string()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    json!({
+        "artifact_key": storage_key,
+        "backend": {
+            "kind": "deterministic",
+            "name": "fixture-pdfplumber",
+            "version": "2026.1",
+            "model_sha256": null
+        },
+        "tables": [{
+            "page": 32,
+            "bbox": [10.0, 20.0, 500.0, 700.0],
+            "cells": rows,
+            "spans": [],
+            "diagnostics": {"fixture": "nsw-budget"}
+        }]
+    })
+    .to_string()
+}
+
+fn parse_metadata(case: FixtureCase) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("artifact_date".into(), case.artifact_date.into()),
+        ("attribution".into(), "Source: NSW Treasury".into()),
+        ("budget_year".into(), case.budget_year.into()),
+        ("jurisdiction".into(), "NSW".into()),
+        (
+            "license".into(),
+            "Creative Commons Attribution 3.0 Australia Licence".into(),
+        ),
+        (
+            "license_url".into(),
+            "https://creativecommons.org/licenses/by/3.0/au/".into(),
+        ),
+        ("paper".into(), "Budget Paper No. 1".into()),
+        ("paper_slug".into(), "bp1-budget-statement".into()),
+        (
+            "schema_drift_policy".into(),
+            "hash-pdf-table-candidates".into(),
+        ),
+        ("title".into(), "Budget Statement".into()),
+    ])
+}
+
+async fn snapshot_fixture(case: FixtureCase, blob_store: BlobStore) -> FixtureSnapshot {
+    let artifact = artifact_for(&blob_store, case.bytes, case.source_url).await;
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        case.artifact_date,
+        sidecar_response(&artifact.storage_key, case.cells),
+    )
+    .await;
+    let adapter = NswBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.nsw_budget").unwrap(),
+        parse_metadata(case),
+    );
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse NSW budget fixture through sidecar");
+
+    let observation_count = rows.len();
+    let series_count = rows
+        .iter()
+        .map(|(series, _)| series.series_key)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let first_rows: Vec<SnapshotRow> = rows
+        .into_iter()
+        .take(10)
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect();
+
+    FixtureSnapshot {
+        observation_count,
+        series_count,
+        first_rows,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_nsw_budget_pdf_fixtures_through_sidecar_contract() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let fixtures = [
+        FixtureCase {
+            name: "nsw_bp1_key_aggregates_2025_26",
+            bytes: BP1_2025_26,
+            source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf",
+            budget_year: "2025-26",
+            artifact_date: "2025-06-24",
+            cells: &[
+                &["Table 1.1: Key fiscal aggregates ($m)", "", "", "", ""],
+                &[
+                    "Fiscal aggregate",
+                    "2024-25 Revised",
+                    "2025-26 Budget",
+                    "2026-27 Forward Estimates",
+                    "2027-28 Forward Estimates",
+                ],
+                &["Revenue", "121,870", "125,031", "129,490", "134,860"],
+                &["Expenses", "125,224", "128,419", "131,660", "135,144"],
+            ],
+        },
+        FixtureCase {
+            name: "nsw_bp1_key_aggregates_2024_25",
+            bytes: BP1_2024_25,
+            source_url: "https://www.budget.nsw.gov.au/sites/default/files/2024-06/bp1-budget-statement-nsw-budget-2024-25.pdf",
+            budget_year: "2024-25",
+            artifact_date: "2024-06-18",
+            cells: &[
+                &["Table 1.1: Key fiscal aggregates ($m)", "", "", "", ""],
+                &[
+                    "Fiscal aggregate",
+                    "2023-24 Revised",
+                    "2024-25 Budget",
+                    "2025-26 Forward Estimates",
+                    "2026-27 Forward Estimates",
+                ],
+                &["Revenue", "116,218", "119,303", "123,977", "128,888"],
+                &["Expenses", "119,519", "122,109", "126,740", "130,322"],
+            ],
+        },
+    ];
+
+    for case in fixtures {
+        let snapshot = snapshot_fixture(case, blob_store.clone()).await;
+        assert!(snapshot.observation_count > 0);
+        insta::assert_json_snapshot!(case.name, snapshot);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_nsw_schema_hash_drift() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let case = FixtureCase {
+        name: "nsw_bp1_key_aggregates_2025_26",
+        bytes: BP1_2025_26,
+        source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf",
+        budget_year: "2025-26",
+        artifact_date: "2025-06-24",
+        cells: &[
+            &["Table 1.1: Key fiscal aggregates ($m)", "", "", "", ""],
+            &[
+                "Fiscal aggregate",
+                "2024-25 Actual",
+                "2025-26 Budget",
+                "2026-27 Forward Estimates",
+                "2027-28 Forward Estimates",
+            ],
+            &["Revenue", "121,870", "125,031", "129,490", "134,860"],
+        ],
+    };
+    let artifact = artifact_for(&blob_store, case.bytes, case.source_url).await;
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        case.artifact_date,
+        sidecar_response(&artifact.storage_key, case.cells),
+    )
+    .await;
+    let adapter = NswBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.nsw_budget").unwrap(),
+        parse_metadata(case),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("schema drift should fail");
+
+    assert!(err.to_string().contains("schema hash drift"), "{err}");
+}
+
+#[tokio::test]
+async fn parse_rejects_ambiguous_nsw_provenance() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let mut artifact = artifact_for(
+        &blob_store,
+        BP1_2025_26,
+        "https://mirror.example.invalid/bp1-budget-statement-nsw-budget-2025-26.pdf",
+    )
+    .await;
+    artifact.source_id = SourceId::new("abs").unwrap();
+
+    let adapter = NswBudgetAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let case = FixtureCase {
+        name: "nsw_bp1_key_aggregates_2025_26",
+        bytes: BP1_2025_26,
+        source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf",
+        budget_year: "2025-26",
+        artifact_date: "2025-06-24",
+        cells: &[],
+    };
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.nsw_budget").unwrap(),
+        parse_metadata(case),
+    );
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("invalid provenance should fail");
+
+    assert!(
+        err.to_string()
+            .contains("NSW budget parse received artifact for source")
+    );
+}
+
+#[tokio::test]
+async fn parse_rejects_artifact_id_storage_key_mismatch() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let actual_id = blob_store
+        .put_artifact(Bytes::from_static(BP1_2025_26))
+        .await
+        .expect("store fixture artifact");
+    let wrong_id = ArtifactId::of_content(b"different NSW budget artifact");
+    assert_ne!(actual_id, wrong_id);
+
+    let artifact = ArtifactRef {
+        id: wrong_id,
+        source_id: SourceId::new("state-budgets").unwrap(),
+        source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf".into(),
+        content_type: "application/pdf".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: StorageKey::canonical_for(&actual_id).to_string(),
+        size_bytes: BP1_2025_26.len() as u64,
+        fetched_at: Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap(),
+    };
+    let adapter = NswBudgetAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let case = FixtureCase {
+        name: "nsw_bp1_key_aggregates_2025_26",
+        bytes: BP1_2025_26,
+        source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf",
+        budget_year: "2025-26",
+        artifact_date: "2025-06-24",
+        cells: &[],
+    };
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.nsw_budget").unwrap(),
+        parse_metadata(case),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("mismatched storage key should fail");
+
+    assert!(
+        err.to_string().contains("does not match artifact id"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_sidecar_artifact_key_mismatch() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let case = FixtureCase {
+        name: "nsw_bp1_key_aggregates_2025_26",
+        bytes: BP1_2025_26,
+        source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf",
+        budget_year: "2025-26",
+        artifact_date: "2025-06-24",
+        cells: &[&["Fiscal aggregate", "2025-26 Budget"], &["Revenue", "1.0"]],
+    };
+    let artifact = artifact_for(&blob_store, case.bytes, case.source_url).await;
+    let response = sidecar_response(
+        "artifacts/not-the-requested-artifact",
+        &[&["Fiscal aggregate", "2025-26 Budget"], &["Revenue", "1.0"]],
+    );
+    let sidecar_url =
+        serve_sidecar_once(artifact.storage_key.clone(), case.artifact_date, response).await;
+    let adapter = NswBudgetAdapter::builder()
+        .pdf_base_url(sidecar_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 27, 1, 0, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("state_budgets.nsw_budget").unwrap(),
+        parse_metadata(case),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("sidecar mismatch should fail");
+
+    assert!(
+        err.to_string().contains("sidecar returned artifact key"),
+        "{err}"
+    );
+}
