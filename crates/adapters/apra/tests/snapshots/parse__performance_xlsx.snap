@@ -1,0 +1,145 @@
+---
+source: crates/adapters/apra/tests/parse.rs
+expression: snapshot
+---
+{
+  "observation_count": 4,
+  "series_count": 2,
+  "schema_hashes": [
+    "b69b20278e1fe4dbcde1a2f2f352034de9bc71c96a29d883fd2315ab795719cb"
+  ],
+  "first_rows": [
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-performance",
+        "sector": "all",
+        "series": "interest_income",
+        "table": "table_1a_adis_financial_performance"
+      },
+      "unit": "$ million",
+      "time": "2025-07-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 101.2,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Interest income",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-performance",
+        "publication_title": "Quarterly authorised deposit taking institution performance September 2004 to December 2025",
+        "schema_hash": "b69b20278e1fe4dbcde1a2f2f352034de9bc71c96a29d883fd2315ab795719cb",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20performance-September%202004%20to%20December%202025.xlsx",
+        "table_title": "Table 1a  ADIs' financial performance"
+      },
+      "source_artifact_id": "ca5ff7883925ff24fb9d55a5bcc78283cd6a50ef9002b47cf66492f001ef003f"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-performance",
+        "sector": "all",
+        "series": "interest_income",
+        "table": "table_1a_adis_financial_performance"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 104.4,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Interest income",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-performance",
+        "publication_title": "Quarterly authorised deposit taking institution performance September 2004 to December 2025",
+        "schema_hash": "b69b20278e1fe4dbcde1a2f2f352034de9bc71c96a29d883fd2315ab795719cb",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20performance-September%202004%20to%20December%202025.xlsx",
+        "table_title": "Table 1a  ADIs' financial performance"
+      },
+      "source_artifact_id": "ca5ff7883925ff24fb9d55a5bcc78283cd6a50ef9002b47cf66492f001ef003f"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-performance",
+        "sector": "all",
+        "series": "cash_and_liquid_assets",
+        "table": "table_1a_adis_financial_performance"
+      },
+      "unit": "$ million",
+      "time": "2025-07-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 7.5,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Cash and liquid assets",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-performance",
+        "publication_title": "Quarterly authorised deposit taking institution performance September 2004 to December 2025",
+        "schema_hash": "b69b20278e1fe4dbcde1a2f2f352034de9bc71c96a29d883fd2315ab795719cb",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20performance-September%202004%20to%20December%202025.xlsx",
+        "table_title": "Table 1a  ADIs' financial performance"
+      },
+      "source_artifact_id": "ca5ff7883925ff24fb9d55a5bcc78283cd6a50ef9002b47cf66492f001ef003f"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-performance",
+        "sector": "all",
+        "series": "cash_and_liquid_assets",
+        "table": "table_1a_adis_financial_performance"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": null,
+      "status": "Missing",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Cash and liquid assets",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-performance",
+        "publication_title": "Quarterly authorised deposit taking institution performance September 2004 to December 2025",
+        "schema_hash": "b69b20278e1fe4dbcde1a2f2f352034de9bc71c96a29d883fd2315ab795719cb",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20performance-September%202004%20to%20December%202025.xlsx",
+        "table_title": "Table 1a  ADIs' financial performance"
+      },
+      "source_artifact_id": "ca5ff7883925ff24fb9d55a5bcc78283cd6a50ef9002b47cf66492f001ef003f"
+    }
+  ]
+}

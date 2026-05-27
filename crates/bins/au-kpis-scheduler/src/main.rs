@@ -29,8 +29,10 @@ use tokio_util::sync::CancellationToken;
 const SCHEDULER_LEADER_LOCK_ID: i64 = 30_000_030;
 const DEFAULT_TICK_MS: u64 = 1_000;
 const DEFAULT_ABS_INTERVAL_MS: u64 = 60 * 60 * 1_000;
+const DEFAULT_APRA_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 const DEFAULT_RBA_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 const ABS_DISCOVERY_CRON: &str = "0 * * * *";
+const APRA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const RBA_DISCOVERY_CRON: &str = "0 0 * * 1";
 
 /// Command-line arguments for `au-kpis-scheduler`.
@@ -52,6 +54,14 @@ struct Cli {
         default_value_t = DEFAULT_ABS_INTERVAL_MS
     )]
     abs_interval_ms: u64,
+
+    /// Test/ops override for the APRA discovery cadence.
+    #[arg(
+        long,
+        env = "AU_KPIS_SCHEDULER_APRA_INTERVAL_MS",
+        default_value_t = DEFAULT_APRA_INTERVAL_MS
+    )]
+    apra_interval_ms: u64,
 
     /// Test/ops override for the RBA discovery cadence.
     #[arg(
@@ -190,6 +200,7 @@ async fn main() -> anyhow::Result<()> {
         schedules: default_discovery_schedules(
             Duration::from_millis(cli.abs_interval_ms),
             Duration::from_millis(cli.rba_interval_ms),
+            Duration::from_millis(cli.apra_interval_ms),
         ),
         worker_id: cli.worker_id.unwrap_or_else(default_worker_id),
     };
@@ -331,6 +342,7 @@ async fn register_schedules(
 fn default_discovery_schedules(
     abs_interval: Duration,
     rba_interval: Duration,
+    apra_interval: Duration,
 ) -> Vec<DiscoverySchedule> {
     vec![
         DiscoverySchedule {
@@ -344,6 +356,12 @@ fn default_discovery_schedules(
             cron_expression: RBA_DISCOVERY_CRON,
             emit_every: rba_interval,
             job: Job::discover(SourceId::new("rba").expect("static source id is valid")),
+        },
+        DiscoverySchedule {
+            id: "apra-discovery",
+            cron_expression: APRA_DISCOVERY_CRON,
+            emit_every: apra_interval,
+            job: Job::discover(SourceId::new("apra").expect("static source id is valid")),
         },
     ]
 }
@@ -459,10 +477,13 @@ mod tests {
 
     #[test]
     fn default_schedule_registers_adapter_discovery_cadences() {
-        let schedules =
-            default_discovery_schedules(Duration::from_secs(3600), Duration::from_secs(604_800));
+        let schedules = default_discovery_schedules(
+            Duration::from_secs(3600),
+            Duration::from_secs(604_800),
+            Duration::from_secs(604_800),
+        );
 
-        assert_eq!(schedules.len(), 2);
+        assert_eq!(schedules.len(), 3);
         assert_eq!(schedules[0].id, "abs-discovery");
         assert_eq!(schedules[0].cron_expression, "0 * * * *");
         assert_eq!(schedules[0].emit_every, Duration::from_secs(3600));
@@ -476,6 +497,13 @@ mod tests {
         assert!(matches!(
             schedules[1].job.kind(),
             JobKind::Discover { source_id } if source_id.as_str() == "rba"
+        ));
+        assert_eq!(schedules[2].id, "apra-discovery");
+        assert_eq!(schedules[2].cron_expression, "0 0 * * 1");
+        assert_eq!(schedules[2].emit_every, Duration::from_secs(604_800));
+        assert!(matches!(
+            schedules[2].job.kind(),
+            JobKind::Discover { source_id } if source_id.as_str() == "apra"
         ));
     }
 

@@ -1,0 +1,149 @@
+---
+source: crates/adapters/apra/tests/parse.rs
+expression: snapshot
+---
+{
+  "observation_count": 4,
+  "series_count": 4,
+  "schema_hashes": [
+    "2018d935cb98a156c9ed20f75e34ba89dfd81aac972fe0bae86ca7db08ff124b"
+  ],
+  "first_rows": [
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "example_bank_limited",
+        "publication": "adi-centralised",
+        "sector": "major_banks",
+        "series": "total_common_equity_tier_1_capital",
+        "table": "table_1_regulatory_capital"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 56562.6,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "Example Bank Limited",
+        "apra_measure": "Total Common Equity Tier 1 capital",
+        "apra_mutual_bank": "N",
+        "apra_sector": "Major banks",
+        "apra_table_orientation": "vertical",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-centralised",
+        "publication_title": "Authorised deposit taking institution centralised publication March 2013 to December 2025",
+        "schema_hash": "2018d935cb98a156c9ed20f75e34ba89dfd81aac972fe0bae86ca7db08ff124b",
+        "sheet_name": "Table 1",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx",
+        "table_title": "Table 1   Regulatory capital"
+      },
+      "source_artifact_id": "48df1fc0fa4568c11fdfbdf4b62ca16c6d91be31e6a664064985eb76c25395ce"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "example_bank_limited",
+        "publication": "adi-centralised",
+        "sector": "major_banks",
+        "series": "total_capital_ratio",
+        "table": "table_1_regulatory_capital"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 0.211,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "Example Bank Limited",
+        "apra_measure": "Total capital ratio",
+        "apra_mutual_bank": "N",
+        "apra_sector": "Major banks",
+        "apra_table_orientation": "vertical",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-centralised",
+        "publication_title": "Authorised deposit taking institution centralised publication March 2013 to December 2025",
+        "schema_hash": "2018d935cb98a156c9ed20f75e34ba89dfd81aac972fe0bae86ca7db08ff124b",
+        "sheet_name": "Table 1",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx",
+        "table_title": "Table 1   Regulatory capital"
+      },
+      "source_artifact_id": "48df1fc0fa4568c11fdfbdf4b62ca16c6d91be31e6a664064985eb76c25395ce"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "example_mutual_bank_ltd",
+        "publication": "adi-centralised",
+        "sector": "other_domestic_banks",
+        "series": "total_common_equity_tier_1_capital",
+        "table": "table_1_regulatory_capital"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 217.1,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "Example Mutual Bank Ltd",
+        "apra_measure": "Total Common Equity Tier 1 capital",
+        "apra_mutual_bank": "Y",
+        "apra_sector": "Other domestic banks",
+        "apra_table_orientation": "vertical",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-centralised",
+        "publication_title": "Authorised deposit taking institution centralised publication March 2013 to December 2025",
+        "schema_hash": "2018d935cb98a156c9ed20f75e34ba89dfd81aac972fe0bae86ca7db08ff124b",
+        "sheet_name": "Table 1",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx",
+        "table_title": "Table 1   Regulatory capital"
+      },
+      "source_artifact_id": "48df1fc0fa4568c11fdfbdf4b62ca16c6d91be31e6a664064985eb76c25395ce"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "example_mutual_bank_ltd",
+        "publication": "adi-centralised",
+        "sector": "other_domestic_banks",
+        "series": "total_capital_ratio",
+        "table": "table_1_regulatory_capital"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 0.302,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "Example Mutual Bank Ltd",
+        "apra_measure": "Total capital ratio",
+        "apra_mutual_bank": "Y",
+        "apra_sector": "Other domestic banks",
+        "apra_table_orientation": "vertical",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-centralised",
+        "publication_title": "Authorised deposit taking institution centralised publication March 2013 to December 2025",
+        "schema_hash": "2018d935cb98a156c9ed20f75e34ba89dfd81aac972fe0bae86ca7db08ff124b",
+        "sheet_name": "Table 1",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx",
+        "table_title": "Table 1   Regulatory capital"
+      },
+      "source_artifact_id": "48df1fc0fa4568c11fdfbdf4b62ca16c6d91be31e6a664064985eb76c25395ce"
+    }
+  ]
+}
