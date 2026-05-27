@@ -47,6 +47,54 @@ fn cli_prints_same_document_as_emit() {
 }
 
 #[test]
+fn emitted_parameters_reject_values_handlers_reject() {
+    let doc = emitted_spec();
+
+    let dataflows_params = doc["paths"]["/v1/dataflows"]["get"]["parameters"]
+        .as_array()
+        .expect("dataflows parameters");
+    assert_parameter_schema(dataflows_params, "source", "minLength", 1);
+    assert_parameter_schema(dataflows_params, "source", "maxLength", 128);
+    assert_parameter_schema(dataflows_params, "frequency", "minLength", 1);
+
+    let observations_params = doc["paths"]["/v1/observations"]["get"]["parameters"]
+        .as_array()
+        .expect("observations parameters");
+    assert_parameter_schema(observations_params, "dataflow", "minLength", 1);
+    assert_parameter_schema(observations_params, "dataflow", "maxLength", 128);
+    assert_parameter_schema(
+        observations_params,
+        "format",
+        "pattern",
+        "^(json|csv|parquet)$",
+    );
+
+    let search_params = doc["paths"]["/v1/search"]["get"]["parameters"]
+        .as_array()
+        .expect("search parameters");
+    assert_parameter_schema(search_params, "q", "minLength", 1);
+
+    let series_params = doc["paths"]["/v1/series/{dataflow}/{series_key}"]["get"]["parameters"]
+        .as_array()
+        .expect("series parameters");
+    assert_parameter_schema(series_params, "dataflow", "minLength", 1);
+    assert_parameter_schema(series_params, "series_key", "minLength", 64);
+    assert_parameter_schema(series_params, "series_key", "maxLength", 64);
+    assert_parameter_schema(series_params, "series_key", "pattern", "^[0-9a-f]{64}$");
+}
+
+fn assert_parameter_schema<T>(parameters: &[Value], name: &str, key: &str, expected: T)
+where
+    T: Into<Value>,
+{
+    let parameter = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == name)
+        .unwrap_or_else(|| panic!("missing parameter `{name}`"));
+    assert_eq!(parameter["schema"][key], expected.into(), "{name}.{key}");
+}
+
+#[test]
 fn emitted_openapi_matches_snapshot() {
     insta::assert_json_snapshot!("openapi", emitted_spec());
 }

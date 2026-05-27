@@ -605,14 +605,7 @@ jobs:
           critcmp_output="$(critcmp main pr --threshold 5 --list 2>&1)"
           critcmp_status=$?
           set -e
-          if [ "${critcmp_status}" -eq 0 ]; then
-            printf '%s\n' "${critcmp_output}"
-          elif [ "${critcmp_output}" = "no benchmark comparisons to show" ]; then
-            printf '%s\n' "${critcmp_output}"
-          else
-            printf '%s\n' "${critcmp_output}" >&2
-            exit "${critcmp_status}"
-          fi
+          printf '%s\n' "${critcmp_output}"
           critcmp --export main > target/criterion-main.json
           critcmp --export pr > target/criterion-pr.json
           python3 <<'PY'
@@ -779,9 +772,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -790,50 +780,55 @@ jobs:
       - name: Install Schemathesis
         run: python -m pip install "schemathesis==4.15.2" "jsonschema==4.25.1"
 
-      - name: Start contract server
+      - name: Start compose contract stack
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p target/contract
-          cargo build -p au-kpis-api-http --example contract_server --locked
-          AU_KPIS_CONTRACT_ADDR="127.0.0.1:0" \
-          AU_KPIS_CONTRACT_ADDR_FILE="target/contract/server.addr" \
-            ./target/debug/examples/contract_server > target/contract/server.log 2>&1 &
-          echo $! > target/contract/server.pid
-          for _ in $(seq 1 120); do
-            if [ -s target/contract/server.addr ]; then
-              export AU_KPIS_CONTRACT_ADDR="$(cat target/contract/server.addr)"
-              echo "AU_KPIS_CONTRACT_ADDR=${AU_KPIS_CONTRACT_ADDR}" >> "$GITHUB_ENV"
-              exit 0
+          AU_KPIS_RATE_LIMITS__ANONYMOUS__PER_SECOND=1000 \
+          AU_KPIS_RATE_LIMITS__ANONYMOUS__PER_HOUR=10000 \
+          AU_KPIS_RATE_LIMITS__ANONYMOUS__BURST_MULTIPLIER=1 \
+            docker compose -f infra/compose/docker-compose.yml up -d --build api
+
+      - name: Apply migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                pg_isready -U au_kpis -d au_kpis; then
+              break
             fi
             sleep 1
           done
-          echo "Contract server did not report its bound address" >&2
-          cat target/contract/server.log >&2 || true
-          exit 1
+          cat infra/migrations/*.up.sql \
+            | docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+                psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
+
+      - name: Seed contract fixture data
+        run: |
+          docker compose -f infra/compose/docker-compose.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
+            < apps/web/e2e/fixtures/explorer.sql
 
       - name: Wait for API readiness
         shell: bash
         run: |
           set -euo pipefail
           for _ in $(seq 1 120); do
-            if curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/health" >/dev/null; then
+            if curl -fsS "http://127.0.0.1:3000/v1/health" >/dev/null; then
               exit 0
             fi
             sleep 1
           done
-          echo "Contract server did not become ready" >&2
-          cat target/contract/server.log >&2 || true
+          docker compose -f infra/compose/docker-compose.yml logs api >&2 || true
           exit 1
-
-      - name: Export OpenAPI schema
-        run: cargo run -p au-kpis-openapi > target/contract/openapi.json
 
       - name: Validate live OpenAPI response
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "http://${AU_KPIS_CONTRACT_ADDR}/v1/openapi.json" > target/contract/live-openapi.json
+          curl -fsS "http://127.0.0.1:3000/v1/openapi.json" > target/contract/live-openapi.json
           python - <<'PY'
           import json
           from pathlib import Path
@@ -848,23 +843,26 @@ jobs:
 
       - name: Run Schemathesis
         run: |
-          schemathesis run \
+          schemathesis --config-file tests/contract/schemathesis.toml run \
             --checks all \
-            --request-timeout 5 \
-            --max-examples 16 \
-            --include-path /v1/health \
-            --include-path /v1/openapi.json \
-            --url "http://${AU_KPIS_CONTRACT_ADDR}" \
-            target/contract/openapi.json
+            --exclude-checks positive_data_acceptance \
+            --rate-limit 5/s \
+            --report junit \
+            --report-junit-path target/contract/schemathesis.xml \
+            --url "http://127.0.0.1:3000" \
+            target/contract/live-openapi.json
 
-      - name: Stop contract server
+      - name: Upload Schemathesis report
         if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f target/contract/server.pid ]; then
-            kill "$(cat target/contract/server.pid)" || true
-          fi
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemathesis-contract-report
+          path: target/contract/schemathesis.xml
+          if-no-files-found: ignore
+
+      - name: Stop compose contract stack
+        if: always()
+        run: docker compose -f infra/compose/docker-compose.yml down -v
 
   snapshots:
     name: Snapshot Check

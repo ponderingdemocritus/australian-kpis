@@ -73,8 +73,8 @@ pub enum SearchResultKind {
     path = "/v1/search",
     operation_id = "searchCatalog",
     params(
-        ("q" = String, Query, description = "Search text."),
-        ("limit" = Option<u16>, Query, description = "Maximum number of results, capped at 100.")
+        ("q" = String, Query, min_length = 1, description = "Search text."),
+        ("limit" = Option<u16>, Query, maximum = 65535, description = "Maximum number of results, capped at 100.")
     ),
     responses(
         (status = 200, description = "Ranked catalog search results.", body = SearchResponse, content_type = "application/json", headers(

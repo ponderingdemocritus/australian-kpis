@@ -22,7 +22,9 @@
             "description": "Optional source id filter, e.g. abs.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
             }
           },
           {
@@ -31,7 +33,9 @@
             "description": "Optional publication frequency filter.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(annual|quarterly|monthly|weekly|daily|irregular)$"
             }
           }
         ],
@@ -89,7 +93,9 @@
             "description": "Dataflow id.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
             }
           }
         ],
@@ -108,6 +114,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DataflowDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path parameter.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -147,7 +163,9 @@
             "description": "Dataflow id.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
             }
           },
           {
@@ -156,7 +174,9 @@
             "description": "Dimension id.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
             }
           }
         ],
@@ -175,6 +195,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DataflowCodelistResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path parameter.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -243,7 +273,9 @@
             "description": "Required dataflow id, e.g. abs.cpi.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
             }
           },
           {
@@ -264,7 +296,9 @@
             "description": "Inclusive lower time bound as YYYY-MM-DD or RFC3339.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "format": "date",
+              "minLength": 1
             }
           },
           {
@@ -273,7 +307,9 @@
             "description": "Inclusive upper time bound as YYYY-MM-DD or RFC3339.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "format": "date",
+              "minLength": 1
             }
           },
           {
@@ -282,7 +318,9 @@
             "description": "Optional dataflow frequency filter.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(annual|quarterly|monthly|weekly|daily|irregular)$"
             }
           },
           {
@@ -291,7 +329,10 @@
             "description": "Response format: json, csv, or parquet.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 7,
+              "minLength": 3,
+              "pattern": "^(json|csv|parquet)$"
             }
           },
           {
@@ -300,7 +341,8 @@
             "description": "Opaque cursor from the previous page.",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             }
           },
           {
@@ -311,6 +353,7 @@
             "schema": {
               "type": "integer",
               "format": "int32",
+              "maximum": 10000,
               "minimum": 0
             }
           }
@@ -461,7 +504,8 @@
             "description": "Search text.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             }
           },
           {
@@ -472,6 +516,7 @@
             "schema": {
               "type": "integer",
               "format": "int32",
+              "maximum": 65535,
               "minimum": 0
             }
           }
@@ -530,7 +575,9 @@
             "description": "Dataflow id.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
             }
           },
           {
@@ -539,7 +586,10 @@
             "description": "64-character series key hex digest.",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
             }
           }
         ],

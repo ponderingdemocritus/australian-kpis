@@ -886,6 +886,8 @@ expression: emitted_spec()
             "name": "source",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -895,6 +897,8 @@ expression: emitted_spec()
             "name": "frequency",
             "required": false,
             "schema": {
+              "minLength": 1,
+              "pattern": "^(annual|quarterly|monthly|weekly|daily|irregular)$",
               "type": "string"
             }
           }
@@ -955,6 +959,8 @@ expression: emitted_spec()
             "name": "id",
             "required": true,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           }
@@ -977,6 +983,16 @@ expression: emitted_spec()
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid path parameter."
           },
           "404": {
             "content": {
@@ -1015,6 +1031,8 @@ expression: emitted_spec()
             "name": "id",
             "required": true,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1024,6 +1042,8 @@ expression: emitted_spec()
             "name": "dim",
             "required": true,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           }
@@ -1046,6 +1066,16 @@ expression: emitted_spec()
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid path parameter."
           },
           "404": {
             "content": {
@@ -1113,6 +1143,8 @@ expression: emitted_spec()
             "name": "dataflow",
             "required": true,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1134,6 +1166,8 @@ expression: emitted_spec()
             "name": "since",
             "required": false,
             "schema": {
+              "format": "date",
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1143,6 +1177,8 @@ expression: emitted_spec()
             "name": "until",
             "required": false,
             "schema": {
+              "format": "date",
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1152,6 +1188,8 @@ expression: emitted_spec()
             "name": "frequency",
             "required": false,
             "schema": {
+              "minLength": 1,
+              "pattern": "^(annual|quarterly|monthly|weekly|daily|irregular)$",
               "type": "string"
             }
           },
@@ -1161,6 +1199,9 @@ expression: emitted_spec()
             "name": "format",
             "required": false,
             "schema": {
+              "maxLength": 7,
+              "minLength": 3,
+              "pattern": "^(json|csv|parquet)$",
               "type": "string"
             }
           },
@@ -1170,6 +1211,7 @@ expression: emitted_spec()
             "name": "cursor",
             "required": false,
             "schema": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1180,6 +1222,7 @@ expression: emitted_spec()
             "required": false,
             "schema": {
               "format": "int32",
+              "maximum": 10000,
               "minimum": 0,
               "type": "integer"
             }
@@ -1333,6 +1376,7 @@ expression: emitted_spec()
             "name": "q",
             "required": true,
             "schema": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1343,6 +1387,7 @@ expression: emitted_spec()
             "required": false,
             "schema": {
               "format": "int32",
+              "maximum": 65535,
               "minimum": 0,
               "type": "integer"
             }
@@ -1404,6 +1449,8 @@ expression: emitted_spec()
             "name": "dataflow",
             "required": true,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -1413,6 +1460,9 @@ expression: emitted_spec()
             "name": "series_key",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             }
           }
