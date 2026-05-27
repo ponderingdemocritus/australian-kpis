@@ -196,6 +196,87 @@ fn issue_38_k6_smoke_contract_is_wired() {
 }
 
 #[test]
+fn issue_49_k6_nightly_load_contract_is_wired() {
+    let root = repo_root();
+
+    let sustained =
+        fs::read_to_string(root.join("apps/bench/sustained.js")).expect("read sustained script");
+    let burst = fs::read_to_string(root.join("apps/bench/burst.js")).expect("read burst script");
+    let nightly = fs::read_to_string(root.join(".github/workflows/k6-nightly.yml"))
+        .expect("read k6 nightly workflow");
+    let bench_docs =
+        fs::read_to_string(root.join("apps/bench/README.md")).expect("read bench docs");
+    let observability_docs =
+        fs::read_to_string(root.join("docs/observability.md")).expect("read observability docs");
+
+    for expected in [
+        "vus: 100",
+        "duration: '10m'",
+        "http_req_duration: ['p(95)<500', 'p(99)<1500']",
+        "http_req_failed: ['rate<0.001']",
+        "singleSeriesRequest",
+        "bulkObservationsRequest",
+        "catalogRequest",
+    ] {
+        assert!(
+            sustained.contains(expected),
+            "sustained scenario should contain `{expected}`"
+        );
+    }
+
+    for expected in [
+        "stages:",
+        "target: 2000",
+        "duration: '2m'",
+        "rateLimitResponses",
+        "serverErrorResponses",
+        "rate_limit_ratio",
+        "server_error_ratio",
+        "rate_limit_seen",
+    ] {
+        assert!(
+            burst.contains(expected),
+            "burst scenario should contain `{expected}`"
+        );
+    }
+
+    for expected in [
+        "cron: \"0 2 * * *\"",
+        "AU_KPIS_STAGING_BASE_URL",
+        "grafana/setup-k6-action",
+        "apps/bench/sustained.js",
+        "apps/bench/burst.js",
+        "K6_OUT",
+        "influxdb=",
+        "perf:regression",
+        "actions/github-script",
+        "k6 load comparison",
+    ] {
+        assert!(
+            nightly.contains(expected),
+            "nightly k6 workflow should contain `{expected}`"
+        );
+    }
+
+    assert!(
+        root.join("infra/observability/grafana/dashboards/k6-load.json")
+            .is_file(),
+        "Grafana should provision a sustained/burst k6 load dashboard"
+    );
+    assert!(
+        bench_docs.contains("sustained.js")
+            && bench_docs.contains("burst.js")
+            && bench_docs.contains("perf:regression"),
+        "benchmark docs should describe sustained, burst, and PR comparison runs"
+    );
+    assert!(
+        observability_docs.contains("k6 sustained and burst")
+            && observability_docs.contains("k6-load.json"),
+        "observability docs should document historical k6 load trending"
+    );
+}
+
+#[test]
 fn issue_39_schemathesis_contract_is_wired() {
     let root = repo_root();
 

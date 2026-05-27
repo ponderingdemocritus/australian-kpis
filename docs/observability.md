@@ -22,6 +22,8 @@ InfluxDB database on `:8086`.
 - The ingestion worker exposes `/metrics`; Prometheus scrapes it directly.
 - Promtail tails Compose container logs and pushes JSON log lines to Loki.
 - The k6 smoke scenario writes request duration and failure-rate samples to InfluxDB.
+- The nightly k6 sustained and burst scenarios write staging load-test samples and
+  custom rate-limit/server-error ratios to the same InfluxDB database.
 - Grafana provisions Prometheus, Loki, Tempo, and k6 InfluxDB datasources plus the
   required dashboards.
 
@@ -33,6 +35,7 @@ InfluxDB database on `:8086`.
 - Queue depth, worker saturation, and DB state: `infra/observability/grafana/dashboards/queue-db.json`
 - SLO burn rates and active page alerts: `infra/observability/grafana/dashboards/slo-burn-rates.json`
 - k6 smoke p95, failure rate, and endpoint request rate: `infra/observability/grafana/dashboards/k6-smoke.json`
+- k6 sustained and burst p95/p99, failure, rate-limit, and 5xx trends: `infra/observability/grafana/dashboards/k6-load.json`
 
 ## Alert Routing
 
