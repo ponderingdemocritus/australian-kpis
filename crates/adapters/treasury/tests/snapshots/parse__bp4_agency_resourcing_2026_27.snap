@@ -1,0 +1,220 @@
+---
+source: crates/adapters/treasury/tests/parse.rs
+expression: snapshot
+---
+{
+  "observation_count": 6,
+  "series_count": 2,
+  "first_rows": [
+    {
+      "dataflow_id": "treasury.budget_papers",
+      "measure_id": "value",
+      "dimensions": {
+        "budget_year": "2026-27",
+        "line_item": "department_of_the_treasury",
+        "paper": "bp4-agency-resourcing",
+        "table": "table_1_agency_resourcing_by_portfolio_m"
+      },
+      "unit": "$ million",
+      "time": "2024-07-01T00:00:00+00:00",
+      "time_precision": "Year",
+      "value": 310.0,
+      "status": "Normal",
+      "attributes": {
+        "artifact_date": "2026-05-12",
+        "attribution": "Source: Australian Government, The Treasury",
+        "budget_year": "2026-27",
+        "extraction_backend": "fixture-pdfplumber",
+        "extraction_backend_version": "2026.1",
+        "license": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "paper": "Budget Paper No. 4",
+        "paper_slug": "bp4-agency-resourcing",
+        "publication_title": "Agency resourcing table",
+        "schema_hash": "206fb468a5a8b1d7514683f1087e30d5a163da126d5381347152218a8757c376",
+        "source": "Australian Government, The Treasury",
+        "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        "table_page": "12",
+        "table_title": "Table 1: Agency resourcing by portfolio ($m)",
+        "treasury_line_item": "Department of the Treasury",
+        "treasury_period_label": "2024-25"
+      },
+      "source_artifact_id": "837f149c2228a46e954833882a76f6c3d33a389680a07ce04aaf374af45d641d"
+    },
+    {
+      "dataflow_id": "treasury.budget_papers",
+      "measure_id": "value",
+      "dimensions": {
+        "budget_year": "2026-27",
+        "line_item": "department_of_the_treasury",
+        "paper": "bp4-agency-resourcing",
+        "table": "table_1_agency_resourcing_by_portfolio_m"
+      },
+      "unit": "$ million",
+      "time": "2025-07-01T00:00:00+00:00",
+      "time_precision": "Year",
+      "value": 325.5,
+      "status": "Forecast",
+      "attributes": {
+        "artifact_date": "2026-05-12",
+        "attribution": "Source: Australian Government, The Treasury",
+        "budget_year": "2026-27",
+        "extraction_backend": "fixture-pdfplumber",
+        "extraction_backend_version": "2026.1",
+        "license": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "paper": "Budget Paper No. 4",
+        "paper_slug": "bp4-agency-resourcing",
+        "publication_title": "Agency resourcing table",
+        "schema_hash": "206fb468a5a8b1d7514683f1087e30d5a163da126d5381347152218a8757c376",
+        "source": "Australian Government, The Treasury",
+        "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        "table_page": "12",
+        "table_title": "Table 1: Agency resourcing by portfolio ($m)",
+        "treasury_line_item": "Department of the Treasury",
+        "treasury_period_label": "2025-26"
+      },
+      "source_artifact_id": "837f149c2228a46e954833882a76f6c3d33a389680a07ce04aaf374af45d641d"
+    },
+    {
+      "dataflow_id": "treasury.budget_papers",
+      "measure_id": "value",
+      "dimensions": {
+        "budget_year": "2026-27",
+        "line_item": "department_of_the_treasury",
+        "paper": "bp4-agency-resourcing",
+        "table": "table_1_agency_resourcing_by_portfolio_m"
+      },
+      "unit": "$ million",
+      "time": "2026-07-01T00:00:00+00:00",
+      "time_precision": "Year",
+      "value": 341.0,
+      "status": "Forecast",
+      "attributes": {
+        "artifact_date": "2026-05-12",
+        "attribution": "Source: Australian Government, The Treasury",
+        "budget_year": "2026-27",
+        "extraction_backend": "fixture-pdfplumber",
+        "extraction_backend_version": "2026.1",
+        "license": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "paper": "Budget Paper No. 4",
+        "paper_slug": "bp4-agency-resourcing",
+        "publication_title": "Agency resourcing table",
+        "schema_hash": "206fb468a5a8b1d7514683f1087e30d5a163da126d5381347152218a8757c376",
+        "source": "Australian Government, The Treasury",
+        "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        "table_page": "12",
+        "table_title": "Table 1: Agency resourcing by portfolio ($m)",
+        "treasury_line_item": "Department of the Treasury",
+        "treasury_period_label": "2026-27"
+      },
+      "source_artifact_id": "837f149c2228a46e954833882a76f6c3d33a389680a07ce04aaf374af45d641d"
+    },
+    {
+      "dataflow_id": "treasury.budget_papers",
+      "measure_id": "value",
+      "dimensions": {
+        "budget_year": "2026-27",
+        "line_item": "department_of_finance",
+        "paper": "bp4-agency-resourcing",
+        "table": "table_1_agency_resourcing_by_portfolio_m"
+      },
+      "unit": "$ million",
+      "time": "2024-07-01T00:00:00+00:00",
+      "time_precision": "Year",
+      "value": 420.0,
+      "status": "Normal",
+      "attributes": {
+        "artifact_date": "2026-05-12",
+        "attribution": "Source: Australian Government, The Treasury",
+        "budget_year": "2026-27",
+        "extraction_backend": "fixture-pdfplumber",
+        "extraction_backend_version": "2026.1",
+        "license": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "paper": "Budget Paper No. 4",
+        "paper_slug": "bp4-agency-resourcing",
+        "publication_title": "Agency resourcing table",
+        "schema_hash": "206fb468a5a8b1d7514683f1087e30d5a163da126d5381347152218a8757c376",
+        "source": "Australian Government, The Treasury",
+        "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        "table_page": "12",
+        "table_title": "Table 1: Agency resourcing by portfolio ($m)",
+        "treasury_line_item": "Department of Finance",
+        "treasury_period_label": "2024-25"
+      },
+      "source_artifact_id": "837f149c2228a46e954833882a76f6c3d33a389680a07ce04aaf374af45d641d"
+    },
+    {
+      "dataflow_id": "treasury.budget_papers",
+      "measure_id": "value",
+      "dimensions": {
+        "budget_year": "2026-27",
+        "line_item": "department_of_finance",
+        "paper": "bp4-agency-resourcing",
+        "table": "table_1_agency_resourcing_by_portfolio_m"
+      },
+      "unit": "$ million",
+      "time": "2025-07-01T00:00:00+00:00",
+      "time_precision": "Year",
+      "value": 438.5,
+      "status": "Forecast",
+      "attributes": {
+        "artifact_date": "2026-05-12",
+        "attribution": "Source: Australian Government, The Treasury",
+        "budget_year": "2026-27",
+        "extraction_backend": "fixture-pdfplumber",
+        "extraction_backend_version": "2026.1",
+        "license": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "paper": "Budget Paper No. 4",
+        "paper_slug": "bp4-agency-resourcing",
+        "publication_title": "Agency resourcing table",
+        "schema_hash": "206fb468a5a8b1d7514683f1087e30d5a163da126d5381347152218a8757c376",
+        "source": "Australian Government, The Treasury",
+        "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        "table_page": "12",
+        "table_title": "Table 1: Agency resourcing by portfolio ($m)",
+        "treasury_line_item": "Department of Finance",
+        "treasury_period_label": "2025-26"
+      },
+      "source_artifact_id": "837f149c2228a46e954833882a76f6c3d33a389680a07ce04aaf374af45d641d"
+    },
+    {
+      "dataflow_id": "treasury.budget_papers",
+      "measure_id": "value",
+      "dimensions": {
+        "budget_year": "2026-27",
+        "line_item": "department_of_finance",
+        "paper": "bp4-agency-resourcing",
+        "table": "table_1_agency_resourcing_by_portfolio_m"
+      },
+      "unit": "$ million",
+      "time": "2026-07-01T00:00:00+00:00",
+      "time_precision": "Year",
+      "value": 456.0,
+      "status": "Forecast",
+      "attributes": {
+        "artifact_date": "2026-05-12",
+        "attribution": "Source: Australian Government, The Treasury",
+        "budget_year": "2026-27",
+        "extraction_backend": "fixture-pdfplumber",
+        "extraction_backend_version": "2026.1",
+        "license": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "paper": "Budget Paper No. 4",
+        "paper_slug": "bp4-agency-resourcing",
+        "publication_title": "Agency resourcing table",
+        "schema_hash": "206fb468a5a8b1d7514683f1087e30d5a163da126d5381347152218a8757c376",
+        "source": "Australian Government, The Treasury",
+        "source_url": "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        "table_page": "12",
+        "table_title": "Table 1: Agency resourcing by portfolio ($m)",
+        "treasury_line_item": "Department of Finance",
+        "treasury_period_label": "2026-27"
+      },
+      "source_artifact_id": "837f149c2228a46e954833882a76f6c3d33a389680a07ce04aaf374af45d641d"
+    }
+  ]
+}
