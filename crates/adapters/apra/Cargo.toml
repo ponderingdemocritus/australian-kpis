@@ -8,3 +8,22 @@ repository.workspace = true
 description = "APRA adapter (quarterly XLS)."
 
 [dependencies]
+async-trait = "0.1"
+au-kpis-adapter = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-error = { workspace = true }
+au-kpis-storage = { workspace = true }
+calamine = { version = "0.35", features = ["chrono"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "sync"] }
+tracing = "0.1"
+
+[dev-dependencies]
+async-trait = "0.1"
+bytes = "1"
+insta = { version = "1", features = ["json"] }
+object_store = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }

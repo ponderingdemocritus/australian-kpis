@@ -18,6 +18,7 @@ use std::{
 use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
+use au_kpis_adapter_apra::ApraAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
@@ -35,6 +36,8 @@ use tokio_util::sync::CancellationToken;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
+const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
+const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
 const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
 const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -510,6 +513,11 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => AbsAdapter::default(),
     };
     builder.register(abs).context("register ABS adapter")?;
+    let apra = match env::var("AU_KPIS_APRA_RELEASE_URL") {
+        Ok(release_url) => ApraAdapter::builder().release_url(release_url).build(),
+        Err(_) => ApraAdapter::default(),
+    };
+    builder.register(apra).context("register APRA adapter")?;
     let rba = match env::var("AU_KPIS_RBA_INDEX_URL") {
         Ok(index_url) => RbaAdapter::builder().index_url(index_url).build(),
         Err(_) => RbaAdapter::default(),
@@ -591,9 +599,13 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
     validate_supported_source(source)?;
     match source {
         "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
+        "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
+        ),
+        "apra" => bail!(
+            "unsupported dataflow `{dataflow}` for source `apra`; supported dataflow: {APRA_QUARTERLY_DATAFLOW_SLUG}"
         ),
         "rba" => bail!(
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
@@ -606,6 +618,7 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
     validate_once_target(source, dataflow)?;
     let dataflow_id = match source {
         "abs" => ABS_CPI_DATAFLOW_ID,
+        "apra" => APRA_QUARTERLY_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
         _ => unreachable!("source was validated above"),
     };
@@ -649,8 +662,8 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 }
 
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
-    if !matches!(source, "abs" | "rba") {
-        bail!("unsupported source `{source}`; supported sources: abs, rba");
+    if !matches!(source, "abs" | "apra" | "rba") {
+        bail!("unsupported source `{source}`; supported sources: abs, apra, rba");
     }
     Ok(())
 }
@@ -659,11 +672,14 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "apra" && dataflow_id == APRA_QUARTERLY_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "rba" && dataflow_id == RBA_STAT_TABLES_DATAFLOW_ID {
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}"
     );
 }
 
@@ -822,7 +838,7 @@ mod tests {
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs, rba"));
+        assert!(err.contains("abs, apra, rba"));
     }
 
     #[test]
@@ -834,6 +850,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("rba.statistical_tables").unwrap())
+        );
+    }
+
+    #[test]
+    fn apra_once_mode_resolves_quarterly_statistics_dataflow() {
+        let request = once_run_request("apra", "quarterly-statistics")
+            .expect("APRA quarterly statistics are supported");
+
+        assert_eq!(request.source_id.as_str(), "apra");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("apra.quarterly_statistics").unwrap())
         );
     }
 

@@ -9,6 +9,10 @@ status-level = "pass"
 filter = 'test(loads_ten_thousand_observations_with_copy_batches)'
 threads-required = "num-cpus"
 
+[[profile.default.overrides]]
+filter = 'test(parse_cpi_fixture_stays_under_runtime_budget)'
+threads-required = "num-cpus"
+
 [profile.ci]
 fail-fast = false
 failure-output = "immediate-final"
@@ -20,6 +24,10 @@ success-output = "never"
 
 [[profile.ci.overrides]]
 filter = 'test(loads_ten_thousand_observations_with_copy_batches)'
+threads-required = "num-cpus"
+
+[[profile.ci.overrides]]
+filter = 'test(parse_cpi_fixture_stays_under_runtime_budget)'
 threads-required = "num-cpus"
 
 [profile.ci.junit]

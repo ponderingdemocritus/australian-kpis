@@ -1,0 +1,145 @@
+---
+source: crates/adapters/apra/tests/parse.rs
+expression: snapshot
+---
+{
+  "observation_count": 4,
+  "series_count": 2,
+  "schema_hashes": [
+    "b50e369c4124d7b695226b06d1e043dba88f1ed78f97a211bcc7c26237285ab2"
+  ],
+  "first_rows": [
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-property-exposures",
+        "sector": "all",
+        "series": "office",
+        "table": "table_1a_all_adis_commercial_property_exposures"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 30269.0,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Office",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-property-exposures",
+        "publication_title": "Quarterly authorised deposit taking institution property exposures statistics December 2025",
+        "schema_hash": "b50e369c4124d7b695226b06d1e043dba88f1ed78f97a211bcc7c26237285ab2",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20property%20exposures%20statistics%20December%202025.xlsx",
+        "table_title": "Table 1a  All ADIs' commercial property exposures"
+      },
+      "source_artifact_id": "655d382d1d035e6440723a3126847a72d6556355fc857024b9460651a25995d2"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-property-exposures",
+        "sector": "all",
+        "series": "office",
+        "table": "table_1a_all_adis_commercial_property_exposures"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 33037.6,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Office",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-property-exposures",
+        "publication_title": "Quarterly authorised deposit taking institution property exposures statistics December 2025",
+        "schema_hash": "b50e369c4124d7b695226b06d1e043dba88f1ed78f97a211bcc7c26237285ab2",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20property%20exposures%20statistics%20December%202025.xlsx",
+        "table_title": "Table 1a  All ADIs' commercial property exposures"
+      },
+      "source_artifact_id": "655d382d1d035e6440723a3126847a72d6556355fc857024b9460651a25995d2"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-property-exposures",
+        "sector": "all",
+        "series": "retail",
+        "table": "table_1a_all_adis_commercial_property_exposures"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 22803.3,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Retail",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-property-exposures",
+        "publication_title": "Quarterly authorised deposit taking institution property exposures statistics December 2025",
+        "schema_hash": "b50e369c4124d7b695226b06d1e043dba88f1ed78f97a211bcc7c26237285ab2",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20property%20exposures%20statistics%20December%202025.xlsx",
+        "table_title": "Table 1a  All ADIs' commercial property exposures"
+      },
+      "source_artifact_id": "655d382d1d035e6440723a3126847a72d6556355fc857024b9460651a25995d2"
+    },
+    {
+      "dataflow_id": "apra.quarterly_statistics",
+      "measure_id": "value",
+      "dimensions": {
+        "entity": "aggregate",
+        "publication": "adi-property-exposures",
+        "sector": "all",
+        "series": "retail",
+        "table": "table_1a_all_adis_commercial_property_exposures"
+      },
+      "unit": "$ million",
+      "time": "2025-10-01T00:00:00+00:00",
+      "time_precision": "Quarter",
+      "value": 27070.0,
+      "status": "Normal",
+      "attributes": {
+        "apra_entity": "aggregate",
+        "apra_sector": "all",
+        "apra_series_name": "Retail",
+        "apra_table_orientation": "horizontal",
+        "attribution": "Source: Australian Prudential Regulation Authority",
+        "license": "Creative Commons Attribution 3.0 Australia Licence",
+        "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+        "publication": "adi-property-exposures",
+        "publication_title": "Quarterly authorised deposit taking institution property exposures statistics December 2025",
+        "schema_hash": "b50e369c4124d7b695226b06d1e043dba88f1ed78f97a211bcc7c26237285ab2",
+        "sheet_name": "Tab 1a",
+        "source": "Australian Prudential Regulation Authority",
+        "source_url": "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20property%20exposures%20statistics%20December%202025.xlsx",
+        "table_title": "Table 1a  All ADIs' commercial property exposures"
+      },
+      "source_artifact_id": "655d382d1d035e6440723a3126847a72d6556355fc857024b9460651a25995d2"
+    }
+  ]
+}
