@@ -605,14 +605,7 @@ jobs:
           critcmp_output="$(critcmp main pr --threshold 5 --list 2>&1)"
           critcmp_status=$?
           set -e
-          if [ "${critcmp_status}" -eq 0 ]; then
-            printf '%s\n' "${critcmp_output}"
-          elif [ "${critcmp_output}" = "no benchmark comparisons to show" ]; then
-            printf '%s\n' "${critcmp_output}"
-          else
-            printf '%s\n' "${critcmp_output}" >&2
-            exit "${critcmp_status}"
-          fi
+          printf '%s\n' "${critcmp_output}"
           critcmp --export main > target/criterion-main.json
           critcmp --export pr > target/criterion-pr.json
           python3 <<'PY'

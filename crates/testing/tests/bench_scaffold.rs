@@ -114,6 +114,10 @@ fn issue_37_benchmark_contract_is_wired() {
         pr_workflow.contains("critcmp main pr --threshold 5"),
         "benchmark workflow should block on >5% regressions"
     );
+    assert!(
+        !pr_workflow.contains("exit \"${critcmp_status}\""),
+        "benchmark workflow should not exit before the confidence-bound regression guard runs"
+    );
 }
 
 #[test]
