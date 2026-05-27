@@ -47,6 +47,8 @@ const STATE_BUDGETS_NSW_DATAFLOW_SLUG: &str = "nsw-budget";
 const STATE_BUDGETS_NSW_DATAFLOW_ID: &str = "state_budgets.nsw_budget";
 const STATE_BUDGETS_VIC_DATAFLOW_SLUG: &str = "vic-budget";
 const STATE_BUDGETS_VIC_DATAFLOW_ID: &str = "state_budgets.vic_budget";
+const STATE_BUDGETS_QLD_DATAFLOW_SLUG: &str = "qld-budget";
+const STATE_BUDGETS_QLD_DATAFLOW_ID: &str = "state_budgets.qld_budget";
 const TREASURY_BUDGET_DATAFLOW_SLUG: &str = "budget-papers";
 const TREASURY_BUDGET_DATAFLOW_ID: &str = "treasury.budget_papers";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -690,7 +692,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         "state-budgets"
             if matches!(
                 dataflow,
-                STATE_BUDGETS_NSW_DATAFLOW_SLUG | STATE_BUDGETS_VIC_DATAFLOW_SLUG
+                STATE_BUDGETS_NSW_DATAFLOW_SLUG
+                    | STATE_BUDGETS_VIC_DATAFLOW_SLUG
+                    | STATE_BUDGETS_QLD_DATAFLOW_SLUG
             ) =>
         {
             Ok(())
@@ -706,7 +710,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
         ),
         "state-budgets" => bail!(
-            "unsupported dataflow `{dataflow}` for source `state-budgets`; supported dataflows: {STATE_BUDGETS_NSW_DATAFLOW_SLUG}, {STATE_BUDGETS_VIC_DATAFLOW_SLUG}"
+            "unsupported dataflow `{dataflow}` for source `state-budgets`; supported dataflows: {STATE_BUDGETS_NSW_DATAFLOW_SLUG}, {STATE_BUDGETS_VIC_DATAFLOW_SLUG}, {STATE_BUDGETS_QLD_DATAFLOW_SLUG}"
         ),
         "treasury" => bail!(
             "unsupported dataflow `{dataflow}` for source `treasury`; supported dataflow: {TREASURY_BUDGET_DATAFLOW_SLUG}"
@@ -726,6 +730,9 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         }
         "state-budgets" if dataflow == STATE_BUDGETS_VIC_DATAFLOW_SLUG => {
             STATE_BUDGETS_VIC_DATAFLOW_ID
+        }
+        "state-budgets" if dataflow == STATE_BUDGETS_QLD_DATAFLOW_SLUG => {
+            STATE_BUDGETS_QLD_DATAFLOW_ID
         }
         "treasury" => TREASURY_BUDGET_DATAFLOW_ID,
         _ => unreachable!("source was validated above"),
@@ -797,11 +804,14 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "state-budgets" && dataflow_id == STATE_BUDGETS_VIC_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "state-budgets" && dataflow_id == STATE_BUDGETS_QLD_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "treasury" && dataflow_id == TREASURY_BUDGET_DATAFLOW_ID {
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1045,6 +1055,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("state_budgets.vic_budget").unwrap())
+        );
+    }
+
+    #[test]
+    fn state_budgets_once_mode_resolves_qld_budget_dataflow() {
+        let request =
+            once_run_request("state-budgets", "qld-budget").expect("QLD state budget is supported");
+
+        assert_eq!(request.source_id.as_str(), "state-budgets");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("state_budgets.qld_budget").unwrap())
         );
     }
 

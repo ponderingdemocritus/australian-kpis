@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, time::Duration};
 
 use au_kpis_adapter::{AdapterHttpClient, DiscoveryCtx, SourceAdapter};
 use au_kpis_adapter_state_budgets::{
-    NswBudgetAdapter, NswBudgetPublication, NswBudgetRevision, StateBudgetsAdapter,
-    VicBudgetAdapter, VicBudgetPublication, VicBudgetRevision,
+    NswBudgetAdapter, NswBudgetPublication, NswBudgetRevision, QldBudgetAdapter,
+    QldBudgetPublication, QldBudgetRevision, StateBudgetsAdapter, VicBudgetAdapter,
+    VicBudgetPublication, VicBudgetRevision,
 };
 use chrono::{TimeZone, Utc};
 
@@ -188,6 +189,29 @@ fn vic_fixture_publications() -> Vec<VicBudgetPublication> {
     ]
 }
 
+fn qld_publication(
+    budget_year: &'static str,
+    last_updated: &'static str,
+    source_url: &'static str,
+) -> QldBudgetPublication {
+    QldBudgetPublication {
+        budget_year: budget_year.into(),
+        paper: "Budget Paper No. 2".into(),
+        paper_slug: "bp2-budget-strategy-outlook".into(),
+        title: "Budget Strategy and Outlook".into(),
+        source_url: source_url.into(),
+        last_updated: Some(last_updated.into()),
+    }
+}
+
+fn qld_fixture_publications() -> Vec<QldBudgetPublication> {
+    vec![qld_publication(
+        "2025-26",
+        "2025-06-24",
+        "https://budget.qld.gov.au/files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf",
+    )]
+}
+
 #[test]
 fn discoverable_jobs_apply_vic_revision_and_license_metadata() {
     let current = vic_fixture_publications();
@@ -312,6 +336,129 @@ fn manifest_declares_vic_rate_limit_and_dataflow_metadata() {
     );
 }
 
+#[test]
+fn discoverable_jobs_apply_qld_revision_and_license_metadata() {
+    let current = qld_fixture_publications();
+    let known_revisions = BTreeMap::from([(
+        "QLD:bp2-budget-strategy-outlook:2024-25".to_string(),
+        QldBudgetRevision::new("2024-06-11", Some("2024-06-11")),
+    )]);
+    let jobs = QldBudgetAdapter::discoverable_jobs_with_started_at(
+        &current,
+        &known_revisions,
+        Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap(),
+        Some(TRACE_PARENT),
+    );
+
+    assert_eq!(jobs.len(), 1);
+    let job = &jobs[0];
+    assert_eq!(job.source_id.as_str(), "state-budgets");
+    assert_eq!(job.dataflow_id.as_str(), "state_budgets.qld_budget");
+    assert_eq!(job.trace_parent.as_deref(), Some(TRACE_PARENT));
+    assert_eq!(job.metadata["jurisdiction"], "QLD");
+    assert_eq!(job.metadata["budget_year"], "2025-26");
+    assert_eq!(job.metadata["artifact_date"], "2025-06-24");
+    assert_eq!(job.metadata["artifact_format"], "pdf");
+    assert_eq!(job.metadata["license"], "Queensland Treasury copyright");
+    assert_eq!(
+        job.metadata["license_url"],
+        "https://www.treasury.qld.gov.au/legal/copyright/"
+    );
+    assert_eq!(
+        job.metadata["attribution"],
+        "© The State of Queensland 2025 (Queensland Treasury)"
+    );
+    assert_eq!(
+        job.metadata["schema_drift_policy"],
+        "hash-pdf-table-candidates"
+    );
+    assert_eq!(
+        job.metadata["revision_key"],
+        "QLD:bp2-budget-strategy-outlook:2025-26"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_returns_hand_curated_qld_budget_publications() {
+    let adapter = QldBudgetAdapter::builder()
+        .publications(qld_fixture_publications())
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap())
+        .with_trace_parent(TRACE_PARENT);
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover QLD budget PDFs");
+
+    assert_eq!(jobs.len(), 1);
+    assert!(
+        jobs.iter()
+            .all(|job| job.source_id.as_str() == "state-budgets")
+    );
+    assert!(
+        jobs.iter()
+            .all(|job| job.dataflow_id.as_str() == "state_budgets.qld_budget")
+    );
+    assert!(
+        jobs.iter()
+            .all(|job| job.trace_parent.as_deref() == Some(TRACE_PARENT))
+    );
+    assert_eq!(jobs[0].metadata["budget_year"], "2025-26");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn qld_discover_honours_requested_dataflow_scope() {
+    let adapter = QldBudgetAdapter::builder()
+        .publications(qld_fixture_publications())
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap())
+        .with_requested_dataflow_id(
+            au_kpis_domain::DataflowId::new("state_budgets.vic_budget").unwrap(),
+        );
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover requested dataflow");
+
+    assert!(jobs.is_empty());
+}
+
+#[test]
+fn manifest_declares_qld_rate_limit_and_dataflow_metadata() {
+    let adapter = QldBudgetAdapter::default();
+    let manifest = adapter.manifest();
+
+    assert_eq!(manifest.source_id.as_str(), "state-budgets");
+    assert_eq!(manifest.rate_limit.max_requests, 20);
+    assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
+    assert_eq!(
+        manifest.dataflows,
+        vec![au_kpis_domain::DataflowId::new("state_budgets.qld_budget").unwrap()]
+    );
+
+    let dataflows = adapter.dataflow_metadata();
+    assert_eq!(dataflows.len(), 1);
+    assert_eq!(dataflows[0].id.as_str(), "state_budgets.qld_budget");
+    assert_eq!(dataflows[0].source_id.as_str(), "state-budgets");
+    assert_eq!(dataflows[0].frequency, au_kpis_domain::Frequency::Annual);
+    assert_eq!(
+        dataflows[0].license,
+        au_kpis_domain::License::Other("Queensland Treasury copyright".into())
+    );
+    assert_eq!(
+        dataflows[0].attribution,
+        "© The State of Queensland 2025 (Queensland Treasury)"
+    );
+    assert_eq!(
+        dataflows[0].source_url,
+        "https://budget.qld.gov.au/budget-papers/"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn combined_state_budgets_adapter_routes_discovery_by_dataflow() {
     let adapter = StateBudgetsAdapter::new(
@@ -321,6 +468,9 @@ async fn combined_state_budgets_adapter_routes_discovery_by_dataflow() {
         VicBudgetAdapter::builder()
             .publications(vic_fixture_publications())
             .build(),
+        QldBudgetAdapter::builder()
+            .publications(qld_fixture_publications())
+            .build(),
     );
     let manifest = adapter.manifest();
     assert_eq!(
@@ -328,23 +478,24 @@ async fn combined_state_budgets_adapter_routes_discovery_by_dataflow() {
         vec![
             au_kpis_domain::DataflowId::new("state_budgets.nsw_budget").unwrap(),
             au_kpis_domain::DataflowId::new("state_budgets.vic_budget").unwrap(),
+            au_kpis_domain::DataflowId::new("state_budgets.qld_budget").unwrap(),
         ]
     );
 
     let http = AdapterHttpClient::new(manifest.rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap())
         .with_requested_dataflow_id(
-            au_kpis_domain::DataflowId::new("state_budgets.vic_budget").unwrap(),
+            au_kpis_domain::DataflowId::new("state_budgets.qld_budget").unwrap(),
         );
 
     let jobs = adapter
         .discover(&ctx)
         .await
-        .expect("discover requested VIC state budget");
+        .expect("discover requested QLD state budget");
 
-    assert_eq!(jobs.len(), 2);
+    assert_eq!(jobs.len(), 1);
     assert!(
         jobs.iter()
-            .all(|job| job.dataflow_id.as_str() == "state_budgets.vic_budget")
+            .all(|job| job.dataflow_id.as_str() == "state_budgets.qld_budget")
     );
 }
