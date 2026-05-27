@@ -953,6 +953,16 @@ async fn parse_one_artifact(
             let (series, observation) = match row {
                 Ok(row) => row,
                 Err(err) => {
+                    if matches!(err, AdapterError::SchemaHashDrift(_)) {
+                        finish_schema_hash_drift_parse(
+                            &tx,
+                            &audit,
+                            &mut early_adapter_errors,
+                            &err,
+                        )
+                        .await?;
+                        return Err(IngestionError::Adapter(err));
+                    }
                     if parsed == 0 {
                         early_adapter_errors.push(err);
                     } else {
@@ -1086,6 +1096,39 @@ async fn parse_one_artifact(
     }
     .instrument(span)
     .await
+}
+
+async fn finish_schema_hash_drift_parse(
+    tx: &mpsc::Sender<LoadStageItem>,
+    audit: &ParseErrorAudit<'_>,
+    early_adapter_errors: &mut Vec<AdapterError>,
+    err: &AdapterError,
+) -> Result<(), IngestionError> {
+    send_adapter_parse_errors(tx, audit, early_adapter_errors, false).await?;
+    early_adapter_errors.clear();
+    send_produced(
+        tx,
+        LoadStageItem::RejectArtifact {
+            artifact_id: audit.artifact_id,
+            correlation: audit.correlation.clone(),
+        },
+        audit.cancellation,
+    )
+    .await?;
+    send_produced(
+        tx,
+        LoadStageItem::ParseError(parse_error_record(
+            audit.artifact_id,
+            audit.dataflow_id,
+            audit.source_id,
+            audit.correlation,
+            err,
+            true,
+        )),
+        audit.cancellation,
+    )
+    .await?;
+    Ok(())
 }
 
 async fn next_after_cancellation(

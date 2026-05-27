@@ -8,6 +8,8 @@ tests:
     input_series:
       - series: 'au_kpis_chaos_error_ratio{service="chaos-drill"}'
         values: "0 0.02 0.02"
+      - series: 'au_kpis_schema_hash_drifts_total{source="treasury",dataflow="treasury.budget_papers"}'
+        values: "0 1 1"
     alert_rule_test:
       - eval_time: 1m
         alertname: AuKpisChaosDrillCanaryFiring
@@ -20,3 +22,16 @@ tests:
             exp_annotations:
               summary: Chaos drill canary fired
               description: Synthetic chaos drill metric for chaos-drill exceeded the canary threshold.
+      - eval_time: 1m
+        alertname: AuKpisSchemaHashDrift
+        exp_alerts:
+          - exp_labels:
+              alertname: AuKpisSchemaHashDrift
+              source: treasury
+              dataflow: treasury.budget_papers
+              severity: page
+              slo: format-drift
+              team: data-platform
+            exp_annotations:
+              summary: Schema hash drift detected
+              description: Source treasury dataflow treasury.budget_papers emitted a schema-hash drift event. Pause ingestion and review the raw artifact before accepting a new parser/schema hash.

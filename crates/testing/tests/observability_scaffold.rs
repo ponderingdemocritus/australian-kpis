@@ -86,6 +86,8 @@ fn issue_47_observability_stack_contract_is_wired() {
         "AuKpisFreshnessSlowBurn",
         "AuKpisIngestionErrorFastBurn",
         "AuKpisIngestionErrorSlowBurn",
+        "AuKpisSchemaHashDrift",
+        "au_kpis_schema_hash_drifts_total",
         "AuKpisChaosDrillCanaryFiring",
         "severity: page",
         "team: data-platform",

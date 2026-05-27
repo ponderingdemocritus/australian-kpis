@@ -5,18 +5,19 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 use std::{
+    collections::BTreeMap,
     env,
     ffi::OsString,
     future::Future,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use anyhow::{Context, bail};
-use au_kpis_adapter::{AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
+use au_kpis_adapter::{AdapterError, AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
@@ -99,11 +100,12 @@ struct WorkerMetrics {
     jobs_completed_total: AtomicU64,
     jobs_failed_total: AtomicU64,
     once_runs_total: AtomicU64,
+    schema_hash_drifts_total: Mutex<BTreeMap<SchemaHashDriftMetricKey, u64>>,
 }
 
 impl WorkerMetrics {
     fn render_prometheus(&self) -> String {
-        format!(
+        let mut body = format!(
             "# HELP au_kpis_ingestion_worker_loops_total Worker polling loop iterations.\n\
              # TYPE au_kpis_ingestion_worker_loops_total counter\n\
              au_kpis_ingestion_worker_loops_total {}\n\
@@ -120,8 +122,56 @@ impl WorkerMetrics {
             self.jobs_completed_total.load(Ordering::Relaxed),
             self.jobs_failed_total.load(Ordering::Relaxed),
             self.once_runs_total.load(Ordering::Relaxed)
-        )
+        );
+        body.push_str(
+            "# HELP au_kpis_schema_hash_drifts_total Schema hash drift events detected by source parsers.\n\
+             # TYPE au_kpis_schema_hash_drifts_total counter\n",
+        );
+        for (key, count) in self
+            .schema_hash_drifts_total
+            .lock()
+            .expect("schema drift metrics mutex should not be poisoned")
+            .iter()
+        {
+            body.push_str(&format!(
+                "au_kpis_schema_hash_drifts_total{{source=\"{}\",dataflow=\"{}\"}} {}\n",
+                prometheus_label_value(&key.source),
+                prometheus_label_value(&key.dataflow),
+                count
+            ));
+        }
+        body
     }
+
+    fn record_ingestion_error(&self, err: &au_kpis_ingestion_core::IngestionError) {
+        if let au_kpis_ingestion_core::IngestionError::Adapter(AdapterError::SchemaHashDrift(
+            drift,
+        )) = err
+        {
+            let key = SchemaHashDriftMetricKey {
+                source: drift.source_id.as_str().to_string(),
+                dataflow: drift.dataflow_id.as_str().to_string(),
+            };
+            let mut counts = self
+                .schema_hash_drifts_total
+                .lock()
+                .expect("schema drift metrics mutex should not be poisoned");
+            *counts.entry(key).or_insert(0) += 1;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SchemaHashDriftMetricKey {
+    source: String,
+    dataflow: String,
+}
+
+fn prometheus_label_value(value: &str) -> String {
+    value
+        .replace('\\', r"\\")
+        .replace('"', r#"\""#)
+        .replace('\n', r"\n")
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -238,7 +288,13 @@ async fn run_mode(mode: Mode, runtime: Runtime) -> anyhow::Result<()> {
     match mode {
         Mode::Once { source, dataflow } => {
             let request = once_run_request(&source, &dataflow)?;
-            let stats = run_source_once(&runtime, &request, runtime.shutdown.clone()).await?;
+            let stats = match run_source_once(&runtime, &request, runtime.shutdown.clone()).await {
+                Ok(stats) => stats,
+                Err(err) => {
+                    runtime.metrics.record_ingestion_error(&err);
+                    return Err(err.into());
+                }
+            };
             runtime
                 .metrics
                 .once_runs_total
@@ -400,6 +456,7 @@ async fn process_one_job(
             );
         }
         Err(err) => {
+            runtime.metrics.record_ingestion_error(&err);
             let class = ingestion_error_class(&err);
             queue
                 .nack(&job, Nack::new(class, err.to_string()))
@@ -820,6 +877,31 @@ mod tests {
 
         assert!(body.contains("# TYPE au_kpis_ingestion_worker_loops_total counter"));
         assert!(body.contains("au_kpis_ingestion_worker_loops_total 7"));
+    }
+
+    #[test]
+    fn metrics_render_schema_hash_drift_by_source_and_dataflow() {
+        let metrics = WorkerMetrics::default();
+        let err = au_kpis_ingestion_core::IngestionError::Adapter(
+            au_kpis_adapter::AdapterError::SchemaHashDrift(Box::new(
+                au_kpis_adapter::SchemaHashDrift {
+                    source_id: SourceId::new("treasury").unwrap(),
+                    dataflow_id: DataflowId::new("treasury.budget_papers").unwrap(),
+                    parser_version: "parse_v2".to_string(),
+                    schema_key: "bp4-agency-resourcing".to_string(),
+                    expected_hash: "abc123".to_string(),
+                    actual_hash: "def456".to_string(),
+                },
+            )),
+        );
+
+        metrics.record_ingestion_error(&err);
+        let body = metrics.render_prometheus();
+
+        assert!(body.contains("# TYPE au_kpis_schema_hash_drifts_total counter"));
+        assert!(body.contains(
+            "au_kpis_schema_hash_drifts_total{source=\"treasury\",dataflow=\"treasury.budget_papers\"} 1"
+        ));
     }
 
     #[test]

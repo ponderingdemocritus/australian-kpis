@@ -126,6 +126,18 @@ groups:
           summary: Ingestion error-rate slow burn
           description: Source {{ $labels.source }} fetch errors remain elevated over the slow window.
 
+      - alert: AuKpisSchemaHashDrift
+        expr: |
+          increase(au_kpis_schema_hash_drifts_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: page
+          team: data-platform
+          slo: format-drift
+        annotations:
+          summary: Schema hash drift detected
+          description: Source {{ $labels.source }} dataflow {{ $labels.dataflow }} emitted a schema-hash drift event. Pause ingestion and review the raw artifact before accepting a new parser/schema hash.
+
       - alert: AuKpisParquetDownloadTooSlow
         expr: |
           histogram_quantile(

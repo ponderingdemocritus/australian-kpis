@@ -42,6 +42,7 @@ enum StubMode {
     TwoArtifactsPanicFirstParse,
     ParseErrorBeforeRow,
     ParseErrorAfterRow,
+    SchemaHashDriftAfterRow,
     ParseErrorAfterCancellation,
     FatalParseError,
     ReadyRowsAfterCancellation,
@@ -129,6 +130,7 @@ impl SourceAdapter for StubAdapter {
             | StubMode::TwoArtifactsPanicFirstParse
             | StubMode::ParseErrorBeforeRow
             | StubMode::ParseErrorAfterRow
+            | StubMode::SchemaHashDriftAfterRow
             | StubMode::ParseErrorAfterCancellation
             | StubMode::FatalParseError
             | StubMode::ReadyRowsAfterCancellation
@@ -283,6 +285,19 @@ impl SourceAdapter for StubAdapter {
             StubMode::ParseErrorAfterRow => Box::pin(stream::iter([
                 Ok(row),
                 Err(AdapterError::FormatDrift("bad row shape".into())),
+            ])),
+            StubMode::SchemaHashDriftAfterRow => Box::pin(stream::iter([
+                Ok(row),
+                Err(AdapterError::SchemaHashDrift(Box::new(
+                    au_kpis_adapter::SchemaHashDrift {
+                        source_id: SourceId::new("stub").unwrap(),
+                        dataflow_id: DataflowId::new("stub.cpi").unwrap(),
+                        parser_version: "parse_v2".into(),
+                        schema_key: "stub-table".into(),
+                        expected_hash: "abc123".into(),
+                        actual_hash: "def456".into(),
+                    },
+                ))),
             ])),
             StubMode::ParseErrorAfterCancellation => parse_error_after_cancellation(
                 self.cancel_token().expect("cancel token configured"),
@@ -1763,6 +1778,55 @@ async fn midstream_parse_errors_are_recorded_while_valid_rows_load() {
         .expect("count parse errors");
 
     assert_eq!(observation_count, 1);
+    assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema_hash_drift_rejects_artifact_and_fails_pipeline_even_after_row() {
+    let timescale = start_timescale("au_kpis_pipeline_schema_hash_drift")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let result = pipeline_with_pool(
+        StubMode::SchemaHashDriftAfterRow,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(IngestionError::Adapter(AdapterError::SchemaHashDrift(_)))
+        ),
+        "{result:?}"
+    );
+
+    let (observation_count, parse_error_count): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM observations), count(*) FROM parse_errors")
+            .fetch_one(&pool)
+            .await
+            .expect("count observations and parse errors");
+
+    assert_eq!(observation_count, 0);
     assert_eq!(parse_error_count, 1);
 }
 
