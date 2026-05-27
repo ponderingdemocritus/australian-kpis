@@ -645,14 +645,12 @@ jobs:
       - name: Install critcmp
         run: cargo install critcmp --locked
 
-      - name: Capture main benchmark baseline
+      - name: Capture benchmark baselines
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
           set -euo pipefail
           pr_sha="$(git rev-parse HEAD)"
-          git fetch --depth=1 origin "${BASE_REF}"
-          git checkout --detach FETCH_HEAD
           run_benchmarks() {
             local baseline="$1"
             cargo bench -p au-kpis-domain --bench observation_json --locked -- --save-baseline "${baseline}"
@@ -669,21 +667,17 @@ jobs:
               cargo bench -p au-kpis-api-http --bench parquet_stream --locked -- --save-baseline "${baseline}"
             fi
           }
+          # Measure the PR first so long-running Criterion jobs do not
+          # consistently charge runner slowdown to the PR baseline.
+          run_benchmarks pr
+          git fetch --depth=1 origin "${BASE_REF}"
+          git checkout --detach FETCH_HEAD
           run_benchmarks main
           git checkout --detach "${pr_sha}"
 
       - name: Run benchmark regression comparison
         run: |
           set -euo pipefail
-          run_benchmarks() {
-            local baseline="$1"
-            cargo bench -p au-kpis-domain --bench observation_json --locked -- --save-baseline "${baseline}"
-            cargo bench -p au-kpis-adapter-abs --bench sdmx_parse --locked -- --save-baseline "${baseline}"
-            cargo bench -p au-kpis-loader --bench copy_upsert --locked -- --save-baseline "${baseline}"
-            cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline "${baseline}"
-            cargo bench -p au-kpis-api-http --bench parquet_stream --locked -- --save-baseline "${baseline}"
-          }
-          run_benchmarks pr
           set +e
           critcmp_output="$(critcmp main pr --threshold 5 --list 2>&1)"
           critcmp_status=$?
