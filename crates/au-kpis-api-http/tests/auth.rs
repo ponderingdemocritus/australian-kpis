@@ -3,7 +3,9 @@ use std::sync::Arc;
 use au_kpis_api_http::{AppState, auth::require_api_key, router_with};
 use au_kpis_auth::{ApiKeyManager, CreateApiKeyRequest, VerifiedApiKey};
 use au_kpis_cache::CacheClient;
-use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_config::{
+    AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
+};
 use au_kpis_db::{connect, migrate};
 use au_kpis_telemetry::Telemetry;
 use au_kpis_testing::{
@@ -186,6 +188,7 @@ fn test_state(db: PgPool, cache: Arc<CacheClient>) -> AppState {
             log_level: "info".into(),
             otlp_endpoint: None,
         },
+        rate_limits: RateLimitConfig::default(),
     };
 
     AppState::new(

@@ -2,7 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
-use au_kpis_config::{AppConfig, DatabaseConfig, HttpConfig, LogFormat, TelemetryConfig};
+use au_kpis_config::{
+    AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
+};
 use au_kpis_telemetry::Telemetry;
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
@@ -64,6 +66,7 @@ fn test_state(token: CancellationToken) -> AppState {
             log_level: "info".into(),
             otlp_endpoint: None,
         },
+        rate_limits: RateLimitConfig::default(),
     };
 
     AppState::new(

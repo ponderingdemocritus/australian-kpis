@@ -10,6 +10,7 @@ use axum::{
     Router,
     error_handling::HandleErrorLayer,
     http::{HeaderValue, Method, header, header::InvalidHeaderValue},
+    middleware,
     response::IntoResponse,
     routing::get,
 };
@@ -27,6 +28,7 @@ pub mod dataflows;
 pub mod docs;
 pub mod error;
 pub mod observations;
+pub mod rate_limit;
 pub mod routes;
 pub mod search;
 pub mod series;
@@ -43,6 +45,7 @@ pub use observations::{
     ObservationsMetadata, ObservationsResponse, ObservationsRow, PaginationMetadata,
     list_observations,
 };
+pub use rate_limit::rate_limit;
 pub use routes::{HealthResponse, health, openapi};
 pub use search::{SearchQuery, SearchResponse, SearchResult, SearchResultKind, search_catalog};
 pub use series::{SeriesLookupResponse, SeriesRevisionMetadata, get_series};
@@ -62,10 +65,12 @@ pub enum RouterBuildError {
 /// Compose arbitrary routes with the standard API middleware stack.
 pub fn router_with(routes: Router<AppState>, state: AppState) -> Result<Router, RouterBuildError> {
     let cors = cors_layer(&state.config)?;
+    let rate_limit = middleware::from_fn_with_state(state.clone(), rate_limit::rate_limit);
 
     Ok(routes.with_state(state).layer(
         ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
+            .layer(rate_limit)
             .layer(cors)
             .layer(CompressionLayer::new())
             .layer(HandleErrorLayer::new(handle_timeout_error))
@@ -112,7 +117,13 @@ fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
             header::CONTENT_TYPE,
             header::HeaderName::from_static("x-api-key"),
         ])
-        .expose_headers([REQUEST_ID_HEADER]);
+        .expose_headers([
+            REQUEST_ID_HEADER,
+            header::RETRY_AFTER,
+            header::HeaderName::from_static("x-ratelimit-limit"),
+            header::HeaderName::from_static("x-ratelimit-remaining"),
+            header::HeaderName::from_static("x-ratelimit-reset"),
+        ]);
 
     if !config.http.cors_allowed_origins.is_empty() {
         let origins = config

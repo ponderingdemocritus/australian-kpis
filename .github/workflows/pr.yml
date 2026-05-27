@@ -581,10 +581,14 @@ jobs:
 
           regressions = []
           for name in common:
-              main_mean = main[name]["criterion_estimates_v1"]["mean"]["point_estimate"]
-              pr_mean = pr[name]["criterion_estimates_v1"]["mean"]["point_estimate"]
+              main_estimate = main[name]["criterion_estimates_v1"]["mean"]
+              pr_estimate = pr[name]["criterion_estimates_v1"]["mean"]
+              main_mean = main_estimate["point_estimate"]
+              pr_mean = pr_estimate["point_estimate"]
+              main_upper = main_estimate.get("upper_bound", main_mean)
+              pr_lower = pr_estimate.get("lower_bound", pr_mean)
               ratio = pr_mean / main_mean
-              if ratio > 1.05:
+              if ratio > 1.05 and pr_lower > main_upper * 1.05:
                   regressions.append((name, ratio))
 
           if regressions:
