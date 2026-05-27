@@ -110,6 +110,79 @@ jobs:
           CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: node packages/sdk/scripts/browser-runtime-check.mjs
 
+  pdf-extractor:
+    name: PDF Extractor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: "0.54.0"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Run PDF extractor unit tests
+        run: uv run --project apps/pdf-extractor pytest apps/pdf-extractor/tests
+
+      - name: Lint PDF extractor
+        run: uv run --project apps/pdf-extractor ruff check apps/pdf-extractor
+
+      - name: Typecheck PDF extractor
+        run: uv run --project apps/pdf-extractor mypy --config-file apps/pdf-extractor/pyproject.toml apps/pdf-extractor/src
+
+      - name: Start PDF extractor smoke stack
+        run: |
+          AU_KPIS_PDF_EXTRACTOR__MAX_PAGES=2 \
+            docker compose -f infra/compose/docker-compose.yml up -d --build --wait --wait-timeout 180 minio pdf-extractor
+
+      - name: Seed PDF fixture into MinIO
+        run: |
+          uv run --project apps/pdf-extractor python - <<'PY'
+          from pathlib import Path
+
+          import boto3
+          from botocore.exceptions import ClientError
+
+          bucket = "au-kpis-local"
+          key = "artifacts/fixtures/bp4-agency-resourcing.pdf"
+          fixture = Path("apps/pdf-extractor/tests/fixtures/bp4_agency_resourcing_tables_2026_27.pdf")
+          client = boto3.client(
+              "s3",
+              endpoint_url="http://127.0.0.1:9000",
+              region_name="us-east-1",
+              aws_access_key_id="au_kpis_minio",
+              aws_secret_access_key="au_kpis_minio_dev_password",
+          )
+          try:
+              client.create_bucket(Bucket=bucket)
+          except ClientError as err:
+              code = err.response.get("Error", {}).get("Code")
+              if code not in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
+                  raise
+          client.upload_file(str(fixture), bucket, key)
+          PY
+
+      - name: Run PDF extractor k6 smoke
+        env:
+          AU_KPIS_PDF_BASE_URL: http://127.0.0.1:8010
+          AU_KPIS_PDF_S3_KEY: artifacts/fixtures/bp4-agency-resourcing.pdf
+        run: k6 run apps/bench/pdf-extractor-smoke.js
+
+      - name: Stop PDF extractor smoke stack
+        if: always()
+        run: docker compose -f infra/compose/docker-compose.yml down -v
+
   sdk-integration:
     name: SDK Integration (compose)
     runs-on: ubuntu-latest
@@ -1398,6 +1471,7 @@ jobs:
       - rust-check
       - typescript
       - sdk-runtime
+      - pdf-extractor
       - sdk-integration
       - web-e2e
       - lint-format

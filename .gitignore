@@ -56,7 +56,9 @@ benches/baselines/*/estimates.json
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
+.venv-*/
 venv/
 .pytest_cache/
 .ruff_cache/
