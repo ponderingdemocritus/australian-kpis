@@ -64,6 +64,22 @@ async fn has_compression_policy(pool: &PgPool, name: &str) -> bool {
     row.0
 }
 
+async fn index_exists(pool: &PgPool, name: &str) -> bool {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (
+            SELECT 1
+            FROM   pg_indexes
+            WHERE  schemaname = 'public'
+            AND    indexname = $1
+        )",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .expect("query index existence");
+    row.0
+}
+
 async fn column_default(pool: &PgPool, table: &str, column: &str) -> Option<String> {
     sqlx::query_scalar(
         "SELECT column_default
@@ -174,6 +190,20 @@ async fn migration_creates_hypertable_and_compression_policy() {
         assert!(
             table_names.contains(&expected),
             "expected `{expected}` to exist; found {table_names:?}"
+        );
+    }
+
+    for expected in [
+        "dataflows_search_tsv_gin",
+        "dataflows_name_trgm_gin",
+        "dataflows_description_trgm_gin",
+        "measures_search_tsv_gin",
+        "measures_name_trgm_gin",
+        "measures_description_trgm_gin",
+    ] {
+        assert!(
+            index_exists(&pool, expected).await,
+            "expected catalog search index `{expected}` to exist"
         );
     }
 }

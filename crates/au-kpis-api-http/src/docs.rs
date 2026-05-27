@@ -13,6 +13,7 @@ use crate::{
         PaginationMetadata,
     },
     routes::{__path_health, __path_openapi, HealthResponse},
+    search::{__path_search_catalog, SearchQuery, SearchResponse, SearchResult, SearchResultKind},
     series::{__path_get_series, SeriesLookupResponse, SeriesRevisionMetadata},
 };
 
@@ -31,7 +32,8 @@ use crate::{
         get_dataflow,
         get_dataflow_codelist,
         list_observations,
-        get_series
+        get_series,
+        search_catalog
     ),
     components(schemas(
         au_kpis_domain::Code,
@@ -50,12 +52,17 @@ use crate::{
         ObservationsRow,
         PaginationMetadata,
         ProblemDetails,
+        SearchQuery,
+        SearchResponse,
+        SearchResult,
+        SearchResultKind,
         SeriesLookupResponse,
         SeriesRevisionMetadata
     )),
     tags(
         (name = "dataflows", description = "Dataflow catalog and codelists"),
         (name = "observations", description = "Time-series observations"),
+        (name = "search", description = "Ranked catalog search"),
         (name = "series", description = "Series metadata lookups")
     )
 )]
