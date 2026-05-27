@@ -90,8 +90,11 @@ fn issue_37_benchmark_contract_is_wired() {
 
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let merge_workflow = fs::read_to_string(root.join(".github/workflows/merge.yml"))
+        .expect("read merge queue workflow");
     assert!(
-        pr_workflow.contains("merge_group:"),
+        merge_workflow.contains("merge_group:")
+            && merge_workflow.contains("uses: ./.github/workflows/pr.yml"),
         "benchmark regression gate should run for merge queue batches"
     );
     assert!(
@@ -173,7 +176,7 @@ fn issue_38_k6_smoke_contract_is_wired() {
     );
     assert!(
         pr_workflow.contains("AU_KPIS_STAGING_BASE_URL")
-            && pr_workflow.contains("github.event_name == 'merge_group'"),
+            && pr_workflow.contains("inputs.merge_queue == true"),
         "merge-queue smoke flow should target the configured staging API"
     );
 
@@ -201,6 +204,8 @@ fn issue_39_schemathesis_contract_is_wired() {
 
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let merge_workflow = fs::read_to_string(root.join(".github/workflows/merge.yml"))
+        .expect("read merge queue workflow");
     let contract_config = fs::read_to_string(root.join("tests/contract/schemathesis.toml"))
         .expect("read schemathesis PR config");
     let deep_config = fs::read_to_string(root.join("tests/contract/schemathesis.deep.toml"))
@@ -228,7 +233,9 @@ fn issue_39_schemathesis_contract_is_wired() {
         "PR contract workflow should emit a JUnit report artifact"
     );
     assert!(
-        pr_workflow.contains("merge_group:") && pr_workflow.contains("- contract"),
+        merge_workflow.contains("merge_group:")
+            && merge_workflow.contains("uses: ./.github/workflows/pr.yml")
+            && pr_workflow.contains("- contract"),
         "contract checks should remain blocking in merge queue batches through CI OK"
     );
 
@@ -303,6 +310,75 @@ fn issue_39_schemathesis_contract_is_wired() {
             && testing_docs.contains("schemathesis.deep.toml"),
         "CI and testing docs should document PR and nightly contract fuzzing"
     );
+}
+
+#[test]
+fn issue_15_merge_queue_contract_is_wired() {
+    let root = repo_root();
+
+    let pr_workflow =
+        fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let merge_workflow = fs::read_to_string(root.join(".github/workflows/merge.yml"))
+        .expect("read merge queue workflow");
+    let codeowners = fs::read_to_string(root.join(".github/CODEOWNERS")).expect("read CODEOWNERS");
+    let ci_docs = fs::read_to_string(root.join("docs/ci.md")).expect("read CI docs");
+
+    assert!(
+        pr_workflow.contains("workflow_call:")
+            && pr_workflow.contains("merge_queue:")
+            && pr_workflow.contains("type: boolean"),
+        "PR workflow should be reusable by the merge-queue workflow"
+    );
+    assert!(
+        !pr_workflow.contains("  merge_group:"),
+        "merge_group should be owned by the dedicated merge queue workflow"
+    );
+
+    for expected in [
+        "name: Merge Queue",
+        "merge_group:",
+        "checks_requested",
+        "uses: ./.github/workflows/pr.yml",
+        "merge_queue: true",
+        "secrets: inherit",
+    ] {
+        assert!(
+            merge_workflow.contains(expected),
+            "merge queue workflow should contain `{expected}`"
+        );
+    }
+
+    for expected in [
+        "name: Smoke (k6)",
+        "name: Bench Regression",
+        "name: Contract (schemathesis)",
+        "CI OK",
+        "inputs.merge_queue == true",
+    ] {
+        assert!(
+            pr_workflow.contains(expected),
+            "merge queue should reuse the blocking PR gate `{expected}`"
+        );
+    }
+
+    assert!(
+        codeowners.contains("* @ponderingdemocritus"),
+        "CODEOWNERS should define a default owner for required review"
+    );
+
+    for expected in [
+        "GitHub merge queue cannot be enabled",
+        "personal account",
+        "add a `merge_queue` rule to `main`",
+        "Required CODEOWNERS review is enforced on `main`",
+        "Signed commits are required on `main`",
+        "A failing merge group fails `CI OK`",
+    ] {
+        assert!(
+            ci_docs.contains(expected),
+            "CI docs should document branch protection setting `{expected}`"
+        );
+    }
 }
 
 #[test]

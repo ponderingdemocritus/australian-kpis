@@ -2,7 +2,8 @@
 
 `Spec.md` is the source of truth for required gates. The pull request workflow
 groups those gates into parallel GitHub Actions jobs and aggregates them through
-the single `CI OK` status check.
+the single `CI OK` status check. The merge-queue workflow reuses that full gate
+set with merge-queue staging behavior enabled.
 
 ## Pull request workflow
 
@@ -21,11 +22,43 @@ the single `CI OK` status check.
 - API container build plus Trivy HIGH/CRITICAL image scan
 - k6 smoke checks against the docker-compose stack on pull requests and the
   configured staging API in merge queue
-- Advisory Criterion bench comparison through `critcmp`
+- Blocking Criterion bench comparison through `critcmp`
 - Advisory Codex structured review when repository secrets allow it
 
 Rust jobs install `sccache` and use the GitHub Actions backend. TypeScript jobs
 restore the pnpm store and `.turbo` cache before running Turborepo tasks.
+
+## Merge queue and branch protection
+
+`.github/workflows/merge.yml` is the only workflow that listens for
+`merge_group` events. It calls `.github/workflows/pr.yml` with
+`merge_queue: true`, so every merge group runs the full pull-request flow plus
+the merge-queue-specific k6 staging smoke target. Branch protection should use
+the single aggregate status instead of individual jobs, because `CI OK` fails
+when any required upstream job fails or is cancelled.
+
+Currently enforceable repository settings for `main`:
+
+- Required status check is `CI OK`.
+- Required CODEOWNERS review is enforced on `main` through `.github/CODEOWNERS`.
+- Signed commits are required on `main`.
+
+GitHub merge queue cannot be enabled while this repository is owned by a
+personal account. GitHub only supports pull request merge queues for public
+repositories owned by an organization, or private repositories owned by
+organizations using Enterprise Cloud. After transferring the repository to an
+organization, add a `merge_queue` rule to `main` in the existing `merge`
+ruleset with these parameters. A failing merge group fails `CI OK`, which
+ejects the whole batch instead of partially landing any pull request from that
+group.
+
+- `grouping_strategy`: `ALLGREEN`
+- `merge_method`: `MERGE`
+- `min_entries_to_merge`: `1`
+- `max_entries_to_merge`: `5`
+- `max_entries_to_build`: `5`
+- `min_entries_to_merge_wait_minutes`: `5`
+- `check_response_timeout_minutes`: `60`
 
 ## k6 smoke gate
 

@@ -7,9 +7,13 @@ on:
       - reopened
       - synchronize
       - ready_for_review
-  merge_group:
-    types:
-      - checks_requested
+  workflow_call:
+    inputs:
+      merge_queue:
+        description: Run merge-queue-specific gate behavior.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('merge-{0}', github.sha) }}
@@ -456,14 +460,14 @@ jobs:
           fi
 
       - name: Configure local smoke target
-        if: github.event_name != 'merge_group'
+        if: ${{ inputs.merge_queue != true }}
         run: |
           set -euo pipefail
           echo "AU_KPIS_BASE_URL=http://127.0.0.1:3000" >> "$GITHUB_ENV"
           echo "K6_ENVIRONMENT=pr-compose" >> "$GITHUB_ENV"
 
       - name: Configure staging smoke target
-        if: github.event_name == 'merge_group'
+        if: ${{ inputs.merge_queue == true }}
         env:
           AU_KPIS_STAGING_BASE_URL: ${{ vars.AU_KPIS_STAGING_BASE_URL }}
         run: |
@@ -476,15 +480,15 @@ jobs:
           echo "K6_ENVIRONMENT=staging" >> "$GITHUB_ENV"
 
       - name: Start compose smoke stack
-        if: github.event_name != 'merge_group'
+        if: ${{ inputs.merge_queue != true }}
         run: docker compose -f infra/compose/docker-compose.yml up -d --build api influxdb
 
       - name: Start merge-queue metrics store
-        if: github.event_name == 'merge_group'
+        if: ${{ inputs.merge_queue == true }}
         run: docker compose -f infra/compose/docker-compose.yml up -d influxdb
 
       - name: Apply migrations
-        if: github.event_name != 'merge_group'
+        if: ${{ inputs.merge_queue != true }}
         run: |
           set -euo pipefail
           for _ in $(seq 1 60); do
@@ -499,14 +503,14 @@ jobs:
                 psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
 
       - name: Seed smoke fixture data
-        if: github.event_name != 'merge_group'
+        if: ${{ inputs.merge_queue != true }}
         run: |
           docker compose -f infra/compose/docker-compose.yml exec -T postgres \
             psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
             < apps/web/e2e/fixtures/explorer.sql
 
       - name: Wait for local API readiness
-        if: github.event_name != 'merge_group'
+        if: ${{ inputs.merge_queue != true }}
         run: |
           set -euo pipefail
           for _ in $(seq 1 120); do
@@ -606,6 +610,9 @@ jobs:
           critcmp_status=$?
           set -e
           printf '%s\n' "${critcmp_output}"
+          if [ "${critcmp_status}" -ne 0 ]; then
+            printf 'critcmp reported threshold crossings; checking confidence bounds before failing.\n'
+          fi
           critcmp --export main > target/criterion-main.json
           critcmp --export pr > target/criterion-pr.json
           python3 <<'PY'
@@ -886,6 +893,7 @@ jobs:
 
   codex-review:
     name: Codex Structured Review
+    if: ${{ inputs.merge_queue != true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
