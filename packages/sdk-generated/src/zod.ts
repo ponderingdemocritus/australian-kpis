@@ -121,6 +121,20 @@ type ObservationsRow = {
 type PaginationMetadata = Partial<{
   next_cursor: string | null;
 }>;
+type SearchResponse = {
+  query: string;
+  results: Array<SearchResult>;
+};
+type SearchResult = {
+  dataflow_ids: Array<DataflowId>;
+  description?: (string | null) | undefined;
+  id: string;
+  kind: SearchResultKind;
+  name: string;
+  score: number;
+  source_id?: (null | SourceId) | undefined;
+};
+type SearchResultKind = "dataflow" | "measure";
 type Series = {
   active: boolean;
   dataflow_id: DataflowId;
@@ -266,6 +280,21 @@ const ObservationsResponse: z.ZodType<ObservationsResponse> = z
     pagination: PaginationMetadata,
   })
   .passthrough();
+const SearchResultKind = z.enum(["dataflow", "measure"]);
+const SearchResult: z.ZodType<SearchResult> = z
+  .object({
+    dataflow_ids: z.array(DataflowId),
+    description: z.union([z.string(), z.null()]).optional(),
+    id: z.string(),
+    kind: SearchResultKind,
+    name: z.string(),
+    score: z.number(),
+    source_id: z.union([z.null(), SourceId]).optional(),
+  })
+  .passthrough();
+const SearchResponse: z.ZodType<SearchResponse> = z
+  .object({ query: z.string(), results: z.array(SearchResult) })
+  .passthrough();
 const Observation: z.ZodType<Observation> = z
   .object({
     attributes: z.record(z.string()),
@@ -322,6 +351,9 @@ const ProblemDetails = z
     type: z.string(),
   })
   .passthrough();
+const SearchQuery = z
+  .object({ limit: z.union([z.number(), z.null()]).optional(), q: z.string() })
+  .passthrough();
 
 export const schemas = {
   DimensionId,
@@ -348,10 +380,14 @@ export const schemas = {
   ObservationsRow,
   PaginationMetadata,
   ObservationsResponse,
+  SearchResultKind,
+  SearchResult,
+  SearchResponse,
   Observation,
   SeriesRevisionMetadata,
   Series,
   SeriesLookupResponse,
   DataflowsQuery,
   ProblemDetails,
+  SearchQuery,
 };

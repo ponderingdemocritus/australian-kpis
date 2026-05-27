@@ -171,6 +171,10 @@ async fn openapi_route_serves_generated_spec() {
         "getSeries"
     );
     assert_eq!(
+        parsed["paths"]["/v1/search"]["get"]["operationId"],
+        "searchCatalog"
+    );
+    assert_eq!(
         parsed["paths"]["/v1/health"]["get"]["responses"]["408"]["content"]["application/problem+json"]
             ["schema"]["$ref"],
         "#/components/schemas/ProblemDetails"

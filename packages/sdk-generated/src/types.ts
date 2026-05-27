@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/search`. */
+        get: operations["searchCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/series/{dataflow}/{series_key}": {
         parameters: {
             query?: never;
@@ -359,6 +376,47 @@ export interface components {
             /** @description Problem type URI. */
             type: string;
         };
+        /** @description Query parameters for `GET /v1/search`. */
+        SearchQuery: {
+            /**
+             * Format: int32
+             * @description Maximum number of catalog results to return.
+             */
+            limit?: number | null;
+            /** @description Search text. Blank queries are rejected. */
+            q: string;
+        };
+        /** @description Response envelope for `GET /v1/search`. */
+        SearchResponse: {
+            /** @description Normalized query text used for ranking. */
+            query: string;
+            /** @description Ranked catalog matches. */
+            results: components["schemas"]["SearchResult"][];
+        };
+        /** @description A ranked catalog search result. */
+        SearchResult: {
+            /** @description Dataflows directly represented by this match. */
+            dataflow_ids: components["schemas"]["DataflowId"][];
+            /** @description Optional catalog description. */
+            description?: string | null;
+            /** @description Stable catalog identifier. */
+            id: string;
+            /** @description Matched catalog object type. */
+            kind: components["schemas"]["SearchResultKind"];
+            /** @description Human-readable name. */
+            name: string;
+            /**
+             * Format: double
+             * @description Relevance score. Larger scores rank first.
+             */
+            score: number;
+            source_id?: null | components["schemas"]["SourceId"];
+        };
+        /**
+         * @description Catalog object types returned by search.
+         * @enum {string}
+         */
+        SearchResultKind: "dataflow" | "measure";
         /**
          * @description One time series within a dataflow. `dimensions` is the sorted bag of
          *     `(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
@@ -712,6 +770,51 @@ export interface operations {
                 };
             };
             /** @description OpenAPI generation failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    searchCatalog: {
+        parameters: {
+            query: {
+                /** @description Search text. */
+                q: string;
+                /** @description Maximum number of results, capped at 100. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ranked catalog search results. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description Invalid query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal error. */
             500: {
                 headers: {
                     [name: string]: unknown;

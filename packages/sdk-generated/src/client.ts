@@ -359,6 +359,73 @@ export interface ProblemDetails {
 }
 
 /**
+ * Maximum number of catalog results to return.
+ * @minimum 0
+ */
+export type SearchQueryLimit = number | null;
+
+/**
+ * Query parameters for `GET /v1/search`.
+ */
+export interface SearchQuery {
+  /**
+   * Maximum number of catalog results to return.
+   * @minimum 0
+   */
+  limit?: SearchQueryLimit;
+  /** Search text. Blank queries are rejected. */
+  q: string;
+}
+
+/**
+ * Response envelope for `GET /v1/search`.
+ */
+export interface SearchResponse {
+  /** Normalized query text used for ranking. */
+  query: string;
+  /** Ranked catalog matches. */
+  results: SearchResult[];
+}
+
+/**
+ * Optional catalog description.
+ */
+export type SearchResultDescription = string | null;
+
+export type SearchResultSourceId = null | SourceId;
+
+/**
+ * A ranked catalog search result.
+ */
+export interface SearchResult {
+  /** Dataflows directly represented by this match. */
+  dataflow_ids: DataflowId[];
+  /** Optional catalog description. */
+  description?: SearchResultDescription;
+  /** Stable catalog identifier. */
+  id: string;
+  /** Matched catalog object type. */
+  kind: SearchResultKind;
+  /** Human-readable name. */
+  name: string;
+  /** Relevance score. Larger scores rank first. */
+  score: number;
+  source_id?: SearchResultSourceId;
+}
+
+/**
+ * Catalog object types returned by search.
+ */
+export type SearchResultKind = typeof SearchResultKind[keyof typeof SearchResultKind];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SearchResultKind = {
+  dataflow: 'dataflow',
+  measure: 'measure',
+} as const;
+
+/**
  * Dimension values keyed by typed dimension ids and code ids. Stored
 sorted (via `BTreeMap`) so iteration order is stable across
 serialisation + re-hashing.
@@ -497,6 +564,18 @@ limit?: number;
 };
 
 export type Openapi200 = { [key: string]: unknown };
+
+export type SearchCatalogParams = {
+/**
+ * Search text.
+ */
+q: string;
+/**
+ * Maximum number of results, capped at 100.
+ * @minimum 0
+ */
+limit?: number;
+};
 
 /**
  * @summary `GET /v1/dataflows`.
@@ -857,6 +936,67 @@ export const openapi = async ( options?: RequestInit): Promise<openapiResponse> 
 
   const data: openapiResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as openapiResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/search`.
+ */
+export type searchCatalogResponse200 = {
+  data: SearchResponse
+  status: 200
+}
+
+export type searchCatalogResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type searchCatalogResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type searchCatalogResponseSuccess = (searchCatalogResponse200) & {
+  headers: Headers;
+};
+export type searchCatalogResponseError = (searchCatalogResponse400 | searchCatalogResponse500) & {
+  headers: Headers;
+};
+
+export type searchCatalogResponse = (searchCatalogResponseSuccess | searchCatalogResponseError)
+
+export const getSearchCatalogUrl = (params: SearchCatalogParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/v1/search?${stringifiedParams}` : `/v1/search`
+}
+
+export const searchCatalog = async (params: SearchCatalogParams, options?: RequestInit): Promise<searchCatalogResponse> => {
+
+  const res = await fetch(getSearchCatalogUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: searchCatalogResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as searchCatalogResponse
 }
 
 

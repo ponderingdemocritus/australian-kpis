@@ -614,6 +614,112 @@ expression: emitted_spec()
         ],
         "type": "object"
       },
+      "SearchQuery": {
+        "description": "Query parameters for `GET /v1/search`.",
+        "properties": {
+          "limit": {
+            "description": "Maximum number of catalog results to return.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "q": {
+            "description": "Search text. Blank queries are rejected.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      },
+      "SearchResponse": {
+        "description": "Response envelope for `GET /v1/search`.",
+        "properties": {
+          "query": {
+            "description": "Normalized query text used for ranking.",
+            "type": "string"
+          },
+          "results": {
+            "description": "Ranked catalog matches.",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ],
+        "type": "object"
+      },
+      "SearchResult": {
+        "description": "A ranked catalog search result.",
+        "properties": {
+          "dataflow_ids": {
+            "description": "Dataflows directly represented by this match.",
+            "items": {
+              "$ref": "#/components/schemas/DataflowId"
+            },
+            "type": "array"
+          },
+          "description": {
+            "description": "Optional catalog description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Stable catalog identifier.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SearchResultKind",
+            "description": "Matched catalog object type."
+          },
+          "name": {
+            "description": "Human-readable name.",
+            "type": "string"
+          },
+          "score": {
+            "description": "Relevance score. Larger scores rank first.",
+            "format": "double",
+            "type": "number"
+          },
+          "source_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceId",
+                "description": "Source id for dataflow results."
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "score",
+          "dataflow_ids"
+        ],
+        "type": "object"
+      },
+      "SearchResultKind": {
+        "description": "Catalog object types returned by search.",
+        "enum": [
+          "dataflow",
+          "measure"
+        ],
+        "type": "string"
+      },
       "Series": {
         "description": "One time series within a dataflow. `dimensions` is the sorted bag of\n`(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.",
         "properties": {
@@ -1212,6 +1318,77 @@ expression: emitted_spec()
         "tags": []
       }
     },
+    "/v1/search": {
+      "get": {
+        "operationId": "searchCatalog",
+        "parameters": [
+          {
+            "description": "Search text.",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum number of results, capped at 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Ranked catalog search results.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public CDN cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid query."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal error."
+          }
+        },
+        "summary": "`GET /v1/search`.",
+        "tags": [
+          "search"
+        ]
+      }
+    },
     "/v1/series/{dataflow}/{series_key}": {
       "get": {
         "operationId": "getSeries",
@@ -1292,6 +1469,10 @@ expression: emitted_spec()
     {
       "description": "Time-series observations",
       "name": "observations"
+    },
+    {
+      "description": "Ranked catalog search",
+      "name": "search"
     },
     {
       "description": "Series metadata lookups",
