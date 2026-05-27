@@ -37,6 +37,10 @@ curl http://127.0.0.1:3000/v1/health
 curl http://127.0.0.1:3000/v1/openapi.json
 ```
 
+For the end-to-end Phase 2 path, follow the
+[`docs/demos/phase-2.md`](./docs/demos/phase-2.md) demo. It walks through
+setup, ABS CPI ingestion, API and SDK queries, and charting in the Explorer.
+
 The compose stack exposes:
 
 | Service | URL |
