@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, process::Command};
 
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -526,6 +526,152 @@ fn issue_50_parquet_stream_benchmark_contract_is_wired() {
         assert!(
             baseline.contains(expected),
             "baseline summary should document `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn issue_62_full_load_test_contract_is_wired() {
+    let root = repo_root();
+
+    let full_load = fs::read_to_string(root.join("apps/bench/full-load.js"))
+        .expect("issue #62 should add a dedicated full-load k6 scenario");
+    for expected in [
+        "constant-arrival-rate",
+        "AU_KPIS_FULL_LOAD_RPS || '1000'",
+        "rate: targetRate",
+        "duration: '10m'",
+        "'http_req_duration{endpoint:observations}': ['p(99)<1000']",
+        "http_req_failed: ['rate<0.001']",
+        "dropped_iterations: ['count==0']",
+        "'Accept-Encoding': 'identity'",
+        "responseType: 'none'",
+        "/v1/observations?dataflow=abs.cpi",
+    ] {
+        assert!(
+            full_load.contains(expected),
+            "full-load k6 scenario should contain `{expected}`"
+        );
+    }
+
+    let nightly = fs::read_to_string(root.join(".github/workflows/k6-nightly.yml"))
+        .expect("read k6 nightly workflow");
+    for expected in [
+        "- full-load",
+        "apps/bench/full-load.js",
+        "full-load-summary.json",
+    ] {
+        assert!(
+            nightly.contains(expected),
+            "k6 workflow should expose full-load manual dispatch via `{expected}`"
+        );
+    }
+
+    let api_observations =
+        fs::read_to_string(root.join("crates/au-kpis-api-http/src/observations.rs"))
+            .expect("read observations module");
+    for expected in [
+        "PARQUET_SCALE_VALIDATION_ROWS: usize = 10_000_000",
+        "PARQUET_SCALE_VALIDATION_BUDGET: Duration = Duration::from_secs(30)",
+    ] {
+        assert!(
+            api_observations.contains(expected),
+            "Parquet benchmark support should contain `{expected}`"
+        );
+    }
+    assert!(
+        root.join("crates/au-kpis-api-http/tests/parquet_scale.rs")
+            .is_file(),
+        "issue #62 should provide a 10M-row Parquet scale validation test"
+    );
+
+    let report = fs::read_to_string(root.join("docs/perf/load-test-2026-05.md"))
+        .expect("issue #62 should commit the May 2026 load-test report");
+    for expected in [
+        "1000 rps",
+        "p99",
+        "<1s",
+        "error rate <0.1%",
+        "10M rows",
+        "<30 seconds",
+        "Measured headroom",
+    ] {
+        assert!(
+            report.contains(expected),
+            "load-test report should contain `{expected}`"
+        );
+    }
+
+    let capacity = fs::read_to_string(root.join("docs/perf/capacity-plan.md"))
+        .expect("issue #62 should add or update the capacity plan");
+    for expected in [
+        "Rows-per-second per instance",
+        "1000 rps",
+        "Parquet 10M",
+        "headroom",
+        "reviewed quarterly",
+    ] {
+        assert!(
+            capacity.contains(expected),
+            "capacity plan should contain `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn issue_62_k6_comment_supports_full_load_k6_export() {
+    let root = repo_root();
+    let scratch = root.join("target/testing/issue-62-k6-comment");
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(scratch.join("current")).expect("create current k6 summary dir");
+    fs::create_dir_all(scratch.join("baseline")).expect("create baseline k6 summary dir");
+
+    fs::write(
+        scratch.join("current/full-load-summary.json"),
+        r#"{
+  "metrics": {
+    "http_req_duration{endpoint:observations}": {"p(99)": 6.956},
+    "http_req_failed": {"passes": 0, "fails": 600001, "value": 0},
+    "dropped_iterations": {"rate": 0, "count": 0}
+  }
+}"#,
+    )
+    .expect("write current k6 summary");
+    fs::write(
+        scratch.join("baseline/full-load-summary.json"),
+        r#"{
+  "metrics": {
+    "http_req_duration{endpoint:observations}": {"values": {"p(99)": 10.0}},
+    "http_req_failed": {"values": {"rate": 0.0005}},
+    "dropped_iterations": {"values": {"count": 2}}
+  }
+}"#,
+    )
+    .expect("write baseline k6 summary");
+
+    let output = scratch.join("comment.md");
+    let status = Command::new("python3")
+        .current_dir(root)
+        .arg("tools/ci/k6_pr_comment.py")
+        .arg("--current")
+        .arg(scratch.join("current"))
+        .arg("--baseline")
+        .arg(scratch.join("baseline"))
+        .arg("--output")
+        .arg(&output)
+        .status()
+        .expect("run k6 PR comment script");
+    assert!(status.success(), "k6 PR comment script should succeed");
+
+    let comment = fs::read_to_string(output).expect("read k6 PR comment");
+    for expected in [
+        "| full-load | HTTP p99 | 7.0 ms | 10.0 ms | -30.44% |",
+        "| full-load | Failure rate | 0.000% | 0.050% | -100.00% |",
+        "| full-load | Dropped iterations | 0 | 2 | -100.00% |",
+    ] {
+        assert!(
+            comment.contains(expected),
+            "k6 PR comment should render `{expected}`"
         );
     }
 }

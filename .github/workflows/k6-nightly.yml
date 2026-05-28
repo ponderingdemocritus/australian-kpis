@@ -14,6 +14,7 @@ on:
           - all
           - sustained
           - burst
+          - full-load
       pr_number:
         description: Optional PR number for a comparison comment
         required: false
@@ -96,6 +97,20 @@ jobs:
             --tag environment=staging \
             --tag github_run_id="${GITHUB_RUN_ID}" \
             apps/bench/burst.js
+
+      - name: Run full observation load
+        id: full_load
+        if: env.REQUESTED_SCENARIO == 'full-load'
+        continue-on-error: true
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.AU_KPIS_SMOKE_API_KEY }}
+        run: |
+          set -euo pipefail
+          k6 run --out "${K6_OUT}" \
+            --summary-export target/k6/full-load-summary.json \
+            --tag environment=staging \
+            --tag github_run_id="${GITHUB_RUN_ID}" \
+            apps/bench/full-load.js
 
       - name: Download latest nightly baseline
         if: github.event_name == 'pull_request' || github.event.inputs.pr_number != ''
@@ -183,5 +198,5 @@ jobs:
           retention-days: 30
 
       - name: Fail on k6 threshold regression
-        if: steps.sustained.outcome == 'failure' || steps.burst.outcome == 'failure'
+        if: steps.sustained.outcome == 'failure' || steps.burst.outcome == 'failure' || steps.full_load.outcome == 'failure'
         run: exit 1
