@@ -372,6 +372,66 @@ fn parse_xls_rows(bytes: Vec<u8>) -> Result<Vec<Vec<String>>, AdapterError> {
         .collect())
 }
 
+/// Parse one arbitrary CSV byte slice through the RBA CSV parser core for
+/// cargo-fuzz.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub async fn parse_csv_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
+    let input = bytes::Bytes::copy_from_slice(bytes);
+    let io_stream = stream::iter([Ok::<_, io::Error>(input)]);
+    let reader = StreamReader::new(io_stream);
+    let mut csv = AsyncReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .create_reader(reader);
+    let mut records = csv.records();
+    let mut rows = Vec::new();
+    while let Some(record) = records.next().await {
+        let record = record.map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
+        rows.push(record.iter().map(|cell| cell.trim().to_string()).collect());
+    }
+    let artifact = fuzz_artifact(
+        bytes,
+        "https://www.rba.gov.au/statistics/tables/csv/g1-data.csv",
+    );
+    parse_table_rows(rows, &artifact, fuzz_ingested_at()).map(|rows| rows.len())
+}
+
+/// Parse one arbitrary XLS/XLSX byte slice through the RBA XLS parser core for
+/// cargo-fuzz.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
+    let rows = parse_xls_rows(bytes.to_vec())?;
+    let artifact = fuzz_artifact(
+        bytes,
+        "https://www.rba.gov.au/statistics/tables/xls/a1-data.xlsx",
+    );
+    parse_table_rows(rows, &artifact, fuzz_ingested_at()).map(|rows| rows.len())
+}
+
+#[cfg(feature = "fuzzing")]
+fn fuzz_artifact(bytes: &[u8], source_url: &str) -> ArtifactRef {
+    let id = au_kpis_domain::ArtifactId::of_content(bytes);
+    ArtifactRef {
+        id,
+        source_id: SourceId::new("rba").expect("static source id is valid"),
+        source_url: source_url.to_string(),
+        content_type: "application/octet-stream".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: StorageKey::canonical_for(&id).to_string(),
+        size_bytes: bytes.len() as u64,
+        fetched_at: fuzz_ingested_at(),
+    }
+}
+
+#[cfg(feature = "fuzzing")]
+fn fuzz_ingested_at() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+        .single()
+        .expect("valid fuzz timestamp")
+}
+
 fn cell_to_string(cell: &Data) -> String {
     match cell {
         Data::Empty => String::new(),

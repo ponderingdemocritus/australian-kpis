@@ -1,0 +1,48 @@
+[package]
+name = "au-kpis-parser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/ponderingdemocritus/australian-kpis"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+au-kpis-adapter-abs = { path = "../crates/adapters/abs" }
+au-kpis-adapter-apra = { path = "../crates/adapters/apra", features = ["fuzzing"] }
+au-kpis-adapter-rba = { path = "../crates/adapters/rba", features = ["fuzzing"] }
+au-kpis-pdf-client = { path = "../crates/au-kpis-pdf-client" }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+tokio = { version = "1", features = ["rt"] }
+
+[[bin]]
+name = "sdmx_json"
+path = "fuzz_targets/sdmx_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xls"
+path = "fuzz_targets/xls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "csv"
+path = "fuzz_targets/csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pdf_response"
+path = "fuzz_targets/pdf_response.rs"
+test = false
+doc = false
+bench = false

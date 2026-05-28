@@ -33,6 +33,14 @@ python3 tools/ci/mutation_report.py \
   --json target/mutation/mutation-report.json \
   --issue-body target/mutation/add-test-issue.md
 
+# Nightly parser fuzz targets, normally run by GitHub Actions for 30 minutes
+# each. Use -runs=1 for a local smoke check before changing the target budget.
+python3 tools/ci/seed_fuzz_corpora.py
+cargo +nightly-2025-10-01 fuzz run sdmx_json -- -runs=1
+cargo +nightly-2025-10-01 fuzz run xls -- -runs=1
+cargo +nightly-2025-10-01 fuzz run csv -- -runs=1
+cargo +nightly-2025-10-01 fuzz run pdf_response -- -runs=1
+
 # Contract fuzzing against a running API
 schemathesis --config-file tests/contract/schemathesis.toml run \
   --checks all \
@@ -95,3 +103,12 @@ requires at least a 70% mutation score and uploads the retained
 Surviving or timed-out mutants are summarized by `tools/ci/mutation_report.py`.
 When the scheduled run finds survivors, the workflow opens a follow-up issue
 labeled `add test` so the missing coverage is tracked as normal backlog work.
+
+## Parser fuzzing
+
+`fuzz/` contains `cargo-fuzz` targets for the parser families identified in the
+spec: ABS SDMX-JSON, RBA/APRA XLS, RBA CSV, and PDF sidecar response JSON.
+Corpora are seeded from committed adapter fixtures and the curated PDF sidecar
+response sample. The nightly workflow keeps newly discovered crashing inputs in
+the `cargo-fuzz-artifacts` artifact so they can be minimized and promoted into
+the committed corpus with the associated fix.

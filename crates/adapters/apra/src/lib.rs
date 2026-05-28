@@ -363,6 +363,36 @@ fn parse_xls_workbook(
     Ok(parsed)
 }
 
+/// Parse one arbitrary XLS/XLSX byte slice through the APRA XLS parser core for
+/// cargo-fuzz.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
+    let id = ArtifactId::of_content(bytes);
+    let source_url = "https://www.apra.gov.au/sites/default/files/centralised.xlsx";
+    let artifact = ArtifactRef {
+        id,
+        source_id: SourceId::new("apra").expect("static source id is valid"),
+        source_url: source_url.into(),
+        content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+        response_headers: BTreeMap::new(),
+        storage_key: StorageKey::canonical_for(&id).to_string(),
+        size_bytes: bytes.len() as u64,
+        fetched_at: fuzz_ingested_at(),
+    };
+    let provenance =
+        release_url_provenance_for_parse(source_url).expect("static APRA URL has provenance");
+    parse_xls_workbook(bytes.to_vec(), artifact, provenance, fuzz_ingested_at())
+        .map(|rows| rows.len())
+}
+
+#[cfg(feature = "fuzzing")]
+fn fuzz_ingested_at() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+        .single()
+        .expect("valid fuzz timestamp")
+}
+
 struct SheetParseContext<'a> {
     sheet_name: &'a str,
     table_title: &'a str,

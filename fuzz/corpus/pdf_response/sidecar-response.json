@@ -1,0 +1,32 @@
+{
+  "artifact_key": "artifacts/fixtures/bp4-agency-resourcing.pdf",
+  "backend": {
+    "kind": "deterministic",
+    "name": "pdfplumber+camelot",
+    "version": "0.11.0+0.11.0",
+    "model_sha256": null
+  },
+  "tables": [
+    {
+      "page": 12,
+      "bbox": [72.0, 120.0, 540.0, 720.0],
+      "cells": [
+        ["Department", "2025-26 Budget", "2026-27 Estimate"],
+        ["Treasury", "123.4", "125.6"],
+        ["Australian Bureau of Statistics", "234.5", "240.1"]
+      ],
+      "spans": [
+        {
+          "row": 0,
+          "column": 0,
+          "row_span": 1,
+          "column_span": 1
+        }
+      ],
+      "diagnostics": {
+        "source_backend": "camelot",
+        "confidence": 0.98
+      }
+    }
+  ]
+}
