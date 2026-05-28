@@ -12,7 +12,7 @@ use axum::{
     http::{HeaderValue, Method, header, header::InvalidHeaderValue},
     middleware,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use thiserror::Error;
 use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
@@ -33,6 +33,7 @@ pub mod routes;
 pub mod search;
 pub mod series;
 pub mod state;
+pub mod subscriptions;
 
 pub use auth::require_api_key;
 pub use dataflows::{
@@ -50,6 +51,12 @@ pub use routes::{HealthResponse, health, openapi};
 pub use search::{SearchQuery, SearchResponse, SearchResult, SearchResultKind, search_catalog};
 pub use series::{SeriesLookupResponse, SeriesRevisionMetadata, get_series};
 pub use state::AppState;
+pub use subscriptions::{
+    CreateSubscriptionRequest, CreateSubscriptionResponse, DeliveryOptions, DeliveryRunOutcome,
+    SubscriptionDetails, SubscriptionError, WebhookDeliveryEvent, create_subscription,
+    deliver_due_webhooks, enqueue_data_update_event, run_webhook_delivery_worker,
+    spawn_webhook_delivery_worker,
+};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
@@ -94,6 +101,12 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
             .route("/v1/observations", get(observations::list_observations))
             .route("/v1/series/:dataflow/:series_key", get(series::get_series))
             .route("/v1/search", get(search::search_catalog))
+            .route(
+                "/v1/subscriptions",
+                post(subscriptions::create_subscription).route_layer(
+                    middleware::from_fn_with_state(state.clone(), require_api_key),
+                ),
+            )
             .route("/v1/openapi.json", get(openapi)),
         state,
     )
@@ -110,7 +123,7 @@ async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
 
 fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
     let mut layer = CorsLayer::new()
-        .allow_methods([Method::GET])
+        .allow_methods([Method::GET, Method::POST])
         .allow_headers([
             header::ACCEPT,
             header::ACCEPT_ENCODING,

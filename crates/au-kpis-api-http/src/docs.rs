@@ -15,6 +15,10 @@ use crate::{
     routes::{__path_health, __path_openapi, HealthResponse},
     search::{__path_search_catalog, SearchQuery, SearchResponse, SearchResult, SearchResultKind},
     series::{__path_get_series, SeriesLookupResponse, SeriesRevisionMetadata},
+    subscriptions::{
+        __path_create_subscription, CreateSubscriptionRequest, CreateSubscriptionResponse,
+        SubscriptionDetails,
+    },
 };
 
 /// Root OpenAPI document for the API handlers in this crate.
@@ -33,7 +37,8 @@ use crate::{
         get_dataflow_codelist,
         list_observations,
         get_series,
-        search_catalog
+        search_catalog,
+        create_subscription
     ),
     components(schemas(
         au_kpis_domain::Code,
@@ -57,13 +62,33 @@ use crate::{
         SearchResult,
         SearchResultKind,
         SeriesLookupResponse,
-        SeriesRevisionMetadata
+        SeriesRevisionMetadata,
+        CreateSubscriptionRequest,
+        CreateSubscriptionResponse,
+        SubscriptionDetails
     )),
+    modifiers(&SecurityAddon),
     tags(
         (name = "dataflows", description = "Dataflow catalog and codelists"),
         (name = "observations", description = "Time-series observations"),
         (name = "search", description = "Ranked catalog search"),
-        (name = "series", description = "Series metadata lookups")
+        (name = "series", description = "Series metadata lookups"),
+        (name = "subscriptions", description = "Webhook subscriptions")
     )
 )]
 pub struct ApiDoc;
+
+#[derive(Debug)]
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "ApiKeyAuth",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("X-API-Key"))),
+        );
+    }
+}

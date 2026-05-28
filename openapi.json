@@ -636,6 +636,70 @@
           }
         }
       }
+    },
+    "/v1/subscriptions": {
+      "post": {
+        "tags": ["subscriptions"],
+        "summary": "`POST /v1/subscriptions`.",
+        "operationId": "createSubscription",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Subscription created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSubscriptionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid subscription request.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -707,6 +771,35 @@
       "CodelistId": {
         "type": "string",
         "description": "Identifier for a codelist (e.g. `CL_STATE_AU`)."
+      },
+      "CreateSubscriptionRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/subscriptions`.",
+        "required": ["url"],
+        "properties": {
+          "dataflow_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataflowId"
+            },
+            "description": "Optional dataflow filter. Empty means every dataflow update."
+          },
+          "url": {
+            "type": "string",
+            "description": "Absolute HTTP(S) URL to receive webhook deliveries."
+          }
+        }
+      },
+      "CreateSubscriptionResponse": {
+        "type": "object",
+        "description": "Response body for `POST /v1/subscriptions`.",
+        "required": ["subscription"],
+        "properties": {
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionDetails",
+            "description": "Created subscription."
+          }
+        }
       },
       "Dataflow": {
         "type": "object",
@@ -1366,10 +1459,53 @@
         "type": "string",
         "description": "Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`)."
       },
+      "SubscriptionDetails": {
+        "type": "object",
+        "description": "Created webhook subscription details.",
+        "required": ["id", "url", "dataflow_ids", "status", "created_at", "signing_secret"],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC creation timestamp."
+          },
+          "dataflow_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataflowId"
+            },
+            "description": "Dataflow filter attached to the subscription."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable subscription id."
+          },
+          "signing_secret": {
+            "type": "string",
+            "description": "HMAC signing secret shown once at creation."
+          },
+          "status": {
+            "type": "string",
+            "description": "Current subscription status."
+          },
+          "url": {
+            "type": "string",
+            "description": "Delivery target URL."
+          }
+        }
+      },
       "TimePrecision": {
         "type": "string",
         "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
         "enum": ["day", "week", "month", "quarter", "year"]
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
       }
     }
   },
@@ -1389,6 +1525,10 @@
     {
       "name": "series",
       "description": "Series metadata lookups"
+    },
+    {
+      "name": "subscriptions",
+      "description": "Webhook subscriptions"
     }
   ]
 }

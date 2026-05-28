@@ -16,6 +16,22 @@ type Codelist = {
   id: CodelistId;
   name: string;
 };
+type CreateSubscriptionRequest = {
+  dataflow_ids?: Array<DataflowId> | undefined;
+  url: string;
+};
+type DataflowId = string;
+type CreateSubscriptionResponse = {
+  subscription: SubscriptionDetails;
+};
+type SubscriptionDetails = {
+  created_at: string;
+  dataflow_ids: Array<DataflowId>;
+  id: string;
+  signing_secret: string;
+  status: string;
+  url: string;
+};
 type Dataflow = {
   attribution: string;
   description?: (string | null) | undefined;
@@ -36,7 +52,6 @@ type Frequency =
   | "quarterly"
   | "annual"
   | "irregular";
-type DataflowId = string;
 type License =
   | "CC-BY-4.0"
   | "CC-BY-ND-4.0"
@@ -335,6 +350,22 @@ const SeriesLookupResponse: z.ZodType<SeriesLookupResponse> = z
     series: Series,
   })
   .passthrough();
+const CreateSubscriptionRequest: z.ZodType<CreateSubscriptionRequest> = z
+  .object({ dataflow_ids: z.array(DataflowId).optional(), url: z.string() })
+  .passthrough();
+const SubscriptionDetails: z.ZodType<SubscriptionDetails> = z
+  .object({
+    created_at: z.string().datetime({ offset: true }),
+    dataflow_ids: z.array(DataflowId),
+    id: z.string().uuid(),
+    signing_secret: z.string(),
+    status: z.string(),
+    url: z.string(),
+  })
+  .passthrough();
+const CreateSubscriptionResponse: z.ZodType<CreateSubscriptionResponse> = z
+  .object({ subscription: SubscriptionDetails })
+  .passthrough();
 const DataflowsQuery: z.ZodType<DataflowsQuery> = z
   .object({
     frequency: z.union([z.null(), Frequency]),
@@ -387,6 +418,9 @@ export const schemas = {
   SeriesRevisionMetadata,
   Series,
   SeriesLookupResponse,
+  CreateSubscriptionRequest,
+  SubscriptionDetails,
+  CreateSubscriptionResponse,
   DataflowsQuery,
   ProblemDetails,
   SearchQuery,
