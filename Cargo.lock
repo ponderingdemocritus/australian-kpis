@@ -337,12 +337,14 @@ dependencies = [
  "futures",
  "httpdate",
  "object_store",
+ "quick-xml 0.39.4",
  "reqwest",
  "serde",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
+ "zip",
 ]
 
 [[package]]
