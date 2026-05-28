@@ -37,6 +37,8 @@ static PDF_HTTP_CHILD_SPANS: AtomicUsize = AtomicUsize::new(0);
 static PDF_HTTP_SPAN_TARGET_URL: Mutex<Option<String>> = Mutex::new(None);
 
 const PDF_EXTRACT_HTTP_SPAN: &str = "pdf.extract.http";
+const PDF_TIMEOUT_TEST_DEADLINE: Duration = Duration::from_millis(200);
+const PDF_TIMEOUT_TEST_DELAY: Duration = Duration::from_secs(1);
 
 fn ensure_pdf_span_counter() {
     PDF_HTTP_SPAN_COUNTER_INIT.call_once(|| {
@@ -399,13 +401,13 @@ async fn extract_stream_timeout_bounds_incomplete_response_body() {
             .await
             .expect("write headers");
         stream.write_all(first).await.expect("write first chunk");
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(PDF_TIMEOUT_TEST_DELAY).await;
     });
 
     let client = PdfClient::builder()
         .base_url(format!("http://{addr}"))
         .http_client(reqwest::Client::new())
-        .timeout(Duration::from_millis(20))
+        .timeout(PDF_TIMEOUT_TEST_DEADLINE)
         .retry_policy(RetryPolicy::none())
         .build()
         .unwrap();
@@ -475,12 +477,12 @@ async fn request_timeout_bounds_hung_sidecar_calls() {
         let request = read_http_request(&mut stream).await;
         assert!(request.starts_with("POST /extract HTTP/1.1"));
         attempts_for_task.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(PDF_TIMEOUT_TEST_DELAY).await;
     });
 
     let client = PdfClient::builder()
         .base_url(format!("http://{addr}"))
-        .timeout(Duration::from_millis(20))
+        .timeout(PDF_TIMEOUT_TEST_DEADLINE)
         .retry_policy(RetryPolicy::none())
         .build()
         .unwrap();
@@ -517,13 +519,13 @@ async fn extract_timeout_bounds_incomplete_response_body() {
             .await
             .expect("write response headers");
         stream.write_all(body).await.expect("write partial body");
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(PDF_TIMEOUT_TEST_DELAY).await;
     });
 
     let client = PdfClient::builder()
         .base_url(format!("http://{addr}"))
         .http_client(reqwest::Client::new())
-        .timeout(Duration::from_millis(20))
+        .timeout(PDF_TIMEOUT_TEST_DEADLINE)
         .retry_policy(RetryPolicy::none())
         .build()
         .unwrap();
@@ -550,13 +552,13 @@ async fn custom_http_client_still_enforces_request_timeout() {
         let request = read_http_request(&mut stream).await;
         assert!(request.starts_with("POST /extract HTTP/1.1"));
         attempts_for_task.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(PDF_TIMEOUT_TEST_DELAY).await;
     });
 
     let client = PdfClient::builder()
         .base_url(format!("http://{addr}"))
         .http_client(reqwest::Client::new())
-        .timeout(Duration::from_millis(20))
+        .timeout(PDF_TIMEOUT_TEST_DEADLINE)
         .retry_policy(RetryPolicy::none())
         .build()
         .unwrap();
