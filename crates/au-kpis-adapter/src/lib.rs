@@ -9,7 +9,7 @@
 #![deny(missing_docs, missing_debug_implementations)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fmt,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -400,12 +400,14 @@ pub struct AdapterHttpClient {
     client: reqwest::Client,
     raw_artifact_client: reqwest::Client,
     limiter: Arc<RateLimiter>,
+    circuit_breaker: Arc<CircuitBreaker>,
 }
 
 impl fmt::Debug for AdapterHttpClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdapterHttpClient")
             .field("rate_limit", &self.limiter.limit)
+            .field("circuit_breaker", &self.circuit_breaker)
             .finish_non_exhaustive()
     }
 }
@@ -429,6 +431,7 @@ impl AdapterHttpClient {
             client,
             raw_artifact_client,
             limiter: Arc::new(RateLimiter::new(rate_limit)),
+            circuit_breaker: Arc::new(CircuitBreaker::new(CircuitBreakerConfig::default())),
         }
     }
 
@@ -450,8 +453,22 @@ impl AdapterHttpClient {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AdapterError> {
+        self.circuit_breaker.before_request().await?;
         self.limiter.wait_for_permit().await;
-        Ok(request.send().await?)
+        match request.send().await {
+            Ok(response) => {
+                if response.status().is_server_error() {
+                    self.circuit_breaker.record_failure().await;
+                } else {
+                    self.circuit_breaker.record_success().await;
+                }
+                Ok(response)
+            }
+            Err(err) => {
+                self.circuit_breaker.record_failure().await;
+                Err(err.into())
+            }
+        }
     }
 
     /// Convenience `GET` helper using the shared rate limiter.
@@ -459,6 +476,113 @@ impl AdapterHttpClient {
     pub async fn get(&self, url: &str) -> Result<reqwest::Response, AdapterError> {
         self.execute(self.client.get(url)).await
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CircuitBreakerConfig {
+    min_samples: usize,
+    failure_ratio: f64,
+    open_for: Duration,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            min_samples: 50,
+            failure_ratio: 0.20,
+            open_for: Duration::from_secs(30),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CircuitBreaker {
+    config: CircuitBreakerConfig,
+    inner: Mutex<CircuitBreakerState>,
+}
+
+impl CircuitBreaker {
+    fn new(config: CircuitBreakerConfig) -> Self {
+        Self {
+            config,
+            inner: Mutex::new(CircuitBreakerState {
+                outcomes: VecDeque::with_capacity(config.min_samples),
+                state: CircuitState::Closed,
+            }),
+        }
+    }
+
+    async fn before_request(&self) -> Result<(), AdapterError> {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().await;
+        match inner.state {
+            CircuitState::Closed | CircuitState::HalfOpen => Ok(()),
+            CircuitState::Open { until } if now >= until => {
+                inner.state = CircuitState::HalfOpen;
+                Ok(())
+            }
+            CircuitState::Open { until } => Err(AdapterError::CircuitOpen {
+                retry_after: until.saturating_duration_since(now),
+            }),
+        }
+    }
+
+    async fn record_success(&self) {
+        self.record(false).await;
+    }
+
+    async fn record_failure(&self) {
+        self.record(true).await;
+    }
+
+    async fn record(&self, failed: bool) {
+        let mut inner = self.inner.lock().await;
+        match inner.state {
+            CircuitState::HalfOpen if failed => {
+                inner.outcomes.clear();
+                inner.state = CircuitState::Open {
+                    until: Instant::now() + self.config.open_for,
+                };
+            }
+            CircuitState::HalfOpen => {
+                inner.outcomes.clear();
+                inner.state = CircuitState::Closed;
+            }
+            CircuitState::Open { .. } => {}
+            CircuitState::Closed => {
+                if inner.outcomes.len() == self.config.min_samples {
+                    inner.outcomes.pop_front();
+                }
+                inner.outcomes.push_back(failed);
+                if self.should_open(&inner.outcomes) {
+                    inner.state = CircuitState::Open {
+                        until: Instant::now() + self.config.open_for,
+                    };
+                }
+            }
+        }
+    }
+
+    fn should_open(&self, outcomes: &VecDeque<bool>) -> bool {
+        if outcomes.len() < self.config.min_samples {
+            return false;
+        }
+        let failures = outcomes.iter().filter(|failed| **failed).count();
+        failures as f64 / outcomes.len() as f64 > self.config.failure_ratio
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CircuitState {
+    Closed,
+    Open { until: Instant },
+    HalfOpen,
+}
+
+#[derive(Debug)]
+struct CircuitBreakerState {
+    outcomes: VecDeque<bool>,
+    state: CircuitState,
 }
 
 #[derive(Debug)]
@@ -1018,6 +1142,13 @@ pub enum AdapterError {
         response_headers: ResponseHeaders,
     },
 
+    /// Source circuit breaker is open after recent transient upstream failures.
+    #[error("source circuit breaker open")]
+    CircuitOpen {
+        /// Duration callers should wait before probing the source again.
+        retry_after: Duration,
+    },
+
     /// Persisting fetched artifact provenance failed.
     #[error("artifact provenance: {message}")]
     ArtifactRecord {
@@ -1083,6 +1214,7 @@ impl Classify for AdapterError {
                     ErrorClass::Permanent
                 }
             }
+            AdapterError::CircuitOpen { .. } => ErrorClass::Transient,
             AdapterError::ArtifactRecord { class, .. } => *class,
             AdapterError::Storage(err) => err.class(),
             AdapterError::UnknownAdapter(_)
@@ -1096,6 +1228,7 @@ impl Classify for AdapterError {
     fn retry_after(&self) -> Option<Duration> {
         match self {
             AdapterError::UpstreamStatus { retry_after, .. } => *retry_after,
+            AdapterError::CircuitOpen { retry_after } => Some(*retry_after),
             _ => None,
         }
     }
@@ -1124,5 +1257,67 @@ mod duration_millis {
     {
         let millis = u64::deserialize(deserializer)?;
         Ok(Duration::from_millis(millis))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn circuit_breaker_opens_after_failure_ratio_exceeds_window_threshold() {
+        let breaker = CircuitBreaker::new(CircuitBreakerConfig {
+            min_samples: 50,
+            failure_ratio: 0.20,
+            open_for: Duration::from_millis(5),
+        });
+
+        for _ in 0..40 {
+            breaker.record_success().await;
+        }
+        for _ in 0..10 {
+            breaker.record_failure().await;
+        }
+        assert!(
+            breaker.before_request().await.is_ok(),
+            "exactly 20% failures must not open the circuit"
+        );
+
+        breaker.record_failure().await;
+        let err = breaker
+            .before_request()
+            .await
+            .expect_err("more than 20% failures in the window should open");
+        assert!(
+            matches!(err, AdapterError::CircuitOpen { retry_after } if retry_after > Duration::ZERO)
+        );
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_recovers_after_cooldown_and_half_open_success() {
+        let breaker = CircuitBreaker::new(CircuitBreakerConfig {
+            min_samples: 3,
+            failure_ratio: 0.20,
+            open_for: Duration::from_millis(5),
+        });
+
+        breaker.record_failure().await;
+        breaker.record_failure().await;
+        breaker.record_failure().await;
+        assert!(matches!(
+            breaker.before_request().await,
+            Err(AdapterError::CircuitOpen { .. })
+        ));
+
+        sleep(Duration::from_millis(6)).await;
+        breaker
+            .before_request()
+            .await
+            .expect("cooldown should allow a half-open probe");
+        breaker.record_success().await;
+        breaker
+            .before_request()
+            .await
+            .expect("successful half-open probe should close the circuit");
     }
 }
