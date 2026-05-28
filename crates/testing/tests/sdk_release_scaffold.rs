@@ -19,6 +19,10 @@ fn issue_61_sdk_release_contract_is_wired() {
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read PR workflow");
     let sdk_package =
         fs::read_to_string(root.join("packages/sdk/package.json")).expect("read SDK package");
+    let sdk_tsconfig =
+        fs::read_to_string(root.join("packages/sdk/tsconfig.json")).expect("read SDK tsconfig");
+    let sdk_build_tsconfig = fs::read_to_string(root.join("packages/sdk/tsconfig.build.json"))
+        .expect("read SDK build tsconfig");
     let generated_package = fs::read_to_string(root.join("packages/sdk-generated/package.json"))
         .expect("read generated SDK package");
     let sdk_readme =
@@ -78,6 +82,7 @@ fn issue_61_sdk_release_contract_is_wired() {
 
     assert_publishable_sdk_package(&sdk_package);
     assert_publishable_generated_package(&generated_package);
+    assert_sdk_build_modes_do_not_share_incremental_cache(&sdk_tsconfig, &sdk_build_tsconfig);
 
     for expected in [
         "npm install @au-kpis/sdk",
@@ -156,5 +161,20 @@ fn assert_publishable_generated_package(package: &str) {
     assert!(
         !package.contains("\"private\": true"),
         "generated SDK package must be publishable because the public SDK depends on it"
+    );
+}
+
+fn assert_sdk_build_modes_do_not_share_incremental_cache(tsconfig: &str, build_tsconfig: &str) {
+    assert!(
+        tsconfig.contains("\"tsBuildInfoFile\": \"dist/.tsbuildinfo.test\""),
+        "SDK test/typecheck config should emit test files using an isolated incremental cache"
+    );
+    assert!(
+        build_tsconfig.contains("\"tsBuildInfoFile\": \"dist/.tsbuildinfo\""),
+        "SDK production build config should keep its own incremental cache"
+    );
+    assert!(
+        build_tsconfig.contains("\"exclude\": [\"src/**/*.test.ts\"]"),
+        "SDK production build should keep runtime tests out of publishable output"
     );
 }
