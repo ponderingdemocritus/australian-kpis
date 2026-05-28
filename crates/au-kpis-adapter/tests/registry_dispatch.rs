@@ -414,6 +414,11 @@ fn adapter_error_classification_matches_retry_policy() {
         .class(),
         ErrorClass::Permanent
     );
+    let circuit_open = AdapterError::CircuitOpen {
+        retry_after: Duration::from_secs(30),
+    };
+    assert_eq!(circuit_open.class(), ErrorClass::Transient);
+    assert_eq!(circuit_open.retry_after(), Some(Duration::from_secs(30)));
 }
 
 #[test]

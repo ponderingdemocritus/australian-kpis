@@ -41,6 +41,10 @@ cargo +nightly-2025-10-01 fuzz run xls -- -runs=1
 cargo +nightly-2025-10-01 fuzz run csv -- -runs=1
 cargo +nightly-2025-10-01 fuzz run pdf_response -- -runs=1
 
+# Weekly chaos suite, normally run by GitHub Actions in the staging environment
+tests/chaos/run.sh --results-dir target/chaos
+tests/chaos/run.sh --dry-run --results-dir target/chaos
+
 # Contract fuzzing against a running API
 schemathesis --config-file tests/contract/schemathesis.toml run \
   --checks all \
@@ -112,3 +116,10 @@ Corpora are seeded from committed adapter fixtures and the curated PDF sidecar
 response sample. The nightly workflow keeps newly discovered crashing inputs in
 the `cargo-fuzz-artifacts` artifact so they can be minimized and promoted into
 the committed corpus with the associated fix.
+
+## Chaos testing
+
+`tests/chaos/` contains the weekly chaos suite for the five resilience scenarios
+listed in the spec. The workflow uploads a retained `chaos-results` artifact and
+adds the Markdown summary to each scheduled run. See `docs/chaos.md` for the
+scenario invariants and failure interpretation guide.

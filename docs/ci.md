@@ -69,6 +69,18 @@ mutants survive or time out, `tools/ci/mutation_report.py` generates a
 follow-up body and the workflow creates an `add test` issue that lists the
 surviving cargo-mutants locations and replacements.
 
+## Weekly chaos suite
+
+`.github/workflows/chaos-weekly.yml` runs at `0 5 * * 0` with the GitHub
+`staging` environment. It executes `tests/chaos/run.sh`, surfaces the Markdown
+summary in the workflow run, and uploads retained `chaos-results` artifacts for
+operator review.
+
+The suite covers the five chaos scenarios from the spec: killing ingestion
+mid-load, severing DB connectivity, filling queue capacity, source 5xx circuit
+breaker recovery, and vacuum/compaction during heavy writes. See `docs/chaos.md`
+for local execution and failure interpretation.
+
 ## Nightly cargo-fuzz
 
 `.github/workflows/fuzz-nightly.yml` runs at `0 3 * * *` on `main`. It installs

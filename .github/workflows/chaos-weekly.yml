@@ -1,0 +1,77 @@
+name: Chaos Testing
+
+on:
+  schedule:
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Optional single chaos scenario to run
+        required: false
+        type: string
+
+concurrency:
+  group: chaos-weekly-${{ github.event.inputs.scenario || 'all' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_RUSTC_WRAPPER: sccache
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: 2G
+  CHAOS_ENVIRONMENT: staging
+  CHAOS_RESULTS_DIR: target/chaos
+
+jobs:
+  staging-chaos:
+    name: staging chaos suite
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Run chaos suite
+        id: chaos
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--results-dir "${CHAOS_RESULTS_DIR}")
+          if [ -n "${{ github.event.inputs.scenario || '' }}" ]; then
+            args+=(--scenario "${{ github.event.inputs.scenario }}")
+          fi
+          tests/chaos/run.sh "${args[@]}"
+
+      - name: Surface chaos results
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${CHAOS_RESULTS_DIR}/summary.md" ]; then
+            cat "${CHAOS_RESULTS_DIR}/summary.md" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Chaos suite did not produce a summary." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload chaos results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-results
+          path: target/chaos/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce chaos invariants
+        if: steps.chaos.outcome == 'failure'
+        run: |
+          echo "Chaos suite failed; review the chaos-results artifact and job summary." >&2
+          exit 1
