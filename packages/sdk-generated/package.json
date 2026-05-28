@@ -1,8 +1,39 @@
 {
   "name": "@au-kpis/sdk-generated",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Generated OpenAPI client, types, and Zod schemas for @au-kpis/sdk.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ponderingdemocritus/australian-kpis.git",
+    "directory": "packages/sdk-generated"
+  },
   "type": "module",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist/client.d.ts",
+    "dist/client.d.ts.map",
+    "dist/client.js",
+    "dist/client.js.map",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/types.d.ts",
+    "dist/types.d.ts.map",
+    "dist/types.js",
+    "dist/types.js.map",
+    "dist/zod.d.ts",
+    "dist/zod.d.ts.map",
+    "dist/zod.js",
+    "dist/zod.js.map",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     "./client": {
       "types": "./dist/client.d.ts",
@@ -28,5 +59,8 @@
   },
   "dependencies": {
     "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
