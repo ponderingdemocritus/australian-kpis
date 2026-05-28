@@ -1,0 +1,129 @@
+name: Parser Fuzzing
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_RUSTC_WRAPPER: sccache
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: 2G
+  FUZZ_RUST_TOOLCHAIN: nightly-2025-10-01
+  FUZZ_TARGET_SECONDS: "1800"
+
+jobs:
+  cargo-fuzz:
+    name: cargo-fuzz nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Install nightly Rust toolchain
+        run: rustup toolchain install "$FUZZ_RUST_TOOLCHAIN" --profile minimal --no-self-update
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+
+      - name: Seed parser fuzz corpora
+        run: python3 tools/ci/seed_fuzz_corpora.py
+
+      - name: Run parser fuzz targets
+        id: fuzz
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          targets=(sdmx_json xls csv pdf_response)
+          status=0
+          for target in "${targets[@]}"; do
+            mkdir -p "fuzz/artifacts/${target}"
+            cargo +"${FUZZ_RUST_TOOLCHAIN}" fuzz run "${target}" \
+              -- \
+              -max_total_time=${FUZZ_TARGET_SECONDS} \
+              -max_len=1048576 \
+              -artifact_prefix=fuzz/artifacts/${target}/ \
+              -print_final_stats=1
+            target_status=$?
+            if [[ "${target_status}" -ne 0 ]]; then
+              status="${target_status}"
+            fi
+          done
+          exit "${status}"
+
+      - name: Upload fuzz artifacts and corpora
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-fuzz-artifacts
+          path: |
+            fuzz/artifacts/**
+            fuzz/corpus/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: File release blocker for fuzz failure
+        if: steps.fuzz.outcome == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const labels = ['bug', 'type:test', 'area:rust', 'release:blocker'];
+            for (const name of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: name === 'release:blocker' ? 'b60205' : 'ededed',
+                  description: name === 'release:blocker'
+                    ? 'Release blocker found by scheduled automation'
+                    : 'Created by scheduled cargo-fuzz automation',
+                });
+              }
+            }
+
+            const date = new Date().toISOString().slice(0, 10);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `test: investigate cargo-fuzz release blocker (${date})`,
+              labels,
+              body: [
+                '## Release blocker',
+                '',
+                'The nightly cargo-fuzz parser run failed. Treat any panic, OOM, timeout, or infinite loop as a release blocker until reproduced and fixed.',
+                '',
+                'Download the retained `cargo-fuzz-artifacts` workflow artifact for crashing inputs, corpus state, and target-specific artifacts.',
+                '',
+                'Targets covered: `sdmx_json`, `xls`, `csv`, `pdf_response`.',
+                '',
+                `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ].join('\n'),
+            });
+
+      - name: Enforce fuzz release blocker
+        if: steps.fuzz.outcome == 'failure'
+        run: |
+          echo "Nightly cargo-fuzz found a release blocker." >&2
+          exit 1

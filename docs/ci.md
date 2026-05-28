@@ -69,6 +69,18 @@ mutants survive or time out, `tools/ci/mutation_report.py` generates a
 follow-up body and the workflow creates an `add test` issue that lists the
 surviving cargo-mutants locations and replacements.
 
+## Nightly cargo-fuzz
+
+`.github/workflows/fuzz-nightly.yml` runs at `0 3 * * *` on `main`. It installs
+`cargo-fuzz`, seeds corpora through `tools/ci/seed_fuzz_corpora.py`, and runs
+the SDMX-JSON, XLS, CSV, and PDF sidecar response targets for 30 minutes per target.
+
+Any cargo-fuzz failure is treated as a release blocker. The workflow uploads
+the retained `cargo-fuzz-artifacts` artifact, including the target corpora and
+any crashing inputs written under `fuzz/artifacts/`. It also files a bug issue
+for the failing scheduled run so maintainers can reproduce, minimize, and add
+the crashing input to the committed corpus or a follow-up artifact.
+
 ## Contract fuzzing
 
 The pull request `Contract (schemathesis)` job starts the docker-compose API
