@@ -90,6 +90,17 @@ so operators can rerun the Phase 5 validation against staging without making it
 part of the nightly sustained/burst load run. The May 2026 validation report is
 committed at `docs/perf/load-test-2026-05.md`.
 
+## SDK publishing
+
+`.github/workflows/sdk-publish.yml` runs on `main` after SDK package or
+Changesets metadata changes. It builds `@au-kpis/sdk` and
+`@au-kpis/sdk-generated`, runs the SDK test suite, then uses
+`changesets/action` with `pnpm version-packages` and `pnpm release:sdk`.
+
+When unreleased changeset files land on `main`, the workflow opens the
+version-package PR with generated changelogs. When that version PR merges, the
+same workflow publishes the public packages to npm with `NPM_TOKEN`.
+
 ## Nightly cargo-fuzz
 
 `.github/workflows/fuzz-nightly.yml` runs at `0 3 * * *` on `main`. It installs

@@ -1,8 +1,32 @@
 {
   "name": "@au-kpis/sdk",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Typed TypeScript SDK for the Australian KPIs API.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ponderingdemocritus/australian-kpis.git",
+    "directory": "packages/sdk"
+  },
   "type": "module",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist/client.d.ts",
+    "dist/client.d.ts.map",
+    "dist/client.js",
+    "dist/client.js.map",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/index.js.map",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -15,6 +39,9 @@
     "test": "tsc -b tsconfig.json --pretty false && node dist/client.runtime.test.js"
   },
   "dependencies": {
-    "@au-kpis/sdk-generated": "workspace:*"
+    "@au-kpis/sdk-generated": "workspace:^"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

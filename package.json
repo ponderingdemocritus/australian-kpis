@@ -12,12 +12,16 @@
     "lint": "biome check . && markdownlint-cli2 \"**/*.md\" \"#node_modules\"",
     "markdownlint": "markdownlint-cli2 \"**/*.md\" \"#node_modules\"",
     "format": "biome format --write .",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release:sdk": "changeset publish",
     "sdk:generate": "node tools/openapi-gen/generate.mjs",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@changesets/cli": "2.31.0",
     "markdownlint-cli2": "0.22.1",
     "openapi-types": "12.1.3",
     "openapi-typescript": "7.13.0",
