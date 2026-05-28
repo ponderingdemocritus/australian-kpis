@@ -545,7 +545,7 @@ since?: string;
  */
 until?: string;
 /**
- * Optional dataflow frequency filter.
+ * Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain.
  */
 frequency?: string;
 /**

@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use arrow_array::{Float64Array, StringArray, UInt32Array};
 use au_kpis_api_http::{AppState, ObservationsResponse, router};
@@ -278,6 +282,85 @@ async fn paginated_observations_concatenate_to_the_full_result() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_observations_rollup").await;
+    seed_observations(db.pool()).await;
+    seed_daily_rollup_observations(db.pool()).await;
+    refresh_monthly_rollup(db.pool()).await;
+    let app = router(test_state(db.pool().clone())).expect("router");
+
+    let response = get_observations_json(
+        app.clone(),
+        "/v1/observations?dataflow=abs.daily&frequency=monthly&limit=10",
+    )
+    .await;
+
+    assert_eq!(response.metadata.dataflow.as_str(), "abs.daily");
+    assert_eq!(response.observations.len(), 2);
+    assert_eq!(
+        response.observations[0].time,
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    );
+    assert_eq!(
+        response.observations[0].time_precision,
+        au_kpis_domain::TimePrecision::Month
+    );
+    assert_eq!(response.observations[0].value, Some(15.0));
+    assert_eq!(
+        response.observations[0]
+            .attributes
+            .get("aggregate")
+            .map(String::as_str),
+        Some("avg")
+    );
+    assert_eq!(
+        response.observations[0]
+            .attributes
+            .get("observations_count")
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        response.observations[1].time,
+        Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap()
+    );
+    assert_eq!(response.observations[1].value, Some(40.0));
+
+    for _ in 0..3 {
+        let response = get_observations_json(
+            app.clone(),
+            "/v1/observations?dataflow=abs.daily&frequency=monthly&limit=10",
+        )
+        .await;
+        assert_eq!(response.observations.len(), 2);
+    }
+
+    let mut samples = Vec::with_capacity(30);
+    for _ in 0..30 {
+        let started = Instant::now();
+        let response = get_observations_json(
+            app.clone(),
+            "/v1/observations?dataflow=abs.daily&frequency=monthly&limit=10",
+        )
+        .await;
+        assert_eq!(response.observations.len(), 2);
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    let p95_index = (samples.len() * 95).div_ceil(100).saturating_sub(1);
+    let p95 = samples[p95_index];
+    assert!(
+        p95 < Duration::from_millis(50),
+        "monthly rollup query p95 should stay under 50 ms; p95={p95:?}, samples={samples:?}"
+    );
+}
+
 fn request(uri: &str) -> Request<Body> {
     Request::builder()
         .uri(uri)
@@ -461,6 +544,91 @@ async fn seed_extra_pagination_observations(pool: &PgPool, artifact: ArtifactId)
     }
 }
 
+async fn seed_daily_rollup_observations(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO dataflows (
+             id, source_id, name, description, dimensions, measures,
+             frequency, license, attribution, source_url
+         )
+         VALUES (
+             'abs.daily', 'abs', 'Daily indicator', NULL,
+             ARRAY['region'], ARRAY['index'], 'daily', 'CC-BY-4.0',
+             'Source: Australian Bureau of Statistics',
+             'https://www.abs.gov.au/'
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("insert daily dataflow");
+
+    let artifact = ArtifactId::of_content(b"api observations daily rollup fixture");
+    sqlx::query(
+        "INSERT INTO artifacts (
+             id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         )
+         VALUES ($1, 'abs', 'https://example.test/daily.json', 'application/json',
+                 '{}'::jsonb, 128, $2, $3)",
+    )
+    .bind(artifact.digest().as_bytes().as_slice())
+    .bind(format!("artifacts/{artifact}"))
+    .bind(Utc.with_ymd_and_hms(2024, 2, 24, 0, 0, 0).unwrap())
+    .execute(pool)
+    .await
+    .expect("insert daily artifact");
+
+    let dataflow = DataflowId::new("abs.daily").unwrap();
+    let dimensions: BTreeMap<String, String> = [("region".to_string(), "AUS".to_string())]
+        .into_iter()
+        .collect();
+    let key = SeriesKey::derive(
+        &dataflow,
+        dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+
+    sqlx::query(
+        "INSERT INTO series (
+             series_key, dataflow_id, measure_id, dimensions, unit,
+             first_observed, last_observed, active
+         )
+         VALUES ($1, 'abs.daily', 'index', $2, 'index', $3, $4, true)",
+    )
+    .bind(key.digest().as_bytes().as_slice())
+    .bind(json!(dimensions))
+    .bind(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+    .bind(Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap())
+    .execute(pool)
+    .await
+    .expect("insert daily series");
+
+    for (date, value) in [
+        ((2024, 1, 1), 10.0),
+        ((2024, 1, 15), 20.0),
+        ((2024, 2, 1), 40.0),
+    ] {
+        insert_observation(
+            pool,
+            ObservationSeed::new(key, artifact, date, 0, value).with_time_precision("day"),
+        )
+        .await;
+    }
+}
+
+async fn refresh_monthly_rollup(pool: &PgPool) {
+    sqlx::query(
+        "CALL refresh_continuous_aggregate(
+            'observations_rollup_monthly',
+            '2024-01-01 00:00:00+00'::timestamptz,
+            '2024-03-01 00:00:00+00'::timestamptz
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("refresh monthly continuous aggregate");
+}
+
 async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
     let dataflow = DataflowId::new("abs.cpi").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), region.to_string())]
@@ -496,6 +664,7 @@ struct ObservationSeed {
     date: (i32, u32, u32),
     revision_no: i32,
     value: f64,
+    time_precision: &'static str,
 }
 
 impl ObservationSeed {
@@ -512,7 +681,13 @@ impl ObservationSeed {
             date,
             revision_no,
             value,
+            time_precision: "quarter",
         }
+    }
+
+    fn with_time_precision(mut self, time_precision: &'static str) -> Self {
+        self.time_precision = time_precision;
+        self
     }
 }
 
@@ -522,8 +697,8 @@ async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
              series_key, time, revision_no, time_precision, value, status,
              attributes, ingested_at, source_artifact_id
          )
-         VALUES ($1, $2, $3, 'quarter', $4, 'normal',
-                 '{}'::jsonb, $5, $6)",
+         VALUES ($1, $2, $3, $4, $5, 'normal',
+                 '{}'::jsonb, $6, $7)",
     )
     .bind(seed.series_key.digest().as_bytes().as_slice())
     .bind(
@@ -531,6 +706,7 @@ async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
             .unwrap(),
     )
     .bind(seed.revision_no)
+    .bind(seed.time_precision)
     .bind(seed.value)
     .bind(Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap())
     .bind(seed.artifact.digest().as_bytes().as_slice())
