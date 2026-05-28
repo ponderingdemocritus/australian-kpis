@@ -127,6 +127,8 @@ fn assert_publishable_sdk_package(package: &str) {
         "\"engines\"",
         "\"node\": \">=20\"",
         "\"@au-kpis/sdk-generated\": \"workspace:^\"",
+        "\"url\": \"git+https://github.com/ponderingdemocritus/australian-kpis.git\"",
+        "\"directory\": \"packages/sdk\"",
     ] {
         assert!(
             package.contains(expected),
@@ -154,6 +156,8 @@ fn assert_publishable_generated_package(package: &str) {
         "\"access\": \"public\"",
         "\"engines\"",
         "\"node\": \">=20\"",
+        "\"url\": \"git+https://github.com/ponderingdemocritus/australian-kpis.git\"",
+        "\"directory\": \"packages/sdk-generated\"",
     ] {
         assert!(
             package.contains(expected),
