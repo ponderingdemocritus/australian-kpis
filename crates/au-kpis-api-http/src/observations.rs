@@ -110,7 +110,7 @@ pub struct ObservationsResponse {
         ("dimensions[]" = Option<Vec<String>>, Query, description = "Dimension filters as repeated key=value values. The handler also accepts dimensions[region]=AUS."),
         ("since" = Option<String>, Query, format = Date, min_length = 1, description = "Inclusive lower time bound as YYYY-MM-DD or RFC3339."),
         ("until" = Option<String>, Query, format = Date, min_length = 1, description = "Inclusive upper time bound as YYYY-MM-DD or RFC3339."),
-        ("frequency" = Option<String>, Query, min_length = 1, pattern = "^(annual|quarterly|monthly|weekly|daily|irregular)$", description = "Optional dataflow frequency filter."),
+        ("frequency" = Option<String>, Query, min_length = 1, pattern = "^(annual|quarterly|monthly|weekly|daily|irregular)$", description = "Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain."),
         ("format" = Option<String>, Query, min_length = 3, max_length = 7, pattern = "^(json|csv|parquet)$", description = "Response format: json, csv, or parquet."),
         ("cursor" = Option<String>, Query, min_length = 1, description = "Opaque cursor from the previous page."),
         ("limit" = Option<u32>, Query, maximum = 10000, description = "Page size, maximum 10000.")
@@ -250,10 +250,49 @@ struct ParsedObservationsQuery {
     dimensions: BTreeMap<String, String>,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
-    frequency: Option<String>,
+    frequency: Option<FrequencyQuery>,
     format: ResponseFormat,
     cursor: Option<ObservationCursor>,
     limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FrequencyQuery {
+    Dataflow(String),
+    Rollup(RollupGrain),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RollupGrain {
+    Weekly,
+    Monthly,
+    Quarterly,
+}
+
+impl RollupGrain {
+    fn view_name(self) -> &'static str {
+        match self {
+            Self::Weekly => "observations_rollup_weekly",
+            Self::Monthly => "observations_rollup_monthly",
+            Self::Quarterly => "observations_rollup_quarterly",
+        }
+    }
+
+    fn query_label(self) -> &'static str {
+        match self {
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+            Self::Quarterly => "quarterly",
+        }
+    }
+
+    fn time_precision_label(self) -> &'static str {
+        match self {
+            Self::Weekly => "week",
+            Self::Monthly => "month",
+            Self::Quarterly => "quarter",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,11 +418,12 @@ fn parse_time_bound(name: &str, value: &str) -> Result<DateTime<Utc>, ApiError> 
         .map_err(|err| ApiError::Validation(format!("invalid {name}: {err}")))
 }
 
-fn parse_frequency(value: &str) -> Result<String, ApiError> {
+fn parse_frequency(value: &str) -> Result<FrequencyQuery, ApiError> {
     match value {
-        "daily" | "weekly" | "monthly" | "quarterly" | "annual" | "irregular" => {
-            Ok(value.to_string())
-        }
+        "weekly" => Ok(FrequencyQuery::Rollup(RollupGrain::Weekly)),
+        "monthly" => Ok(FrequencyQuery::Rollup(RollupGrain::Monthly)),
+        "quarterly" => Ok(FrequencyQuery::Rollup(RollupGrain::Quarterly)),
+        "daily" | "annual" | "irregular" => Ok(FrequencyQuery::Dataflow(value.to_string())),
         _ => Err(ApiError::Validation(format!(
             "unsupported frequency `{value}`"
         ))),
@@ -457,7 +497,11 @@ async fn compute_etag(pool: &PgPool, query: &ParsedObservationsQuery) -> Result<
                 max(o.ingested_at) AS max_ingested_at,
                 max(o.time) AS max_time,
                 max(o.revision_no) AS max_revision_no
-         FROM observations_latest o
+         FROM ",
+    );
+    builder.push(observation_source_table(query));
+    builder.push(
+        " o
          JOIN series s ON s.series_key = o.series_key
          JOIN dataflows d ON d.id = s.dataflow_id",
     );
@@ -516,6 +560,17 @@ fn observations_json_cache_key(raw_query: Option<&str>, query: &ParsedObservatio
         query.format,
         BASE64_URL_SAFE_NO_PAD.encode(raw_query.unwrap_or_default())
     )
+}
+
+fn rollup_grain(query: &ParsedObservationsQuery) -> Option<RollupGrain> {
+    match &query.frequency {
+        Some(FrequencyQuery::Rollup(grain)) => Some(*grain),
+        _ => None,
+    }
+}
+
+fn observation_source_table(query: &ParsedObservationsQuery) -> &'static str {
+    rollup_grain(query).map_or("observations_latest", RollupGrain::view_name)
 }
 
 async fn read_cached_json_observations(
@@ -1063,23 +1118,8 @@ fn fetch_observation_rows(
     query: ParsedObservationsQuery,
 ) -> impl Stream<Item = Result<ObservationsRow, ApiError>> + Send + 'static {
     async_stream::try_stream! {
-        let mut builder = QueryBuilder::<Postgres>::new(
-            "SELECT o.series_key,
-                    o.time,
-                    o.revision_no,
-                    o.time_precision,
-                    o.value,
-                    o.status,
-                    o.attributes,
-                    o.ingested_at,
-                    o.source_artifact_id,
-                    s.dimensions,
-                    s.measure_id,
-                    s.unit
-             FROM observations_latest o
-             JOIN series s ON s.series_key = o.series_key
-             JOIN dataflows d ON d.id = s.dataflow_id",
-        );
+        let mut builder = QueryBuilder::<Postgres>::new("");
+        push_observation_select(&mut builder, rollup_grain(&query));
         push_observation_filters(&mut builder, &query);
         builder.push(" ORDER BY o.time ASC, o.series_key ASC LIMIT ");
         builder.push_bind((query.limit + 1) as i64);
@@ -1089,6 +1129,66 @@ fn fetch_observation_rows(
             yield row_to_observation(row)?;
         }
     }
+}
+
+fn push_observation_select(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    rollup_grain: Option<RollupGrain>,
+) {
+    builder.push(
+        "SELECT o.series_key,
+                o.time,
+                o.revision_no,
+                ",
+    );
+
+    if let Some(grain) = rollup_grain {
+        builder.push("'");
+        builder.push(grain.time_precision_label());
+        builder.push(
+            "'::text AS time_precision,
+                o.value,
+                'normal'::text AS status,
+                jsonb_build_object(
+                    'aggregate', 'avg',
+                    'rollup_grain', '",
+        );
+        builder.push(grain.query_label());
+        builder.push(
+            "',
+                    'observations_count', o.observations_count::text,
+                    'min_value', o.min_value::text,
+                    'max_value', o.max_value::text
+                ) AS attributes,
+                o.ingested_at,
+                o.source_artifact_id,
+                s.dimensions,
+                s.measure_id,
+                s.unit
+         FROM ",
+        );
+        builder.push(grain.view_name());
+        builder.push(" o");
+    } else {
+        builder.push(
+            "o.time_precision,
+                o.value,
+                o.status,
+                o.attributes,
+                o.ingested_at,
+                o.source_artifact_id,
+                s.dimensions,
+                s.measure_id,
+                s.unit
+         FROM observations_latest o",
+        );
+    }
+
+    builder.push(
+        "
+         JOIN series s ON s.series_key = o.series_key
+         JOIN dataflows d ON d.id = s.dataflow_id",
+    );
 }
 
 fn push_observation_filters(
@@ -1114,7 +1214,7 @@ fn push_observation_filters(
         builder.push_bind(until);
     }
 
-    if let Some(frequency) = &query.frequency {
+    if let Some(FrequencyQuery::Dataflow(frequency)) = &query.frequency {
         builder.push(" AND d.frequency = ");
         builder.push_bind(frequency.clone());
     }
@@ -1327,7 +1427,10 @@ mod tests {
             query.until,
             Some(Utc.with_ymd_and_hms(2024, 6, 30, 0, 0, 0).unwrap())
         );
-        assert_eq!(query.frequency.as_deref(), Some("quarterly"));
+        assert_eq!(
+            query.frequency,
+            Some(FrequencyQuery::Rollup(RollupGrain::Quarterly))
+        );
         assert_eq!(query.format, ResponseFormat::Csv);
         assert_eq!(query.limit, 500);
         assert_eq!(query.cursor.unwrap().series_key, series_key);

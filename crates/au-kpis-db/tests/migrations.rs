@@ -64,6 +64,37 @@ async fn has_compression_policy(pool: &PgPool, name: &str) -> bool {
     row.0
 }
 
+async fn continuous_aggregate_exists(pool: &PgPool, name: &str) -> bool {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (
+            SELECT 1
+            FROM   timescaledb_information.continuous_aggregates
+            WHERE  view_name = $1
+        )",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .expect("query continuous aggregate existence");
+    row.0
+}
+
+async fn has_continuous_aggregate_policy(pool: &PgPool, name: &str) -> bool {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (
+            SELECT 1
+            FROM   timescaledb_information.jobs
+            WHERE  proc_name = 'policy_refresh_continuous_aggregate'
+            AND    hypertable_name = $1
+        )",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .expect("query continuous aggregate policy existence");
+    row.0
+}
+
 async fn index_exists(pool: &PgPool, name: &str) -> bool {
     let row: (bool,) = sqlx::query_as(
         "SELECT EXISTS (
@@ -184,6 +215,9 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "measures",
         "observations",
         "observations_latest",
+        "observations_rollup_monthly",
+        "observations_rollup_quarterly",
+        "observations_rollup_weekly",
         "parse_errors",
         "series",
         "sources",
@@ -205,6 +239,21 @@ async fn migration_creates_hypertable_and_compression_policy() {
         assert!(
             index_exists(&pool, expected).await,
             "expected catalog search index `{expected}` to exist"
+        );
+    }
+
+    for expected in [
+        "observations_rollup_weekly",
+        "observations_rollup_monthly",
+        "observations_rollup_quarterly",
+    ] {
+        assert!(
+            continuous_aggregate_exists(&pool, expected).await,
+            "expected continuous aggregate `{expected}` to exist"
+        );
+        assert!(
+            has_continuous_aggregate_policy(&pool, expected).await,
+            "expected continuous aggregate `{expected}` to have a refresh policy"
         );
     }
 }

@@ -315,7 +315,7 @@
           {
             "name": "frequency",
             "in": "query",
-            "description": "Optional dataflow frequency filter.",
+            "description": "Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain.",
             "required": false,
             "schema": {
               "type": "string",

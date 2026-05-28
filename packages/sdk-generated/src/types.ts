@@ -664,7 +664,7 @@ export interface operations {
                 since?: string;
                 /** @description Inclusive upper time bound as YYYY-MM-DD or RFC3339. */
                 until?: string;
-                /** @description Optional dataflow frequency filter. */
+                /** @description Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain. */
                 frequency?: string;
                 /** @description Response format: json, csv, or parquet. */
                 format?: string;

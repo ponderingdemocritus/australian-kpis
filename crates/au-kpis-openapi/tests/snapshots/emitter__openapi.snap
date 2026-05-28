@@ -1183,7 +1183,7 @@ expression: emitted_spec()
             }
           },
           {
-            "description": "Optional dataflow frequency filter.",
+            "description": "Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain.",
             "in": "query",
             "name": "frequency",
             "required": false,
