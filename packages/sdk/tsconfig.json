@@ -4,7 +4,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "composite": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo"
+    "tsBuildInfoFile": "dist/.tsbuildinfo.test"
   },
   "references": [{ "path": "../sdk-generated" }],
   "include": ["src/**/*.ts"]
