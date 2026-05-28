@@ -17,6 +17,22 @@ cargo llvm-cov nextest --workspace --profile ci --lcov --output-path target/llvm
 # Snapshot verification
 cargo insta test --workspace --check
 
+# Weekly-style mutation score report, normally run by GitHub Actions
+cargo mutants --workspace \
+  --test-workspace true \
+  --test-tool nextest \
+  --minimum-test-timeout 120 \
+  --output target/mutation \
+  --no-times \
+  --colors never \
+  -- --profile ci
+python3 tools/ci/mutation_report.py \
+  --out-dir target/mutation/mutants.out \
+  --min-score 70 \
+  --markdown target/mutation/report.md \
+  --json target/mutation/mutation-report.json \
+  --issue-body target/mutation/add-test-issue.md
+
 # Contract fuzzing against a running API
 schemathesis --config-file tests/contract/schemathesis.toml run \
   --checks all \
@@ -68,3 +84,14 @@ CI uses the `ci` nextest profile from `.config/nextest.toml`:
 - JUnit output is written to `target/nextest/ci/junit.xml` for reporting
 
 This matches the repository's zero-flake policy: fix flaky tests or delete them.
+
+## Mutation testing
+
+`.github/workflows/mutation-weekly.yml` runs `cargo mutants --workspace` every
+Sunday at 06:00 UTC with `cargo-nextest` as the test runner. The scheduled gate
+requires at least a 70% mutation score and uploads the retained
+`cargo-mutants-report` artifact for maintainers to inspect.
+
+Surviving or timed-out mutants are summarized by `tools/ci/mutation_report.py`.
+When the scheduled run finds survivors, the workflow opens a follow-up issue
+labeled `add test` so the missing coverage is tracked as normal backlog work.
