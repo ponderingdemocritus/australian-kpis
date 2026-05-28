@@ -63,6 +63,9 @@ fn issue_61_sdk_release_contract_is_wired() {
         "version: pnpm version-packages",
         "publish: pnpm release:sdk",
         "NPM_TOKEN: ${{ secrets.NPM_TOKEN }}",
+        "node-version: \"24\"",
+        "registry-url: \"https://registry.npmjs.org\"",
+        "npm trusted publishing requires npm >= 11.5.1",
         "pnpm turbo run build --filter=@au-kpis/sdk... --cache-dir=.turbo",
         "pnpm turbo run test --filter=@au-kpis/sdk --cache-dir=.turbo",
     ] {
