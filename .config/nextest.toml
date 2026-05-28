@@ -13,6 +13,14 @@ threads-required = "num-cpus"
 filter = 'test(parse_cpi_fixture_stays_under_runtime_budget)'
 threads-required = "num-cpus"
 
+[[profile.default.overrides]]
+filter = 'test(observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain)'
+threads-required = "num-cpus"
+
+[[profile.default.overrides]]
+filter = 'test(search_catalog_single_term_query_stays_under_p95_budget)'
+threads-required = "num-cpus"
+
 [profile.ci]
 fail-fast = false
 failure-output = "immediate-final"
@@ -28,6 +36,14 @@ threads-required = "num-cpus"
 
 [[profile.ci.overrides]]
 filter = 'test(parse_cpi_fixture_stays_under_runtime_budget)'
+threads-required = "num-cpus"
+
+[[profile.ci.overrides]]
+filter = 'test(observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain)'
+threads-required = "num-cpus"
+
+[[profile.ci.overrides]]
+filter = 'test(search_catalog_single_term_query_stays_under_p95_budget)'
 threads-required = "num-cpus"
 
 [profile.ci.junit]

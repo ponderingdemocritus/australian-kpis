@@ -7,6 +7,7 @@ use std::{
     env,
     ffi::OsString,
     future::IntoFuture,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -19,8 +20,13 @@ use au_kpis_config::load_ingestion;
 use au_kpis_db::{PgPool, connect as connect_db, migrate};
 use au_kpis_domain::SourceId;
 use au_kpis_queue::{ApalisPgQueue, CronSchedule, Job, Queue};
+use au_kpis_scheduler::data_quality::{
+    PagerDutyConfig, PagerDutyOutcome, default_data_quality_rules, notify_pagerduty,
+    run_data_quality_checks,
+};
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use sqlx::{Pool, Postgres, pool::PoolConnection};
 use tokio::{net::TcpListener, signal};
@@ -36,6 +42,8 @@ const ABS_DISCOVERY_CRON: &str = "0 * * * *";
 const APRA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const RBA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const TREASURY_DISCOVERY_CRON: &str = "0 0 * * *";
+const DEFAULT_DATA_QUALITY_REPORT_PATH: &str = "target/data-quality/data-quality-report.md";
+const DEFAULT_PAGERDUTY_EVENTS_URL: &str = "https://events.pagerduty.com/v2/enqueue";
 
 /// Command-line arguments for `au-kpis-scheduler`.
 #[derive(Debug, Parser)]
@@ -86,10 +94,32 @@ struct Cli {
 }
 
 /// Scheduler subcommands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 enum Command {
     /// Start the long-running scheduler loop.
     Run,
+    /// Run data-quality checks once and write the daily report artifacts.
+    DataQuality {
+        /// Markdown report path for the generated daily report.
+        #[arg(
+            long,
+            env = "AU_KPIS_DATA_QUALITY_REPORT_PATH",
+            default_value = DEFAULT_DATA_QUALITY_REPORT_PATH
+        )]
+        report_path: PathBuf,
+
+        /// PagerDuty Events v2 routing key used when anomalies are detected.
+        #[arg(long, env = "AU_KPIS_PAGERDUTY_ROUTING_KEY")]
+        pagerduty_routing_key: Option<String>,
+
+        /// PagerDuty Events v2 endpoint.
+        #[arg(
+            long,
+            env = "AU_KPIS_PAGERDUTY_EVENTS_URL",
+            default_value = DEFAULT_PAGERDUTY_EVENTS_URL
+        )]
+        pagerduty_events_url: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -191,7 +221,7 @@ impl Drop for LeaderGuard {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    resolve_command(&cli)?;
+    let command = resolve_command(&cli)?;
 
     let config = Arc::new(load_ingestion(None).context("load config")?);
     let _telemetry = init_or_disabled(&config.telemetry)?;
@@ -199,6 +229,21 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect postgres database")?;
     migrate(&db).await.context("apply database migrations")?;
+
+    if let Command::DataQuality {
+        report_path,
+        pagerduty_routing_key,
+        pagerduty_events_url,
+    } = command
+    {
+        return run_data_quality_command(
+            &db,
+            &report_path,
+            pagerduty_routing_key,
+            pagerduty_events_url,
+        )
+        .await;
+    }
 
     let shutdown = CancellationToken::new();
     let metrics = Arc::new(SchedulerMetrics::default());
@@ -257,6 +302,77 @@ async fn main() -> anyhow::Result<()> {
             "metrics server drain window elapsed; forcing exit"
         ),
     }
+
+    Ok(())
+}
+
+async fn run_data_quality_command(
+    db: &PgPool,
+    report_path: &Path,
+    pagerduty_routing_key: Option<String>,
+    pagerduty_events_url: String,
+) -> anyhow::Result<()> {
+    let report = run_data_quality_checks(db, default_data_quality_rules(), Utc::now())
+        .await
+        .context("run data-quality checks")?;
+    write_data_quality_reports(report_path, &report)
+        .await
+        .with_context(|| format!("write data-quality report to {}", report_path.display()))?;
+
+    match notify_pagerduty(
+        &report,
+        &PagerDutyConfig {
+            routing_key: pagerduty_routing_key,
+            events_url: pagerduty_events_url,
+        },
+    )
+    .await
+    .context("notify PagerDuty for data-quality anomalies")?
+    {
+        PagerDutyOutcome::NoAnomalies => {
+            tracing::info!("data-quality checks passed without anomalies");
+        }
+        PagerDutyOutcome::MissingRoutingKey => {
+            tracing::warn!(
+                anomalies = report.anomalies_total(),
+                "data-quality anomalies detected, but AU_KPIS_PAGERDUTY_ROUTING_KEY is unset"
+            );
+            anyhow::bail!(
+                "data-quality anomalies detected but AU_KPIS_PAGERDUTY_ROUTING_KEY is unset"
+            );
+        }
+        PagerDutyOutcome::Sent => {
+            tracing::warn!(
+                anomalies = report.anomalies_total(),
+                "data-quality anomalies sent to PagerDuty"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn write_data_quality_reports(
+    report_path: &Path,
+    report: &au_kpis_scheduler::data_quality::DataQualityReport,
+) -> anyhow::Result<()> {
+    if let Some(parent) = report_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    tokio::fs::write(report_path, report.render_markdown())
+        .await
+        .with_context(|| format!("write {}", report_path.display()))?;
+    let json_path = report_path.with_extension("json");
+    let json = serde_json::to_vec_pretty(report).context("serialize data-quality report JSON")?;
+    tokio::fs::write(&json_path, json)
+        .await
+        .with_context(|| format!("write {}", json_path.display()))?;
 
     Ok(())
 }
@@ -410,9 +526,9 @@ async fn serve_metrics(
         .context("serve scheduler metrics")
 }
 
-fn resolve_command(cli: &Cli) -> anyhow::Result<()> {
-    match cli.command {
-        Some(Command::Run) => Ok(()),
+fn resolve_command(cli: &Cli) -> anyhow::Result<Command> {
+    match &cli.command {
+        Some(command) => Ok(command.clone()),
         None => anyhow::bail!("choose `run` to start the scheduler"),
     }
 }
@@ -490,6 +606,8 @@ mod tests {
     use std::time::Duration;
 
     use au_kpis_queue::JobKind;
+    use au_kpis_scheduler::data_quality::DataQualityReport;
+    use chrono::Utc;
 
     use super::*;
 
@@ -555,5 +673,34 @@ mod tests {
         assert_eq!(trace.len(), 55);
         assert!(trace.starts_with("00-"));
         assert!(trace.ends_with("-01"));
+    }
+
+    #[tokio::test]
+    async fn write_data_quality_reports_writes_markdown_and_json() {
+        let now = Utc::now();
+        let report = DataQualityReport {
+            generated_at: now,
+            window_start: now - chrono::Duration::days(1),
+            window_end: now,
+            results: Vec::new(),
+        };
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "au-kpis-data-quality-report-{}-{}.md",
+            std::process::id(),
+            now.timestamp_nanos_opt().expect("timestamp nanos")
+        ));
+
+        write_data_quality_reports(&path, &report)
+            .await
+            .expect("write reports");
+
+        let markdown = std::fs::read_to_string(&path).expect("read markdown report");
+        let json = std::fs::read_to_string(path.with_extension("json")).expect("read json report");
+        assert!(markdown.contains("# Data Quality Report"));
+        assert!(json.contains("\"results\""));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("json"));
     }
 }
