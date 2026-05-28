@@ -1,0 +1,19 @@
+{
+  "name": "@au-kpis/docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --pretty false && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "test": "pnpm run build && node scripts/verify-docs.mjs",
+    "typecheck": "tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@scalar/api-reference": "1.57.5"
+  },
+  "devDependencies": {
+    "typescript": "5.7.2",
+    "vite": "^6.0.3"
+  }
+}
