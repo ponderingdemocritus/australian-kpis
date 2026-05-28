@@ -20,6 +20,11 @@ SCENARIOS: dict[str, list[tuple[str, str, str]]] = {
         ("Server-error ratio", "server_error_ratio", "rate"),
         ("Rate-limit seen", "rate_limit_seen", "rate"),
     ],
+    "full-load": [
+        ("HTTP p99", "http_req_duration{endpoint:observations}", "p(99)"),
+        ("Failure rate", "http_req_failed", "rate"),
+        ("Dropped iterations", "dropped_iterations", "count"),
+    ],
 }
 
 
@@ -86,8 +91,14 @@ def read_summary(directory: Path, scenario: str) -> dict[str, Any] | None:
 def metric_value(summary: dict[str, Any] | None, metric: str, value_name: str) -> float | None:
     if summary is None:
         return None
-    values = summary.get("metrics", {}).get(metric, {}).get("values", {})
-    value = values.get(value_name)
+    metric_data = summary.get("metrics", {}).get(metric, {})
+    value = metric_data.get(value_name)
+    if not isinstance(value, (int, float)) and value_name == "rate":
+        value = metric_data.get("value")
+    if not isinstance(value, (int, float)):
+        values = metric_data.get("values", {})
+        if isinstance(values, dict):
+            value = values.get(value_name)
     if isinstance(value, (int, float)):
         return float(value)
     return None
@@ -98,6 +109,8 @@ def format_value(value: float | None, value_name: str) -> str:
         return "n/a"
     if value_name == "rate":
         return f"{value * 100:.3f}%"
+    if value_name == "count":
+        return f"{value:.0f}"
     return f"{value:.1f} ms"
 
 

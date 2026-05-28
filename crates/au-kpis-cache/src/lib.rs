@@ -71,6 +71,7 @@ redis.call('PEXPIRE', key, ttl_ms)
 
 return {allowed, math.floor(tokens_scaled / scale), retry_after_ms}
 "#;
+const REDIS_POOL_SIZE: usize = 16;
 
 /// Token-bucket refill parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,7 +257,7 @@ impl CacheClient {
     #[instrument(skip(url))]
     pub async fn connect(url: &str) -> Result<Self, CacheError> {
         let config = RedisConfig::from_url(url)?;
-        let pool = Builder::from_config(config).build_pool(2)?;
+        let pool = Builder::from_config(config).build_pool(REDIS_POOL_SIZE)?;
         let _connection_task = pool.init().await?;
         Ok(Self::from_backend(FredBackend { pool }))
     }

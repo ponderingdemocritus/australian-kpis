@@ -267,7 +267,7 @@ pub struct ConnectOptions {
 impl Default for ConnectOptions {
     fn default() -> Self {
         Self {
-            max_connections: 8,
+            max_connections: 64,
             min_connections: 0,
             acquire_timeout: Duration::from_secs(5),
         }
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn default_connect_options_are_conservative() {
         let opts = ConnectOptions::default();
-        assert!(opts.max_connections >= 1);
+        assert_eq!(opts.max_connections, 64);
         assert!(opts.min_connections <= opts.max_connections);
         assert!(opts.acquire_timeout >= Duration::from_secs(1));
     }

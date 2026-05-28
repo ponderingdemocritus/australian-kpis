@@ -81,6 +81,15 @@ mid-load, severing DB connectivity, filling queue capacity, source 5xx circuit
 breaker recovery, and vacuum/compaction during heavy writes. See `docs/chaos.md`
 for local execution and failure interpretation.
 
+## Phase 5 full-load validation
+
+`apps/bench/full-load.js` drives `/v1/observations` at 1000 rps for 10 minutes
+with p99 <1s, error rate <0.1%, and no dropped k6 iterations. It is exposed as
+the `full-load` manual-dispatch scenario in `.github/workflows/k6-nightly.yml`
+so operators can rerun the Phase 5 validation against staging without making it
+part of the nightly sustained/burst load run. The May 2026 validation report is
+committed at `docs/perf/load-test-2026-05.md`.
+
 ## Nightly cargo-fuzz
 
 `.github/workflows/fuzz-nightly.yml` runs at `0 3 * * *` on `main`. It installs

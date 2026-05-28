@@ -1,6 +1,6 @@
 //! `/v1/observations` query handling and streaming renderers.
 
-use std::{collections::BTreeMap, fmt, io, sync::Arc};
+use std::{collections::BTreeMap, fmt, io, sync::Arc, time::Duration};
 
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
@@ -36,6 +36,7 @@ use crate::{AppState, error::ApiError};
 const DEFAULT_LIMIT: usize = 1_000;
 const MAX_LIMIT: usize = 10_000;
 const CACHE_CONTROL_VALUE: &str = "public, max-age=60, stale-while-revalidate=300";
+const JSON_RESPONSE_CACHE_TTL: Duration = Duration::from_secs(300);
 const PARQUET_ROW_GROUP_TARGET_BYTES: usize = 1_000_000;
 const PARQUET_BATCH_ROWS: usize = 1_024;
 
@@ -169,6 +170,13 @@ pub async fn list_observations(
     uri: Uri,
 ) -> Result<Response, ApiError> {
     let query = parse_observations_query(uri.query())?;
+    let json_cache_key = observations_json_cache_key(uri.query(), &query);
+    if should_cache_json_observations(&query) {
+        if let Some(cached) = read_cached_json_observations(&state, &json_cache_key).await {
+            return cached_json_observations_response(&headers, cached);
+        }
+    }
+
     let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
     let etag = compute_etag(&state.db, &query).await?;
     let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
@@ -192,6 +200,20 @@ pub async fn list_observations(
         ResponseFormat::Parquet => HeaderValue::from_static("application/vnd.apache.parquet"),
     };
     let stream = match query.format {
+        ResponseFormat::Json if should_cache_json_observations(&query) => {
+            let body =
+                render_json_observations(state.db.clone(), query.clone(), metadata.clone()).await?;
+            write_cached_json_observations(
+                &state,
+                &json_cache_key,
+                &CachedJsonObservations {
+                    etag: etag.clone(),
+                    body: body.clone(),
+                },
+            )
+            .await;
+            Body::from(body)
+        }
         ResponseFormat::Json => {
             Body::from_stream(json_observations_stream(state.db.clone(), query, metadata))
         }
@@ -214,6 +236,12 @@ pub async fn list_observations(
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
     Ok(response)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedJsonObservations {
+    etag: String,
+    body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,6 +503,115 @@ fn if_none_match_fresh(headers: &HeaderMap, etag: &str) -> bool {
                 .map(str::trim)
                 .any(|candidate| candidate == "*" || candidate == etag)
         })
+}
+
+fn should_cache_json_observations(query: &ParsedObservationsQuery) -> bool {
+    // Keep the hot-path cache bounded; cursor pages and export formats stay streaming.
+    query.format == ResponseFormat::Json && query.cursor.is_none() && query.limit <= DEFAULT_LIMIT
+}
+
+fn observations_json_cache_key(raw_query: Option<&str>, query: &ParsedObservationsQuery) -> String {
+    format!(
+        "observations:v1:{}:{}",
+        query.format,
+        BASE64_URL_SAFE_NO_PAD.encode(raw_query.unwrap_or_default())
+    )
+}
+
+async fn read_cached_json_observations(
+    state: &AppState,
+    key: &str,
+) -> Option<CachedJsonObservations> {
+    match state.cache.get_json(key).await {
+        Ok(cached) => cached,
+        Err(err) => {
+            tracing::warn!(error = %err, cache.key = key, "observations JSON cache read failed");
+            None
+        }
+    }
+}
+
+async fn write_cached_json_observations(
+    state: &AppState,
+    key: &str,
+    value: &CachedJsonObservations,
+) {
+    if let Err(err) = state
+        .cache
+        .set_json(key, value, JSON_RESPONSE_CACHE_TTL)
+        .await
+    {
+        tracing::warn!(error = %err, cache.key = key, "observations JSON cache write failed");
+    }
+}
+
+fn cached_json_observations_response(
+    headers: &HeaderMap,
+    cached: CachedJsonObservations,
+) -> Result<Response, ApiError> {
+    let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
+    let etag_header = HeaderValue::from_str(&cached.etag).map_err(|err| {
+        tracing::error!(error = %err, "cached ETag header is invalid");
+        ApiError::Internal
+    })?;
+
+    if if_none_match_fresh(headers, &cached.etag) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, cache_control);
+        response.headers_mut().insert(header::ETAG, etag_header);
+        return Ok(response);
+    }
+
+    let mut response = Response::new(Body::from(cached.body));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, cache_control);
+    response.headers_mut().insert(header::ETAG, etag_header);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    Ok(response)
+}
+
+async fn render_json_observations(
+    pool: PgPool,
+    query: ParsedObservationsQuery,
+    metadata: ObservationsMetadata,
+) -> Result<String, ApiError> {
+    let metadata = serialize_json_chunk(&metadata)?;
+    let mut body = format!("{{\"metadata\":{metadata},\"observations\":[");
+
+    let limit = query.limit;
+    let stream = fetch_observation_rows(pool, query);
+    futures::pin_mut!(stream);
+    let mut emitted = 0_usize;
+    let mut first = true;
+    let mut last_cursor = None;
+    let mut next_cursor = None;
+    while let Some(row) = stream.try_next().await? {
+        if emitted == limit {
+            next_cursor = last_cursor;
+            break;
+        }
+
+        if !first {
+            body.push(',');
+        }
+        first = false;
+        last_cursor = Some(encode_cursor(&ObservationCursor {
+            time: row.time,
+            series_key: row.series_key,
+        })?);
+        emitted += 1;
+        body.push_str(&serialize_json_chunk(&row)?);
+    }
+
+    let pagination = serialize_json_chunk(&PaginationMetadata { next_cursor })?;
+    body.push_str(&format!("],\"pagination\":{pagination}}}"));
+    Ok(body)
 }
 
 fn json_observations_stream(
@@ -821,6 +958,10 @@ pub mod benchmark_support {
     pub const PARQUET_STREAM_BENCHMARK_BUDGET: Duration = Duration::from_secs(30);
     /// The Phase 3 Parquet benchmark peak heap budget.
     pub const PARQUET_STREAM_DHAT_HEAP_BUDGET_BYTES: usize = 100 * 1024 * 1024;
+    /// The Phase 5 Parquet scale-validation row count.
+    pub const PARQUET_SCALE_VALIDATION_ROWS: usize = 10_000_000;
+    /// The Phase 5 Parquet scale-validation wall-clock budget.
+    pub const PARQUET_SCALE_VALIDATION_BUDGET: Duration = Duration::from_secs(30);
 
     /// Summary of a drained synthetic Parquet stream.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1197,6 +1338,30 @@ mod tests {
         let query = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
 
         assert_eq!(query.format, ResponseFormat::Parquet);
+    }
+
+    #[test]
+    fn only_first_page_json_observations_use_response_cache() {
+        let first_page = parse_observations_query(Some("dataflow=abs.cpi&limit=500")).unwrap();
+        assert!(should_cache_json_observations(&first_page));
+        let key = observations_json_cache_key(Some("dataflow=abs.cpi&limit=500"), &first_page);
+        assert!(key.starts_with("observations:v1:json:"));
+        assert!(!key.contains("dataflow=abs.cpi"));
+
+        let csv = parse_observations_query(Some("dataflow=abs.cpi&format=csv")).unwrap();
+        assert!(!should_cache_json_observations(&csv));
+
+        let cursor = encode_cursor(&ObservationCursor {
+            time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            series_key: SeriesKey::derive(
+                &DataflowId::new("abs.cpi").unwrap(),
+                [("region", "AUS")],
+            ),
+        })
+        .unwrap();
+        let cursor_page =
+            parse_observations_query(Some(&format!("dataflow=abs.cpi&cursor={cursor}"))).unwrap();
+        assert!(!should_cache_json_observations(&cursor_page));
     }
 
     #[tokio::test]
