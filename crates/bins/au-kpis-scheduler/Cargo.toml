@@ -16,15 +16,22 @@ au-kpis-queue = { workspace = true }
 au-kpis-telemetry = { workspace = true }
 # Reuse the API/ingestion HTTP stack for the Prometheus metrics endpoint.
 axum = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 # CLI parsing is binary-local; no workspace helper handles scheduler flags.
 clap = { version = "4", features = ["derive", "env"] }
+# PagerDuty Events v2 is an outbound JSON API; reqwest is already used elsewhere
+# in the workspace and avoids hand-rolling TLS/HTTP retry plumbing.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Needed for session-scoped Postgres advisory locks.
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
+    "chrono",
 ] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"
 

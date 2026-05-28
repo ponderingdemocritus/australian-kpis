@@ -1,0 +1,38 @@
+name: Data Quality
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  data-quality:
+    name: Run production data-quality checks
+    runs-on: ubuntu-latest
+    env:
+      AU_KPIS_DATABASE__URL: ${{ secrets.PROD_DATABASE_URL }}
+      AU_KPIS_PAGERDUTY_ROUTING_KEY: ${{ secrets.PAGERDUTY_ROUTING_KEY }}
+      AU_KPIS_DATA_QUALITY_REPORT_PATH: target/data-quality/data-quality-report.md
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Run data-quality checks
+        run: |
+          cargo run --locked -p au-kpis-scheduler -- data-quality \
+            --report-path "${AU_KPIS_DATA_QUALITY_REPORT_PATH}"
+
+      - name: Upload data-quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-quality-report
+          path: target/data-quality/
+          if-no-files-found: error
