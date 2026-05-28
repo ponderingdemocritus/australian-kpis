@@ -11,6 +11,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
+    io::{BufRead, BufReader, Cursor},
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
@@ -23,10 +24,15 @@ use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::stream::BoxStream;
+use quick_xml::{Reader as XmlReader, events::Event};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::Mutex, time::sleep};
 use tokio_util::sync::CancellationToken;
+use zip::ZipArchive;
+
+const XLSX_MAX_COLUMN: u32 = 16_384;
+const XLSX_MAX_ROW: u32 = 1_048_576;
 
 /// Streaming observation payload emitted by adapters during parse.
 pub type ObservationStream<'a> =
@@ -84,6 +90,124 @@ pub fn retry_after_delta(headers: &ResponseHeaders) -> Option<Duration> {
                 .ok()
                 .or_else(|| retry_after_http_date(value))
         })
+}
+
+/// Validate worksheet cell references before handing XLSX bytes to downstream
+/// workbook parsers.
+///
+/// Malformed cell coordinates have triggered panics in third-party XLSX
+/// readers. This helper treats invalid ZIP/XML/cell references as source
+/// format drift and leaves non-XLSX byte streams untouched.
+pub fn validate_xlsx_workbook_cell_refs(bytes: &[u8], source: &str) -> Result<(), AdapterError> {
+    if !bytes.starts_with(b"PK") {
+        return Ok(());
+    }
+
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|err| {
+        AdapterError::FormatDrift(format!("{source} XLSX ZIP is unreadable: {err}"))
+    })?;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|err| {
+            AdapterError::FormatDrift(format!("{source} XLSX ZIP entry is unreadable: {err}"))
+        })?;
+        let name = entry.name().to_string();
+        if name.starts_with("xl/worksheets/") && name.ends_with(".xml") {
+            validate_xlsx_worksheet_cell_refs(source, &name, BufReader::new(entry))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_xlsx_worksheet_cell_refs<R: BufRead>(
+    source: &str,
+    sheet_name: &str,
+    xml: R,
+) -> Result<(), AdapterError> {
+    let mut reader = XmlReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element))
+                if element.local_name().as_ref() == b"c" =>
+            {
+                for attribute in element.attributes().with_checks(false) {
+                    let attribute = attribute.map_err(|err| {
+                        AdapterError::FormatDrift(format!(
+                            "{source} XLSX worksheet `{sheet_name}` has invalid XML attributes: {err}"
+                        ))
+                    })?;
+                    if attribute.key.as_ref() == b"r" {
+                        let reference =
+                            attribute
+                                .decode_and_unescape_value(reader.decoder())
+                                .map_err(|err| {
+                                    AdapterError::FormatDrift(format!(
+                                        "{source} XLSX worksheet `{sheet_name}` has invalid cell reference: {err}"
+                                    ))
+                                })?;
+                        validate_xlsx_cell_reference(source, sheet_name, &reference)?;
+                    }
+                }
+            }
+            Ok(Event::Eof) => return Ok(()),
+            Ok(_) => {}
+            Err(err) => {
+                return Err(AdapterError::FormatDrift(format!(
+                    "{source} XLSX worksheet `{sheet_name}` is malformed XML: {err}"
+                )));
+            }
+        }
+        buffer.clear();
+    }
+}
+
+fn validate_xlsx_cell_reference(
+    source: &str,
+    sheet_name: &str,
+    reference: &str,
+) -> Result<(), AdapterError> {
+    let mut bytes = reference.bytes().peekable();
+    let _ = bytes.next_if_eq(&b'$');
+
+    let mut column = 0_u32;
+    let mut has_column = false;
+    while let Some(byte) = bytes.next_if(|byte| byte.is_ascii_alphabetic()) {
+        has_column = true;
+        let value = u32::from(byte.to_ascii_uppercase() - b'A' + 1);
+        column = column
+            .checked_mul(26)
+            .and_then(|current| current.checked_add(value))
+            .ok_or_else(|| invalid_xlsx_cell_reference(source, sheet_name, reference))?;
+        if column > XLSX_MAX_COLUMN {
+            return Err(invalid_xlsx_cell_reference(source, sheet_name, reference));
+        }
+    }
+
+    let _ = bytes.next_if_eq(&b'$');
+    let mut row = 0_u32;
+    let mut has_row = false;
+    while let Some(byte) = bytes.next_if(|byte| byte.is_ascii_digit()) {
+        has_row = true;
+        row = row
+            .checked_mul(10)
+            .and_then(|current| current.checked_add(u32::from(byte - b'0')))
+            .ok_or_else(|| invalid_xlsx_cell_reference(source, sheet_name, reference))?;
+        if row > XLSX_MAX_ROW {
+            return Err(invalid_xlsx_cell_reference(source, sheet_name, reference));
+        }
+    }
+
+    if !has_column || !has_row || row == 0 || bytes.peek().is_some() {
+        return Err(invalid_xlsx_cell_reference(source, sheet_name, reference));
+    }
+
+    Ok(())
+}
+
+fn invalid_xlsx_cell_reference(source: &str, sheet_name: &str, reference: &str) -> AdapterError {
+    AdapterError::FormatDrift(format!(
+        "invalid {source} XLSX worksheet cell reference `{reference}` in `{sheet_name}`"
+    ))
 }
 
 fn retry_after_http_date(value: &str) -> Option<Duration> {

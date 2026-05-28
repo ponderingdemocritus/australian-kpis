@@ -6,6 +6,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{self, Cursor},
+    panic::{self, AssertUnwindSafe},
     time::Duration,
 };
 
@@ -13,7 +14,7 @@ use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterManifest, ArtifactRef, DiscoveredJob, DiscoveryCtx, FetchCtx,
     ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
-    capture_response_headers, retry_after_delta,
+    capture_response_headers, retry_after_delta, validate_xlsx_workbook_cell_refs,
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, CodeId, Dataflow, DataflowId, DimensionId, Frequency, License, MeasureId,
@@ -308,6 +309,16 @@ fn parse_xls_workbook(
     provenance: ApraReleaseProvenance,
     ingested_at: DateTime<Utc>,
 ) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    catch_xls_parser_panic(|| parse_xls_workbook_inner(bytes, artifact, provenance, ingested_at))
+}
+
+fn parse_xls_workbook_inner(
+    bytes: Vec<u8>,
+    artifact: ArtifactRef,
+    provenance: ApraReleaseProvenance,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    validate_xlsx_workbook_cell_refs(&bytes, "APRA")?;
     let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes))
         .map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
     let sheet_names = workbook.sheet_names().to_vec();
@@ -361,6 +372,16 @@ fn parse_xls_workbook(
         ));
     }
     Ok(parsed)
+}
+
+fn catch_xls_parser_panic<T>(
+    parse: impl FnOnce() -> Result<T, AdapterError>,
+) -> Result<T, AdapterError> {
+    panic::catch_unwind(AssertUnwindSafe(parse)).unwrap_or_else(|_| {
+        Err(AdapterError::FormatDrift(
+            "APRA workbook parser panicked while reading malformed XLS/XLSX".into(),
+        ))
+    })
 }
 
 /// Parse one arbitrary XLS/XLSX byte slice through the APRA XLS parser core for
@@ -1403,6 +1424,41 @@ fn quarter_version(started_at: DateTime<Utc>) -> String {
 mod tests {
     use super::*;
 
+    fn decode_hex_fixture(hex: &str) -> Vec<u8> {
+        let digits = hex
+            .bytes()
+            .filter(|byte| !byte.is_ascii_whitespace())
+            .collect::<Vec<_>>();
+        digits
+            .chunks_exact(2)
+            .map(|pair| {
+                let high = char::from(pair[0]).to_digit(16).expect("hex digit");
+                let low = char::from(pair[1]).to_digit(16).expect("hex digit");
+                ((high << 4) | low) as u8
+            })
+            .collect()
+    }
+
+    fn apra_fuzz_artifact(bytes: &[u8]) -> (ArtifactRef, ApraReleaseProvenance, DateTime<Utc>) {
+        let id = ArtifactId::of_content(bytes);
+        let source_url = "https://www.apra.gov.au/sites/default/files/centralised.xlsx";
+        let fetched_at = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let artifact = ArtifactRef {
+            id,
+            source_id: source_id(),
+            source_url: source_url.into(),
+            content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                .into(),
+            response_headers: BTreeMap::new(),
+            storage_key: StorageKey::canonical_for(&id).to_string(),
+            size_bytes: bytes.len() as u64,
+            fetched_at,
+        };
+        let provenance =
+            release_url_provenance_for_parse(source_url).expect("static APRA URL has provenance");
+        (artifact, provenance, fetched_at)
+    }
+
     #[test]
     fn parse_apra_quarter_accepts_month_labels_and_excel_serials() {
         let (time, precision) = parse_apra_quarter("Dec 2025")
@@ -1416,6 +1472,24 @@ mod tests {
             .expect("period");
         assert_eq!(precision, TimePrecision::Quarter);
         assert_eq!(time.to_rfc3339(), "2025-10-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn malformed_xlsx_returns_format_error_instead_of_panicking() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-row-overflow.xlsx.hex"
+        ));
+        let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+
+        let parsed = std::panic::catch_unwind(|| {
+            parse_xls_workbook(bytes, artifact, provenance, ingested_at)
+        });
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(err.to_string().contains("APRA XLSX worksheet"), "{err}");
     }
 
     #[test]

@@ -6,6 +6,7 @@
 use std::{
     collections::BTreeMap,
     io::{self, Cursor},
+    panic::{self, AssertUnwindSafe},
     time::Duration,
 };
 
@@ -13,7 +14,7 @@ use async_trait::async_trait;
 use au_kpis_adapter::{
     AdapterError, AdapterManifest, ArtifactRef, DiscoveredJob, DiscoveryCtx, FetchCtx,
     ObservationStream, ParseCtx, RateLimit, SourceAdapter, UpstreamRevision,
-    capture_response_headers, retry_after_delta,
+    capture_response_headers, retry_after_delta, validate_xlsx_workbook_cell_refs,
 };
 use au_kpis_domain::{
     Artifact, CodeId, Dataflow, DataflowId, DimensionId, Frequency, License, MeasureId,
@@ -356,6 +357,11 @@ async fn send_rows(
 }
 
 fn parse_xls_rows(bytes: Vec<u8>) -> Result<Vec<Vec<String>>, AdapterError> {
+    catch_xls_parser_panic(|| parse_xls_rows_inner(bytes))
+}
+
+fn parse_xls_rows_inner(bytes: Vec<u8>) -> Result<Vec<Vec<String>>, AdapterError> {
+    validate_xlsx_workbook_cell_refs(&bytes, "RBA")?;
     let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes))
         .map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
     let sheet_name = workbook
@@ -370,6 +376,16 @@ fn parse_xls_rows(bytes: Vec<u8>) -> Result<Vec<Vec<String>>, AdapterError> {
         .rows()
         .map(|row| row.iter().map(cell_to_string).collect())
         .collect())
+}
+
+fn catch_xls_parser_panic<T>(
+    parse: impl FnOnce() -> Result<T, AdapterError>,
+) -> Result<T, AdapterError> {
+    panic::catch_unwind(AssertUnwindSafe(parse)).unwrap_or_else(|_| {
+        Err(AdapterError::FormatDrift(
+            "RBA workbook parser panicked while reading malformed XLS/XLSX".into(),
+        ))
+    })
 }
 
 /// Parse one arbitrary CSV byte slice through the RBA CSV parser core for
@@ -1087,6 +1103,21 @@ mod tests {
     use super::*;
     use calamine::{ExcelDateTime, ExcelDateTimeType};
 
+    fn decode_hex_fixture(hex: &str) -> Vec<u8> {
+        let digits = hex
+            .bytes()
+            .filter(|byte| !byte.is_ascii_whitespace())
+            .collect::<Vec<_>>();
+        digits
+            .chunks_exact(2)
+            .map(|pair| {
+                let high = char::from(pair[0]).to_digit(16).expect("hex digit");
+                let low = char::from(pair[1]).to_digit(16).expect("hex digit");
+                ((high << 4) | low) as u8
+            })
+            .collect()
+    }
+
     #[test]
     fn cell_to_string_formats_excel_datetime_cells_as_iso_periods() {
         let cell = Data::DateTime(ExcelDateTime::new(
@@ -1096,5 +1127,20 @@ mod tests {
         ));
 
         assert_eq!(cell_to_string(&cell), "2025-10-13T12:59:02");
+    }
+
+    #[test]
+    fn malformed_xlsx_returns_format_error_instead_of_panicking() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-row-overflow.xlsx.hex"
+        ));
+
+        let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(err.to_string().contains("RBA XLSX worksheet"), "{err}");
     }
 }
