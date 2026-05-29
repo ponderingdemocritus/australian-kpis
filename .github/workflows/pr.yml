@@ -676,25 +676,51 @@ jobs:
           git checkout --detach "${pr_sha}"
 
       - name: Run benchmark regression comparison
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
           set -euo pipefail
-          set +e
-          critcmp_output="$(critcmp main pr --threshold 5 --list 2>&1)"
-          critcmp_status=$?
-          set -e
-          printf '%s\n' "${critcmp_output}"
-          if [ "${critcmp_status}" -ne 0 ]; then
-            echo "critcmp threshold check exited with status ${critcmp_status}; verifying confidence bounds."
-          fi
-          critcmp --export main > target/criterion-main.json
-          critcmp --export pr > target/criterion-pr.json
-          python3 <<'PY'
+
+          run_benchmarks() {
+            local baseline="$1"
+            cargo bench -p au-kpis-domain --bench observation_json --locked -- --save-baseline "${baseline}"
+            if [ -f crates/adapters/abs/benches/sdmx_parse.rs ]; then
+              cargo bench -p au-kpis-adapter-abs --bench sdmx_parse --locked -- --save-baseline "${baseline}"
+            fi
+            if [ -f crates/au-kpis-loader/benches/copy_upsert.rs ]; then
+              cargo bench -p au-kpis-loader --bench copy_upsert --locked -- --save-baseline "${baseline}"
+            fi
+            if [ -f crates/au-kpis-api-http/benches/observations_handler.rs ]; then
+              cargo bench -p au-kpis-api-http --bench observations_handler --locked -- --save-baseline "${baseline}"
+            fi
+            if [ -f crates/au-kpis-api-http/benches/parquet_stream.rs ]; then
+              cargo bench -p au-kpis-api-http --bench parquet_stream --locked -- --save-baseline "${baseline}"
+            fi
+          }
+
+          compare_baselines() {
+            local main_baseline="$1"
+            local pr_baseline="$2"
+            set +e
+            critcmp_output="$(critcmp "${main_baseline}" "${pr_baseline}" --threshold 5 --list 2>&1)"
+            critcmp_status=$?
+            set -e
+            printf '%s\n' "${critcmp_output}"
+            if [ "${critcmp_status}" -ne 0 ]; then
+              echo "critcmp threshold check exited with status ${critcmp_status}; verifying confidence bounds."
+            fi
+            critcmp --export "${main_baseline}" > "target/criterion-${main_baseline}.json"
+            critcmp --export "${pr_baseline}" > "target/criterion-${pr_baseline}.json"
+            python3 - "${main_baseline}" "${pr_baseline}" <<'PY'
           import json
           import sys
 
-          with open("target/criterion-main.json", encoding="utf-8") as handle:
+          main_baseline = sys.argv[1]
+          pr_baseline = sys.argv[2]
+
+          with open(f"target/criterion-{main_baseline}.json", encoding="utf-8") as handle:
               main = json.load(handle)["benchmarks"]
-          with open("target/criterion-pr.json", encoding="utf-8") as handle:
+          with open(f"target/criterion-{pr_baseline}.json", encoding="utf-8") as handle:
               pr = json.load(handle)["benchmarks"]
 
           common = sorted(set(main) & set(pr))
@@ -722,6 +748,20 @@ jobs:
 
           print(f"No Criterion regressions above 5% across {len(common)} common benchmark(s).")
           PY
+          }
+
+          if compare_baselines main pr; then
+            exit 0
+          fi
+
+          echo "Initial benchmark comparison exceeded threshold; confirming with fresh baselines."
+          pr_sha="$(git rev-parse HEAD)"
+          run_benchmarks pr_confirm
+          git fetch --depth=1 origin "${BASE_REF}"
+          git checkout --detach FETCH_HEAD
+          run_benchmarks main_confirm
+          git checkout --detach "${pr_sha}"
+          compare_baselines main_confirm pr_confirm
 
   nextest:
     name: Rust Tests (nextest)

@@ -7,6 +7,13 @@ fn repo_root() -> &'static Path {
         .expect("testing crate lives under crates/testing")
 }
 
+fn workflow_blocks_on_criterion_threshold(pr_workflow: &str) -> bool {
+    pr_workflow.contains("critcmp main pr --threshold 5")
+        || (pr_workflow.contains("compare_baselines main pr")
+            && pr_workflow
+                .contains("critcmp \"${main_baseline}\" \"${pr_baseline}\" --threshold 5"))
+}
+
 #[test]
 fn benchmark_scaffold_matches_issue_contract() {
     let root = repo_root();
@@ -52,7 +59,7 @@ fn benchmark_scaffold_matches_issue_contract() {
         "PR workflow should run the API observations handler criterion bench"
     );
     assert!(
-        pr_workflow.contains("critcmp main pr --threshold 5"),
+        workflow_blocks_on_criterion_threshold(&pr_workflow),
         "PR workflow should run blocking critcmp comparison"
     );
 }
@@ -111,7 +118,7 @@ fn issue_37_benchmark_contract_is_wired() {
         "benchmark workflow should save a PR baseline for every committed criterion bench"
     );
     assert!(
-        pr_workflow.contains("critcmp main pr --threshold 5"),
+        workflow_blocks_on_criterion_threshold(&pr_workflow),
         "benchmark workflow should block on >5% regressions"
     );
     assert!(
@@ -516,7 +523,7 @@ fn issue_50_parquet_stream_benchmark_contract_is_wired() {
         "CI should enforce the 1M-row Parquet DHAT memory budget"
     );
     assert!(
-        pr_workflow.contains("critcmp main pr --threshold 5"),
+        workflow_blocks_on_criterion_threshold(&pr_workflow),
         "merge-queue benchmark regression threshold should remain 5%"
     );
 
