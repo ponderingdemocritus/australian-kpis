@@ -140,6 +140,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /v1/subscriptions`. */
+        post: operations["createSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -172,6 +189,18 @@ export interface components {
         };
         /** @description Identifier for a codelist (e.g. `CL_STATE_AU`). */
         CodelistId: string;
+        /** @description Request body for `POST /v1/subscriptions`. */
+        CreateSubscriptionRequest: {
+            /** @description Optional dataflow filter. Empty means every dataflow update. */
+            dataflow_ids?: components["schemas"]["DataflowId"][];
+            /** @description Absolute HTTP(S) URL to receive webhook deliveries. */
+            url: string;
+        };
+        /** @description Response body for `POST /v1/subscriptions`. */
+        CreateSubscriptionResponse: {
+            /** @description Created subscription. */
+            subscription: components["schemas"]["SubscriptionDetails"];
+        };
         /** @description A dataflow — a named collection of series sharing dimensions and measures. */
         Dataflow: {
             /** @description Required attribution string shown to end-users alongside derived charts. */
@@ -476,6 +505,27 @@ export interface components {
         };
         /** @description Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`). */
         SourceId: string;
+        /** @description Created webhook subscription details. */
+        SubscriptionDetails: {
+            /**
+             * Format: date-time
+             * @description UTC creation timestamp.
+             */
+            created_at: string;
+            /** @description Dataflow filter attached to the subscription. */
+            dataflow_ids: components["schemas"]["DataflowId"][];
+            /**
+             * Format: uuid
+             * @description Stable subscription id.
+             */
+            id: string;
+            /** @description HMAC signing secret shown once at creation. */
+            signing_secret: string;
+            /** @description Current subscription status. */
+            status: string;
+            /** @description Delivery target URL. */
+            url: string;
+        };
         /**
          * @description Temporal granularity of an observation's timestamp. Matches the SDMX
          *     `@FREQ` facet on a coarse scale.
@@ -559,6 +609,15 @@ export interface operations {
                     "application/json": components["schemas"]["DataflowDetailResponse"];
                 };
             };
+            /** @description Invalid path parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Dataflow not found. */
             404: {
                 headers: {
@@ -602,6 +661,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataflowCodelistResponse"];
+                };
+            };
+            /** @description Invalid path parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
             /** @description Dataflow or dimension not found. */
@@ -860,6 +928,57 @@ export interface operations {
             };
             /** @description Series not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    createSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Subscription created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateSubscriptionResponse"];
+                };
+            };
+            /** @description Invalid subscription request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Missing or invalid API key. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

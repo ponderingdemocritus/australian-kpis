@@ -56,6 +56,7 @@ async fn api_binary_honors_configured_shutdown_grace_period() {
     stream
         .write_all(b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\n")
         .expect("write partial request");
+    thread::sleep(Duration::from_millis(100));
 
     let started = Instant::now();
     harness.send_sigterm();

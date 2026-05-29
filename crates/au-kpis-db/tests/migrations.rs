@@ -221,6 +221,9 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "parse_errors",
         "series",
         "sources",
+        "webhook_deliveries",
+        "webhook_delivery_attempts",
+        "webhook_subscriptions",
     ] {
         assert!(
             table_names.contains(&expected),

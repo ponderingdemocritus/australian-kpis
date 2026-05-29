@@ -51,6 +51,24 @@ export interface Codelist {
  */
 export type CodelistId = string;
 
+/**
+ * Request body for `POST /v1/subscriptions`.
+ */
+export interface CreateSubscriptionRequest {
+  /** Optional dataflow filter. Empty means every dataflow update. */
+  dataflow_ids?: DataflowId[];
+  /** Absolute HTTP(S) URL to receive webhook deliveries. */
+  url: string;
+}
+
+/**
+ * Response body for `POST /v1/subscriptions`.
+ */
+export interface CreateSubscriptionResponse {
+  /** Created subscription. */
+  subscription: SubscriptionDetails;
+}
+
 export type DataflowDescription = string | null;
 
 /**
@@ -501,6 +519,24 @@ export interface SeriesRevisionMetadata {
 export type SourceId = string;
 
 /**
+ * Created webhook subscription details.
+ */
+export interface SubscriptionDetails {
+  /** UTC creation timestamp. */
+  created_at: string;
+  /** Dataflow filter attached to the subscription. */
+  dataflow_ids: DataflowId[];
+  /** Stable subscription id. */
+  id: string;
+  /** HMAC signing secret shown once at creation. */
+  signing_secret: string;
+  /** Current subscription status. */
+  status: string;
+  /** Delivery target URL. */
+  url: string;
+}
+
+/**
  * Temporal granularity of an observation's timestamp. Matches the SDMX
 `@FREQ` facet on a coarse scale.
  */
@@ -519,10 +555,14 @@ export const TimePrecision = {
 export type ListDataflowsParams = {
 /**
  * Optional source id filter, e.g. abs.
+ * @minLength 1
+ * @maxLength 128
  */
 source?: string;
 /**
  * Optional publication frequency filter.
+ * @minLength 1
+ * @pattern ^(annual|quarterly|monthly|weekly|daily|irregular)$
  */
 frequency?: string;
 };
@@ -530,6 +570,8 @@ frequency?: string;
 export type ListObservationsParams = {
 /**
  * Required dataflow id, e.g. abs.cpi.
+ * @minLength 1
+ * @maxLength 128
  */
 dataflow: string;
 /**
@@ -538,27 +580,36 @@ dataflow: string;
 'dimensions[]'?: string[];
 /**
  * Inclusive lower time bound as YYYY-MM-DD or RFC3339.
+ * @minLength 1
  */
 since?: string;
 /**
  * Inclusive upper time bound as YYYY-MM-DD or RFC3339.
+ * @minLength 1
  */
 until?: string;
 /**
  * Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain.
+ * @minLength 1
+ * @pattern ^(annual|quarterly|monthly|weekly|daily|irregular)$
  */
 frequency?: string;
 /**
  * Response format: json, csv, or parquet.
+ * @minLength 3
+ * @maxLength 7
+ * @pattern ^(json|csv|parquet)$
  */
 format?: string;
 /**
  * Opaque cursor from the previous page.
+ * @minLength 1
  */
 cursor?: string;
 /**
  * Page size, maximum 10000.
  * @minimum 0
+ * @maximum 10000
  */
 limit?: number;
 };
@@ -568,11 +619,13 @@ export type Openapi200 = { [key: string]: unknown };
 export type SearchCatalogParams = {
 /**
  * Search text.
+ * @minLength 1
  */
 q: string;
 /**
  * Maximum number of results, capped at 100.
  * @minimum 0
+ * @maximum 65535
  */
 limit?: number;
 };
@@ -646,6 +699,11 @@ export type getDataflowResponse200 = {
   status: 200
 }
 
+export type getDataflowResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type getDataflowResponse404 = {
   data: ProblemDetails
   status: 404
@@ -659,7 +717,7 @@ export type getDataflowResponse500 = {
 export type getDataflowResponseSuccess = (getDataflowResponse200) & {
   headers: Headers;
 };
-export type getDataflowResponseError = (getDataflowResponse404 | getDataflowResponse500) & {
+export type getDataflowResponseError = (getDataflowResponse400 | getDataflowResponse404 | getDataflowResponse500) & {
   headers: Headers;
 };
 
@@ -700,6 +758,11 @@ export type getDataflowCodelistResponse200 = {
   status: 200
 }
 
+export type getDataflowCodelistResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type getDataflowCodelistResponse404 = {
   data: ProblemDetails
   status: 404
@@ -713,7 +776,7 @@ export type getDataflowCodelistResponse500 = {
 export type getDataflowCodelistResponseSuccess = (getDataflowCodelistResponse200) & {
   headers: Headers;
 };
-export type getDataflowCodelistResponseError = (getDataflowCodelistResponse404 | getDataflowCodelistResponse500) & {
+export type getDataflowCodelistResponseError = (getDataflowCodelistResponse400 | getDataflowCodelistResponse404 | getDataflowCodelistResponse500) & {
   headers: Headers;
 };
 
@@ -1058,4 +1121,64 @@ export const getSeries = async (dataflow: string,
 
   const data: getSeriesResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as getSeriesResponse
+}
+
+
+
+/**
+ * @summary `POST /v1/subscriptions`.
+ */
+export type createSubscriptionResponse201 = {
+  data: CreateSubscriptionResponse
+  status: 201
+}
+
+export type createSubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type createSubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type createSubscriptionResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type createSubscriptionResponseSuccess = (createSubscriptionResponse201) & {
+  headers: Headers;
+};
+export type createSubscriptionResponseError = (createSubscriptionResponse400 | createSubscriptionResponse401 | createSubscriptionResponse500) & {
+  headers: Headers;
+};
+
+export type createSubscriptionResponse = (createSubscriptionResponseSuccess | createSubscriptionResponseError)
+
+export const getCreateSubscriptionUrl = () => {
+
+
+
+
+  return `/v1/subscriptions`
+}
+
+export const createSubscription = async (createSubscriptionRequest: CreateSubscriptionRequest, options?: RequestInit): Promise<createSubscriptionResponse> => {
+
+  const res = await fetch(getCreateSubscriptionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      createSubscriptionRequest,)
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: createSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as createSubscriptionResponse
 }
