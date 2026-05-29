@@ -1,0 +1,228 @@
+---
+source: crates/adapters/aemo/tests/parse.rs
+expression: snapshot
+---
+{
+  "observation_count": 8,
+  "series_count": 8,
+  "first_rows": [
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "rrp",
+        "region": "NSW1"
+      },
+      "unit": "AUD/MWh",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 91.89,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "rrp",
+        "price_status": "FIRM",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "5",
+        "run_no": "1",
+        "table": "PRICE"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "rrp",
+        "region": "QLD1"
+      },
+      "unit": "AUD/MWh",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 40.02,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "rrp",
+        "price_status": "FIRM",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "5",
+        "run_no": "1",
+        "table": "PRICE"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "total_demand",
+        "region": "NSW1"
+      },
+      "unit": "MW",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 7989.37,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "total_demand",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "9",
+        "run_no": "1",
+        "table": "REGIONSUM"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "available_generation",
+        "region": "NSW1"
+      },
+      "unit": "MW",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 13499.68147,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "available_generation",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "9",
+        "run_no": "1",
+        "table": "REGIONSUM"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "net_interchange",
+        "region": "NSW1"
+      },
+      "unit": "MW",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": -944.77,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "net_interchange",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "9",
+        "run_no": "1",
+        "table": "REGIONSUM"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "total_demand",
+        "region": "QLD1"
+      },
+      "unit": "MW",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 4750.84,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "total_demand",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "9",
+        "run_no": "1",
+        "table": "REGIONSUM"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "available_generation",
+        "region": "QLD1"
+      },
+      "unit": "MW",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 11744.2721,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "available_generation",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "9",
+        "run_no": "1",
+        "table": "REGIONSUM"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    },
+    {
+      "dataflow_id": "aemo.dispatch",
+      "measure_id": "value",
+      "dimensions": {
+        "metric": "net_interchange",
+        "region": "QLD1"
+      },
+      "unit": "MW",
+      "time": "2026-05-29T01:10:00+00:00",
+      "time_precision": "Minute",
+      "value": 774.26,
+      "status": "Normal",
+      "attributes": {
+        "csv_file": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        "dispatch_interval": "2026-05-29T01:10:00+00:00",
+        "dispatch_interval_no": "20260529086",
+        "freshness_slo_seconds": "900",
+        "intervention": "0",
+        "last_changed": "2026/05/29 11:05:08",
+        "metric": "net_interchange",
+        "published_at": "2026-05-29T01:05:12Z",
+        "record_version": "9",
+        "run_no": "1",
+        "table": "REGIONSUM"
+      },
+      "source_artifact_id": "3d21f25c897f3b73fad13d1df5d1c79dbcb7b58cc41e6edd874fd2d77a077713"
+    }
+  ]
+}

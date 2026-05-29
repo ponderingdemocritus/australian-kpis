@@ -545,6 +545,7 @@ export type TimePrecision = typeof TimePrecision[keyof typeof TimePrecision];
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const TimePrecision = {
+  minute: 'minute',
   day: 'day',
   week: 'week',
   month: 'month',

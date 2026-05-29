@@ -13,6 +13,7 @@ use crate::ids::{ArtifactId, SeriesKey};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TimePrecision {
+    Minute,
     Day,
     Week,
     Month,
@@ -133,6 +134,7 @@ mod tests {
 
     fn arb_time_precision() -> impl Strategy<Value = TimePrecision> {
         prop_oneof![
+            Just(TimePrecision::Minute),
             Just(TimePrecision::Day),
             Just(TimePrecision::Week),
             Just(TimePrecision::Month),

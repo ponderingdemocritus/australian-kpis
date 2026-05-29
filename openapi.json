@@ -1498,7 +1498,7 @@
       "TimePrecision": {
         "type": "string",
         "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
-        "enum": ["day", "week", "month", "quarter", "year"]
+        "enum": ["minute", "day", "week", "month", "quarter", "year"]
       }
     },
     "securitySchemes": {

@@ -92,6 +92,32 @@ groups:
           summary: Dataflow freshness slow burn
           description: Dataflow {{ $labels.dataflow }} has stayed stale across the slow burn window.
 
+      - alert: AuKpisAemoDispatchFreshnessFastBurn
+        expr: max(au_kpis_ingestion_lag_seconds{dataflow="aemo.dispatch"}) > 900
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: data-freshness
+          dataflow: aemo.dispatch
+          window: fast
+        annotations:
+          summary: AEMO DispatchIS freshness fast burn
+          description: AEMO DispatchIS observations are more than 15 minutes behind publication.
+
+      - alert: AuKpisAemoDispatchFreshnessSlowBurn
+        expr: max(avg_over_time(au_kpis_ingestion_lag_seconds{dataflow="aemo.dispatch"}[15m])) > 900
+        for: 15m
+        labels:
+          severity: page
+          team: data-platform
+          slo: data-freshness
+          dataflow: aemo.dispatch
+          window: slow
+        annotations:
+          summary: AEMO DispatchIS freshness slow burn
+          description: AEMO DispatchIS freshness has stayed above the 15-minute SLO.
+
       - alert: AuKpisIngestionErrorFastBurn
         expr: |
           (

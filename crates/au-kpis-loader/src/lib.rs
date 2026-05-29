@@ -998,6 +998,7 @@ fn escape_copy_field(payload: &mut String, field: &str) {
 
 fn time_precision_db(value: TimePrecision) -> &'static str {
     match value {
+        TimePrecision::Minute => "minute",
         TimePrecision::Day => "day",
         TimePrecision::Week => "week",
         TimePrecision::Month => "month",

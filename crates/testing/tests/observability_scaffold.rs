@@ -84,6 +84,8 @@ fn issue_47_observability_stack_contract_is_wired() {
         "AuKpisApiLatencySlowBurn",
         "AuKpisFreshnessFastBurn",
         "AuKpisFreshnessSlowBurn",
+        "aemo.dispatch",
+        "900",
         "AuKpisIngestionErrorFastBurn",
         "AuKpisIngestionErrorSlowBurn",
         "AuKpisSchemaHashDrift",

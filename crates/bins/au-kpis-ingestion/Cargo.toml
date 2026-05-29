@@ -11,6 +11,7 @@ description = "Ingestion worker binary."
 anyhow = "1"
 au-kpis-adapter = { workspace = true }
 au-kpis-adapter-abs = { path = "../../adapters/abs" }
+au-kpis-adapter-aemo = { path = "../../adapters/aemo" }
 au-kpis-adapter-apra = { path = "../../adapters/apra" }
 au-kpis-adapter-rba = { path = "../../adapters/rba" }
 au-kpis-adapter-state-budgets = { path = "../../adapters/state-budgets" }

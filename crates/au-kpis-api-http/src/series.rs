@@ -205,6 +205,7 @@ fn json_map(value: Option<serde_json::Value>) -> Result<BTreeMap<String, String>
 
 fn parse_time_precision(value: &str) -> Result<TimePrecision, ApiError> {
     match value {
+        "minute" => Ok(TimePrecision::Minute),
         "day" => Ok(TimePrecision::Day),
         "week" => Ok(TimePrecision::Week),
         "month" => Ok(TimePrecision::Month),

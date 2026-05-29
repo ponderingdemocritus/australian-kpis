@@ -471,6 +471,8 @@ pub struct Observation {
 
 Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `Series`, `Observation`, `Artifact`. `ToSchema` derive (utoipa) makes them OpenAPI-visible. `SeriesKey` is a newtype wrapping a hash — not `String` — for type-safety at all boundaries, and series dimensions stay typed in-memory (`DimensionId`/`CodeId`) while serializing to ordinary JSON object keys/values.
 
+`TimePrecision` covers `minute`, `day`, `week`, `month`, `quarter`, and `year`; the `minute` value is used for sub-hourly feeds such as AEMO DispatchIS five-minute observations.
+
 ### Database schema (key tables)
 
 - **`series`** — vanilla Postgres, GIN index on `dimensions` JSONB for dimensional queries like "all VIC observations". ~100K rows, small.

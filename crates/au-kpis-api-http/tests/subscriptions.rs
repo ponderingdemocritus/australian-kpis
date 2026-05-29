@@ -170,7 +170,7 @@ async fn due_webhook_deliveries_are_hmac_signed_and_marked_delivered() {
     let outcome = deliver_due_webhooks(
         &ctx.pool,
         &reqwest::Client::new(),
-        Utc.with_ymd_and_hms(2026, 5, 29, 10, 0, 1).unwrap(),
+        Utc::now() + ChronoDuration::seconds(5),
         DeliveryOptions {
             max_attempts: 3,
             base_backoff: Duration::from_secs(10),
@@ -242,7 +242,7 @@ async fn failed_webhook_deliveries_retry_with_exponential_backoff_and_stop_after
         .await
         .expect("enqueue delivery");
 
-    let now = Utc.with_ymd_and_hms(2026, 5, 29, 11, 0, 1).unwrap();
+    let now = Utc::now() + ChronoDuration::seconds(5);
     let options = DeliveryOptions {
         max_attempts: 2,
         base_backoff: Duration::from_secs(10),

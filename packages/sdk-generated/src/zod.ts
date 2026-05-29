@@ -107,7 +107,7 @@ type ObservationStatus =
   | "provisional"
   | "revised"
   | "break";
-type TimePrecision = "day" | "week" | "month" | "quarter" | "year";
+type TimePrecision = "minute" | "day" | "week" | "month" | "quarter" | "year";
 type ObservationsMetadata = {
   attribution: string;
   dataflow: DataflowId;
@@ -267,7 +267,14 @@ const ObservationStatus = z.enum([
   "revised",
   "break",
 ]);
-const TimePrecision = z.enum(["day", "week", "month", "quarter", "year"]);
+const TimePrecision = z.enum([
+  "minute",
+  "day",
+  "week",
+  "month",
+  "quarter",
+  "year",
+]);
 const ObservationsRow: z.ZodType<ObservationsRow> = z
   .object({
     attributes: z.record(z.string()),

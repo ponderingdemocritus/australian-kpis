@@ -35,10 +35,12 @@ use tokio_util::sync::CancellationToken;
 const SCHEDULER_LEADER_LOCK_ID: i64 = 30_000_030;
 const DEFAULT_TICK_MS: u64 = 1_000;
 const DEFAULT_ABS_INTERVAL_MS: u64 = 60 * 60 * 1_000;
+const DEFAULT_AEMO_INTERVAL_MS: u64 = 5 * 60 * 1_000;
 const DEFAULT_APRA_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 const DEFAULT_RBA_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 const DEFAULT_TREASURY_INTERVAL_MS: u64 = 24 * 60 * 60 * 1_000;
 const ABS_DISCOVERY_CRON: &str = "0 * * * *";
+const AEMO_DISCOVERY_CRON: &str = "*/5 * * * *";
 const APRA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const RBA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const TREASURY_DISCOVERY_CRON: &str = "0 0 * * *";
@@ -64,6 +66,14 @@ struct Cli {
         default_value_t = DEFAULT_ABS_INTERVAL_MS
     )]
     abs_interval_ms: u64,
+
+    /// Test/ops override for the AEMO DispatchIS discovery cadence.
+    #[arg(
+        long,
+        env = "AU_KPIS_SCHEDULER_AEMO_INTERVAL_MS",
+        default_value_t = DEFAULT_AEMO_INTERVAL_MS
+    )]
+    aemo_interval_ms: u64,
 
     /// Test/ops override for the APRA discovery cadence.
     #[arg(
@@ -257,6 +267,7 @@ async fn main() -> anyhow::Result<()> {
             Duration::from_millis(cli.rba_interval_ms),
             Duration::from_millis(cli.apra_interval_ms),
             Duration::from_millis(cli.treasury_interval_ms),
+            Duration::from_millis(cli.aemo_interval_ms),
         ),
         worker_id: cli.worker_id.unwrap_or_else(default_worker_id),
     };
@@ -471,6 +482,7 @@ fn default_discovery_schedules(
     rba_interval: Duration,
     apra_interval: Duration,
     treasury_interval: Duration,
+    aemo_interval: Duration,
 ) -> Vec<DiscoverySchedule> {
     vec![
         DiscoverySchedule {
@@ -496,6 +508,12 @@ fn default_discovery_schedules(
             cron_expression: TREASURY_DISCOVERY_CRON,
             emit_every: treasury_interval,
             job: Job::discover(SourceId::new("treasury").expect("static source id is valid")),
+        },
+        DiscoverySchedule {
+            id: "aemo-dispatch-discovery",
+            cron_expression: AEMO_DISCOVERY_CRON,
+            emit_every: aemo_interval,
+            job: Job::discover(SourceId::new("aemo").expect("static source id is valid")),
         },
     ]
 }
@@ -618,9 +636,10 @@ mod tests {
             Duration::from_secs(604_800),
             Duration::from_secs(604_800),
             Duration::from_secs(86_400),
+            Duration::from_secs(300),
         );
 
-        assert_eq!(schedules.len(), 4);
+        assert_eq!(schedules.len(), 5);
         assert_eq!(schedules[0].id, "abs-discovery");
         assert_eq!(schedules[0].cron_expression, "0 * * * *");
         assert_eq!(schedules[0].emit_every, Duration::from_secs(3600));
@@ -648,6 +667,13 @@ mod tests {
         assert!(matches!(
             schedules[3].job.kind(),
             JobKind::Discover { source_id } if source_id.as_str() == "treasury"
+        ));
+        assert_eq!(schedules[4].id, "aemo-dispatch-discovery");
+        assert_eq!(schedules[4].cron_expression, "*/5 * * * *");
+        assert_eq!(schedules[4].emit_every, Duration::from_secs(300));
+        assert!(matches!(
+            schedules[4].job.kind(),
+            JobKind::Discover { source_id } if source_id.as_str() == "aemo"
         ));
     }
 

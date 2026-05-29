@@ -1,0 +1,42 @@
+---
+source: crates/adapters/aemo/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "dispatch_interval": "2026-05-29T00:55:00+00:00",
+    "file_name": "PUBLIC_DISPATCHIS_202605291055_0000000519884398.zip",
+    "freshness_lag_seconds_at_1110": 1140,
+    "published_at": "2026-05-29T00:51:00+00:00",
+    "sequence": "0000000519884398",
+    "size_bytes": 20468,
+    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291055_0000000519884398.zip"
+  },
+  {
+    "dispatch_interval": "2026-05-29T01:00:00+00:00",
+    "file_name": "PUBLIC_DISPATCHIS_202605291100_0000000519884840.zip",
+    "freshness_lag_seconds_at_1110": 780,
+    "published_at": "2026-05-29T00:57:00+00:00",
+    "sequence": "0000000519884840",
+    "size_bytes": 20660,
+    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291100_0000000519884840.zip"
+  },
+  {
+    "dispatch_interval": "2026-05-29T01:05:00+00:00",
+    "file_name": "PUBLIC_DISPATCHIS_202605291105_0000000519885422.zip",
+    "freshness_lag_seconds_at_1110": 480,
+    "published_at": "2026-05-29T01:02:00+00:00",
+    "sequence": "0000000519885422",
+    "size_bytes": 20628,
+    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291105_0000000519885422.zip"
+  },
+  {
+    "dispatch_interval": "2026-05-29T01:10:00+00:00",
+    "file_name": "PUBLIC_DISPATCHIS_202605291110_0000000519886550.zip",
+    "freshness_lag_seconds_at_1110": 240,
+    "published_at": "2026-05-29T01:06:00+00:00",
+    "sequence": "0000000519886550",
+    "size_bytes": 20654,
+    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291110_0000000519886550.zip"
+  }
+]

@@ -19,6 +19,7 @@ use std::{
 use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
+use au_kpis_adapter_aemo::AemoAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
@@ -39,6 +40,8 @@ use tokio_util::sync::CancellationToken;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
+const AEMO_DISPATCH_DATAFLOW_SLUG: &str = "dispatch";
+const AEMO_DISPATCH_DATAFLOW_ID: &str = "aemo.dispatch";
 const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
 const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
 const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
@@ -585,6 +588,13 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => ApraAdapter::default(),
     };
     builder.register(apra).context("register APRA adapter")?;
+    let aemo = match env::var("AU_KPIS_AEMO_DISPATCH_LISTING_URL") {
+        Ok(dispatch_listing_url) => AemoAdapter::builder()
+            .dispatch_listing_url(dispatch_listing_url)
+            .build(),
+        Err(_) => AemoAdapter::default(),
+    };
+    builder.register(aemo).context("register AEMO adapter")?;
     let rba = match env::var("AU_KPIS_RBA_INDEX_URL") {
         Ok(index_url) => RbaAdapter::builder().index_url(index_url).build(),
         Err(_) => RbaAdapter::default(),
@@ -687,6 +697,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
     validate_supported_source(source)?;
     match source {
         "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
+        "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => Ok(()),
         "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
         "state-budgets"
@@ -702,6 +713,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         "treasury" if dataflow == TREASURY_BUDGET_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
+        ),
+        "aemo" => bail!(
+            "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflow: {AEMO_DISPATCH_DATAFLOW_SLUG}"
         ),
         "apra" => bail!(
             "unsupported dataflow `{dataflow}` for source `apra`; supported dataflow: {APRA_QUARTERLY_DATAFLOW_SLUG}"
@@ -723,6 +737,7 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
     validate_once_target(source, dataflow)?;
     let dataflow_id = match source {
         "abs" => ABS_CPI_DATAFLOW_ID,
+        "aemo" => AEMO_DISPATCH_DATAFLOW_ID,
         "apra" => APRA_QUARTERLY_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
         "state-budgets" if dataflow == STATE_BUDGETS_NSW_DATAFLOW_SLUG => {
@@ -779,10 +794,10 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     if !matches!(
         source,
-        "abs" | "apra" | "rba" | "state-budgets" | "treasury"
+        "abs" | "aemo" | "apra" | "rba" | "state-budgets" | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, apra, rba, state-budgets, treasury"
+            "unsupported source `{source}`; supported sources: abs, aemo, apra, rba, state-budgets, treasury"
         );
     }
     Ok(())
@@ -790,6 +805,9 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
 
 fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Result<()> {
     if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "aemo" && dataflow_id == AEMO_DISPATCH_DATAFLOW_ID {
         return Ok(());
     }
     if source == "apra" && dataflow_id == APRA_QUARTERLY_DATAFLOW_ID {
@@ -811,7 +829,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -991,11 +1009,22 @@ mod tests {
 
     #[test]
     fn unsupported_source_reports_specific_error() {
-        let err = validate_once_target("aemo", "cpi")
+        let err = validate_once_target("asx", "prices")
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs, apra, rba, state-budgets, treasury"));
+        assert!(err.contains("abs, aemo, apra, rba, state-budgets, treasury"));
+    }
+
+    #[test]
+    fn aemo_once_mode_resolves_dispatch_dataflow() {
+        let request = once_run_request("aemo", "dispatch").expect("AEMO dispatch is supported");
+
+        assert_eq!(request.source_id.as_str(), "aemo");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("aemo.dispatch").unwrap())
+        );
     }
 
     #[test]

@@ -531,7 +531,7 @@ export interface components {
          *     `@FREQ` facet on a coarse scale.
          * @enum {string}
          */
-        TimePrecision: "day" | "week" | "month" | "quarter" | "year";
+        TimePrecision: "minute" | "day" | "week" | "month" | "quarter" | "year";
     };
     responses: never;
     parameters: never;

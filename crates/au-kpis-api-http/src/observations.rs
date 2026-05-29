@@ -1261,6 +1261,7 @@ fn json_map(value: serde_json::Value) -> Result<BTreeMap<String, String>, ApiErr
 
 fn parse_time_precision(value: &str) -> Result<TimePrecision, ApiError> {
     match value {
+        "minute" => Ok(TimePrecision::Minute),
         "day" => Ok(TimePrecision::Day),
         "week" => Ok(TimePrecision::Week),
         "month" => Ok(TimePrecision::Month),
@@ -1372,6 +1373,7 @@ fn csv_escape(value: &str) -> String {
 
 fn time_precision_label(value: TimePrecision) -> &'static str {
     match value {
+        TimePrecision::Minute => "minute",
         TimePrecision::Day => "day",
         TimePrecision::Week => "week",
         TimePrecision::Month => "month",
