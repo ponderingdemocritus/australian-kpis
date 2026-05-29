@@ -51,20 +51,17 @@ async fn verified_key(
     let Some(header) = request.headers().get("x-api-key") else {
         return Ok(None);
     };
-    let plaintext = header
-        .to_str()
-        .map_err(|_| ApiError::Unauthorized("missing or invalid API key".into()))?
-        .to_owned();
+    let Ok(plaintext) = header.to_str() else {
+        return Ok(None);
+    };
 
     let manager = ApiKeyManager::new(state.db.clone(), state.cache.clone());
-    match manager.verify(&plaintext).await {
+    match manager.verify(plaintext).await {
         Ok(verified) => {
             request.extensions_mut().insert(verified.clone());
             Ok(Some(verified))
         }
-        Err(AuthError::InvalidApiKey | AuthError::Validation(_)) => {
-            Err(ApiError::Unauthorized("missing or invalid API key".into()))
-        }
+        Err(AuthError::InvalidApiKey | AuthError::Validation(_)) => Ok(None),
         Err(err) => {
             tracing::error!(error = %err, "api key verification failed during rate limiting");
             Err(ApiError::Internal)

@@ -503,6 +503,25 @@ async fn cors_preflight_allows_x_api_key_header_for_configured_origin() {
 }
 
 #[tokio::test]
+async fn unsupported_subscription_methods_return_method_not_allowed_before_auth() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .method("TRACE")
+                .uri("/v1/subscriptions")
+                .header("x-api-key", "auk_live_unused")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"dataflow_ids":[],"url":""}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
 async fn timeout_middleware_returns_problem_json_through_router_stack() {
     async fn slow() -> &'static str {
         tokio::time::sleep(Duration::from_secs(31)).await;

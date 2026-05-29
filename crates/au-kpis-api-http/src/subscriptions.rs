@@ -2,10 +2,9 @@
 
 use std::time::{Duration, Instant};
 
-use au_kpis_auth::VerifiedApiKey;
 use au_kpis_domain::ids::{ArtifactId, DataflowId};
 use axum::{
-    Extension, Json,
+    Json,
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -23,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::{ApiError, AppState};
+use crate::{ApiError, AppState, auth::RequiredApiKey};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -154,7 +153,7 @@ pub enum SubscriptionError {
 )]
 pub async fn create_subscription(
     State(state): State<AppState>,
-    Extension(api_key): Extension<VerifiedApiKey>,
+    RequiredApiKey { key: api_key }: RequiredApiKey,
     Json(request): Json<CreateSubscriptionRequest>,
 ) -> Result<Response, ApiError> {
     let response = create_subscription_record(&state.db, api_key.id, request)

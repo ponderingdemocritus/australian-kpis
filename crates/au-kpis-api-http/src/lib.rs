@@ -35,7 +35,7 @@ pub mod series;
 pub mod state;
 pub mod subscriptions;
 
-pub use auth::require_api_key;
+pub use auth::{RequiredApiKey, require_api_key, verify_api_key_header};
 pub use dataflows::{
     DataflowCodelistResponse, DataflowDetailResponse, DataflowsQuery, DataflowsResponse,
     get_dataflow, get_dataflow_codelist, list_dataflows,
@@ -103,9 +103,7 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
             .route("/v1/search", get(search::search_catalog))
             .route(
                 "/v1/subscriptions",
-                post(subscriptions::create_subscription).route_layer(
-                    middleware::from_fn_with_state(state.clone(), require_api_key),
-                ),
+                post(subscriptions::create_subscription),
             )
             .route("/v1/openapi.json", get(openapi)),
         state,
