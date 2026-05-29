@@ -961,8 +961,13 @@ jobs:
 
       - name: Verify committed snapshots
         run: |
-          cargo insta test --workspace --check -- \
-            --skip loads_ten_thousand_observations_with_copy_batches
+          cargo insta test --check \
+            -p au-kpis-adapter-abs \
+            -p au-kpis-adapter-apra \
+            -p au-kpis-adapter-rba \
+            -p au-kpis-adapter-state-budgets \
+            -p au-kpis-adapter-treasury \
+            -p au-kpis-openapi
 
   codex-review:
     name: Codex Structured Review
