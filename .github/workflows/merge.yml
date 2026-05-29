@@ -1,0 +1,43 @@
+name: Merge Queue
+
+on:
+  merge_group:
+    types:
+      - checks_requested
+
+concurrency:
+  group: merge-queue-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  full-pr-flow:
+    name: Full PR Flow
+    uses: ./.github/workflows/pr.yml
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+      security-events: write
+    secrets: inherit
+
+  # `main` requires one status check named `CI OK`. On merge-group
+  # events this job makes that status belong to the merge queue workflow
+  # while the reusable PR workflow supplies the full gate set.
+  ci-ok:
+    name: CI OK
+    runs-on: ubuntu-latest
+    needs:
+      - full-pr-flow
+    if: always()
+    steps:
+      - name: Enforce merge-queue result
+        env:
+          FULL_PR_FLOW_RESULT: ${{ needs.full-pr-flow.result }}
+        run: |
+          set -euo pipefail
+          echo "Full PR flow result: ${FULL_PR_FLOW_RESULT}"
+          if [ "${FULL_PR_FLOW_RESULT}" != "success" ]; then
+            echo "::error::merge queue batch failed; GitHub merge queue will eject the batch."
+            exit 1
+          fi

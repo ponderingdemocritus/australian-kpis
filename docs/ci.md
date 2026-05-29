@@ -2,7 +2,8 @@
 
 `Spec.md` is the source of truth for required gates. The pull request workflow
 groups those gates into parallel GitHub Actions jobs and aggregates them through
-the single `CI OK` status check.
+the single `CI OK` status check. The merge-queue workflow reuses the same gate
+set and reports its own `CI OK` status for merge-group batches.
 
 ## Pull request workflow
 
@@ -19,27 +20,64 @@ the single `CI OK` status check.
 - Supply-chain and secret scans: `cargo deny`, `cargo audit`,
   `pnpm audit --audit-level critical`, and gitleaks over full history
 - API container build plus Trivy HIGH/CRITICAL image scan
-- k6 smoke checks against the docker-compose stack on pull requests and the
-  configured staging API in merge queue
+- k6 smoke checks against the docker-compose stack
 - Advisory Criterion bench comparison through `critcmp`
 - Advisory Codex structured review when repository secrets allow it
 
 Rust jobs install `sccache` and use the GitHub Actions backend. TypeScript jobs
 restore the pnpm store and `.turbo` cache before running Turborepo tasks.
 
+## Merge-queue workflow
+
+`.github/workflows/merge.yml` triggers only on GitHub `merge_group` events. It
+calls `.github/workflows/pr.yml` through `workflow_call`, so each queued batch
+runs the full PR gate set: compile, typecheck, lint/format, nextest, coverage,
+snapshots, OpenAPI drift, schemathesis contract checks, supply-chain scans,
+container scan, k6 smoke against the docker-compose stack, bench regression, and
+the currently available Playwright suite.
+
+The merge workflow has a final `CI OK` job that depends on the called full PR
+flow. Branch rules require that status check, so any failed upstream gate fails
+the whole merge group.
+
+## Protected `main` configuration
+
+`main` is governed by the repository ruleset named `merge` (GitHub ruleset ID
+`15487251`), targeting `~DEFAULT_BRANCH`, with active enforcement and no bypass
+actors. The currently enforced rules are:
+
+- Block branch deletion and non-fast-forward pushes.
+- Require signed commits.
+- Require pull requests with CODEOWNERS review and at least one approving
+  review.
+- Require the `CI OK` status check.
+
+The intended merge-queue rule is blocked while this repository is owned by the
+`ponderingdemocritus` user account. GitHub merge queues are available for public
+repositories owned by organizations, or private repositories owned by
+organizations using GitHub Enterprise Cloud. The GitHub REST API rejects a
+`merge_queue` ruleset rule on this repository with HTTP 422
+`Invalid rule 'merge_queue'`.
+
+After the repository is transferred to an eligible organization, add a
+`merge_queue` rule to ruleset `15487251` with `HEADGREEN` grouping, `MERGE`
+merge method, build concurrency of 3, maximum batch size of 5, minimum batch
+size of 1, no minimum wait, and 60-minute status-check timeout. `HEADGREEN`
+validates the head of the merge group that contains every queued PR in the
+batch. If a required check fails, no subset lands; the failed batch is ejected
+and PRs must be re-queued after fixes.
+
 ## k6 smoke gate
 
 The smoke job starts the compose API stack and an InfluxDB v1 metrics store for
-pull requests, applies migrations, seeds `apps/web/e2e/fixtures/explorer.sql`,
-and runs `apps/bench/smoke.js`. Merge-queue runs use
-`AU_KPIS_STAGING_BASE_URL` from repository variables as the API target and still
-publish k6 samples through the configured InfluxDB output.
+pull requests and merge groups, applies migrations, seeds
+`apps/web/e2e/fixtures/explorer.sql`, and runs `apps/bench/smoke.js`.
 
 Set `K6_INFLUXDB_ADDR` as a repository variable when CI should post trend data
 to a shared InfluxDB/Grafana environment. If it is not set, the job posts to the
 local compose InfluxDB database at `http://127.0.0.1:8086/k6`. Set
-`AU_KPIS_SMOKE_API_KEY` as a repository secret when staging should run the smoke
-scenario with an API-key tier instead of anonymous quotas.
+`AU_KPIS_SMOKE_API_KEY` as a repository secret when the smoke scenario should
+use an API-key tier instead of anonymous quotas.
 
 ## Nightly k6 load tests
 

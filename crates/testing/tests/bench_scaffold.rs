@@ -90,9 +90,12 @@ fn issue_37_benchmark_contract_is_wired() {
 
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let merge_workflow =
+        fs::read_to_string(root.join(".github/workflows/merge.yml")).expect("read merge workflow");
     assert!(
-        pr_workflow.contains("merge_group:"),
-        "benchmark regression gate should run for merge queue batches"
+        merge_workflow.contains("merge_group:")
+            && merge_workflow.contains("uses: ./.github/workflows/pr.yml"),
+        "benchmark regression gate should run for merge queue batches through merge.yml"
     );
     assert!(
         pr_workflow.contains("name: Bench Regression"),
@@ -127,6 +130,8 @@ fn issue_38_k6_smoke_contract_is_wired() {
         fs::read_to_string(root.join("apps/bench/smoke.js")).expect("read k6 smoke script");
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let merge_workflow =
+        fs::read_to_string(root.join(".github/workflows/merge.yml")).expect("read merge workflow");
 
     for expected in [
         "duration: '30s'",
@@ -177,9 +182,10 @@ fn issue_38_k6_smoke_contract_is_wired() {
         "smoke workflow should publish k6 results to InfluxDB for Grafana trending"
     );
     assert!(
-        pr_workflow.contains("AU_KPIS_STAGING_BASE_URL")
-            && pr_workflow.contains("github.event_name == 'merge_group'"),
-        "merge-queue smoke flow should target the configured staging API"
+        merge_workflow.contains("merge_group:")
+            && merge_workflow.contains("uses: ./.github/workflows/pr.yml")
+            && pr_workflow.contains("AU_KPIS_BASE_URL=http://127.0.0.1:3000"),
+        "merge-queue smoke flow should reuse the docker-compose k6 gate"
     );
 
     let compose = fs::read_to_string(root.join("infra/compose/docker-compose.yml"))
@@ -325,6 +331,8 @@ fn issue_39_schemathesis_contract_is_wired() {
 
     let pr_workflow =
         fs::read_to_string(root.join(".github/workflows/pr.yml")).expect("read pr workflow");
+    let merge_workflow =
+        fs::read_to_string(root.join(".github/workflows/merge.yml")).expect("read merge workflow");
     let contract_config = fs::read_to_string(root.join("tests/contract/schemathesis.toml"))
         .expect("read schemathesis PR config");
     let deep_config = fs::read_to_string(root.join("tests/contract/schemathesis.deep.toml"))
@@ -352,8 +360,12 @@ fn issue_39_schemathesis_contract_is_wired() {
         "PR contract workflow should emit a JUnit report artifact"
     );
     assert!(
-        pr_workflow.contains("merge_group:") && pr_workflow.contains("- contract"),
-        "contract checks should remain blocking in merge queue batches through CI OK"
+        pr_workflow.contains("  contract:")
+            && merge_workflow.contains("merge_group:")
+            && merge_workflow.contains("uses: ./.github/workflows/pr.yml")
+            && merge_workflow.contains("name: CI OK")
+            && merge_workflow.contains("FULL_PR_FLOW_RESULT"),
+        "contract checks should remain blocking in merge queue batches through merge.yml CI OK"
     );
 
     for expected in [

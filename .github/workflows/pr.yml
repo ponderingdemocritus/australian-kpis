@@ -7,12 +7,10 @@ on:
       - reopened
       - synchronize
       - ready_for_review
-  merge_group:
-    types:
-      - checks_requested
+  workflow_call:
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('merge-{0}', github.sha) }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('workflow-call-{0}', github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -421,9 +419,12 @@ jobs:
             target/openapi/generated-normalized.json
 
       - name: Compare against base branch OpenAPI
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.base_ref || 'main' }}
         run: |
           set -euo pipefail
-          git show "origin/${{ github.event.pull_request.base.ref }}:openapi.json" > target/openapi/base-openapi.json
+          git fetch --depth=1 origin "${BASE_REF}"
+          git show "origin/${BASE_REF}:openapi.json" > target/openapi/base-openapi.json
           oasdiff breaking target/openapi/base-openapi.json target/openapi/openapi.json
 
   supply-chain:
@@ -528,36 +529,16 @@ jobs:
             echo "K6_OUT=${LOCAL_K6_OUT}" >> "$GITHUB_ENV"
           fi
 
-      - name: Configure local smoke target
-        if: github.event_name != 'merge_group'
+      - name: Configure smoke target
         run: |
           set -euo pipefail
           echo "AU_KPIS_BASE_URL=http://127.0.0.1:3000" >> "$GITHUB_ENV"
           echo "K6_ENVIRONMENT=pr-compose" >> "$GITHUB_ENV"
 
-      - name: Configure staging smoke target
-        if: github.event_name == 'merge_group'
-        env:
-          AU_KPIS_STAGING_BASE_URL: ${{ vars.AU_KPIS_STAGING_BASE_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${AU_KPIS_STAGING_BASE_URL:-}" ]; then
-            echo "AU_KPIS_STAGING_BASE_URL repository variable is required for merge queue smoke." >&2
-            exit 1
-          fi
-          echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
-          echo "K6_ENVIRONMENT=staging" >> "$GITHUB_ENV"
-
       - name: Start compose smoke dependencies
-        if: github.event_name != 'merge_group'
         run: docker compose -f infra/compose/docker-compose.yml up -d --wait --wait-timeout 120 postgres redis minio pdf-extractor influxdb
 
-      - name: Start merge-queue metrics store
-        if: github.event_name == 'merge_group'
-        run: docker compose -f infra/compose/docker-compose.yml up -d influxdb
-
       - name: Apply migrations
-        if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
           ready=0
@@ -578,18 +559,15 @@ jobs:
                 psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis
 
       - name: Seed smoke fixture data
-        if: github.event_name != 'merge_group'
         run: |
           docker compose -f infra/compose/docker-compose.yml exec -T postgres \
             psql -v ON_ERROR_STOP=1 -U au_kpis -d au_kpis \
             < apps/web/e2e/fixtures/explorer.sql
 
       - name: Start local smoke API
-        if: github.event_name != 'merge_group'
         run: docker compose -f infra/compose/docker-compose.yml up -d --build api
 
       - name: Wait for local API readiness
-        if: github.event_name != 'merge_group'
         run: |
           set -euo pipefail
           for _ in $(seq 1 120); do
@@ -966,6 +944,7 @@ jobs:
 
   codex-review:
     name: Codex Structured Review
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1479,7 +1458,7 @@ jobs:
       - contract
       - snapshots
       - codex-review
-    if: always()
+    if: always() && github.event_name == 'pull_request'
     steps:
       - name: Enforce required job results
         env:
