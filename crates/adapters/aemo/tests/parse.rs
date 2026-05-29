@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use au_kpis_adapter::{AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
 use au_kpis_adapter_aemo::AemoAdapter;
-use au_kpis_domain::{ArtifactId, SourceId, TimePrecision};
+use au_kpis_domain::{ArtifactId, ObservationStatus, SourceId, TimePrecision};
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
@@ -17,6 +17,14 @@ D,DISPATCH,PRICE,5,"2026/05/29 11:10:00",1,QLD1,20260529086,0,40.02,0,40.02,0,0,
 I,DISPATCH,REGIONSUM,9,SETTLEMENTDATE,RUNNO,REGIONID,DISPATCHINTERVAL,INTERVENTION,TOTALDEMAND,AVAILABLEGENERATION,AVAILABLELOAD,DEMANDFORECAST,DISPATCHABLEGENERATION,DISPATCHABLELOAD,NETINTERCHANGE,LASTCHANGED
 D,DISPATCH,REGIONSUM,9,"2026/05/29 11:10:00",1,NSW1,20260529086,0,7989.37,13499.68147,1746,-29,7537.17,492.58,-944.77,"2026/05/29 11:05:08"
 D,DISPATCH,REGIONSUM,9,"2026/05/29 11:10:00",1,QLD1,20260529086,0,4750.84,11744.2721,2484,-17,6683.77,1158.67,774.26,"2026/05/29 11:05:08"
+"#;
+
+const BLANK_PRICE_CSV: &[u8] = br#"I,DISPATCH,PRICE,5,SETTLEMENTDATE,RUNNO,REGIONID,DISPATCHINTERVAL,INTERVENTION,RRP,EEP,ROP,APCFLAG,MARKETSUSPENDEDFLAG,LASTCHANGED,PRICE_STATUS
+D,DISPATCH,PRICE,5,"2026/05/29 11:10:00",1,VIC1,20260529086,0,,0,0,0,0,"2026/05/29 11:05:08",FIRM
+"#;
+
+const DATA_BEFORE_HEADER_CSV: &[u8] =
+    br#"D,DISPATCH,PRICE,5,"2026/05/29 11:10:00",1,NSW1,20260529086,0,91.89
 "#;
 
 #[derive(Debug, Serialize)]
@@ -41,15 +49,21 @@ struct SnapshotRow {
 }
 
 fn zip_fixture() -> Vec<u8> {
+    zip_files(&[(
+        "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+        DISPATCH_CSV,
+    )])
+}
+
+fn zip_files(files: &[(&str, &[u8])]) -> Vec<u8> {
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
-    writer
-        .start_file(
-            "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
-            zip::write::SimpleFileOptions::default(),
-        )
-        .expect("start zip file");
-    std::io::Write::write_all(&mut writer, DISPATCH_CSV).expect("write zip csv");
+    for (name, bytes) in files {
+        writer
+            .start_file(*name, zip::write::SimpleFileOptions::default())
+            .expect("start zip file");
+        std::io::Write::write_all(&mut writer, bytes).expect("write zip entry");
+    }
     writer.finish().expect("finish zip").into_inner()
 }
 
@@ -220,4 +234,141 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
         err.to_string().contains("does not match artifact id"),
         "{err}"
     );
+}
+
+#[tokio::test]
+async fn parse_rejects_zip_without_csv_payload() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        zip_files(&[("README.txt", b"not dispatch data")]),
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291110_0000000519886550.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 29, 1, 12, 0).unwrap(),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("missing CSV should fail");
+
+    assert!(
+        err.to_string().contains("did not contain a CSV payload"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn parse_rejects_zip_with_multiple_csv_payloads() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        zip_files(&[
+            (
+                "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+                DISPATCH_CSV,
+            ),
+            (
+                "PUBLIC_DISPATCHIS_202605291115_0000000519886551.CSV",
+                BLANK_PRICE_CSV,
+            ),
+        ]),
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291110_0000000519886550.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 29, 1, 12, 0).unwrap(),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("multiple CSVs should fail");
+
+    assert!(
+        err.to_string().contains("more than one CSV payload"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn parse_rejects_data_rows_before_headers() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        zip_files(&[(
+            "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+            DATA_BEFORE_HEADER_CSV,
+        )]),
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291110_0000000519886550.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 29, 1, 12, 0).unwrap(),
+    );
+
+    let err = adapter
+        .parse(artifact, &ctx)
+        .next()
+        .await
+        .expect("one parse result")
+        .expect_err("data before header should fail");
+
+    assert!(
+        err.to_string().contains("appeared before its header"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn parse_emits_missing_observation_for_blank_numeric_value() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        zip_files(&[(
+            "PUBLIC_DISPATCHIS_202605291110_0000000519886550.CSV",
+            BLANK_PRICE_CSV,
+        )]),
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202605291110_0000000519886550.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 29, 1, 12, 0).unwrap(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("blank price should parse as missing observation");
+
+    assert_eq!(rows.len(), 1);
+    let (_, observation) = &rows[0];
+    assert_eq!(observation.value, None);
+    assert_eq!(observation.status, ObservationStatus::Missing);
+    assert!(!observation.attributes.contains_key("published_at"));
 }

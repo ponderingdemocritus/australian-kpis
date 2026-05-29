@@ -594,7 +594,9 @@ fn metric_observation_rows(
     let mut rows = Vec::with_capacity(metrics.len());
 
     for metric in metrics {
-        let raw = row_required(row, metric.field)?;
+        let raw = row.get(metric.field).map(String::as_str).ok_or_else(|| {
+            AdapterError::FormatDrift(format!("AEMO DispatchIS row missing `{}`", metric.field))
+        })?;
         let value = parse_optional_f64(raw)?;
         let dimensions = BTreeMap::from([
             (
