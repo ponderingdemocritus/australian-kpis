@@ -1493,6 +1493,33 @@ mod tests {
     }
 
     #[test]
+    fn unknown_workbook_signature_returns_format_error_before_calamine() {
+        let crash_bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-prefixed-zip-overflow.xlsx.hex"
+        ));
+        for bytes in [b"not an XLS workbook".to_vec(), crash_bytes] {
+            let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+
+            let parsed = std::panic::catch_unwind(|| {
+                parse_xls_workbook(bytes, artifact, provenance, ingested_at)
+            });
+            assert!(
+                parsed.is_ok(),
+                "unknown workbook signature should not panic"
+            );
+            let err = parsed
+                .expect("panic handled")
+                .expect_err("unknown workbook signature should be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("APRA workbook has unrecognised XLS/XLSX signature"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
     fn validate_fetch_job_rejects_wrong_source_dataflow_and_url() {
         let adapter = ApraAdapter::default();
         let releases = ApraAdapter::parse_release_calendar(

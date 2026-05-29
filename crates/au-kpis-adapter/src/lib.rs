@@ -33,6 +33,8 @@ use zip::ZipArchive;
 
 const XLSX_MAX_COLUMN: u32 = 16_384;
 const XLSX_MAX_ROW: u32 = 1_048_576;
+const ZIP_LOCAL_FILE_HEADER: &[u8] = b"PK\x03\x04";
+const OLE_COMPOUND_FILE_HEADER: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 /// Streaming observation payload emitted by adapters during parse.
 pub type ObservationStream<'a> =
@@ -95,12 +97,18 @@ pub fn retry_after_delta(headers: &ResponseHeaders) -> Option<Duration> {
 /// Validate worksheet cell references before handing XLSX bytes to downstream
 /// workbook parsers.
 ///
-/// Malformed cell coordinates have triggered panics in third-party XLSX
-/// readers. This helper treats invalid ZIP/XML/cell references as source
-/// format drift and leaves non-XLSX byte streams untouched.
+/// Malformed cell coordinates and ambiguous byte streams have triggered panics
+/// in third-party workbook readers. This helper treats invalid ZIP/XML/cell
+/// references and unrecognised workbook signatures as source format drift, and
+/// leaves legacy OLE XLS byte streams untouched.
 pub fn validate_xlsx_workbook_cell_refs(bytes: &[u8], source: &str) -> Result<(), AdapterError> {
-    if !bytes.starts_with(b"PK") {
+    if bytes.starts_with(OLE_COMPOUND_FILE_HEADER) {
         return Ok(());
+    }
+    if !bytes.starts_with(ZIP_LOCAL_FILE_HEADER) {
+        return Err(AdapterError::FormatDrift(format!(
+            "{source} workbook has unrecognised XLS/XLSX signature"
+        )));
     }
 
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|err| {

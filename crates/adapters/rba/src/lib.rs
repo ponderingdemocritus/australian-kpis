@@ -1143,4 +1143,27 @@ mod tests {
 
         assert!(err.to_string().contains("RBA XLSX worksheet"), "{err}");
     }
+
+    #[test]
+    fn unknown_workbook_signature_returns_format_error_before_calamine() {
+        let crash_bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-prefixed-zip-overflow.xlsx.hex"
+        ));
+        for bytes in [b"not an XLS workbook".to_vec(), crash_bytes] {
+            let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));
+            assert!(
+                parsed.is_ok(),
+                "unknown workbook signature should not panic"
+            );
+            let err = parsed
+                .expect("panic handled")
+                .expect_err("unknown workbook signature should be rejected");
+
+            assert!(
+                err.to_string()
+                    .contains("RBA workbook has unrecognised XLS/XLSX signature"),
+                "{err}"
+            );
+        }
+    }
 }
