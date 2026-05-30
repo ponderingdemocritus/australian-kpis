@@ -41,6 +41,10 @@ BHP,2026-05-29,42.10,42.80,41.95,42.55,18234567,BHP Group Limited
 CBA,2026-05-29,169.25,170.10,168.40,169.80,3250123,Commonwealth Bank of Australia
 "#;
 
+const EOD_ENTITY_NAME_CSV: &[u8] = br#"ticker,date,open,high,low,close,volume,entity_name
+ABC,29/05/2026,-,,1,2,"1,234",ABC Limited
+"#;
+
 #[derive(Debug, Serialize)]
 struct FixtureSnapshot {
     observation_count: usize,
@@ -175,6 +179,43 @@ async fn parses_asx_announcements_and_eod_fixtures() {
     assert_eq!(eod.observation_count, 10);
     insta::assert_json_snapshot!("announcements_rss", announcements);
     insta::assert_json_snapshot!("eod_csv", eod);
+}
+
+#[tokio::test]
+async fn parses_eod_entity_name_slash_dates_and_missing_values() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let eod_artifact = artifact_for(
+        &blob_store,
+        EOD_ENTITY_NAME_CSV,
+        "https://data.example.invalid/asx/eod/entity-name.csv",
+        "text/csv",
+    )
+    .await;
+
+    let adapter = AsxAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 5, 29, 8, 5, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        au_kpis_domain::DataflowId::new("asx.eod").unwrap(),
+        BTreeMap::new(),
+    );
+    let rows = adapter
+        .parse(eod_artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse alternate ASX EOD fixture");
+
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0].1.time.to_rfc3339(), "2026-05-29T00:00:00+00:00");
+    assert_eq!(rows[0].1.value, None);
+    assert_eq!(rows[1].1.value, None);
+    assert_eq!(rows[4].1.value, Some(1234.0));
 }
 
 #[tokio::test]

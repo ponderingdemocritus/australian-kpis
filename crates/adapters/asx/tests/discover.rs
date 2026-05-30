@@ -141,6 +141,74 @@ fn parse_announcements_json_feed_resolves_tickers_and_document_urls() {
 }
 
 #[test]
+fn parse_announcements_json_feed_accepts_company_ticker_and_source_url() {
+    let announcements = AsxAdapter::parse_announcements_feed(
+        r#"
+{
+  "data": {
+    "items": [
+      {
+        "announcementTypes": [],
+        "companies": [{"symbolDisplay": "ASX:abc"}],
+        "date": "2026-05-29T10:45:00.000Z",
+        "documentKey": "2924-03095500-6A1327674",
+        "headline": "Appendix 3Y",
+        "isPriceSensitive": true,
+        "symbol": "",
+        "url": "https://downloads.example.invalid/asx/2924-03095500-6A1327674.pdf"
+      }
+    ]
+  }
+}
+"#,
+    )
+    .expect("parse ASX JSON feed with company fallback");
+
+    assert_eq!(announcements.len(), 1);
+    assert_eq!(announcements[0].ticker, "ABC");
+    assert_eq!(announcements[0].category, None);
+    assert_eq!(announcements[0].market_sensitive, Some(true));
+    assert_eq!(
+        announcements[0].source_url,
+        "https://downloads.example.invalid/asx/2924-03095500-6A1327674.pdf"
+    );
+}
+
+#[test]
+fn parse_announcements_rss_accepts_url_ids_iso_dates_and_false_flags() {
+    let announcements = AsxAdapter::parse_announcements_feed(
+        r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:asx="https://www.asx.com.au/rss">
+  <channel>
+    <item>
+      <title>ABC - Investor presentation</title>
+      <link>https://www.asx.com.au/asxpdf/20260529/pdf/06fedcba.pdf?download=1</link>
+      <pubDate>2026-05-29T10:45:00Z</pubDate>
+      <asx:marketSensitive>no</asx:marketSensitive>
+      <description><![CDATA[Investor update.]]></description>
+    </item>
+  </channel>
+</rss>
+"#,
+    )
+    .expect("parse ASX RSS feed with alternate fields");
+
+    assert_eq!(announcements.len(), 1);
+    assert_eq!(announcements[0].announcement_id, "06fedcba");
+    assert_eq!(announcements[0].ticker, "ABC");
+    assert_eq!(
+        announcements[0].published_at.to_rfc3339(),
+        "2026-05-29T10:45:00+00:00"
+    );
+    assert_eq!(announcements[0].market_sensitive, Some(false));
+    assert_eq!(
+        announcements[0].description.as_deref(),
+        Some("Investor update.")
+    );
+}
+
+#[test]
 fn discoverable_jobs_skip_known_feed_revision_and_emit_eod_daily_job() {
     let announcements =
         AsxAdapter::parse_announcements_feed(ANNOUNCEMENTS_RSS).expect("parse ASX RSS");
