@@ -1,0 +1,57 @@
+---
+source: crates/adapters/asx/tests/parse.rs
+expression: announcements
+---
+{
+  "observation_count": 2,
+  "series_count": 2,
+  "first_rows": [
+    {
+      "dataflow_id": "asx.announcements",
+      "measure_id": "event_count",
+      "dimensions": {
+        "announcement_id": "06abc123",
+        "category": "Periodic Reports",
+        "ticker": "BHP"
+      },
+      "unit": "announcement",
+      "time": "2026-05-29T01:15:00+00:00",
+      "time_precision": "Day",
+      "value": 1.0,
+      "status": "Normal",
+      "attributes": {
+        "announcement_id": "06abc123",
+        "category": "Periodic Reports",
+        "description": "Quarterly operating update.",
+        "market_sensitive": "true",
+        "source_url": "https://www.asx.com.au/asxpdf/20260529/pdf/06abc123.pdf",
+        "ticker": "BHP",
+        "title": "BHP: Quarterly activities report"
+      },
+      "source_artifact_id": "8d63efbc88862f57adab575a9c0d7cda961989d2c51320933e5dc4f7f5cf5a58"
+    },
+    {
+      "dataflow_id": "asx.announcements",
+      "measure_id": "event_count",
+      "dimensions": {
+        "announcement_id": "06def456",
+        "category": "Trading Halt",
+        "ticker": "CBA"
+      },
+      "unit": "announcement",
+      "time": "2026-05-29T00:45:00+00:00",
+      "time_precision": "Day",
+      "value": 1.0,
+      "status": "Normal",
+      "attributes": {
+        "announcement_id": "06def456",
+        "category": "Trading Halt",
+        "description": "Trading halt request.",
+        "source_url": "https://www.asx.com.au/asxpdf/20260529/pdf/06def456.pdf",
+        "ticker": "CBA",
+        "title": "CBA: Trading halt"
+      },
+      "source_artifact_id": "8d63efbc88862f57adab575a9c0d7cda961989d2c51320933e5dc4f7f5cf5a58"
+    }
+  ]
+}

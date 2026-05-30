@@ -1,0 +1,24 @@
+---
+source: crates/adapters/asx/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "announcement_id": "06abc123",
+    "category": "Periodic Reports",
+    "market_sensitive": true,
+    "published_at": "2026-05-29T01:15:00+00:00",
+    "source_url": "https://www.asx.com.au/asxpdf/20260529/pdf/06abc123.pdf",
+    "ticker": "BHP",
+    "title": "BHP: Quarterly activities report"
+  },
+  {
+    "announcement_id": "06def456",
+    "category": "Trading Halt",
+    "market_sensitive": null,
+    "published_at": "2026-05-29T00:45:00+00:00",
+    "source_url": "https://www.asx.com.au/asxpdf/20260529/pdf/06def456.pdf",
+    "ticker": "CBA",
+    "title": "CBA: Trading halt"
+  }
+]

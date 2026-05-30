@@ -20,6 +20,7 @@ use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
+use au_kpis_adapter_asx::AsxAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
@@ -41,6 +42,10 @@ const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
 const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
 const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
+const ASX_ANNOUNCEMENTS_DATAFLOW_SLUG: &str = "announcements";
+const ASX_ANNOUNCEMENTS_DATAFLOW_ID: &str = "asx.announcements";
+const ASX_EOD_DATAFLOW_SLUG: &str = "eod";
+const ASX_EOD_DATAFLOW_ID: &str = "asx.eod";
 const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
 const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
 const STATE_BUDGETS_NSW_DATAFLOW_SLUG: &str = "nsw-budget";
@@ -585,6 +590,16 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => ApraAdapter::default(),
     };
     builder.register(apra).context("register APRA adapter")?;
+    let mut asx = AsxAdapter::builder();
+    if let Ok(feed_url) = env::var("AU_KPIS_ASX_ANNOUNCEMENTS_FEED_URL") {
+        asx = asx.announcements_feed_url(feed_url);
+    }
+    if let Ok(eod_file_url) = env::var("AU_KPIS_ASX_EOD_FILE_URL") {
+        asx = asx.eod_file_url(eod_file_url);
+    }
+    builder
+        .register(asx.build())
+        .context("register ASX adapter")?;
     let rba = match env::var("AU_KPIS_RBA_INDEX_URL") {
         Ok(index_url) => RbaAdapter::builder().index_url(index_url).build(),
         Err(_) => RbaAdapter::default(),
@@ -688,6 +703,14 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
     match source {
         "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
         "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
+        "asx"
+            if matches!(
+                dataflow,
+                ASX_ANNOUNCEMENTS_DATAFLOW_SLUG | ASX_EOD_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
         "state-budgets"
             if matches!(
@@ -705,6 +728,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         ),
         "apra" => bail!(
             "unsupported dataflow `{dataflow}` for source `apra`; supported dataflow: {APRA_QUARTERLY_DATAFLOW_SLUG}"
+        ),
+        "asx" => bail!(
+            "unsupported dataflow `{dataflow}` for source `asx`; supported dataflows: {ASX_ANNOUNCEMENTS_DATAFLOW_SLUG}, {ASX_EOD_DATAFLOW_SLUG}"
         ),
         "rba" => bail!(
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
@@ -724,6 +750,8 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
     let dataflow_id = match source {
         "abs" => ABS_CPI_DATAFLOW_ID,
         "apra" => APRA_QUARTERLY_DATAFLOW_ID,
+        "asx" if dataflow == ASX_ANNOUNCEMENTS_DATAFLOW_SLUG => ASX_ANNOUNCEMENTS_DATAFLOW_ID,
+        "asx" if dataflow == ASX_EOD_DATAFLOW_SLUG => ASX_EOD_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
         "state-budgets" if dataflow == STATE_BUDGETS_NSW_DATAFLOW_SLUG => {
             STATE_BUDGETS_NSW_DATAFLOW_ID
@@ -779,10 +807,10 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     if !matches!(
         source,
-        "abs" | "apra" | "rba" | "state-budgets" | "treasury"
+        "abs" | "apra" | "asx" | "rba" | "state-budgets" | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, apra, rba, state-budgets, treasury"
+            "unsupported source `{source}`; supported sources: abs, apra, asx, rba, state-budgets, treasury"
         );
     }
     Ok(())
@@ -793,6 +821,12 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     if source == "apra" && dataflow_id == APRA_QUARTERLY_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "asx" && dataflow_id == ASX_ANNOUNCEMENTS_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "asx" && dataflow_id == ASX_EOD_DATAFLOW_ID {
         return Ok(());
     }
     if source == "rba" && dataflow_id == RBA_STAT_TABLES_DATAFLOW_ID {
@@ -811,7 +845,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -995,7 +1029,7 @@ mod tests {
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs, apra, rba, state-budgets, treasury"));
+        assert!(err.contains("abs, apra, asx, rba, state-budgets, treasury"));
     }
 
     #[test]
@@ -1067,6 +1101,57 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("state_budgets.qld_budget").unwrap())
+        );
+    }
+
+    #[test]
+    fn asx_once_mode_resolves_announcements_dataflow() {
+        let request =
+            once_run_request("asx", "announcements").expect("ASX announcements are supported");
+
+        assert_eq!(request.source_id.as_str(), "asx");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("asx.announcements").unwrap())
+        );
+    }
+
+    #[test]
+    fn asx_once_mode_resolves_eod_dataflow() {
+        let request = once_run_request("asx", "eod").expect("ASX EOD is supported");
+
+        assert_eq!(request.source_id.as_str(), "asx");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("asx.eod").unwrap())
+        );
+    }
+
+    #[test]
+    fn backfill_jobs_accept_asx_scoped_dataflows() {
+        let request = job_run_request(
+            &JobKind::Backfill {
+                source_id: SourceId::new("asx").unwrap(),
+                dataflow_id: Some(DataflowId::new("asx.eod").unwrap()),
+            },
+            None,
+        )
+        .expect("ASX EOD backfill is supported");
+
+        assert_eq!(request.source_id.as_str(), "asx");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("asx.eod").unwrap())
+        );
+    }
+
+    #[test]
+    fn build_adapters_registers_asx_source() {
+        let adapters = build_adapters().expect("build production adapters");
+
+        assert!(
+            adapters.get("asx").is_ok(),
+            "production ingestion registry should include ASX"
         );
     }
 

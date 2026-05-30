@@ -1,0 +1,230 @@
+---
+source: crates/adapters/asx/tests/parse.rs
+expression: eod
+---
+{
+  "observation_count": 10,
+  "series_count": 10,
+  "first_rows": [
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "BHP Group Limited",
+        "metric": "open",
+        "ticker": "BHP"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 42.1,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "BHP Group Limited",
+        "metric": "open",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "BHP",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "BHP Group Limited",
+        "metric": "high",
+        "ticker": "BHP"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 42.8,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "BHP Group Limited",
+        "metric": "high",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "BHP",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "BHP Group Limited",
+        "metric": "low",
+        "ticker": "BHP"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 41.95,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "BHP Group Limited",
+        "metric": "low",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "BHP",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "BHP Group Limited",
+        "metric": "close",
+        "ticker": "BHP"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 42.55,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "BHP Group Limited",
+        "metric": "close",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "BHP",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "BHP Group Limited",
+        "metric": "volume",
+        "ticker": "BHP"
+      },
+      "unit": "shares",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 18234567.0,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "BHP Group Limited",
+        "metric": "volume",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "BHP",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "Commonwealth Bank of Australia",
+        "metric": "open",
+        "ticker": "CBA"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 169.25,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "Commonwealth Bank of Australia",
+        "metric": "open",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "CBA",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "Commonwealth Bank of Australia",
+        "metric": "high",
+        "ticker": "CBA"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 170.1,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "Commonwealth Bank of Australia",
+        "metric": "high",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "CBA",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "Commonwealth Bank of Australia",
+        "metric": "low",
+        "ticker": "CBA"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 168.4,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "Commonwealth Bank of Australia",
+        "metric": "low",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "CBA",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "Commonwealth Bank of Australia",
+        "metric": "close",
+        "ticker": "CBA"
+      },
+      "unit": "AUD",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 169.8,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "Commonwealth Bank of Australia",
+        "metric": "close",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "CBA",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    },
+    {
+      "dataflow_id": "asx.eod",
+      "measure_id": "value",
+      "dimensions": {
+        "entity_name": "Commonwealth Bank of Australia",
+        "metric": "volume",
+        "ticker": "CBA"
+      },
+      "unit": "shares",
+      "time": "2026-05-29T00:00:00+00:00",
+      "time_precision": "Day",
+      "value": 3250123.0,
+      "status": "Normal",
+      "attributes": {
+        "company_name": "Commonwealth Bank of Australia",
+        "metric": "volume",
+        "source_url": "https://data.example.invalid/asx/eod/latest.csv",
+        "ticker": "CBA",
+        "trading_date": "2026-05-29"
+      },
+      "source_artifact_id": "33225d406768bc9190f1d974878130cc39a9a9906730db74a6365d3271dc6c96"
+    }
+  ]
+}
