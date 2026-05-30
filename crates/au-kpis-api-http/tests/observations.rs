@@ -426,6 +426,7 @@ impl TestDb {
             match au_kpis_db::connect(&cfg).await {
                 Ok(pool) => {
                     au_kpis_db::migrate(&pool).await.expect("apply migrations");
+                    disable_rollup_policies(&pool).await;
                     return Self {
                         pool,
                         _timescale: timescale,
@@ -442,6 +443,20 @@ impl TestDb {
 
     fn pool(&self) -> &PgPool {
         &self.pool
+    }
+}
+
+async fn disable_rollup_policies(pool: &PgPool) {
+    for view in [
+        "observations_rollup_weekly",
+        "observations_rollup_monthly",
+        "observations_rollup_quarterly",
+    ] {
+        sqlx::query("SELECT remove_continuous_aggregate_policy($1::regclass, if_exists => TRUE)")
+            .bind(view)
+            .execute(pool)
+            .await
+            .expect("remove continuous aggregate policy in observations test database");
     }
 }
 
