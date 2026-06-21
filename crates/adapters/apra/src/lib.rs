@@ -18,7 +18,7 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, CodeId, Dataflow, DataflowId, DimensionId, Frequency, License, MeasureId,
-    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
+    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_error::CoreError;
 use au_kpis_storage::{BlobStore, StorageKey};
@@ -151,6 +151,21 @@ impl SourceAdapter for ApraAdapter {
 
     fn manifest(&self) -> &AdapterManifest {
         &self.manifest
+    }
+
+    fn source_metadata(&self) -> Option<Source> {
+        Some(Source {
+            id: source_id(),
+            name: "Australian Prudential Regulation Authority".into(),
+            homepage: "https://www.apra.gov.au".into(),
+            description: Some(
+                "Australian prudential regulator for banks, insurers, and superannuation.".into(),
+            ),
+        })
+    }
+
+    fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        ApraAdapter::dataflow_metadata(self)
     }
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
@@ -871,7 +886,7 @@ fn release_url_provenance(
     if require_apra_host && !matches!(host, "www.apra.gov.au" | "apra.gov.au") {
         return None;
     }
-    if !path.starts_with("sites/default/files/") {
+    if !is_apra_artifact_path(path) {
         return None;
     }
     let filename = path
@@ -904,6 +919,10 @@ fn release_url_provenance(
         publication_slug,
         publication_title: title.split_whitespace().collect::<Vec<_>>().join(" "),
     })
+}
+
+fn is_apra_artifact_path(path: &str) -> bool {
+    path.starts_with("sites/default/files/") || path.starts_with("system/files/")
 }
 
 fn discoverable_jobs_with_release_url(
@@ -1191,6 +1210,9 @@ fn parse_value(value: &str) -> Result<(Option<f64>, ObservationStatus), AdapterE
     if trimmed.is_empty() || matches!(trimmed, "-" | "*" | "**" | "na" | "n/a" | "NA" | "N/A") {
         return Ok((None, ObservationStatus::Missing));
     }
+    if is_inline_unit_marker(trimmed) {
+        return Ok((None, ObservationStatus::Missing));
+    }
     let mut normalized = trimmed.replace([',', ' ', '%'], "");
     let negative = normalized.starts_with('(') && normalized.ends_with(')');
     if negative {
@@ -1208,6 +1230,20 @@ fn parse_value(value: &str) -> Result<(Option<f64>, ObservationStatus), AdapterE
             )
         })
         .map_err(|_| AdapterError::FormatDrift(format!("invalid APRA numeric value `{value}`")))
+}
+
+fn is_inline_unit_marker(value: &str) -> bool {
+    let normalized = value
+        .trim_matches(|ch| matches!(ch, '(' | ')'))
+        .trim()
+        .to_ascii_lowercase();
+    !normalized.chars().any(|ch| ch.is_ascii_digit())
+        && (normalized.contains("$ million")
+            || normalized.contains("$m")
+            || normalized.contains("thousand")
+            || normalized.contains("per cent")
+            || normalized.contains("percent")
+            || normalized.contains("number"))
 }
 
 fn decode_url_component(value: &str) -> String {
@@ -1677,6 +1713,10 @@ mod tests {
         );
         assert_eq!(
             parse_value("N/A").unwrap(),
+            (None, ObservationStatus::Missing)
+        );
+        assert_eq!(
+            parse_value("(thousands of loans)").unwrap(),
             (None, ObservationStatus::Missing)
         );
         assert!(parse_value("not numeric").is_err());

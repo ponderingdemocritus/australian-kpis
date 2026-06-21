@@ -18,15 +18,16 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{
     Artifact, CodeId, Dataflow, DataflowId, DimensionId, Frequency, License, MeasureId,
-    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
+    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_error::CoreError;
 use au_kpis_storage::{BlobStore, StorageKey};
 use calamine::{Data, Reader, open_workbook_auto_from_rs};
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use csv_async::AsyncReaderBuilder;
-use futures::{StreamExt, TryStreamExt, stream};
-use tokio_util::{io::StreamReader, sync::CancellationToken};
+use encoding_rs::WINDOWS_1252;
+use futures::{StreamExt, stream};
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_INDEX_URL: &str = "https://www.rba.gov.au/statistics/tables/";
 const USER_AGENT: &str = concat!("au-kpis-adapter-rba/", env!("CARGO_PKG_VERSION"));
@@ -153,6 +154,21 @@ impl SourceAdapter for RbaAdapter {
 
     fn manifest(&self) -> &AdapterManifest {
         &self.manifest
+    }
+
+    fn source_metadata(&self) -> Option<Source> {
+        Some(Source {
+            id: source_id(),
+            name: "Reserve Bank of Australia".into(),
+            homepage: "https://www.rba.gov.au".into(),
+            description: Some(
+                "Australia's central bank and publisher of financial statistics.".into(),
+            ),
+        })
+    }
+
+    fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        RbaAdapter::dataflow_metadata(self)
     }
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
@@ -295,16 +311,22 @@ async fn parse_csv_artifact(
     cancellation: CancellationToken,
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
-    let chunks = tokio::select! {
+    let mut chunks = tokio::select! {
         () = cancellation.cancelled() => return Err(cancelled_parse_error()),
         chunks = blob_store.get(&key) => chunks?,
     };
-    let io_stream = chunks.map_err(|err| io::Error::other(err.to_string()));
-    let reader = StreamReader::new(io_stream);
+    let mut bytes = Vec::new();
+    while let Some(chunk) = tokio::select! {
+        () = cancellation.cancelled() => return Err(cancelled_parse_error()),
+        chunk = chunks.next() => chunk,
+    } {
+        bytes.extend_from_slice(&chunk?);
+    }
+    let decoded = decode_csv_bytes(&bytes);
     let mut csv = AsyncReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
-        .create_reader(reader);
+        .create_reader(Cursor::new(decoded.into_bytes()));
     let mut records = csv.records();
     let mut rows = Vec::new();
     while let Some(record) = tokio::select! {
@@ -315,6 +337,16 @@ async fn parse_csv_artifact(
         rows.push(record.iter().map(|cell| cell.trim().to_string()).collect());
     }
     send_rows(rows, artifact, ingested_at, tx).await
+}
+
+fn decode_csv_bytes(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(value) => value.to_string(),
+        Err(_) => {
+            let (decoded, _, _) = WINDOWS_1252.decode(bytes);
+            decoded.into_owned()
+        }
+    }
 }
 
 async fn parse_xls_artifact(
@@ -395,7 +427,7 @@ fn catch_xls_parser_panic<T>(
 pub async fn parse_csv_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
     let input = bytes::Bytes::copy_from_slice(bytes);
     let io_stream = stream::iter([Ok::<_, io::Error>(input)]);
-    let reader = StreamReader::new(io_stream);
+    let reader = tokio_util::io::StreamReader::new(io_stream);
     let mut csv = AsyncReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -479,11 +511,13 @@ fn parse_table_rows(
 ) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
     let mut metadata = TableMetadata::default();
     let mut header_index = None;
+    let mut candidate_header_index = None;
     for (index, row) in rows.iter().enumerate() {
         if row.is_empty() {
             continue;
         }
-        match row[0].trim().to_ascii_lowercase().as_str() {
+        let first_cell = clean_first_cell(&row[0]);
+        match first_cell.to_ascii_lowercase().as_str() {
             "title" => metadata.title = row.get(1).cloned().filter(|value| !value.is_empty()),
             "table" => metadata.table_id = row.get(1).cloned().filter(|value| !value.is_empty()),
             "frequency" => {
@@ -498,12 +532,43 @@ fn parse_table_rows(
                 header_index = Some(index);
                 break;
             }
+            _ if index == 0
+                && candidate_header_index.is_none()
+                && row_has_series_cells(row)
+                && !first_cell.is_empty() =>
+            {
+                candidate_header_index = Some(index);
+            }
             _ => {}
         }
     }
 
-    let header_index = header_index
-        .ok_or_else(|| AdapterError::FormatDrift("RBA table is missing `Date` header".into()))?;
+    let (header_index, data_start_index) = if let Some(header_index) = header_index {
+        (header_index, header_index + 1)
+    } else {
+        let header_index = candidate_header_index
+            .or_else(|| current_title_header_index(&rows))
+            .ok_or_else(|| {
+                AdapterError::FormatDrift("RBA table is missing `Date` header".into())
+            })?;
+        let data_start_index = rows
+            .iter()
+            .enumerate()
+            .skip(header_index + 1)
+            .find_map(|(index, row)| {
+                row.first()
+                    .and_then(|value| parse_time(value.trim()).ok().map(|_| index))
+            })
+            .ok_or_else(|| {
+                AdapterError::FormatDrift("RBA table is missing dated observations".into())
+            })?;
+        if let Some(title) = title_from_previous_row(&rows, header_index) {
+            metadata.title = Some(title);
+        } else if metadata.title.is_none() {
+            metadata.title = Some(clean_first_cell(&rows[header_index][0]).to_string());
+        }
+        (header_index, data_start_index)
+    };
     let header = &rows[header_index];
     if header.len() < 2 {
         return Err(AdapterError::FormatDrift(
@@ -520,32 +585,68 @@ fn parse_table_rows(
     let source = metadata
         .source
         .unwrap_or_else(|| "Reserve Bank of Australia".into());
-    let series_names: Vec<String> = header.iter().skip(1).cloned().collect();
+    let mut series_columns: Vec<SeriesColumn> = header
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(column_index, series_name)| {
+            let series_name = series_name.trim();
+            (!series_name.is_empty()).then(|| SeriesColumn {
+                column_index,
+                metadata_index: column_index - 1,
+                name: series_name.to_string(),
+                kind: SeriesColumnKind::Numeric,
+            })
+        })
+        .collect();
+    if series_columns.is_empty() {
+        return Err(AdapterError::FormatDrift(
+            "RBA table `Date` header has no populated series columns".into(),
+        ));
+    }
+    for column in &mut series_columns {
+        column.kind = classify_series_column(column, &rows[data_start_index..])?;
+    }
+    let numeric_column_count = series_columns
+        .iter()
+        .filter(|column| column.kind == SeriesColumnKind::Numeric)
+        .count();
+    if numeric_column_count == 0 {
+        return Ok(Vec::new());
+    }
     let mut parsed = Vec::new();
 
-    for row in rows.into_iter().skip(header_index + 1) {
+    for row in rows.into_iter().skip(data_start_index) {
         if row.first().is_none_or(|value| value.trim().is_empty()) {
             continue;
         }
         let (time, precision) = parse_time(row[0].trim())?;
-        for (column_offset, series_name) in series_names.iter().enumerate() {
-            let value_cell = row.get(column_offset + 1).map_or("", String::as_str);
+        let context_attributes = row_context_attributes(&row, &series_columns);
+        for column in series_columns
+            .iter()
+            .filter(|column| column.kind == SeriesColumnKind::Numeric)
+        {
+            let value_cell = row.get(column.column_index).map_or("", String::as_str);
             let (value, status) = parse_value(value_cell)?;
             let series_id = metadata
                 .series_ids
-                .get(column_offset)
-                .filter(|value| !value.is_empty())
-                .cloned()
-                .unwrap_or_else(|| slugify_code(series_name));
+                .get(column.metadata_index)
+                .and_then(|value| {
+                    let value = value.trim();
+                    (!value.is_empty()).then(|| value.to_string())
+                })
+                .unwrap_or_else(|| slugify_code(&column.name));
             let unit = metadata
                 .units
-                .get(column_offset)
-                .filter(|value| !value.is_empty())
-                .cloned()
+                .get(column.metadata_index)
+                .and_then(|value| {
+                    let value = value.trim();
+                    (!value.is_empty()).then(|| value.to_string())
+                })
                 .unwrap_or_else(|| "unknown".into());
             let table_code = rba_code_id("table", &table_id)?;
             let series_id_code = rba_code_id("series_id", &series_id)?;
-            let series_name_code = rba_code_id("series_name", series_name)?;
+            let series_name_code = rba_code_id("series_name", &column.name)?;
             let dimensions = BTreeMap::from([
                 (
                     DimensionId::new("table").expect("static dimension id is valid"),
@@ -574,6 +675,21 @@ fn parse_table_rows(
                 dimensions,
                 unit,
             };
+            let mut attributes = BTreeMap::from([
+                ("source".into(), source.clone()),
+                ("source_url".into(), artifact.source_url.clone()),
+                ("table_title".into(), title.clone()),
+                (
+                    "frequency".into(),
+                    metadata
+                        .frequency
+                        .clone()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+                ("rba_series_id".into(), series_id.clone()),
+                ("rba_series_name".into(), column.name.clone()),
+            ]);
+            attributes.extend(context_attributes.iter().cloned());
             let observation = Observation {
                 series_key,
                 time,
@@ -581,20 +697,7 @@ fn parse_table_rows(
                 value,
                 status,
                 revision_no: 0,
-                attributes: BTreeMap::from([
-                    ("source".into(), source.clone()),
-                    ("source_url".into(), artifact.source_url.clone()),
-                    ("table_title".into(), title.clone()),
-                    (
-                        "frequency".into(),
-                        metadata
-                            .frequency
-                            .clone()
-                            .unwrap_or_else(|| "unknown".into()),
-                    ),
-                    ("rba_series_id".into(), series_id),
-                    ("rba_series_name".into(), series_name.clone()),
-                ]),
+                attributes,
                 ingested_at,
                 source_artifact_id: artifact.id,
             };
@@ -602,6 +705,99 @@ fn parse_table_rows(
         }
     }
     Ok(parsed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeriesColumnKind {
+    Numeric,
+    Context,
+}
+
+#[derive(Debug, Clone)]
+struct SeriesColumn {
+    column_index: usize,
+    metadata_index: usize,
+    name: String,
+    kind: SeriesColumnKind,
+}
+
+fn classify_series_column(
+    column: &SeriesColumn,
+    data_rows: &[Vec<String>],
+) -> Result<SeriesColumnKind, AdapterError> {
+    let mut numeric_compatible_values = 0usize;
+    let mut first_invalid_value = None;
+    for row in data_rows {
+        if row.first().is_none_or(|value| value.trim().is_empty()) {
+            continue;
+        }
+        let value = row.get(column.column_index).map_or("", String::as_str);
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match parse_value(trimmed) {
+            Ok(_) => numeric_compatible_values += 1,
+            Err(_) => {
+                first_invalid_value.get_or_insert_with(|| trimmed.to_string());
+            }
+        }
+    }
+    match (numeric_compatible_values, first_invalid_value) {
+        (_, None) => Ok(SeriesColumnKind::Numeric),
+        (0, Some(_)) => Ok(SeriesColumnKind::Context),
+        (_, Some(value)) => Err(AdapterError::FormatDrift(format!(
+            "invalid RBA numeric value `{value}`"
+        ))),
+    }
+}
+
+fn row_context_attributes(row: &[String], columns: &[SeriesColumn]) -> Vec<(String, String)> {
+    columns
+        .iter()
+        .filter(|column| column.kind == SeriesColumnKind::Context)
+        .filter_map(|column| {
+            let value = row.get(column.column_index)?.trim();
+            (!value.is_empty())
+                .then(|| (rba_context_attribute_key(&column.name), value.to_string()))
+        })
+        .collect()
+}
+
+fn rba_context_attribute_key(name: &str) -> String {
+    format!("rba_context_{}", slugify_code(name).to_ascii_lowercase())
+}
+
+fn clean_first_cell(value: &str) -> &str {
+    value.trim().trim_start_matches('\u{feff}')
+}
+
+fn title_from_previous_row(rows: &[Vec<String>], index: usize) -> Option<String> {
+    index
+        .checked_sub(1)
+        .and_then(|previous| rows.get(previous))
+        .filter(|row| {
+            row.first()
+                .is_some_and(|value| !clean_first_cell(value).is_empty())
+                && row.iter().skip(1).all(|value| value.trim().is_empty())
+        })
+        .and_then(|row| row.first())
+        .map(|value| clean_first_cell(value).to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn row_has_series_cells(row: &[String]) -> bool {
+    row.iter().skip(1).any(|value| !value.trim().is_empty())
+}
+
+fn current_title_header_index(rows: &[Vec<String>]) -> Option<usize> {
+    rows.iter().enumerate().find_map(|(index, row)| {
+        let first = row.first()?;
+        (clean_first_cell(first).eq_ignore_ascii_case("title")
+            && row_has_series_cells(row)
+            && title_from_previous_row(rows, index).is_some())
+        .then_some(index)
+    })
 }
 
 #[derive(Debug, Default)]
@@ -702,11 +898,21 @@ fn parse_value(value: &str) -> Result<(Option<f64>, ObservationStatus), AdapterE
     if trimmed.is_empty() || matches!(trimmed, "na" | "n/a" | "NA" | "N/A") {
         return Ok((None, ObservationStatus::Missing));
     }
+    if is_non_scalar_range(trimmed) {
+        return Ok((None, ObservationStatus::Missing));
+    }
     let normalized = trimmed.replace(',', "");
     normalized
         .parse::<f64>()
         .map(|value| (Some(value), ObservationStatus::Normal))
         .map_err(|_| AdapterError::FormatDrift(format!("invalid RBA numeric value `{value}`")))
+}
+
+fn is_non_scalar_range(value: &str) -> bool {
+    let Some((left, right)) = value.split_once(" to ") else {
+        return false;
+    };
+    left.trim().parse::<f64>().is_ok() && right.trim().parse::<f64>().is_ok()
 }
 
 fn validate_parse_artifact(artifact: &ArtifactRef) -> Result<TableUrlProvenance, AdapterError> {

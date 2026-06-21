@@ -91,6 +91,14 @@ async fn serve_sidecar_once(
         assert_eq!(json["source_id"], "treasury");
         assert_eq!(json["artifact_date"], expected_artifact_date);
         assert_eq!(json["strategy"], "deterministic");
+        assert!(
+            json["pages"]
+                .as_array()
+                .expect("extract request pages")
+                .iter()
+                .any(|page| page.as_u64() == Some(85)),
+            "expected bounded Treasury extraction pages in {json}"
+        );
 
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
@@ -290,6 +298,146 @@ async fn parses_treasury_budget_pdf_fixtures_through_sidecar_contract() {
         assert!(snapshot.observation_count > 0);
         insta::assert_json_snapshot!(case.name, snapshot);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_treasury_budget_paper_four_camelot_stream_shape() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let case = FixtureCase {
+        name: "bp4_agency_resourcing_stream_shape_2026_27",
+        bytes: BP4_2026_27,
+        source_url: "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf",
+        budget_year: "2026-27",
+        artifact_date: "2026-05-12",
+        cells: &[
+            &["", "", "", "", "PARLIAMENT", "", "", "", "", "", "", ""],
+            &[
+                "",
+                "",
+                "",
+                "",
+                "Agency Resourcing – 2026-2027",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
+            &[
+                "",
+                "",
+                "",
+                "",
+                "Estimated Actual – 2025-2026",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
+            &[
+                "Department/Outcome/",
+                "",
+                "Non-",
+                "External",
+                "Special",
+                "Special",
+                "",
+                "",
+                "Non-",
+                "Special",
+                "",
+                "",
+            ],
+            &[
+                "Non-operating",
+                "Operating",
+                "operating",
+                "Revenue(a)",
+                "Appropriation",
+                "Accounts(b)",
+                "Operating",
+                "SPPs",
+                "operating(c)",
+                "Appropriation",
+                "Total",
+                "",
+            ],
+            &[
+                "", "$'000", "$'000", "$'000", "$'000", "$'000", "$'000", "$'000", "$'000",
+                "$'000", "$'000", "",
+            ],
+            &[
+                "Department of the",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
+            &["Senate", "", "", "", "", "", "", "", "", "", "", ""],
+            &[
+                "Outcome 1",
+                "28,918",
+                "-",
+                "200",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "29,118",
+                "",
+            ],
+            &[
+                "",
+                "29,281",
+                "-",
+                "200",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "29,481",
+                "| Budget Paper No. 4",
+            ],
+            &[
+                "Total", "28,918", "-", "200", "-", "-", "-", "-", "-", "-", "29,118", "",
+            ],
+            &[
+                "", "29,281", "-", "200", "-", "-", "-", "-", "-", "-", "29,481", "",
+            ],
+        ],
+    };
+
+    let snapshot = snapshot_fixture(case, blob_store).await;
+
+    assert_eq!(snapshot.observation_count, 4);
+    assert_eq!(snapshot.series_count, 2);
+    assert_eq!(snapshot.first_rows[0].unit, "$ thousand");
+    assert_eq!(snapshot.first_rows[0].time, "2026-07-01T00:00:00+00:00");
+    assert_eq!(snapshot.first_rows[0].value, Some(29_118.0));
+    assert_eq!(snapshot.first_rows[0].status, "Forecast");
+    assert_eq!(snapshot.first_rows[1].time, "2025-07-01T00:00:00+00:00");
+    assert_eq!(snapshot.first_rows[1].value, Some(29_481.0));
+    assert_eq!(snapshot.first_rows[1].status, "Estimated");
+    assert_eq!(
+        snapshot.first_rows[0].attributes["treasury_line_item"],
+        "Department of the Senate / Outcome 1"
+    );
 }
 
 #[tokio::test]

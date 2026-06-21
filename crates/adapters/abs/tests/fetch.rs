@@ -247,7 +247,7 @@ async fn serve_artifact_once() -> (String, String) {
         assert!(
             request
                 .to_ascii_lowercase()
-                .contains("accept: application/vnd.sdmx.data+json")
+                .contains("accept: application/vnd.sdmx.data+json;version=1.0.0-wd")
         );
 
         let response = format!(

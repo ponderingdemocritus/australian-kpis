@@ -1,14 +1,17 @@
+'use client'
+
 import { Button } from '@/components/ui/button'
-import { ComparePage } from '@/pages/Compare'
-import { ExplorerPage } from '@/pages/Explorer'
-import { PlaygroundPage } from '@/pages/Playground'
+import { ComparePage } from '@/views/Compare'
+import { ExplorerPage } from '@/views/Explorer'
+import { PlaygroundPage } from '@/views/Playground'
+import { SearchPage } from '@/views/Search'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Database, GitCompareArrows, LineChart, SquareTerminal } from 'lucide-react'
+import { Database, GitCompareArrows, LineChart, Search, SquareTerminal } from 'lucide-react'
 import { useState } from 'react'
 
 const queryClient = new QueryClient()
 
-type PageId = 'explorer' | 'compare' | 'playground'
+type PageId = 'explorer' | 'search' | 'compare' | 'playground'
 
 const pages: Array<{
   icon: typeof LineChart
@@ -16,12 +19,19 @@ const pages: Array<{
   label: string
 }> = [
   { icon: LineChart, id: 'explorer', label: 'Explorer' },
+  { icon: Search, id: 'search', label: 'Search' },
   { icon: GitCompareArrows, id: 'compare', label: 'Compare' },
   { icon: SquareTerminal, id: 'playground', label: 'Playground' },
 ]
 
 export function App() {
   const [activePage, setActivePage] = useState<PageId>('explorer')
+  const [selectedDataflow, setSelectedDataflow] = useState('abs.cpi')
+
+  const openDataflowInExplorer = (dataflowId: string) => {
+    setSelectedDataflow(dataflowId)
+    setActivePage('explorer')
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -34,7 +44,7 @@ export function App() {
               </span>
               <div>
                 <p className="text-sm font-semibold">Australian KPIs</p>
-                <p className="text-xs text-muted-foreground">Reference client</p>
+                <p className="text-xs text-muted-foreground">Data explorer</p>
               </div>
             </div>
             <nav aria-label="Primary" className="flex flex-wrap gap-2">
@@ -59,7 +69,8 @@ export function App() {
           </div>
         </header>
 
-        {activePage === 'explorer' ? <ExplorerPage /> : null}
+        {activePage === 'explorer' ? <ExplorerPage selectedDataflowId={selectedDataflow} /> : null}
+        {activePage === 'search' ? <SearchPage onSelectDataflow={openDataflowInExplorer} /> : null}
         {activePage === 'compare' ? <ComparePage /> : null}
         {activePage === 'playground' ? <PlaygroundPage /> : null}
       </main>

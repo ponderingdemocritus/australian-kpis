@@ -17,6 +17,8 @@ bytes = "1"
 calamine = { version = "0.35", features = ["chrono"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 csv-async = { version = "1.3", default-features = false, features = ["tokio"] }
+# Some current RBA CSVs are Windows-1252 despite being served as CSV.
+encoding_rs = "0.8"
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "sync"] }
 tokio-util = { version = "0.7", features = ["io"] }

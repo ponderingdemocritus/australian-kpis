@@ -38,7 +38,7 @@ pub struct SeriesRevisionMetadata {
 pub struct SeriesLookupResponse {
     /// Series metadata.
     pub series: Series,
-    /// Latest observation by timestamp, using `observations_latest` revision selection.
+    /// Latest observation by timestamp and highest revision for that timestamp.
     pub latest_observation: Option<Observation>,
     /// Revision metadata for `latest_observation`.
     pub revision: Option<SeriesRevisionMetadata>,
@@ -87,24 +87,8 @@ async fn load_series_lookup(
                 s.unit,
                 s.first_observed,
                 s.last_observed,
-                s.active,
-                o.time AS observation_time,
-                o.time_precision,
-                o.value,
-                o.status,
-                o.revision_no,
-                o.attributes,
-                o.ingested_at,
-                o.source_artifact_id
+                s.active
          FROM series s
-         LEFT JOIN LATERAL (
-             SELECT series_key, time, time_precision, value, status, revision_no,
-                    attributes, ingested_at, source_artifact_id
-             FROM observations_latest
-             WHERE series_key = s.series_key
-             ORDER BY time DESC
-             LIMIT 1
-         ) o ON TRUE
          WHERE s.dataflow_id = $1 AND s.series_key = $2",
     )
     .bind(dataflow.as_str())
@@ -113,12 +97,49 @@ async fn load_series_lookup(
     .await?;
 
     let row = row.ok_or_else(|| ApiError::NotFound(format!("series `{series_key}`")))?;
-    series_lookup_from_row(row)
+    let series = series_from_row(&row)?;
+    let latest_observation = match series.last_observed {
+        Some(last_observed) => load_latest_observation(pool, series_key, last_observed).await?,
+        None => None,
+    };
+    Ok(series_lookup_from_parts(series, latest_observation))
 }
 
-fn series_lookup_from_row(row: PgRow) -> Result<SeriesLookupResponse, ApiError> {
-    let series = series_from_row(&row)?;
-    let latest_observation = observation_from_row(&row)?;
+async fn load_latest_observation(
+    pool: &PgPool,
+    series_key: &SeriesKey,
+    last_observed: DateTime<Utc>,
+) -> Result<Option<Observation>, ApiError> {
+    let row = sqlx::query(
+        "SELECT series_key,
+                time AS observation_time,
+                time_precision,
+                value,
+                status,
+                revision_no,
+                attributes,
+                ingested_at,
+                source_artifact_id
+         FROM observations
+         WHERE series_key = $1
+           AND time = $2
+         ORDER BY revision_no DESC
+         LIMIT 1",
+    )
+    .bind(series_key.digest().as_bytes().to_vec())
+    .bind(last_observed)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|row| observation_from_row(&row))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn series_lookup_from_parts(
+    series: Series,
+    latest_observation: Option<Observation>,
+) -> SeriesLookupResponse {
     let revision = latest_observation
         .as_ref()
         .map(|observation| SeriesRevisionMetadata {
@@ -128,11 +149,11 @@ fn series_lookup_from_row(row: PgRow) -> Result<SeriesLookupResponse, ApiError> 
             source_artifact_id: observation.source_artifact_id,
         });
 
-    Ok(SeriesLookupResponse {
+    SeriesLookupResponse {
         series,
         latest_observation,
         revision,
-    })
+    }
 }
 
 fn series_from_row(row: &PgRow) -> Result<Series, ApiError> {
@@ -205,6 +226,7 @@ fn json_map(value: Option<serde_json::Value>) -> Result<BTreeMap<String, String>
 
 fn parse_time_precision(value: &str) -> Result<TimePrecision, ApiError> {
     match value {
+        "minute" => Ok(TimePrecision::Minute),
         "day" => Ok(TimePrecision::Day),
         "week" => Ok(TimePrecision::Week),
         "month" => Ok(TimePrecision::Month),

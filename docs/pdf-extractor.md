@@ -5,7 +5,8 @@ The PDF extractor is a stateless FastAPI sidecar for turning stored PDFs into ra
 ## Runtime
 
 - `GET /health` returns `{"status":"ok"}` for liveness and readiness probes.
-- `POST /extract` accepts `s3_key`, `source_id`, optional `artifact_date`, and optional `strategy`.
+- `POST /extract` accepts `s3_key`, `source_id`, optional `artifact_date`, optional `strategy`, and optional `pages`.
+- `pages` is a non-empty list of 1-indexed pages. Source-specific adapters use it to keep deterministic extraction bounded to the expected table window.
 - The sidecar fetches the PDF directly from the configured S3/R2-compatible bucket and writes it to an ephemeral local temp file for extraction.
 - The deterministic backend uses `pdfplumber` and `camelot-py[cv]`; model fallback requests currently return `501` until a pinned local model backend is configured.
 - Responses match the `au-kpis-pdf-client` contract: `artifact_key`, `backend`, and a list of table candidates with page, bounding box, raw cells, spans, and diagnostics.
@@ -22,7 +23,9 @@ The service uses the same object-store environment names as the ingestion stack:
 - `AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY`
 - `AU_KPIS_OBJECT_STORE__REGION`
 - `AU_KPIS_PDF_EXTRACTOR__MAX_PAGES` optionally limits deterministic extraction to
-  the first N pages for smoke tests.
+  the first N pages for smoke tests when a request does not include `pages`.
+- `AU_KPIS_PDF_REQUEST_TIMEOUT_SECS` optionally raises the Rust ingestion
+  client's per-attempt sidecar timeout when `AU_KPIS_PDF_BASE_URL` is set.
 
 Local compose points these at MinIO. Staging and production should point them at the private R2/S3 endpoint used for raw artifacts.
 

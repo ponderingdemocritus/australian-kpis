@@ -234,6 +234,76 @@ async fn run_mode_serves_metrics_until_sigterm_then_exits() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_mode_syncs_adapter_catalog_before_worker_loop() {
+    let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+    let mut harness = IngestionProcess::start_run("au_kpis_ingestion_catalog_sync").await;
+
+    let apra_source_homepage: String =
+        sqlx::query_scalar("SELECT homepage FROM sources WHERE id = 'apra'")
+            .fetch_one(harness.pool())
+            .await
+            .expect("APRA source should be synced");
+    assert_eq!(apra_source_homepage, "https://www.apra.gov.au");
+
+    let (name, dimensions, measures, frequency, license): (
+        String,
+        Vec<String>,
+        Vec<String>,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT name, dimensions, measures, frequency, license
+         FROM dataflows
+         WHERE id = 'apra.quarterly_statistics'",
+    )
+    .fetch_one(harness.pool())
+    .await
+    .expect("APRA dataflow should be synced");
+    assert_eq!(name, "APRA quarterly statistics");
+    assert_eq!(
+        dimensions,
+        vec!["publication", "table", "series", "entity", "sector"]
+    );
+    assert_eq!(measures, vec!["value"]);
+    assert_eq!(frequency, "quarterly");
+    assert_eq!(
+        license,
+        "Creative Commons Attribution 3.0 Australia Licence"
+    );
+
+    let apra_dimensions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM dimensions WHERE dataflow_id = 'apra.quarterly_statistics'",
+    )
+    .fetch_one(harness.pool())
+    .await
+    .expect("count APRA dimensions");
+    assert_eq!(apra_dimensions, 5);
+
+    let synced_static_dataflows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM dataflows
+         WHERE id IN (
+             'apra.quarterly_statistics',
+             'rba.statistical_tables',
+             'treasury.budget_papers',
+             'state_budgets.nsw_budget',
+             'state_budgets.vic_budget',
+             'state_budgets.qld_budget'
+         )",
+    )
+    .fetch_one(harness.pool())
+    .await
+    .expect("count synced static dataflows");
+    assert_eq!(synced_static_dataflows, 6);
+
+    harness.send_sigterm();
+    harness.wait_for_exit(Duration::from_secs(5));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_mode_dead_letters_invalid_jobs_without_exiting() {
     let _guard = INGESTION_PROCESS_TEST_LOCK.lock().await;
     if !docker_available() {

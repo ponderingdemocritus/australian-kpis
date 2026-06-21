@@ -13,7 +13,7 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, CodeId, Dataflow, DataflowId, DimensionId, Frequency, License, MeasureId,
-    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
+    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_pdf_client::{
@@ -36,6 +36,8 @@ const PAPER: &str = "Budget Paper No. 4";
 const PAPER_SLUG: &str = "bp4-agency-resourcing";
 const TARGET_TITLE: &str = "Agency resourcing table";
 const TARGET_FILENAME: &str = "bp4_05_agency_resourcing_tables.pdf";
+const EXTRACT_FIRST_PAGE: u32 = 1;
+const EXTRACT_LAST_PAGE: u32 = 85;
 
 /// Treasury Budget Paper adapter that parses PDF tables via the sidecar.
 #[derive(Debug, Clone)]
@@ -158,6 +160,21 @@ impl SourceAdapter for TreasuryAdapter {
 
     fn manifest(&self) -> &AdapterManifest {
         &self.manifest
+    }
+
+    fn source_metadata(&self) -> Option<Source> {
+        Some(Source {
+            id: source_id(),
+            name: SOURCE_NAME.into(),
+            homepage: "https://treasury.gov.au".into(),
+            description: Some(
+                "Australian Government Treasury budget and economic publications.".into(),
+            ),
+        })
+    }
+
+    fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        TreasuryAdapter::dataflow_metadata(self)
     }
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
@@ -283,7 +300,8 @@ async fn parse_pdf_artifact(
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
     let mut request = ExtractRequest::new(artifact.storage_key.clone(), "treasury")
-        .strategy(ExtractionStrategy::Deterministic);
+        .strategy(ExtractionStrategy::Deterministic)
+        .page_range(EXTRACT_FIRST_PAGE, EXTRACT_LAST_PAGE);
     if let Some(artifact_date) = &provenance.artifact_date {
         request = request.artifact_date(artifact_date.clone());
     }
@@ -351,7 +369,15 @@ fn parse_budget_table(
         .map(|row| row.iter().map(|cell| clean_cell(cell)).collect::<Vec<_>>())
         .collect::<Vec<_>>();
     let Some(periods) = find_budget_period_columns(&rows)? else {
-        return Ok(None);
+        return parse_bp4_stream_table(
+            table,
+            table_index,
+            backend,
+            artifact,
+            provenance,
+            ingested_at,
+            &rows,
+        );
     };
     let unit = unit_from_rows(&rows);
     let table_title = table_title_for_candidate(&rows, periods.row_index, table.page, table_index);
@@ -418,6 +444,211 @@ fn parse_budget_table(
     } else {
         Ok(Some(parsed))
     }
+}
+
+fn parse_bp4_stream_table(
+    table: &TableCandidate,
+    _table_index: usize,
+    backend: &BackendInfo,
+    artifact: &ArtifactRef,
+    provenance: &TreasuryBudgetProvenance,
+    ingested_at: DateTime<Utc>,
+    rows: &[Vec<String>],
+) -> Result<Option<Vec<(SeriesDescriptor, Observation)>>, AdapterError> {
+    let Some(periods) = find_bp4_stream_periods(rows) else {
+        return Ok(None);
+    };
+    let Some((header_row, total_column)) = find_total_column(rows) else {
+        return Ok(None);
+    };
+    let unit = unit_from_rows(rows);
+    let schema_hash = schema_hash_for_candidate(table, rows);
+    let row_context = Bp4StreamRowContext {
+        table,
+        backend,
+        artifact,
+        provenance,
+        ingested_at,
+        unit: &unit,
+        schema_hash: &schema_hash,
+    };
+    let mut parsed = Vec::new();
+    let mut context = Vec::new();
+    let mut pending_current: Option<PendingBp4Row> = None;
+
+    for row in rows.iter().skip(header_row + 1) {
+        if row.iter().any(|cell| normalize_header(cell) == "$'000") {
+            continue;
+        }
+        let label = row
+            .first()
+            .map(|cell| cell.trim())
+            .filter(|cell| !cell.is_empty() && !looks_like_bp4_page_chrome(cell));
+        let total_cell = row.get(total_column).map_or("", String::as_str);
+        let (value, status) = parse_value(total_cell)?;
+        if value.is_none() {
+            if let Some(label) = label {
+                if let Some(pending) = pending_current.as_mut() {
+                    pending.line_item.push(' ');
+                    pending.line_item.push_str(label);
+                } else {
+                    context.push(label.to_string());
+                }
+            }
+            continue;
+        }
+
+        if let Some(label) = label {
+            if let Some(pending) = pending_current.take() {
+                parsed.push(build_bp4_stream_row(
+                    &row_context,
+                    &periods.current,
+                    &pending.line_item,
+                    pending.value,
+                    pending.status,
+                )?);
+            }
+            let context_label = std::mem::take(&mut context).join(" ");
+            let line_item = if context_label.is_empty() {
+                label.to_string()
+            } else {
+                format!("{context_label} / {label}")
+            };
+            pending_current = Some(PendingBp4Row {
+                line_item,
+                value,
+                status,
+            });
+            continue;
+        }
+
+        let Some(pending) = pending_current.take() else {
+            continue;
+        };
+        let line_item = pending.line_item;
+        parsed.push(build_bp4_stream_row(
+            &row_context,
+            &periods.current,
+            &line_item,
+            pending.value,
+            pending.status,
+        )?);
+        parsed.push(build_bp4_stream_row(
+            &row_context,
+            &periods.previous,
+            &line_item,
+            value,
+            status,
+        )?);
+    }
+
+    if let Some(pending) = pending_current {
+        parsed.push(build_bp4_stream_row(
+            &row_context,
+            &periods.current,
+            &pending.line_item,
+            pending.value,
+            pending.status,
+        )?);
+    }
+
+    if parsed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parsed))
+    }
+}
+
+struct Bp4StreamPeriods {
+    current: BudgetPeriod,
+    previous: BudgetPeriod,
+}
+
+struct PendingBp4Row {
+    line_item: String,
+    value: Option<f64>,
+    status: ObservationStatus,
+}
+
+struct Bp4StreamRowContext<'a> {
+    table: &'a TableCandidate,
+    backend: &'a BackendInfo,
+    artifact: &'a ArtifactRef,
+    provenance: &'a TreasuryBudgetProvenance,
+    ingested_at: DateTime<Utc>,
+    unit: &'a str,
+    schema_hash: &'a str,
+}
+
+fn find_bp4_stream_periods(rows: &[Vec<String>]) -> Option<Bp4StreamPeriods> {
+    let mut current = None;
+    let mut previous = None;
+    for cell in rows.iter().flat_map(|row| row.iter()) {
+        let normalized = normalize_header(cell);
+        let Some(label) = find_fiscal_year(cell) else {
+            continue;
+        };
+        let period = budget_period_from_label(&label, cell).ok()?;
+        if normalized.contains("agency resourcing") {
+            current = Some(BudgetPeriod {
+                status: ObservationStatus::Forecast,
+                ..period
+            });
+        } else if normalized.contains("estimated actual") {
+            previous = Some(BudgetPeriod {
+                status: ObservationStatus::Estimated,
+                ..period
+            });
+        }
+    }
+    Some(Bp4StreamPeriods {
+        current: current?,
+        previous: previous?,
+    })
+}
+
+fn find_total_column(rows: &[Vec<String>]) -> Option<(usize, usize)> {
+    rows.iter().enumerate().find_map(|(row_index, row)| {
+        row.iter().enumerate().find_map(|(column, cell)| {
+            (normalize_header(cell) == "total"
+                && rows.iter().skip(row_index + 1).take(2).any(|candidate| {
+                    candidate
+                        .get(column)
+                        .is_some_and(|unit| normalize_header(unit) == "$'000")
+                }))
+            .then_some((row_index, column))
+        })
+    })
+}
+
+fn build_bp4_stream_row(
+    context: &Bp4StreamRowContext<'_>,
+    period: &BudgetPeriod,
+    line_item: &str,
+    value: Option<f64>,
+    status: ObservationStatus,
+) -> Result<(SeriesDescriptor, Observation), AdapterError> {
+    let status = if matches!(status, ObservationStatus::Normal) {
+        period.status
+    } else {
+        status
+    };
+    build_row(BuildRow {
+        provenance: context.provenance,
+        table_title: TARGET_TITLE,
+        table_page: context.table.page,
+        line_item,
+        period_label: &period.label,
+        unit: context.unit,
+        time: period.time,
+        precision: TimePrecision::Year,
+        value,
+        status,
+        schema_hash: context.schema_hash,
+        backend: context.backend,
+        artifact: context.artifact,
+        ingested_at: context.ingested_at,
+    })
 }
 
 struct BuildRow<'a> {
@@ -838,8 +1069,14 @@ fn parse_budget_period(value: &str) -> Result<Option<BudgetPeriod>, AdapterError
     let Some(label) = find_fiscal_year(value) else {
         return Ok(None);
     };
+    budget_period_from_label(&label, value).map(Some)
+}
+
+fn budget_period_from_label(label: &str, value: &str) -> Result<BudgetPeriod, AdapterError> {
     let Some((start_year, _)) = label.split_once('-') else {
-        return Ok(None);
+        return Err(AdapterError::FormatDrift(format!(
+            "invalid Treasury fiscal period `{value}`"
+        )));
     };
     let year = start_year.parse::<i32>().map_err(|_| {
         AdapterError::FormatDrift(format!("invalid Treasury fiscal period `{value}`"))
@@ -855,12 +1092,12 @@ fn parse_budget_period(value: &str) -> Result<Option<BudgetPeriod>, AdapterError
     } else {
         ObservationStatus::Normal
     };
-    Ok(Some(BudgetPeriod {
+    Ok(BudgetPeriod {
         column: 0,
-        label,
+        label: label.to_string(),
         time: utc_midnight(date),
         status,
-    }))
+    })
 }
 
 fn find_fiscal_year(value: &str) -> Option<String> {
@@ -876,6 +1113,17 @@ fn find_fiscal_year(value: &str) -> Option<String> {
         let separator = *bytes.get(index + 4)?;
         if separator != b'-' && separator != b'_' {
             continue;
+        }
+        if bytes.get(index + 5).is_some_and(u8::is_ascii_digit)
+            && bytes.get(index + 6).is_some_and(u8::is_ascii_digit)
+            && bytes.get(index + 7).is_some_and(u8::is_ascii_digit)
+            && bytes.get(index + 8).is_some_and(u8::is_ascii_digit)
+        {
+            return Some(format!(
+                "{}-{}",
+                &value[index..index + 4],
+                &value[index + 7..index + 9]
+            ));
         }
         if bytes.get(index + 5).is_some_and(u8::is_ascii_digit)
             && bytes.get(index + 6).is_some_and(u8::is_ascii_digit)
@@ -942,6 +1190,9 @@ fn schema_hash_for_candidate(table: &TableCandidate, rows: &[Vec<String>]) -> St
 fn unit_from_rows(rows: &[Vec<String>]) -> String {
     for cell in rows.iter().flat_map(|row| row.iter()) {
         let lower = cell.to_ascii_lowercase();
+        if lower.contains("$'000") || lower.contains("$000") {
+            return "$ thousand".into();
+        }
         if lower.contains("$ million") || lower.contains("$m") || lower.contains("($m)") {
             return "$ million".into();
         }
@@ -994,6 +1245,11 @@ fn clean_cell(value: &str) -> String {
 
 fn normalize_header(value: &str) -> String {
     clean_cell(value).trim().to_ascii_lowercase()
+}
+
+fn looks_like_bp4_page_chrome(value: &str) -> bool {
+    let normalized = normalize_header(value);
+    normalized.contains("budget paper no. 4") || normalized.starts_with("page ")
 }
 
 fn decode_url_component(value: &str) -> String {
@@ -1438,6 +1694,15 @@ mod tests {
         assert_eq!(
             table_title_for_candidate(&[vec!["Table 1".into()]], 1, 7, 0),
             "Table 1"
+        );
+        assert_eq!(
+            find_total_column(&[
+                vec!["Total".into(), "1".into()],
+                vec!["".into(), "2".into()],
+                vec!["Label".into(), "Total".into()],
+                vec!["".into(), "$'000".into()],
+            ]),
+            Some((2, 1))
         );
 
         assert_eq!(slugify_code("!!!"), "value");

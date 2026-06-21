@@ -475,7 +475,7 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 
 - **`series`** — vanilla Postgres, GIN index on `dimensions` JSONB for dimensional queries like "all VIC observations". ~100K rows, small.
 - **`observations`** — **Timescale hypertable**, narrow table of `(series_key, time, revision_no, value, status, attributes, artifact_id)`. Primary key `(series_key, time, revision_no)`. Chunked on `time` (1-month), space-partitioned on `series_key` hash.
-- **`observations_latest`** — materialized view / continuous aggregate: most-recent revision per `(series_key, time)`. This is the default query target; full `observations` for audit/revision history.
+- **`observations_latest`** — materialized view / continuous aggregate: most-recent revision per `(series_key, time)`. Kept for validation and targeted maintenance paths; latency-sensitive API reads resolve bounded `series` rows first and then query `observations` by concrete `series_key` values so high-cardinality dataflows do not force global hypertable sorts. Full `observations` remains the audit/revision source of truth.
 - **Compression** on chunks >7 days old (90%+ savings on numeric data).
 - **Continuous aggregates** for weekly/monthly/quarterly rollups per series, refreshed by policy.
 - `sources`, `dataflows`, `dimensions`, `codelists`, `codes`, `measures` — vanilla relational tables.
@@ -483,12 +483,15 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 - `parse_errors` — rows that failed validation, keyed to artifact for re-processing.
 - `api_keys` — hashed (argon2id), scopes, rate-limit tier.
 
-Typical query plan:
+Typical latest-observation query plan:
 ```
-1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>
-2. SELECT * FROM observations_latest WHERE series_key IN (...) AND time BETWEEN ... ORDER BY time
-   (hypertable chunk exclusion makes this fast even over years of data)
-3. Stream results to client in JSON/CSV/Parquet
+1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
+2. If a latest-observation request still matches a high-cardinality series set,
+   reject it with `400` and ask the client to add more dimension filters.
+3. Query `observations` by the accepted concrete `series_key` values, ordered by
+   `(time, series_key, revision_no DESC)`, and collapse duplicate revisions in
+   the API stream so the latest revision wins.
+4. Stream results to client in JSON/CSV/Parquet.
 ```
 
 ---
@@ -604,8 +607,10 @@ validation.
   for born-digital PDFs.
 - Optional model backends: open-source document/table models such as Docling
   or Granite Docling, used only as a fallback or comparison path.
-- `POST /extract { s3_key, source_id, artifact_date?, strategy? }` fetches
-  directly from S3/R2 and streams structured table candidates back.
+- `POST /extract { s3_key, source_id, artifact_date?, strategy?, pages? }`
+  fetches directly from S3/R2 and streams structured table candidates back.
+  `pages` is an optional non-empty list of 1-indexed pages for source-specific
+  bounded extraction windows.
 - Dockerized with Ghostscript, OpenCV, Tk, and optional model dependencies in
   a separate image/profile so the deterministic sidecar remains lightweight.
 - Horizontally scalable; Rust adapter calls via `au-kpis-pdf-client` crate
@@ -706,6 +711,12 @@ GET  /v1/openapi.json
 - **Rate limits** (free tier defaults): 60 rps / 1000 requests per hour per key. Burst allowance of 2x. Token bucket in Redis via `fred`. Returns `429` with `Retry-After` header and `X-RateLimit-*` headers on every response. Anonymous (no key) tier: 10 rps / 100 per hour per IP.
 - **Caching**: Dataflow metadata long TTL. Observation responses ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Cloudflare CDN in front.
 - **Pagination**: cursor-based (opaque base64 of `(time, series_key)` pair). Max 10k rows per page.
+- **High-cardinality latest reads**: `/v1/observations` latest-revision requests
+  must be dimension-filtered enough to match fewer than 512 series. Broader
+  requests return `400` with a problem detail explaining that more
+  `dimensions[]` filters are required; clients should use codelist/catalog
+  endpoints to discover the needed dimension values first. Rollup requests use
+  their aggregate views and are exempt from this latest-read guard.
 - **Formats**: JSON default; CSV; **Parquet streamed via arrow-rs** — this is the killer feature for data-science consumers.
 - **Versioning**: additive changes same version; breaking changes → `/v2`. OpenAPI diff enforced in CI via `oasdiff`.
 - **Problem+JSON** error bodies (RFC 7807).

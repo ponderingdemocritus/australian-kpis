@@ -167,10 +167,11 @@ async fn due_webhook_deliveries_are_hmac_signed_and_marked_delivered() {
         .expect("enqueue deliveries");
     assert_eq!(enqueued, 1);
 
+    let now = delivery_due_at(&ctx.pool, subscription_id).await + ChronoDuration::seconds(1);
     let outcome = deliver_due_webhooks(
         &ctx.pool,
         &reqwest::Client::new(),
-        Utc.with_ymd_and_hms(2026, 5, 29, 10, 0, 1).unwrap(),
+        now,
         DeliveryOptions {
             max_attempts: 3,
             base_backoff: Duration::from_secs(10),
@@ -242,7 +243,7 @@ async fn failed_webhook_deliveries_retry_with_exponential_backoff_and_stop_after
         .await
         .expect("enqueue delivery");
 
-    let now = Utc.with_ymd_and_hms(2026, 5, 29, 11, 0, 1).unwrap();
+    let now = delivery_due_at(&ctx.pool, subscription_id).await + ChronoDuration::seconds(1);
     let options = DeliveryOptions {
         max_attempts: 2,
         base_backoff: Duration::from_secs(10),
@@ -363,6 +364,20 @@ async fn delivery_state(pool: &PgPool, subscription_id: uuid::Uuid) -> DeliveryS
         next_attempt_at,
         attempt_rows,
     }
+}
+
+async fn delivery_due_at(pool: &PgPool, subscription_id: uuid::Uuid) -> chrono::DateTime<Utc> {
+    let (next_attempt_at,): (chrono::DateTime<Utc>,) = sqlx::query_as(
+        "SELECT next_attempt_at
+         FROM webhook_deliveries
+         WHERE subscription_id = $1",
+    )
+    .bind(subscription_id)
+    .fetch_one(pool)
+    .await
+    .expect("fetch delivery due time");
+
+    next_attempt_at
 }
 
 async fn response_json(response: axum::response::Response) -> Value {

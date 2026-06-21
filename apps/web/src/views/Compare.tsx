@@ -15,6 +15,7 @@ import { formatDate, formatValue } from '@/lib/format'
 import {
   collectObservations,
   comparisonColors,
+  defaultComparedRegionIds,
   nationalRegion,
   regionById,
   stateRegions,
@@ -25,11 +26,9 @@ import { useQuery } from '@tanstack/react-query'
 import { GitCompareArrows, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
-const defaultComparedRegions = [nationalRegion, 'NSW', 'VIC']
-
 export function ComparePage() {
   const [selectedDataflow, setSelectedDataflow] = useState('abs.cpi')
-  const [selectedRegions, setSelectedRegions] = useState<string[]>(defaultComparedRegions)
+  const [selectedRegions, setSelectedRegions] = useState<string[]>([nationalRegion, '1', '2'])
 
   const dataflowsQuery = useQuery({
     queryFn: () => client.dataflows.list(),
@@ -42,7 +41,7 @@ export function ComparePage() {
   useEffect(() => {
     if (activeDataflow === undefined && dataflows[0] !== undefined) {
       setSelectedDataflow(dataflows[0].id)
-      setSelectedRegions(defaultComparedRegions)
+      setSelectedRegions([nationalRegion, '1', '2'])
     }
   }, [activeDataflow, dataflows])
 
@@ -63,10 +62,28 @@ export function ComparePage() {
   })
 
   const regions = regionsQuery.data?.codelist.codes ?? []
+  const dimensionIds = detailQuery.data?.dataflow.dimensions ??
+    activeDataflow?.dimensions ?? ['region']
   const regionOptions = useMemo(
-    () => [regionById(regions, nationalRegion), ...stateRegions(regions)],
+    () =>
+      regions.length === 0
+        ? []
+        : [
+            regionById(regions, defaultComparedRegionIds(regions)[0] ?? nationalRegion),
+            ...stateRegions(regions),
+          ],
     [regions],
   )
+
+  useEffect(() => {
+    if (regions.length === 0) {
+      return
+    }
+    const available = new Set(regions.map((region) => region.id))
+    if (selectedRegions.length === 0 || selectedRegions.some((region) => !available.has(region))) {
+      setSelectedRegions(defaultComparedRegionIds(regions))
+    }
+  }, [regions, selectedRegions])
 
   const comparisonQuery = useQuery({
     enabled: selectedDataflow.length > 0 && selectedRegions.length > 0 && regions.length > 0,
@@ -75,12 +92,17 @@ export function ComparePage() {
         selectedRegions.map(async (regionId) => {
           const region = regionById(regions, regionId)
           return {
-            observations: await collectObservations(selectedDataflow, region.id),
+            observations: await collectObservations(selectedDataflow, region.id, dimensionIds),
             region,
           }
         }),
       ),
-    queryKey: ['compare-observations', selectedDataflow, selectedRegions.join(',')],
+    queryKey: [
+      'compare-observations',
+      selectedDataflow,
+      selectedRegions.join(','),
+      dimensionIds.join(','),
+    ],
   })
 
   const comparisonRows = comparisonQuery.data ?? []
@@ -123,7 +145,7 @@ export function ComparePage() {
                 id="compare-dataflow"
                 onChange={(event) => {
                   setSelectedDataflow(event.target.value)
-                  setSelectedRegions(defaultComparedRegions)
+                  setSelectedRegions([nationalRegion, '1', '2'])
                 }}
                 value={selectedDataflow}
               >

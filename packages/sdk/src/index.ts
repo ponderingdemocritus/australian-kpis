@@ -7,3 +7,8 @@ export {
   type ObservationLatestParams,
   type ObservationsListParams,
 } from './client.js'
+export type {
+  SearchCatalogParams,
+  SearchResponse,
+  SearchResult,
+} from '@au-kpis/sdk-generated/client'

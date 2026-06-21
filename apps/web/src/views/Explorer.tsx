@@ -15,7 +15,8 @@ import { formatDate, formatValue } from '@/lib/format'
 import {
   collectObservations,
   comparisonColors,
-  nationalRegion,
+  nationalRegionId,
+  orderedRegions,
   regionName,
   stateRegions,
   toChartPoints,
@@ -26,9 +27,13 @@ import { RefreshCw } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
-export function ExplorerPage() {
-  const [selectedDataflow, setSelectedDataflow] = useState('abs.cpi')
-  const [selectedRegion, setSelectedRegion] = useState(nationalRegion)
+type ExplorerPageProps = {
+  selectedDataflowId?: string
+}
+
+export function ExplorerPage({ selectedDataflowId = 'abs.cpi' }: ExplorerPageProps) {
+  const [selectedDataflow, setSelectedDataflow] = useState(selectedDataflowId)
+  const [selectedRegion, setSelectedRegion] = useState('AUS')
 
   const dataflowsQuery = useQuery({
     queryFn: () => client.dataflows.list(),
@@ -37,6 +42,13 @@ export function ExplorerPage() {
 
   const dataflows = dataflowsQuery.data?.dataflows ?? []
   const activeDataflow = dataflows.find((dataflow) => dataflow.id === selectedDataflow)
+
+  useEffect(() => {
+    if (selectedDataflowId !== selectedDataflow) {
+      setSelectedDataflow(selectedDataflowId)
+      setSelectedRegion('AUS')
+    }
+  }, [selectedDataflow, selectedDataflowId])
 
   useEffect(() => {
     if (activeDataflow === undefined && dataflows[0] !== undefined) {
@@ -61,36 +73,55 @@ export function ExplorerPage() {
   })
 
   const regions = regionsQuery.data?.codelist.codes ?? []
+  const regionOptions = useMemo(() => orderedRegions(regions), [regions])
+  const dimensionIds = detailQuery.data?.dataflow.dimensions ??
+    activeDataflow?.dimensions ?? ['region']
+  const nationalRegion = nationalRegionId(regions)
   const states = useMemo(() => stateRegions(regions), [regions])
+  const comparisonRegions = useMemo(() => states.slice(0, 3), [states])
+
+  useEffect(() => {
+    if (regions.length > 0 && !regions.some((region) => region.id === selectedRegion)) {
+      setSelectedRegion(nationalRegion)
+    }
+  }, [nationalRegion, regions, selectedRegion])
 
   const nationalQuery = useQuery({
-    enabled: selectedDataflow.length > 0,
-    queryFn: () => collectObservations(selectedDataflow, nationalRegion),
-    queryKey: ['observations', selectedDataflow, nationalRegion],
+    enabled: selectedDataflow.length > 0 && regions.length > 0,
+    queryFn: () => collectObservations(selectedDataflow, nationalRegion, dimensionIds),
+    queryKey: ['observations', selectedDataflow, nationalRegion, dimensionIds.join(',')],
   })
 
   const selectedQuery = useQuery({
-    enabled: selectedDataflow.length > 0,
-    queryFn: () => collectObservations(selectedDataflow, selectedRegion),
-    queryKey: ['observations', selectedDataflow, selectedRegion],
+    enabled:
+      selectedDataflow.length > 0 &&
+      selectedRegion !== nationalRegion &&
+      regions.some((region) => region.id === selectedRegion),
+    queryFn: () => collectObservations(selectedDataflow, selectedRegion, dimensionIds),
+    queryKey: ['observations', selectedDataflow, selectedRegion, dimensionIds.join(',')],
   })
 
   const comparisonQuery = useQuery({
-    enabled: selectedDataflow.length > 0 && states.length > 0,
+    enabled: selectedDataflow.length > 0 && comparisonRegions.length > 0,
     queryFn: async () => {
       const rows = await Promise.all(
-        states.map(async (region) => ({
-          observations: await collectObservations(selectedDataflow, region.id),
+        comparisonRegions.map(async (region) => ({
+          observations: await collectObservations(selectedDataflow, region.id, dimensionIds),
           region,
         })),
       )
       return rows
     },
-    queryKey: ['comparison', selectedDataflow, states.map((region) => region.id).join(',')],
+    queryKey: [
+      'comparison',
+      selectedDataflow,
+      comparisonRegions.map((region) => region.id).join(','),
+      dimensionIds.join(','),
+    ],
   })
 
   const nationalRows = nationalQuery.data ?? []
-  const selectedRows = selectedQuery.data ?? []
+  const selectedRows = selectedRegion === nationalRegion ? nationalRows : (selectedQuery.data ?? [])
   const comparisonRows = comparisonQuery.data ?? []
   const selectedRegionName = regionName(regions, selectedRegion)
   const latestObservation = selectedRows.at(-1)
@@ -133,7 +164,7 @@ export function ExplorerPage() {
                 id="dataflow"
                 onChange={(event) => {
                   setSelectedDataflow(event.target.value)
-                  setSelectedRegion(nationalRegion)
+                  setSelectedRegion('AUS')
                 }}
                 value={selectedDataflow}
               >
@@ -152,7 +183,7 @@ export function ExplorerPage() {
                 onChange={(event) => setSelectedRegion(event.target.value)}
                 value={selectedRegion}
               >
-                {regions.map((region) => (
+                {regionOptions.map((region) => (
                   <option key={region.id} value={region.id}>
                     {region.name}
                   </option>
@@ -192,7 +223,9 @@ export function ExplorerPage() {
 
       <section className="flex min-w-0 flex-col gap-5">
         <div>
-          <h1 className="text-2xl font-semibold tracking-normal">Consumer Price Index</h1>
+          <h1 className="text-2xl font-semibold tracking-normal">
+            {activeDataflow?.name ?? 'Data explorer'}
+          </h1>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             {activeDataflow?.description ??
               'Quarterly Consumer Price Index observations from the Australian Bureau of Statistics.'}
@@ -225,7 +258,7 @@ export function ExplorerPage() {
               />
             }
             description="State and territory comparison"
-            legend={states}
+            legend={comparisonRegions}
             testId="state-comparison-chart"
             title="State comparison"
           />

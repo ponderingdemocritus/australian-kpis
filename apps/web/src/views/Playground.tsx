@@ -3,7 +3,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { NativeSelect } from '@/components/ui/native-select'
 import { apiBaseUrl, client } from '@/lib/api'
-import { nationalRegion } from '@/lib/observations'
+import {
+  nationalRegion,
+  nationalRegionId,
+  observationDimensions,
+  orderedRegions,
+} from '@/lib/observations'
 import { useQuery } from '@tanstack/react-query'
 import { Play, RefreshCw, SquareTerminal } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
@@ -71,23 +76,49 @@ export function PlaygroundPage() {
   })
 
   const regions = regionsQuery.data?.codelist.codes ?? []
+  const regionOptions = useMemo(() => orderedRegions(regions), [regions])
+  const dimensionIds = detailQuery.data?.dataflow.dimensions ??
+    activeDataflow?.dimensions ?? ['region']
+
+  useEffect(() => {
+    if (regions.length > 0 && !regions.some((region) => region.id === form.region)) {
+      const nextForm = { ...form, region: nationalRegionId(regions) }
+      setForm(nextForm)
+      setSubmittedParams(normalizeForm(nextForm))
+    }
+  }, [form, regions])
+
+  const submittedDimensions = useMemo(
+    () => observationDimensions(submittedParams.region, dimensionIds),
+    [dimensionIds, submittedParams.region],
+  )
 
   const responseQuery = useQuery({
     enabled: submittedParams.dataflow.length > 0,
     queryFn: () =>
       client.observations.list({
         dataflow: submittedParams.dataflow,
-        dimensions: { region: submittedParams.region },
+        dimensions: submittedDimensions,
         limit: submittedParams.limit,
         since: submittedParams.since,
         until: submittedParams.until,
       }),
-    queryKey: ['playground-observations', submittedParams],
+    queryKey: ['playground-observations', submittedParams, submittedDimensions],
   })
 
   const previewParams = useMemo(() => normalizeForm(form), [form])
-  const curlSnippet = useMemo(() => buildCurlSnippet(apiBaseUrl, previewParams), [previewParams])
-  const sdkSnippet = useMemo(() => buildSdkSnippet(previewParams), [previewParams])
+  const previewDimensions = useMemo(
+    () => observationDimensions(previewParams.region, dimensionIds),
+    [dimensionIds, previewParams.region],
+  )
+  const curlSnippet = useMemo(
+    () => buildCurlSnippet(apiBaseUrl, previewParams, previewDimensions),
+    [previewParams, previewDimensions],
+  )
+  const sdkSnippet = useMemo(
+    () => buildSdkSnippet(previewParams, previewDimensions),
+    [previewParams, previewDimensions],
+  )
   const responseText =
     responseQuery.data === undefined
       ? responseQuery.error instanceof Error
@@ -144,7 +175,7 @@ export function PlaygroundPage() {
                   }
                   value={form.region}
                 >
-                  {regions.map((region) => (
+                  {regionOptions.map((region) => (
                     <option key={region.id} value={region.id}>
                       {region.name}
                     </option>
@@ -299,13 +330,21 @@ function normalizeLimit(value: string): number {
   return Math.min(10_000, Math.max(1, parsed))
 }
 
-function buildCurlSnippet(baseUrl: string, params: PlaygroundParams): string {
+function buildCurlSnippet(
+  baseUrl: string,
+  params: PlaygroundParams,
+  dimensions: Record<string, string>,
+): string {
   const lines = [
     `curl -sS --get '${baseUrl}/v1/observations'`,
     `  --data-urlencode 'dataflow=${params.dataflow}'`,
-    `  --data-urlencode 'dimensions[region]=${params.region}'`,
-    `  --data-urlencode 'limit=${params.limit}'`,
   ]
+
+  for (const [dimension, value] of Object.entries(dimensions)) {
+    lines.push(`  --data-urlencode 'dimensions[${dimension}]=${value}'`)
+  }
+
+  lines.push(`  --data-urlencode 'limit=${params.limit}'`)
 
   if (params.since !== undefined) {
     lines.push(`  --data-urlencode 'since=${params.since}'`)
@@ -317,15 +356,18 @@ function buildCurlSnippet(baseUrl: string, params: PlaygroundParams): string {
   return lines.join(' \\\n')
 }
 
-function buildSdkSnippet(params: PlaygroundParams): string {
+function buildSdkSnippet(params: PlaygroundParams, dimensions: Record<string, string>): string {
   const lines = [
     'const response = await client.observations.list({',
     `  dataflow: '${escapeSnippet(params.dataflow)}',`,
     '  dimensions: {',
-    `    region: '${escapeSnippet(params.region)}',`,
-    '  },',
-    `  limit: ${params.limit},`,
   ]
+
+  for (const [dimension, value] of Object.entries(dimensions)) {
+    lines.push(`    ${dimension}: '${escapeSnippet(value)}',`)
+  }
+
+  lines.push('  },', `  limit: ${params.limit},`)
 
   if (params.since !== undefined) {
     lines.push(`  since: '${escapeSnippet(params.since)}',`)

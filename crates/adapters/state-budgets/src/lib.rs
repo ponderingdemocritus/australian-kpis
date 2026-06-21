@@ -14,7 +14,7 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, CodeId, Dataflow, DataflowId, DimensionId, Frequency, License, MeasureId,
-    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
+    Observation, ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_pdf_client::{
@@ -37,18 +37,26 @@ const SOURCE_NAME: &str = "NSW Treasury";
 const ATTRIBUTION: &str = "Source: NSW Treasury";
 const LICENSE_NAME: &str = "Creative Commons Attribution 3.0 Australia Licence";
 const LICENSE_URL: &str = "https://creativecommons.org/licenses/by/3.0/au/";
-const DEFAULT_SOURCE_INDEX_URL: &str = "https://www.budget.nsw.gov.au/2025-26/budget-papers";
-const DEFAULT_BUDGET_PDF_URL: &str = "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf";
+const DEFAULT_SOURCE_INDEX_URL: &str =
+    "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers";
+const DEFAULT_BUDGET_PDF_URL: &str = "https://www.nsw.gov.au/sites/default/files/noindex/2026-03/bp1-budget-statement-nsw-budget-2025-26.pdf";
 const PAPER: &str = "Budget Paper No. 1";
 const PAPER_SLUG: &str = "bp1-budget-statement";
 const TARGET_TITLE: &str = "Budget Statement";
 const NSW_KEY_AGGREGATES_SCHEMA_KEY: &str = "table_1_1_key_fiscal_aggregates_m";
 const NSW_KEY_AGGREGATES_SCHEMA_HASH: &str =
     "61014127d5e49374262775674f0abd3bf87731a276cc1deecb69381d4bf811aa";
+const NSW_KEY_BUDGET_AGGREGATES_SCHEMA_KEY: &str =
+    "table_1_2_key_budget_aggregates_for_the_general_government_sector";
+const NSW_KEY_BUDGET_AGGREGATES_SCHEMA_HASH: &str =
+    "8682d8d86a4591880d0f82cf85acc0eabb8608b2e04fd4dc0934eb8317f7c385";
 const VIC_KEY_AGGREGATES_SCHEMA_KEY: &str =
     "table_1_1_estimated_financial_statements_for_the_general_government_sector_million";
 const VIC_KEY_AGGREGATES_SCHEMA_HASH: &str =
     "25df1806f48ed1a256abeb5778785adddf4d5e970eb211b6d47965aecde36c6b";
+const VIC_OPERATING_STATEMENT_SCHEMA_KEY: &str = "comprehensive_operating_statement";
+const VIC_OPERATING_STATEMENT_SCHEMA_HASH: &str =
+    "a3a19b2782eee5343c3bc530b81ce9468e814bd22e5d007155b4df02d92bc706";
 const VIC_JURISDICTION: &str = "VIC";
 const VIC_JURISDICTION_NAME: &str = "Victoria";
 const VIC_SOURCE_NAME: &str = "Department of Treasury and Finance Victoria";
@@ -64,6 +72,10 @@ const QLD_KEY_AGGREGATES_SCHEMA_KEY: &str =
     "table_8_1_general_government_sector_operating_statement_million";
 const QLD_KEY_AGGREGATES_SCHEMA_HASH: &str =
     "a8706dc9455aff8bc8474454cbf528b69daea0c13e2abf4805ff01fe10ead3a2";
+const QLD_OPERATING_STATEMENT_SCHEMA_KEY: &str =
+    "table_8_1_general_government_sector_operating_statement1";
+const QLD_OPERATING_STATEMENT_SCHEMA_HASH: &str =
+    "3dc097502c47f72793ba9bff6b62b77d022d00a69ac6e7e7d81349bb11c8e7ef";
 const QLD_JURISDICTION: &str = "QLD";
 const QLD_JURISDICTION_NAME: &str = "Queensland";
 const QLD_SOURCE_NAME: &str = "Queensland Treasury";
@@ -97,6 +109,8 @@ struct BudgetConfig {
     target_title: &'static str,
     schema_key: &'static str,
     schema_hash: &'static str,
+    extract_first_page: u32,
+    extract_last_page: u32,
     official_parse_hosts: &'static [&'static str],
 }
 
@@ -119,12 +133,14 @@ const NSW_CONFIG: BudgetConfig = BudgetConfig {
     license_url: LICENSE_URL,
     source_index_url: DEFAULT_SOURCE_INDEX_URL,
     default_budget_pdf_url: DEFAULT_BUDGET_PDF_URL,
-    default_last_updated: "2025-06-24",
+    default_last_updated: "2026-03-20",
     paper: PAPER,
     paper_slug: PAPER_SLUG,
     target_title: TARGET_TITLE,
     schema_key: NSW_KEY_AGGREGATES_SCHEMA_KEY,
     schema_hash: NSW_KEY_AGGREGATES_SCHEMA_HASH,
+    extract_first_page: 1,
+    extract_last_page: 80,
     official_parse_hosts: &[
         "budget.nsw.gov.au",
         "www.budget.nsw.gov.au",
@@ -151,6 +167,8 @@ const VIC_CONFIG: BudgetConfig = BudgetConfig {
     target_title: VIC_TARGET_TITLE,
     schema_key: VIC_KEY_AGGREGATES_SCHEMA_KEY,
     schema_hash: VIC_KEY_AGGREGATES_SCHEMA_HASH,
+    extract_first_page: 14,
+    extract_last_page: 14,
     official_parse_hosts: &[
         "budget.vic.gov.au",
         "www.budget.vic.gov.au",
@@ -177,6 +195,8 @@ const QLD_CONFIG: BudgetConfig = BudgetConfig {
     target_title: QLD_TARGET_TITLE,
     schema_key: QLD_KEY_AGGREGATES_SCHEMA_KEY,
     schema_hash: QLD_KEY_AGGREGATES_SCHEMA_HASH,
+    extract_first_page: 113,
+    extract_last_page: 113,
     official_parse_hosts: &["budget.qld.gov.au", "www.budget.qld.gov.au"],
 };
 
@@ -739,6 +759,19 @@ impl SourceAdapter for StateBudgetsAdapter {
         &self.manifest
     }
 
+    fn source_metadata(&self) -> Option<Source> {
+        Some(Source {
+            id: source_id(),
+            name: "Australian state budget publications".into(),
+            homepage: "https://www.nsw.gov.au/business-and-economy/nsw-budget".into(),
+            description: Some("Curated Australian state budget papers from NSW, Victoria, and Queensland treasury sites.".into()),
+        })
+    }
+
+    fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        StateBudgetsAdapter::dataflow_metadata(self)
+    }
+
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
         if let Some(requested) = ctx.requested_dataflow_id() {
@@ -886,7 +919,8 @@ async fn parse_pdf_artifact(
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
     let mut request = ExtractRequest::new(artifact.storage_key.clone(), SOURCE_ID)
-        .strategy(ExtractionStrategy::Deterministic);
+        .strategy(ExtractionStrategy::Deterministic)
+        .page_range(config.extract_first_page, config.extract_last_page);
     if let Some(artifact_date) = &provenance.artifact_date {
         request = request.artifact_date(artifact_date.clone());
     }
@@ -962,14 +996,15 @@ fn parse_state_budget_table(
         .iter()
         .map(|row| row.iter().map(|cell| clean_cell(cell)).collect::<Vec<_>>())
         .collect::<Vec<_>>();
+    let rows = normalize_state_budget_rows(config, rows);
     let Some(periods) = find_budget_period_columns(&rows)? else {
         return Ok(None);
     };
     let table_title = table_title_for_candidate(&rows, periods.row_index, table.page, table_index);
     let schema_key = slugify_code(&table_title);
-    if schema_key != config.schema_key {
+    let Some(expected_schema_hash) = schema_hash_for_key(config, &schema_key) else {
         return Ok(None);
-    }
+    };
     let schema_hash = schema_hash_for_candidate(&table_title, &rows[periods.row_index]);
     let versions = parser_versions();
     let parser_version = select_parser_version(&versions, artifact_date_for_version(provenance)?)?;
@@ -978,7 +1013,7 @@ fn parse_state_budget_table(
         dataflow_id(config),
         parser_version.name(),
         schema_key.clone(),
-        config.schema_hash,
+        expected_schema_hash,
     )?;
     validate_schema_hash(&expected, &schema_hash)?;
 
@@ -994,6 +1029,7 @@ fn parse_state_budget_table(
         let Some(line_item) = label_before(row, first_period_col) else {
             continue;
         };
+        let (line_item, row_unit) = normalize_line_item_and_unit(&line_item, &unit);
         let mut row_values = Vec::new();
         let mut numeric_values = 0_usize;
         let mut invalid_value = None;
@@ -1028,7 +1064,7 @@ fn parse_state_budget_table(
                 table_page: table.page,
                 line_item: &line_item,
                 period_label: &period.label,
-                unit: &unit,
+                unit: &row_unit,
                 time: period.time,
                 precision: TimePrecision::Year,
                 value,
@@ -1326,6 +1362,187 @@ fn discoverable_jobs_with_source_index(
         .collect()
 }
 
+fn schema_hash_for_key(config: &BudgetConfig, schema_key: &str) -> Option<&'static str> {
+    match (config.jurisdiction, schema_key) {
+        (JURISDICTION, NSW_KEY_AGGREGATES_SCHEMA_KEY) => Some(NSW_KEY_AGGREGATES_SCHEMA_HASH),
+        (JURISDICTION, NSW_KEY_BUDGET_AGGREGATES_SCHEMA_KEY) => {
+            Some(NSW_KEY_BUDGET_AGGREGATES_SCHEMA_HASH)
+        }
+        (VIC_JURISDICTION, VIC_OPERATING_STATEMENT_SCHEMA_KEY) => {
+            Some(VIC_OPERATING_STATEMENT_SCHEMA_HASH)
+        }
+        (QLD_JURISDICTION, QLD_OPERATING_STATEMENT_SCHEMA_KEY) => {
+            Some(QLD_OPERATING_STATEMENT_SCHEMA_HASH)
+        }
+        _ if schema_key == config.schema_key => Some(config.schema_hash),
+        _ => None,
+    }
+}
+
+fn normalize_state_budget_rows(config: &BudgetConfig, rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let rows = if config.jurisdiction == JURISDICTION {
+        trim_rows_before_table_title(rows)
+    } else {
+        rows
+    };
+    let rows = merge_split_table_title_rows(rows);
+    let rows = merge_split_period_header_rows(rows);
+    if config.jurisdiction == JURISDICTION {
+        contextualize_repeated_unit_rows(repair_lagged_value_labels(rows))
+    } else {
+        rows
+    }
+}
+
+fn trim_rows_before_table_title(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    if let Some(index) = rows.iter().position(|row| {
+        row.iter()
+            .any(|cell| normalize_header(cell).starts_with("table "))
+    }) {
+        rows.into_iter().skip(index).collect()
+    } else {
+        rows
+    }
+}
+
+fn merge_split_table_title_rows(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    rows.into_iter()
+        .map(|mut row| {
+            if row.len() > 1
+                && normalize_header(&row[0]).starts_with("table ")
+                && !row[1].trim().is_empty()
+            {
+                row[0] = format!("{} {}", row[0].trim(), row[1].trim());
+                for cell in row.iter_mut().skip(1) {
+                    cell.clear();
+                }
+            }
+            row
+        })
+        .collect()
+}
+
+fn merge_split_period_header_rows(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let mut merged = Vec::with_capacity(rows.len());
+    let mut index = 0;
+    while index < rows.len() {
+        if index + 1 < rows.len()
+            && fiscal_year_cell_count(&rows[index]) >= 2
+            && is_split_status_row(&rows[index + 1])
+        {
+            let mut header = rows[index].clone();
+            let statuses = filled_split_statuses(&rows[index + 1], header.len());
+            for (column, cell) in header.iter_mut().enumerate() {
+                if find_fiscal_year(cell).is_some() {
+                    let status = statuses.get(column).map_or("", String::as_str);
+                    if !status.is_empty() {
+                        *cell = format!("{} {}", cell.trim(), status);
+                    }
+                }
+            }
+            merged.push(header);
+            index += 2;
+        } else {
+            merged.push(rows[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn is_split_status_row(row: &[String]) -> bool {
+    !row_has_budget_values(row)
+        && fiscal_year_cell_count(row) == 0
+        && row.iter().skip(1).any(|cell| {
+            let normalized = normalize_header(cell);
+            normalized.contains("actual")
+                || normalized.contains("revised")
+                || normalized.contains("budget")
+                || normalized.contains("estimate")
+                || normalized.contains("projection")
+        })
+}
+
+fn fiscal_year_cell_count(row: &[String]) -> usize {
+    row.iter()
+        .filter(|cell| find_fiscal_year(cell).is_some())
+        .count()
+}
+
+fn filled_split_statuses(row: &[String], len: usize) -> Vec<String> {
+    let mut statuses = (0..len)
+        .map(|index| row.get(index).map_or("", String::as_str).trim().to_string())
+        .collect::<Vec<_>>();
+
+    let mut last_forward = String::new();
+    for status in &mut statuses {
+        if normalize_header(status).contains("forward") {
+            last_forward.clone_from(status);
+        } else if status.trim().is_empty() && !last_forward.is_empty() {
+            status.clone_from(&last_forward);
+        }
+    }
+
+    let mut next_forward = String::new();
+    for status in statuses.iter_mut().rev() {
+        if normalize_header(status).contains("forward") {
+            next_forward.clone_from(status);
+        } else if status.trim().is_empty() && !next_forward.is_empty() {
+            status.clone_from(&next_forward);
+        }
+    }
+
+    statuses
+}
+
+fn repair_lagged_value_labels(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let mut repaired = Vec::with_capacity(rows.len());
+    let mut index = 0;
+    while index < rows.len() {
+        let mut row = rows[index].clone();
+        if label_before(&row, 1).is_none()
+            && row_has_budget_values(&row)
+            && index + 1 < rows.len()
+            && label_before(&rows[index + 1], 1).is_some()
+            && !row_has_budget_values(&rows[index + 1])
+        {
+            row[0] = label_before(&rows[index + 1], 1).expect("checked above");
+            repaired.push(row);
+            index += 2;
+        } else {
+            repaired.push(row);
+            index += 1;
+        }
+    }
+    repaired
+}
+
+fn row_has_budget_values(row: &[String]) -> bool {
+    row.iter()
+        .skip(1)
+        .any(|cell| matches!(parse_value(cell), Ok((Some(_), _))))
+}
+
+fn contextualize_repeated_unit_rows(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let mut current_metric = String::new();
+    rows.into_iter()
+        .map(|mut row| {
+            if let Some(label) = row.first().map(String::as_str) {
+                let normalized = normalize_header(label);
+                if normalized == "per cent of gsp" && !current_metric.is_empty() {
+                    row[0] = format!("{current_metric} / Per cent of GSP");
+                } else if row_has_budget_values(&row)
+                    && !label.trim().is_empty()
+                    && normalized != "per cent of gsp"
+                {
+                    current_metric = strip_budget_unit_from_label(label);
+                }
+            }
+            row
+        })
+        .collect()
+}
+
 fn find_budget_period_columns(rows: &[Vec<String>]) -> Result<Option<BudgetPeriods>, AdapterError> {
     for (row_index, row) in rows.iter().enumerate() {
         let columns = row
@@ -1343,6 +1560,7 @@ fn find_budget_period_columns(rows: &[Vec<String>]) -> Result<Option<BudgetPerio
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let columns = dedupe_budget_period_columns(columns);
         if columns.len() >= 2 {
             return Ok(Some(BudgetPeriods { row_index, columns }));
         }
@@ -1364,6 +1582,32 @@ struct BudgetPeriod {
     status: ObservationStatus,
 }
 
+fn dedupe_budget_period_columns(columns: Vec<BudgetPeriod>) -> Vec<BudgetPeriod> {
+    let mut deduped: Vec<BudgetPeriod> = Vec::with_capacity(columns.len());
+    for period in columns {
+        if let Some(existing) = deduped
+            .iter_mut()
+            .find(|existing| existing.label == period.label)
+        {
+            if period_status_rank(period.status) > period_status_rank(existing.status) {
+                *existing = period;
+            }
+        } else {
+            deduped.push(period);
+        }
+    }
+    deduped
+}
+
+fn period_status_rank(status: ObservationStatus) -> u8 {
+    match status {
+        ObservationStatus::Normal => 3,
+        ObservationStatus::Estimated | ObservationStatus::Revised => 2,
+        ObservationStatus::Forecast | ObservationStatus::Provisional => 1,
+        ObservationStatus::Imputed | ObservationStatus::Missing | ObservationStatus::Break => 0,
+    }
+}
+
 fn parse_budget_period(value: &str) -> Result<Option<BudgetPeriod>, AdapterError> {
     let Some(label) = find_fiscal_year(value) else {
         return Ok(None);
@@ -1378,7 +1622,10 @@ fn parse_budget_period(value: &str) -> Result<Option<BudgetPeriod>, AdapterError
         AdapterError::FormatDrift(format!("invalid NSW budget fiscal period `{value}`"))
     })?;
     let normalized = normalize_header(value);
-    let status = if normalized.contains("revised") || normalized.contains("estimated actual") {
+    let status = if normalized.contains("revised")
+        || normalized.contains("estimated actual")
+        || normalized.contains("est.actual")
+    {
         ObservationStatus::Estimated
     } else if normalized.contains("estimate")
         || normalized.contains("budget")
@@ -1509,12 +1756,39 @@ fn unit_from_rows(rows: &[Vec<String>]) -> String {
     "unknown".into()
 }
 
+fn normalize_line_item_and_unit(label: &str, fallback_unit: &str) -> (String, String) {
+    let lower = label.to_ascii_lowercase();
+    let unit = if lower.contains("$ million") || lower.contains("$m") || lower.contains("($m)") {
+        "$ million"
+    } else if lower.contains("per cent") || lower.contains("percent") || lower.contains('%') {
+        "percent"
+    } else if lower.contains("number") {
+        "number"
+    } else {
+        fallback_unit
+    }
+    .to_string();
+
+    (strip_budget_unit_from_label(label), unit)
+}
+
+fn strip_budget_unit_from_label(label: &str) -> String {
+    let without_units = label
+        .replace("($m)", "")
+        .replace("($ million)", "")
+        .replace("$ million", "")
+        .replace("$m", "")
+        .replace("(number)", "")
+        .replace("(Number)", "");
+    clean_cell(&without_units)
+}
+
 fn parse_value(value: &str) -> Result<(Option<f64>, ObservationStatus), AdapterError> {
     let trimmed = value.trim();
     if trimmed.is_empty()
         || matches!(
             trimmed.to_ascii_lowercase().as_str(),
-            "-" | "*" | "**" | "na" | "n/a" | "nfp"
+            "-" | ".." | "*" | "**" | "na" | "n/a" | "nfp"
         )
     {
         return Ok((None, ObservationStatus::Missing));
@@ -1544,6 +1818,7 @@ fn parse_value(value: &str) -> Result<(Option<f64>, ObservationStatus), AdapterE
 
 fn clean_cell(value: &str) -> String {
     value
+        .replace(['\u{2013}', '\u{2014}'], "-")
         .replace(['\n', '\u{a0}'], " ")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -1668,7 +1943,8 @@ fn default_budget_year(config: &BudgetConfig) -> String {
     config
         .default_budget_pdf_url
         .split(['/', '+', ' '])
-        .find_map(find_fiscal_year)
+        .filter_map(find_fiscal_year)
+        .last()
         .unwrap_or_else(|| config.default_last_updated[..4].to_string())
 }
 
@@ -1919,12 +2195,14 @@ impl QldBudgetAdapterBuilder {
 #[derive(Debug, Clone)]
 pub struct StateBudgetsAdapterBuilder {
     pdf_base_url: String,
+    pdf_client: Option<PdfClient>,
 }
 
 impl Default for StateBudgetsAdapterBuilder {
     fn default() -> Self {
         Self {
             pdf_base_url: DEFAULT_PDF_BASE_URL.into(),
+            pdf_client: None,
         }
     }
 }
@@ -1937,17 +2215,26 @@ impl StateBudgetsAdapterBuilder {
         self
     }
 
+    /// Inject a prebuilt PDF client for all state budget parsers.
+    #[must_use]
+    pub fn pdf_client(mut self, pdf_client: PdfClient) -> Self {
+        self.pdf_client = Some(pdf_client);
+        self
+    }
+
     /// Build the adapter, returning validation errors for invalid sidecar URLs.
     pub fn try_build(self) -> Result<StateBudgetsAdapter, AdapterError> {
-        let nsw = NswBudgetAdapter::builder()
-            .pdf_base_url(self.pdf_base_url.clone())
-            .try_build()?;
-        let vic = VicBudgetAdapter::builder()
-            .pdf_base_url(self.pdf_base_url.clone())
-            .try_build()?;
-        let qld = QldBudgetAdapter::builder()
-            .pdf_base_url(self.pdf_base_url)
-            .try_build()?;
+        let mut nsw = NswBudgetAdapter::builder().pdf_base_url(self.pdf_base_url.clone());
+        let mut vic = VicBudgetAdapter::builder().pdf_base_url(self.pdf_base_url.clone());
+        let mut qld = QldBudgetAdapter::builder().pdf_base_url(self.pdf_base_url);
+        if let Some(pdf_client) = self.pdf_client {
+            nsw = nsw.pdf_client(pdf_client.clone());
+            vic = vic.pdf_client(pdf_client.clone());
+            qld = qld.pdf_client(pdf_client);
+        }
+        let nsw = nsw.try_build()?;
+        let vic = vic.try_build()?;
+        let qld = qld.try_build()?;
         Ok(StateBudgetsAdapter::new(nsw, vic, qld))
     }
 

@@ -8,3 +8,24 @@ repository.workspace = true
 description = "ASX adapter (announcements + EOD)."
 
 [dependencies]
+async-trait = "0.1"
+au-kpis-adapter = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-storage = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "sync"] }
+tokio-util = "0.7"
+tracing = "0.1"
+
+[dev-dependencies]
+au-kpis-adapter = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-storage = { workspace = true }
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+futures = "0.3"
+insta = { version = "1", features = ["json"] }
+object_store = "0.11"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

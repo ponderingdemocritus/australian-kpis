@@ -1,0 +1,81 @@
+- main [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - generic [ref=e11]:
+        - paragraph [ref=e12]: Australian KPIs
+        - paragraph [ref=e13]: Data explorer
+    - navigation "Primary" [ref=e14]:
+      - button "Explorer" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - text: Explorer
+      - button "Search" [ref=e19] [cursor=pointer]:
+        - img [ref=e20]
+        - text: Search
+      - button "Compare" [ref=e23] [cursor=pointer]:
+        - img [ref=e24]
+        - text: Compare
+      - button "Playground" [ref=e31] [cursor=pointer]:
+        - img [ref=e32]
+        - text: Playground
+  - generic [ref=e35]:
+    - complementary [ref=e36]:
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - heading "Explorer" [level=2] [ref=e39]
+          - paragraph [ref=e40]: Browse dataflows and dimensions through the SDK.
+        - generic [ref=e41]:
+          - generic [ref=e42]:
+            - generic [ref=e43]: Dataflow
+            - generic [ref=e44]:
+              - combobox "Dataflow" [disabled] [ref=e45]
+              - img
+          - generic [ref=e46]:
+            - generic [ref=e47]: Region
+            - generic [ref=e48]:
+              - combobox "Region" [disabled] [ref=e49]
+              - img
+          - generic [ref=e50]:
+            - paragraph [ref=e51]: quarterly
+            - paragraph [ref=e52]: "API base: /api/au-kpis"
+      - generic [ref=e53]:
+        - generic [ref=e54]:
+          - heading "Latest observation" [level=2] [ref=e55]
+          - paragraph [ref=e56]: AUS
+        - generic [ref=e58]:
+          - paragraph [ref=e59]: n/aindex
+          - paragraph [ref=e60]: Waiting for observations
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - heading "Data explorer" [level=1] [ref=e63]
+        - paragraph [ref=e64]: Quarterly Consumer Price Index observations from the Australian Bureau of Statistics.
+      - generic [ref=e65]:
+        - img [ref=e66]
+        - text: Loading CPI data
+      - generic [ref=e71]:
+        - generic [ref=e72]:
+          - generic [ref=e74]:
+            - heading "National CPI" [level=2] [ref=e75]
+            - paragraph [ref=e76]: Australia, quarterly index
+          - img "National CPI line chart" [ref=e78]
+        - generic [ref=e79]:
+          - generic [ref=e81]:
+            - heading "State comparison" [level=2] [ref=e82]
+            - paragraph [ref=e83]: State and territory comparison
+          - img "State comparison line chart" [ref=e85]
+      - generic [ref=e86]:
+        - generic [ref=e87]:
+          - heading "Observations" [level=2] [ref=e88]
+          - paragraph [ref=e89]:
+            - text: AUS observations returned by
+            - code [ref=e90]: client.observations.stream()
+            - text: .
+        - table "Observations" [ref=e93]:
+          - rowgroup [ref=e94]:
+            - row "Region Quarter Index Status" [ref=e95]:
+              - columnheader "Region" [ref=e96]
+              - columnheader "Quarter" [ref=e97]
+              - columnheader "Index" [ref=e98]
+              - columnheader "Status" [ref=e99]
+          - rowgroup
+      - paragraph [ref=e100]: "Source: Australian Bureau of Statistics"

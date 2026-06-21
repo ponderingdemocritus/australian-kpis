@@ -51,6 +51,32 @@ await run('dataflow methods call catalog endpoints and attach api key', async ()
   assertEqual(new Headers(mock.calls[0]?.init?.headers).get('x-api-key'), 'test-key')
 })
 
+await run('search.catalog calls the search endpoint', async () => {
+  const response = {
+    query: 'cpi',
+    results: [
+      {
+        dataflow_ids: ['abs.cpi'],
+        description: 'Quarterly Consumer Price Index observations.',
+        id: 'abs.cpi',
+        kind: 'dataflow',
+        name: 'Consumer Price Index',
+        score: 1,
+        source_id: 'abs',
+      },
+    ],
+  }
+  const mock = mockFetch([jsonResponse(response)])
+  const client = createClient({ baseUrl: 'https://api.example.test', fetch: mock.fetch })
+
+  const result = await client.search.catalog({ limit: 5, q: 'cpi' })
+
+  assertEqual(result, response)
+  assertPath(mock.calls[0], '/v1/search')
+  assertSearch(mock.calls[0], 'q', 'cpi')
+  assertSearch(mock.calls[0], 'limit', '5')
+})
+
 await run('default global fetch is bound before requests are made', async () => {
   const originalFetch = globalThis.fetch
   try {
@@ -69,6 +95,33 @@ await run('default global fetch is bound before requests are made', async () => 
     await client.dataflows.list()
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+await run('relative browser base URLs resolve against window location', async () => {
+  const originalLocation = Reflect.get(globalThis, 'location') as Location | undefined
+  const mock = mockFetch([jsonResponse({ status: 'ok' })])
+
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { origin: 'http://app.example.test' },
+  })
+
+  try {
+    const client = createClient({ baseUrl: '/api/au-kpis', fetch: mock.fetch })
+
+    await client.health()
+
+    assertEqual(mock.calls[0]?.url, 'http://app.example.test/api/au-kpis/v1/health')
+  } finally {
+    if (originalLocation === undefined) {
+      Reflect.deleteProperty(globalThis, 'location')
+    } else {
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: originalLocation,
+      })
+    }
   }
 })
 

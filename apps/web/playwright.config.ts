@@ -20,9 +20,12 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: `pnpm --filter @au-kpis/web exec vite --host 127.0.0.1 --port ${port}`,
+    command: `pnpm --filter @au-kpis/web exec next dev --hostname 127.0.0.1 --port ${port}`,
     env: {
-      VITE_AU_KPIS_API_BASE_URL: process.env.VITE_AU_KPIS_API_BASE_URL ?? 'http://127.0.0.1:3000',
+      AU_KPIS_API_BASE_URL:
+        process.env.AU_KPIS_API_BASE_URL ??
+        process.env.NEXT_PUBLIC_AU_KPIS_API_BASE_URL ??
+        'http://127.0.0.1:3000',
     },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

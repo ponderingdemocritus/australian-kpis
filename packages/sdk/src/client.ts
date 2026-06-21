@@ -6,6 +6,8 @@ import type {
   ListDataflowsParams,
   ObservationsResponse,
   ObservationsRow,
+  SearchCatalogParams,
+  SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 
@@ -68,6 +70,9 @@ export type AuKpisClient = {
     stream: (params: ObservationsListParams) => AsyncIterable<ObservationsRow>
   }
   openapi: () => Promise<unknown>
+  search: {
+    catalog: (params: SearchCatalogParams) => Promise<SearchResponse>
+  }
 }
 
 export class ApiRequestError extends Error {
@@ -100,6 +105,7 @@ type SchemaName =
   | 'DataflowsResponse'
   | 'HealthResponse'
   | 'ObservationsResponse'
+  | 'SearchResponse'
   | 'SeriesLookupResponse'
 
 type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
@@ -165,6 +171,14 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
       requestJson<unknown>(context, {
         path: '/v1/openapi.json',
       }),
+    search: {
+      catalog: (params) =>
+        requestJson<SearchResponse>(context, {
+          path: '/v1/search',
+          query: params,
+          schema: 'SearchResponse',
+        }),
+    },
   }
 }
 
@@ -281,7 +295,7 @@ function dimensionsQuery(dimensions: Record<string, string>): string[] {
 }
 
 function buildUrl(baseUrl: string, path: string, query: RequestSpec['query'] = {}): string {
-  const url = new URL(`${baseUrl}${path}`)
+  const url = newUrl(baseUrl, path)
 
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined) {
@@ -299,6 +313,20 @@ function buildUrl(baseUrl: string, path: string, query: RequestSpec['query'] = {
   }
 
   return url.toString()
+}
+
+function newUrl(baseUrl: string, path: string): URL {
+  const value = `${baseUrl}${path}`
+  if (/^[a-z][a-z\d+\-.]*:/i.test(value)) {
+    return new URL(value)
+  }
+
+  const origin = globalThis.location?.origin
+  if (origin === undefined) {
+    throw new Error('relative AU KPIs API base URL requires a browser location origin')
+  }
+
+  return new URL(value, origin)
 }
 
 function normalizeBaseUrl(baseUrl: string): string {

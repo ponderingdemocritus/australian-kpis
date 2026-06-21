@@ -375,6 +375,24 @@ dependencies = [
 [[package]]
 name = "au-kpis-adapter-aemo"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "au-kpis-adapter",
+ "au-kpis-domain",
+ "au-kpis-storage",
+ "bytes",
+ "chrono",
+ "csv-async",
+ "futures",
+ "insta",
+ "object_store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zip",
+]
 
 [[package]]
 name = "au-kpis-adapter-apra"
@@ -400,6 +418,21 @@ dependencies = [
 [[package]]
 name = "au-kpis-adapter-asx"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "au-kpis-adapter",
+ "au-kpis-domain",
+ "au-kpis-storage",
+ "bytes",
+ "chrono",
+ "futures",
+ "insta",
+ "object_store",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
 
 [[package]]
 name = "au-kpis-adapter-rba"
@@ -414,6 +447,7 @@ dependencies = [
  "calamine",
  "chrono",
  "csv-async",
+ "encoding_rs",
  "futures",
  "insta",
  "object_store",
@@ -644,7 +678,9 @@ dependencies = [
  "assert_cmd",
  "au-kpis-adapter",
  "au-kpis-adapter-abs",
+ "au-kpis-adapter-aemo",
  "au-kpis-adapter-apra",
+ "au-kpis-adapter-asx",
  "au-kpis-adapter-rba",
  "au-kpis-adapter-state-budgets",
  "au-kpis-adapter-treasury",
@@ -654,6 +690,7 @@ dependencies = [
  "au-kpis-error",
  "au-kpis-ingestion-core",
  "au-kpis-loader",
+ "au-kpis-pdf-client",
  "au-kpis-queue",
  "au-kpis-storage",
  "au-kpis-telemetry",

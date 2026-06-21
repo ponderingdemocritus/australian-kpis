@@ -158,6 +158,58 @@ async fn applied_migration_count(pool: &PgPool) -> i64 {
         .expect("count applied migrations")
 }
 
+async fn seed_minute_precision_fixture(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO sources (id, name, homepage)
+         VALUES ('aemo', 'AEMO', 'https://aemo.com.au')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed source");
+
+    sqlx::query(
+        "INSERT INTO measures (id, name, unit)
+         VALUES ('value', 'Value', 'MW')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed measure");
+
+    sqlx::query(
+        "INSERT INTO dataflows
+            (id, source_id, name, dimensions, measures, frequency, license, attribution, source_url)
+         VALUES
+            ('aemo.dispatch', 'aemo', 'AEMO dispatch', ARRAY['region'], ARRAY['value'],
+             'irregular', 'AEMO Copyright and Disclaimer Notice',
+             'Source: Australian Energy Market Operator', 'https://www.nemweb.com.au')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed dataflow");
+
+    sqlx::query(
+        "INSERT INTO series (series_key, dataflow_id, measure_id, dimensions, unit)
+         VALUES
+            (decode(repeat('11', 32), 'hex'), 'aemo.dispatch', 'value',
+             jsonb_build_object('region', 'NSW1'), 'MW')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed series");
+
+    sqlx::query(
+        "INSERT INTO artifacts
+            (id, source_id, source_url, content_type, size_bytes, storage_key, fetched_at,
+             response_headers)
+         VALUES
+            (decode(repeat('22', 32), 'hex'), 'aemo', 'https://www.nemweb.com.au/example.zip',
+             'application/zip', 10, 'artifacts/test', now(), '{}'::jsonb)",
+    )
+    .execute(pool)
+    .await
+    .expect("seed artifact");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn migration_creates_hypertable_and_compression_policy() {
     let timescale = start_timescale("au_kpis_test")
@@ -195,6 +247,32 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "artifact response_headers must be explicitly supplied"
     );
 
+    seed_minute_precision_fixture(&pool).await;
+    sqlx::query(
+        "INSERT INTO observations
+            (series_key, time, revision_no, time_precision, value, status, source_artifact_id)
+         VALUES
+            (decode(repeat('11', 32), 'hex'), '2026-06-19T17:05:00Z', 0,
+             'minute', 1224.55, 'normal', decode(repeat('22', 32), 'hex'))",
+    )
+    .execute(&pool)
+    .await
+    .expect("minute precision should be accepted");
+
+    let invalid_precision = sqlx::query(
+        "INSERT INTO observations
+            (series_key, time, revision_no, time_precision, value, status, source_artifact_id)
+         VALUES
+            (decode(repeat('11', 32), 'hex'), '2026-06-19T17:10:00Z', 0,
+             'hour', 1225.00, 'normal', decode(repeat('22', 32), 'hex'))",
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_precision.is_err(),
+        "unsupported time precision should still be rejected"
+    );
+
     // Sanity-check one representative table + the latest-revision view.
     let tables: Vec<(String,)> = sqlx::query_as(
         "SELECT table_name FROM information_schema.tables
@@ -208,6 +286,7 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "api_key_audit_log",
         "api_keys",
         "artifacts",
+        "artifact_loads",
         "codelists",
         "codes",
         "dataflows",
@@ -238,10 +317,12 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "measures_search_tsv_gin",
         "measures_name_trgm_gin",
         "measures_description_trgm_gin",
+        "series_dataflow_first_observed_series_key_idx",
+        "artifact_loads_source_dataflow_idx",
     ] {
         assert!(
             index_exists(&pool, expected).await,
-            "expected catalog search index `{expected}` to exist"
+            "expected index `{expected}` to exist"
         );
     }
 
