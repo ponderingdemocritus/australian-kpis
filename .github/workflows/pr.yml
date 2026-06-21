@@ -154,7 +154,7 @@ jobs:
           import boto3
           from botocore.exceptions import ClientError
 
-          bucket = "au-kpis-local"
+          bucket = "au-kpis-artifacts"
           key = "artifacts/fixtures/bp4-agency-resourcing.pdf"
           fixture = Path("apps/pdf-extractor/tests/fixtures/bp4_agency_resourcing_tables_2026_27.pdf")
           client = boto3.client(

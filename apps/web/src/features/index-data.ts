@@ -1,5 +1,5 @@
 import type { ChartPoint } from '@/components/plot-chart'
-import { nationalRegion, regionName, toChartPoints } from '@/lib/observations'
+import { nationalRegion, nationalRegionId, regionName, toChartPoints } from '@/lib/observations'
 import type {
   Code,
   Dataflow,
@@ -85,6 +85,7 @@ export function deriveIndexData(input: {
 }): IndexData {
   const cpiGroup = input.groups.find((group) => group.detail.dataflow.id === 'abs.cpi')
   const latestRows = latestIndicatorRows(input.groups, input.codelists)
+  const cpiNationalRegion = dataflowNationalRegion(input.codelists, 'abs.cpi')
 
   return {
     featured: featuredIndicatorDefinitions(input.groups).map((definition) =>
@@ -102,7 +103,7 @@ export function deriveIndexData(input: {
     sourceMix: distributionBy(input.dataflows, (dataflow) => dataflow.source_id),
     trendChart: toChartPoints(
       cpiGroup?.observations.filter(
-        (observation) => observation.dimensions.region === nationalRegion,
+        (observation) => observation.dimensions.region === cpiNationalRegion,
       ) ?? [],
       'Australia',
     ),
@@ -139,9 +140,15 @@ function featuredIndicator(
   },
 ): FeaturedIndicator {
   const group = input.groups.find((candidate) => candidate.detail.dataflow.id === dataflowId)
+  const targetRegion =
+    region === undefined
+      ? undefined
+      : region === nationalRegion
+        ? dataflowNationalRegion(input.codelists, dataflowId)
+        : region
   const rows =
     group?.observations.filter((observation) =>
-      region === undefined ? true : observation.dimensions.region === region,
+      targetRegion === undefined ? true : observation.dimensions.region === targetRegion,
     ) ?? []
   const current = latestObservation(rows)
   const previous = current === undefined ? undefined : previousObservation(rows, current)
@@ -239,11 +246,12 @@ function regionalComparisonChart(
       (codelist) =>
         codelist.dataflowId === cpiGroup.detail.dataflow.id && codelist.dimensionId === 'region',
     )?.codes ?? []
+  const national = nationalRegionId(regionCodes)
   const byRegion = new Map<string, ObservationsRow[]>()
 
   for (const observation of cpiGroup.observations) {
     const region = observation.dimensions.region
-    if (region === undefined || region === nationalRegion) {
+    if (region === undefined || region === national) {
       continue
     }
     byRegion.set(region, [...(byRegion.get(region) ?? []), observation])
@@ -252,6 +260,14 @@ function regionalComparisonChart(
   return Array.from(byRegion.entries()).flatMap(([region, rows]) =>
     toChartPoints(rows, regionName(regionCodes, region)),
   )
+}
+
+function dataflowNationalRegion(codelists: CodelistLookup[], dataflowId: string): string {
+  const regionCodes =
+    codelists.find(
+      (codelist) => codelist.dataflowId === dataflowId && codelist.dimensionId === 'region',
+    )?.codes ?? []
+  return nationalRegionId(regionCodes)
 }
 
 function distributionBy(

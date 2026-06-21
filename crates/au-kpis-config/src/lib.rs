@@ -243,21 +243,11 @@ pub enum LogFormat {
 /// Sections without a default (e.g. `database`) are intentionally omitted
 /// so figment surfaces a clear "missing field" error when the caller
 /// forgets to supply them.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct Defaults {
     http: HttpConfig,
     telemetry: TelemetryConfig,
     rate_limits: RateLimitConfig,
-}
-
-impl Default for Defaults {
-    fn default() -> Self {
-        Self {
-            http: HttpConfig::default(),
-            telemetry: TelemetryConfig::default(),
-            rate_limits: RateLimitConfig::default(),
-        }
-    }
 }
 
 impl Defaults {

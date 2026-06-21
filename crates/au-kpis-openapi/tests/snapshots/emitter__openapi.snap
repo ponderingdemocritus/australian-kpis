@@ -825,7 +825,7 @@ expression: emitted_spec()
               },
               {
                 "$ref": "#/components/schemas/Observation",
-                "description": "Latest observation by timestamp, using `observations_latest` revision selection."
+                "description": "Latest observation by timestamp and highest revision for that timestamp."
               }
             ]
           },

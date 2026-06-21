@@ -313,7 +313,10 @@ async fn run_mode_dead_letters_invalid_jobs_without_exiting() {
     let mut harness = IngestionProcess::start_run("au_kpis_ingestion_poison_job").await;
     let queue = ApalisPgQueue::new(harness.pool().clone());
     let job_id = queue
-        .push(Job::discover(SourceId::new("rba").expect("valid source id")).with_max_attempts(1))
+        .push(
+            Job::discover(SourceId::new("unsupported").expect("valid source id"))
+                .with_max_attempts(1),
+        )
         .await
         .expect("push unsupported queue job");
 

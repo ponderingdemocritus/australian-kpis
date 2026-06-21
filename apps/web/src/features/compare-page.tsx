@@ -25,7 +25,9 @@ import { formatDate, formatValue } from '@/lib/format'
 import {
   collectObservations,
   comparisonColors,
+  defaultComparedRegionIds,
   nationalRegion,
+  nationalRegionId,
   regionById,
   stateRegions,
   toChartPoints,
@@ -72,10 +74,22 @@ export function ComparePage() {
   })
 
   const regions = regionsQuery.data?.codelist.codes ?? []
+  const activeNationalRegion = useMemo(() => nationalRegionId(regions), [regions])
+  const defaultSelectedRegions = useMemo(() => defaultComparedRegionIds(regions), [regions])
   const regionOptions = useMemo(
-    () => [regionById(regions, nationalRegion), ...stateRegions(regions)],
-    [regions],
+    () => [regionById(regions, activeNationalRegion), ...stateRegions(regions)],
+    [activeNationalRegion, regions],
   )
+
+  useEffect(() => {
+    if (regions.length === 0 || defaultSelectedRegions.length === 0) {
+      return
+    }
+    const validRegionIds = new Set(regionOptions.map((region) => region.id))
+    if (selectedRegions.some((regionId) => !validRegionIds.has(regionId))) {
+      setSelectedRegions(defaultSelectedRegions)
+    }
+  }, [defaultSelectedRegions, regionOptions, regions.length, selectedRegions])
 
   const comparisonQuery = useQuery({
     enabled: selectedDataflow.length > 0 && selectedRegions.length > 0 && regions.length > 0,
@@ -150,7 +164,7 @@ export function ComparePage() {
                 id="compare-dataflow"
                 onChange={(event) => {
                   setSelectedDataflow(event.target.value)
-                  setSelectedRegions(defaultComparedRegions)
+                  setSelectedRegions(defaultSelectedRegions)
                 }}
                 value={selectedDataflow}
               >

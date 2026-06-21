@@ -330,11 +330,6 @@ struct CacheFingerprint {
 #[derive(Debug, Clone)]
 struct CandidateSeries {
     series_key: SeriesKey,
-    dimensions: BTreeMap<String, String>,
-    measure_id: String,
-    unit: String,
-    first_observed: Option<DateTime<Utc>>,
-    last_observed: Option<DateTime<Utc>>,
 }
 
 fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery, ApiError> {
@@ -1251,64 +1246,31 @@ async fn fetch_latest_observation_rows_page(
     fetch_cursor: Option<ObservationCursor>,
     raw_fetch_limit: usize,
 ) -> Result<Vec<ObservationsRow>, ApiError> {
-    let series_by_key: BTreeMap<SeriesKey, CandidateSeries> = candidates
-        .iter()
-        .cloned()
-        .map(|series| (series.series_key, series))
-        .collect();
-    let mut rows = Vec::with_capacity(raw_fetch_limit.min(candidates.len() * raw_fetch_limit));
-
-    for series in candidates {
-        let mut builder = build_single_series_latest_observation_rows_query(
-            series,
-            query,
-            fetch_cursor,
-            raw_fetch_limit,
-        );
-        let fetched = builder.build().fetch_all(pool).await?;
-        for row in fetched {
-            rows.push(row_to_latest_observation(row, &series_by_key)?);
-        }
-    }
-
-    rows.sort_by(|left, right| {
-        left.time
-            .cmp(&right.time)
-            .then_with(|| left.series_key.cmp(&right.series_key))
-            .then_with(|| right.revision_no.cmp(&left.revision_no))
-    });
-    rows.truncate(raw_fetch_limit);
-    Ok(rows)
+    let mut builder =
+        build_latest_observation_rows_query(candidates, query, fetch_cursor, raw_fetch_limit);
+    let rows = builder.build().fetch_all(pool).await?;
+    rows.into_iter().map(row_to_observation).collect()
 }
 
-fn build_single_series_latest_observation_rows_query<'a>(
-    series: &'a CandidateSeries,
+fn build_latest_observation_rows_query<'a>(
+    candidates: &'a [CandidateSeries],
     query: &'a ParsedObservationsQuery,
     fetch_cursor: Option<ObservationCursor>,
     raw_fetch_limit: usize,
 ) -> QueryBuilder<'a, Postgres> {
+    let series_keys = candidates
+        .iter()
+        .map(|series| series.series_key.digest().as_bytes().to_vec())
+        .collect::<Vec<_>>();
     let mut builder = QueryBuilder::<Postgres>::new("");
-    push_latest_observation_select(&mut builder);
-    builder.push(" FROM observations obs WHERE obs.series_key = ");
-    builder.push_bind(series.series_key.digest().as_bytes().to_vec());
-    push_candidate_observation_time_filters(&mut builder, query, fetch_cursor, Some(series));
-    builder.push(" ORDER BY obs.time ASC, obs.revision_no DESC LIMIT ");
+    push_observation_select(&mut builder, None);
+    builder.push(" WHERE o.series_key = ANY(");
+    builder.push_bind(series_keys);
+    builder.push(")");
+    push_candidate_observation_time_filters(&mut builder, query, fetch_cursor);
+    builder.push(" ORDER BY o.time ASC, o.series_key ASC LIMIT ");
     builder.push_bind(raw_fetch_limit as i64);
     builder
-}
-
-fn push_latest_observation_select(builder: &mut QueryBuilder<'_, Postgres>) {
-    builder.push(
-        "SELECT obs.series_key,
-                obs.time,
-                obs.revision_no,
-                obs.time_precision,
-                obs.value,
-                obs.status,
-                obs.attributes,
-                obs.ingested_at,
-                obs.source_artifact_id",
-    );
 }
 
 fn latest_revision_raw_fetch_limit(limit: usize) -> usize {
@@ -1320,12 +1282,7 @@ async fn load_candidate_series(
     query: &ParsedObservationsQuery,
 ) -> Result<Vec<CandidateSeries>, ApiError> {
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT s.series_key,
-                s.dimensions,
-                s.measure_id,
-                s.unit,
-                s.first_observed,
-                s.last_observed
+        "SELECT s.series_key
          FROM series s
          JOIN dataflows d ON d.id = s.dataflow_id",
     );
@@ -1457,27 +1414,19 @@ fn push_candidate_observation_time_filters(
     builder: &mut QueryBuilder<'_, Postgres>,
     query: &ParsedObservationsQuery,
     cursor: Option<ObservationCursor>,
-    series: Option<&CandidateSeries>,
 ) {
-    let lower_bound = query
-        .since
-        .or_else(|| series.and_then(|series| series.first_observed));
-    let upper_bound = query
-        .until
-        .or_else(|| series.and_then(|series| series.last_observed));
-
-    if let Some(since) = lower_bound {
-        builder.push(" AND obs.time >= ");
+    if let Some(since) = query.since {
+        builder.push(" AND o.time >= ");
         builder.push_bind(since);
     }
 
-    if let Some(until) = upper_bound {
-        builder.push(" AND obs.time <= ");
+    if let Some(until) = query.until {
+        builder.push(" AND o.time <= ");
         builder.push_bind(until);
     }
 
     if let Some(cursor) = cursor {
-        builder.push(" AND (obs.time, obs.series_key) > (");
+        builder.push(" AND (o.time, o.series_key) > (");
         builder.push_bind(cursor.time);
         builder.push(", ");
         builder.push_bind(cursor.series_key.digest().as_bytes().to_vec());
@@ -1528,45 +1477,9 @@ fn row_to_observation(row: PgRow) -> Result<ObservationsRow, ApiError> {
     })
 }
 
-fn row_to_latest_observation(
-    row: PgRow,
-    series_by_key: &BTreeMap<SeriesKey, CandidateSeries>,
-) -> Result<ObservationsRow, ApiError> {
-    let series_key = series_key_from_bytes(row.try_get("series_key")?)?;
-    let Some(series) = series_by_key.get(&series_key) else {
-        tracing::error!(%series_key, "observation row missing candidate series metadata");
-        return Err(ApiError::Internal);
-    };
-    let revision_no = row.try_get::<i32, _>("revision_no")?;
-    let attributes = json_map(row.try_get("attributes")?)?;
-
-    Ok(ObservationsRow {
-        series_key,
-        time: row.try_get("time")?,
-        time_precision: parse_time_precision(row.try_get("time_precision")?)?,
-        value: row.try_get("value")?,
-        status: parse_observation_status(row.try_get("status")?)?,
-        revision_no: u32::try_from(revision_no).map_err(|err| {
-            tracing::error!(error = %err, revision_no, "database returned invalid revision_no");
-            ApiError::Internal
-        })?,
-        attributes,
-        ingested_at: row.try_get("ingested_at")?,
-        source_artifact_id: artifact_id_from_bytes(row.try_get("source_artifact_id")?)?,
-        dimensions: series.dimensions.clone(),
-        measure_id: series.measure_id.clone(),
-        unit: series.unit.clone(),
-    })
-}
-
 fn row_to_candidate_series(row: PgRow) -> Result<CandidateSeries, ApiError> {
     Ok(CandidateSeries {
         series_key: series_key_from_bytes(row.try_get("series_key")?)?,
-        dimensions: json_map(row.try_get("dimensions")?)?,
-        measure_id: row.try_get("measure_id")?,
-        unit: row.try_get("unit")?,
-        first_observed: row.try_get("first_observed")?,
-        last_observed: row.try_get("last_observed")?,
     })
 }
 
@@ -1851,33 +1764,24 @@ mod tests {
     }
 
     #[test]
-    fn single_series_latest_queries_use_series_time_bounds() {
+    fn latest_queries_use_one_bounded_candidate_key_scan() {
         let dataflow = DataflowId::new("state_budgets.vic_budget").unwrap();
-        let query =
-            parse_observations_query(Some("dataflow=state_budgets.vic_budget&limit=10")).unwrap();
-        let series = CandidateSeries {
+        let query = parse_observations_query(Some(
+            "dataflow=state_budgets.vic_budget&since=2026-07-01&until=2029-07-01&limit=10",
+        ))
+        .unwrap();
+        let series = [CandidateSeries {
             series_key: SeriesKey::derive(&dataflow, [("metric", "operating_revenue")]),
-            dimensions: [("metric".to_string(), "operating_revenue".to_string())]
-                .into_iter()
-                .collect(),
-            measure_id: "amount".to_string(),
-            unit: "aud".to_string(),
-            first_observed: Some(Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap()),
-            last_observed: Some(Utc.with_ymd_and_hms(2029, 7, 1, 0, 0, 0).unwrap()),
-        };
+        }];
 
-        let mut query_builder =
-            build_single_series_latest_observation_rows_query(&series, &query, None, 22);
+        let mut query_builder = build_latest_observation_rows_query(&series, &query, None, 22);
         let builder = query_builder.build();
         let sql = builder.sql();
 
-        assert!(sql.contains("obs.series_key ="));
-        assert!(sql.contains("obs.time >="));
-        assert!(sql.contains("obs.time <="));
-        assert!(
-            !sql.contains("series_key IN"),
-            "latest reads should not use the unstable broad IN plan: {sql}"
-        );
+        assert!(sql.contains("o.series_key = ANY"));
+        assert!(sql.contains("o.time >="));
+        assert!(sql.contains("o.time <="));
+        assert!(sql.contains("ORDER BY o.time ASC, o.series_key ASC LIMIT"));
     }
 
     #[tokio::test]

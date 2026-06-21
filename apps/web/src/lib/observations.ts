@@ -17,6 +17,18 @@ export const comparisonColors: Record<string, string> = {
   Melbourne: '#b45309',
 }
 
+const regionDisplayOrder = [
+  'Australia',
+  'New South Wales',
+  'Victoria',
+  'Queensland',
+  'South Australia',
+  'Western Australia',
+  'Tasmania',
+  'Northern Territory',
+  'Australian Capital Territory',
+]
+
 export async function collectObservations(
   dataflow: string,
   region: string,
@@ -122,9 +134,9 @@ export function stateRegions(regions: Code[]): Code[] {
   const national = nationalRegionId(regions)
   const childRegions = regions.filter((code) => code.id !== national && code.parent_id === national)
   if (childRegions.length > 0) {
-    return childRegions
+    return sortRegionsForDisplay(childRegions)
   }
-  return regions.filter((code) => code.id !== national)
+  return sortRegionsForDisplay(regions.filter((code) => code.id !== national))
 }
 
 export function orderedRegions(regions: Code[]): Code[] {
@@ -141,6 +153,18 @@ export function defaultComparedRegionIds(regions: Code[]): string[] {
     .slice(0, 2)
     .map((region) => region.id)
   return [national, ...comparison]
+}
+
+function sortRegionsForDisplay(regions: Code[]): Code[] {
+  return [...regions].sort((left, right) => {
+    const leftIndex = regionDisplayOrder.indexOf(left.name)
+    const rightIndex = regionDisplayOrder.indexOf(right.name)
+    const leftRank = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex
+    const rightRank = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex
+    return (
+      leftRank - rightRank || left.name.localeCompare(right.name) || left.id.localeCompare(right.id)
+    )
+  })
 }
 
 export function observationDimensions(

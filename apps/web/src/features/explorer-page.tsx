@@ -26,6 +26,7 @@ import {
   collectObservations,
   comparisonColors,
   nationalRegion,
+  nationalRegionId,
   regionName,
   stateRegions,
   toChartPoints,
@@ -71,12 +72,22 @@ export function ExplorerPage() {
   })
 
   const regions = regionsQuery.data?.codelist.codes ?? []
+  const activeNationalRegion = useMemo(() => nationalRegionId(regions), [regions])
   const states = useMemo(() => stateRegions(regions), [regions])
 
+  useEffect(() => {
+    if (regions.length === 0) {
+      return
+    }
+    if (!regions.some((region) => region.id === selectedRegion)) {
+      setSelectedRegion(activeNationalRegion)
+    }
+  }, [activeNationalRegion, regions, selectedRegion])
+
   const nationalQuery = useQuery({
-    enabled: selectedDataflow.length > 0,
-    queryFn: () => collectObservations(selectedDataflow, nationalRegion),
-    queryKey: ['observations', selectedDataflow, nationalRegion],
+    enabled: selectedDataflow.length > 0 && regions.length > 0,
+    queryFn: () => collectObservations(selectedDataflow, activeNationalRegion),
+    queryKey: ['observations', selectedDataflow, activeNationalRegion],
   })
 
   const selectedQuery = useQuery({
@@ -168,7 +179,7 @@ export function ExplorerPage() {
                 id="dataflow"
                 onChange={(event) => {
                   setSelectedDataflow(event.target.value)
-                  setSelectedRegion(nationalRegion)
+                  setSelectedRegion(activeNationalRegion)
                 }}
                 value={selectedDataflow}
               >
