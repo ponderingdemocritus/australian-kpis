@@ -29,6 +29,15 @@ test('Index surfaces fixture-backed latest indicator values first', async ({ pag
   await expect(nswRow).toContainText('139.2')
 
   await expect(page.getByTestId('endpoint-map')).toContainText('Catalog search')
+  await expect(page.getByTestId('index-attribution')).toContainText(
+    'Source: Australian Bureau of Statistics',
+  )
+  await expect(page.getByTestId('index-attribution')).toContainText(
+    'Source: Reserve Bank of Australia',
+  )
+  await expect(page.getByText('API base:')).toContainText('127.0.0.1:3000')
+  await expect(page.getByText('Latest loaded: Jun 2024')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Methodology' })).toHaveCount(0)
   await expect(page.getByText('Loading API index data')).toHaveCount(0)
 
   await expect(page).toHaveScreenshot('index-values-dashboard.png')

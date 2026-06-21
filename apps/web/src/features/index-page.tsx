@@ -213,6 +213,7 @@ export function IndexPage() {
   const regionalChart = indexData.regionalChart
   const regionalLegend = regionalChartRegions(regionalChart)
   const latestPeriod = headlineObservation?.time ? formatDate(headlineObservation.time) : 'waiting'
+  const attributions = uniqueText(details.map((detail) => detail.dataflow.attribution))
   const endpointStates = endpointDefinitions.map((endpoint) => ({
     ...endpoint,
     state: endpointState(endpoint.id, {
@@ -309,6 +310,8 @@ export function IndexPage() {
           title="CPI by state/territory"
         />
       </section>
+
+      <AttributionList attributions={attributions} />
 
       <LatestIndicatorValues rows={indexData.latestRows.slice(0, 8)} />
 
@@ -705,6 +708,26 @@ function ContractRow({
   )
 }
 
+function AttributionList({ attributions }: { attributions: string[] }) {
+  if (attributions.length === 0) {
+    return null
+  }
+
+  return (
+    <section
+      className="rounded-md border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+      data-testid="index-attribution"
+    >
+      <p className="font-medium text-card-foreground">Attribution</p>
+      <ul className="mt-2 flex flex-col gap-1">
+        {attributions.map((attribution) => (
+          <li key={attribution}>{attribution}</li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 function StatusBanner({ message, tone }: { message: string; tone: 'error' | 'loading' }) {
   return (
     <div
@@ -728,6 +751,10 @@ type DistributionItem = {
 
 function regionalChartRegions(chart: ChartPoint[]): string[] {
   return Array.from(new Set(chart.map((point) => point.region)))
+}
+
+function uniqueText(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)))
 }
 
 function endpointState(

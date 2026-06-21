@@ -796,7 +796,7 @@ for await (const obs of client.observations.stream({
 
 // Catalog
 const dataflows = await client.dataflows.list({ source: 'abs' })
-const matches = await client.search('unemployment')
+const matches = await client.search.catalog({ q: 'unemployment' })
 ```
 
 - **Runtime validation** (optional, off by default): Zod schemas generated from OpenAPI via `openapi-zod-client`; consumers pass `{ validate: true }` to enable.

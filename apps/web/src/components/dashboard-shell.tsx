@@ -14,15 +14,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarSeparator,
   SidebarTrigger,
 } from '@/components/ui/sidebar'
+import { apiBaseUrl } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import {
   BarChart3,
   Database,
   GitCompareArrows,
-  Info,
   LayoutDashboard,
   SquareTerminal,
 } from 'lucide-react'
@@ -73,26 +72,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               </nav>
             </SidebarGroupContent>
           </SidebarGroup>
-          <SidebarSeparator />
-          <SidebarGroup>
-            <SidebarGroupLabel>Reference</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild tooltip="Methodology">
-                    <a href="https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia">
-                      <Info aria-hidden="true" />
-                      <span>Methodology</span>
-                    </a>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
         </SidebarContent>
         <SidebarFooter className="p-4">
           <div className="rounded-md border border-sidebar-border bg-background px-3 py-2 text-xs text-sidebar-foreground/75">
-            API base: <span className="font-mono">localhost:3000</span>
+            API base: <span className="break-all font-mono">{apiBaseUrl}</span>
           </div>
         </SidebarFooter>
       </Sidebar>
@@ -103,7 +86,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <SidebarTrigger aria-label="Open navigation" className="md:hidden" />
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold">Australian KPIs</p>
-                <p className="truncate text-xs text-muted-foreground">Latest loaded: Jun 2024</p>
+                <p className="truncate text-xs text-muted-foreground">Public API dashboard</p>
               </div>
             </div>
             <Button asChild size="sm" variant="outline">
