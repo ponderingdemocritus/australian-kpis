@@ -478,6 +478,7 @@ async fn staged_load_commit_promotes_observations_in_configured_chunks() {
     let pool = &db.pool;
     let artifact_id = ArtifactId::of_content(b"loader staged chunked commit fixture");
     seed_reference_data(pool, artifact_id).await;
+    seed_webhook_subscriptions(pool).await;
     seed_observation_statement_row_limit(pool, 2).await;
 
     let aus = descriptor("AUS");
@@ -509,6 +510,11 @@ async fn staged_load_commit_promotes_observations_in_configured_chunks() {
 
     assert_eq!(stats.observations_loaded, 5);
     assert_eq!(stats.parse_errors, 0);
+    let delivery_count: i64 = sqlx::query_scalar("SELECT count(*) FROM webhook_deliveries")
+        .fetch_one(pool)
+        .await
+        .expect("count webhook deliveries for staged commit");
+    assert_eq!(delivery_count, 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -799,26 +799,45 @@ async fn upsert_observations_in_chunk_transactions(
     max_rows: usize,
 ) -> Result<u64, LoadError> {
     let chunk_limit = chunk_limit(max_rows)?;
+    let final_stage_row_id = max_staged_observation_row_id(conn).await?.unwrap_or(0);
+    if final_stage_row_id == 0 {
+        return Ok(0);
+    }
+
     let mut last_stage_row_id = 0_i64;
     let mut observations_loaded = 0_u64;
     loop {
         let mut tx = (&mut *conn).begin().await?;
         let (max_stage_row_id, chunk_rows_loaded, had_rows) =
             upsert_next_observation_chunk(&mut tx, last_stage_row_id, chunk_limit).await?;
-        tx.commit().await?;
 
         if !had_rows {
+            tx.commit().await?;
             break;
         }
+
         observations_loaded += chunk_rows_loaded;
         last_stage_row_id = max_stage_row_id;
+
+        if last_stage_row_id >= final_stage_row_id {
+            enqueue_webhook_deliveries_for_observations(&mut tx, observations_loaded).await?;
+            tx.commit().await?;
+            break;
+        }
+
+        tx.commit().await?;
     }
 
-    let mut tx = (&mut *conn).begin().await?;
-    enqueue_webhook_deliveries_for_observations(&mut tx, observations_loaded).await?;
-    tx.commit().await?;
-
     Ok(observations_loaded)
+}
+
+async fn max_staged_observation_row_id(
+    conn: &mut PoolConnection<Postgres>,
+) -> Result<Option<i64>, LoadError> {
+    sqlx::query_scalar("SELECT max(stage_row_id) FROM staging_observations")
+        .fetch_one(&mut **conn)
+        .await
+        .map_err(LoadError::from)
 }
 
 fn chunk_limit(max_rows: usize) -> Result<i64, LoadError> {

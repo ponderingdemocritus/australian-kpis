@@ -172,7 +172,8 @@ pub async fn list_observations(
     uri: Uri,
 ) -> Result<Response, ApiError> {
     let query = parse_observations_query(uri.query())?;
-    enforce_observation_query_bounds(&state.db, &query).await?;
+    let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
+    validate_observation_query_bounds(&query, &fingerprint)?;
     let json_cache_key = observations_json_cache_key(uri.query(), &query);
     if should_cache_json_observations(&query) {
         if let Some(cached) = read_cached_json_observations(&state, &json_cache_key).await {
@@ -181,7 +182,7 @@ pub async fn list_observations(
     }
 
     let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
-    let etag = compute_etag(&state.db, &query).await?;
+    let etag = compute_etag(&query, &fingerprint)?;
     let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
     let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
         tracing::error!(error = %err, "generated invalid ETag header");
@@ -497,7 +498,10 @@ async fn load_observations_metadata(
     })
 }
 
-async fn compute_etag(pool: &PgPool, query: &ParsedObservationsQuery) -> Result<String, ApiError> {
+async fn load_cache_fingerprint(
+    pool: &PgPool,
+    query: &ParsedObservationsQuery,
+) -> Result<CacheFingerprint, ApiError> {
     let mut builder = QueryBuilder::<Postgres>::new(
         "SELECT count(*)::bigint AS series_count,
                 max(s.updated_at) AS max_series_updated_at
@@ -506,41 +510,27 @@ async fn compute_etag(pool: &PgPool, query: &ParsedObservationsQuery) -> Result<
     );
     push_series_fingerprint_filters(&mut builder, query);
     let row = builder.build().fetch_one(pool).await?;
-    let fingerprint = CacheFingerprint {
+    Ok(CacheFingerprint {
         series_count: row.try_get("series_count")?,
         max_series_updated_at: row.try_get("max_series_updated_at")?,
-    };
+    })
+}
+
+fn compute_etag(
+    query: &ParsedObservationsQuery,
+    fingerprint: &CacheFingerprint,
+) -> Result<String, ApiError> {
     Ok(format!(
         "W/\"{}\"",
-        Sha256Digest::hash(etag_seed(query, &fingerprint).as_bytes())
+        Sha256Digest::hash(etag_seed(query, fingerprint).as_bytes())
     ))
 }
 
-async fn enforce_observation_query_bounds(
-    pool: &PgPool,
+fn validate_observation_query_bounds(
     query: &ParsedObservationsQuery,
+    fingerprint: &CacheFingerprint,
 ) -> Result<(), ApiError> {
-    if rollup_grain(query).is_some() {
-        return Ok(());
-    }
-
-    let candidate_series_count = count_candidate_series(pool, query).await?;
-    validate_latest_query_cardinality(query, candidate_series_count)
-}
-
-async fn count_candidate_series(
-    pool: &PgPool,
-    query: &ParsedObservationsQuery,
-) -> Result<i64, ApiError> {
-    let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT count(*)::bigint AS candidate_series_count
-         FROM series s
-         JOIN dataflows d ON d.id = s.dataflow_id",
-    );
-    push_candidate_series_filters(&mut builder, query);
-    let row = builder.build().fetch_one(pool).await?;
-    row.try_get("candidate_series_count")
-        .map_err(ApiError::from)
+    validate_latest_query_cardinality(query, fingerprint.series_count)
 }
 
 fn validate_latest_query_cardinality(
@@ -1847,6 +1837,57 @@ mod tests {
 
         assert!(!encoded.contains("2024-03-01"));
         assert_eq!(decode_cursor(&encoded).unwrap(), cursor);
+    }
+
+    #[test]
+    fn validates_observation_query_edge_cases_before_db_access() {
+        let empty_dimension =
+            parse_observations_query(Some("dataflow=abs.cpi&dimensions[region]=")).unwrap_err();
+        assert!(empty_dimension.to_string().contains("dimension filters"));
+
+        let malformed_dimension =
+            parse_observations_query(Some("dataflow=abs.cpi&dimensions=region")).unwrap_err();
+        assert!(malformed_dimension.to_string().contains("dimension=value"));
+
+        let bad_frequency =
+            parse_observations_query(Some("dataflow=abs.cpi&frequency=hourly")).unwrap_err();
+        assert!(bad_frequency.to_string().contains("unsupported frequency"));
+
+        let bad_format = parse_observations_query(Some("dataflow=abs.cpi&format=xml")).unwrap_err();
+        assert!(bad_format.to_string().contains("unsupported format"));
+
+        let bad_limit = parse_observations_query(Some("dataflow=abs.cpi&limit=abc")).unwrap_err();
+        assert!(bad_limit.to_string().contains("invalid limit"));
+
+        let reversed_dates =
+            parse_observations_query(Some("dataflow=abs.cpi&since=2024-06-30&until=2024-01-01"))
+                .unwrap_err();
+        assert!(reversed_dates.to_string().contains("since"));
+
+        assert!(decode_cursor("not base64").is_err());
+        let invalid_payload = BASE64_URL_SAFE_NO_PAD.encode(br#"{}"#);
+        assert!(decode_cursor(&invalid_payload).is_err());
+    }
+
+    #[test]
+    fn rollups_cache_limits_and_etags_cover_boundary_branches() {
+        let rollup = parse_observations_query(Some("dataflow=abs.cpi&frequency=monthly")).unwrap();
+        validate_latest_query_cardinality(&rollup, RAW_OBSERVATION_SERIES_LIMIT + 100)
+            .expect("rollups bypass raw latest series-cardinality guard");
+
+        let oversized_first_page =
+            parse_observations_query(Some("dataflow=abs.cpi&limit=1001")).unwrap();
+        assert!(!should_cache_json_observations(&oversized_first_page));
+
+        let mut headers = HeaderMap::new();
+        assert!(!if_none_match_fresh(&headers, "W/\"fresh\""));
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"stale\", W/\"fresh\""),
+        );
+        assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
+        assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
     }
 
     fn test_observation_row() -> ObservationsRow {

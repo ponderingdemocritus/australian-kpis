@@ -698,6 +698,13 @@ jobs:
               pr = json.load(handle)["benchmarks"]
 
           common = sorted(set(main) & set(pr))
+          # These helper timings feed an explicit in-benchmark overhead budget;
+          # comparing them against main double-counts the same guard.
+          budget_checked = {
+              "api_observations/direct_db_observations_page",
+              "api_observations/handler_observations_page_under_5ms_above_db",
+          }
+          common = [name for name in common if name not in budget_checked]
           if not common:
               print("No common Criterion benchmarks to compare.", file=sys.stderr)
               sys.exit(1)

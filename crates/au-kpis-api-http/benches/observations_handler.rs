@@ -26,6 +26,7 @@ use tower::ServiceExt;
 
 const API_URI: &str = "/v1/observations?dataflow=abs.cpi&limit=25";
 const ROW_COUNT: usize = 1_000;
+const HANDLER_OVERHEAD_BUDGET: Duration = Duration::from_millis(5);
 
 #[derive(Debug, Default)]
 struct NoopCacheBackend;
@@ -257,19 +258,17 @@ async fn direct_db_page(pool: &PgPool) -> usize {
     black_box(metadata.get::<String, _>("source_url"));
 
     let fingerprint = sqlx::query(
-        "SELECT count(*)::bigint AS row_count,
-                max(o.ingested_at) AS max_ingested_at,
-                max(o.time) AS max_time,
-                max(o.revision_no) AS max_revision_no
-         FROM observations_latest o
-         JOIN series s ON s.series_key = o.series_key
+        "SELECT count(*)::bigint AS series_count,
+                max(s.updated_at) AS max_series_updated_at
+         FROM series s
          JOIN dataflows d ON d.id = s.dataflow_id
          WHERE s.dataflow_id = 'abs.cpi'",
     )
     .fetch_one(pool)
     .await
     .expect("fetch etag fingerprint");
-    black_box(fingerprint.get::<i64, _>("row_count"));
+    black_box(fingerprint.get::<i64, _>("series_count"));
+    black_box(fingerprint.get::<Option<DateTime<Utc>>, _>("max_series_updated_at"));
 
     let rows = sqlx::query(
         "SELECT o.series_key,
@@ -336,6 +335,10 @@ fn bench_observations_handler(c: &mut Criterion) {
     let app = router(test_state(db.pool.clone())).expect("router");
     let overhead = runtime.block_on(estimate_handler_overhead(&db.pool, app.clone()));
     eprintln!("api handler overhead estimate above direct DB: {overhead:?}");
+    assert!(
+        overhead <= HANDLER_OVERHEAD_BUDGET,
+        "api observations handler overhead {overhead:?} exceeds {HANDLER_OVERHEAD_BUDGET:?}"
+    );
 
     let mut group = c.benchmark_group("api_observations");
     group.bench_function("direct_db_observations_page", |b| {
