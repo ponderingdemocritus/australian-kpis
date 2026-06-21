@@ -111,7 +111,7 @@ metadata from the same local API.
 Start the React Explorer against the compose API:
 
 ```bash
-VITE_AU_KPIS_API_BASE_URL=http://127.0.0.1:3000 \
+NEXT_PUBLIC_AU_KPIS_API_BASE_URL=http://127.0.0.1:3000 \
   pnpm --filter @au-kpis/web dev -- --port 4174
 ```
 

@@ -6,6 +6,8 @@ import type {
   ListDataflowsParams,
   ObservationsResponse,
   ObservationsRow,
+  SearchCatalogParams,
+  SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 
@@ -68,6 +70,9 @@ export type AuKpisClient = {
     stream: (params: ObservationsListParams) => AsyncIterable<ObservationsRow>
   }
   openapi: () => Promise<unknown>
+  search: {
+    catalog: (params: SearchCatalogParams) => Promise<SearchResponse>
+  }
 }
 
 export class ApiRequestError extends Error {
@@ -100,6 +105,7 @@ type SchemaName =
   | 'DataflowsResponse'
   | 'HealthResponse'
   | 'ObservationsResponse'
+  | 'SearchResponse'
   | 'SeriesLookupResponse'
 
 type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
@@ -165,6 +171,14 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
       requestJson<unknown>(context, {
         path: '/v1/openapi.json',
       }),
+    search: {
+      catalog: (params) =>
+        requestJson<SearchResponse>(context, {
+          path: '/v1/search',
+          query: params,
+          schema: 'SearchResponse',
+        }),
+    },
   }
 }
 

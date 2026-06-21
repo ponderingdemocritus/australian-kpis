@@ -17,10 +17,18 @@ export async function collectObservations(
   region: string,
   limit = 100,
 ): Promise<ObservationsRow[]> {
+  return collectObservationRows(dataflow, { region }, limit)
+}
+
+export async function collectObservationRows(
+  dataflow: string,
+  dimensions?: Record<string, string>,
+  limit = 100,
+): Promise<ObservationsRow[]> {
   const observations: ObservationsRow[] = []
   for await (const observation of client.observations.stream({
     dataflow,
-    dimensions: { region },
+    dimensions,
     limit,
   })) {
     observations.push(observation)

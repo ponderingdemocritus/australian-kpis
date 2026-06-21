@@ -4,9 +4,10 @@ import { expect, test } from '@playwright/test'
 test('Compare overlays multiple selected series on one chart', async ({ page }) => {
   await page.goto('/')
 
-  await page.getByRole('button', { name: 'Compare' }).click()
+  await page.getByRole('link', { name: 'Compare' }).click()
 
   await expect(page.getByRole('heading', { name: 'Compare' })).toBeVisible()
+  await expect(page).toHaveURL(/\/compare$/)
   await expect(page.getByLabel('Dataflow')).toHaveValue('abs.cpi')
 
   const chart = page.getByTestId('compare-chart')
@@ -26,9 +27,10 @@ test('Playground runs a live observations query and shows curl plus SDK snippets
 }) => {
   await page.goto('/')
 
-  await page.getByRole('button', { name: 'Playground' }).click()
+  await page.getByRole('link', { name: 'Playground' }).click()
 
   await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible()
+  await expect(page).toHaveURL(/\/playground$/)
   await expect(page.getByLabel('Region')).toContainText('New South Wales')
   await page.getByLabel('Region').selectOption('NSW')
   await page.getByLabel('Since').fill('2024-03-01')
@@ -49,12 +51,12 @@ test('Playground runs a live observations query and shows curl plus SDK snippets
 test('Compare and Playground have no WCAG AA accessibility violations', async ({ page }) => {
   await page.goto('/')
 
-  await page.getByRole('button', { name: 'Compare' }).click()
+  await page.getByRole('link', { name: 'Compare' }).click()
   await expect(page.getByTestId('compare-chart')).toContainText('Australia')
   let results = await new AxeBuilder({ page }).analyze()
   expect(results.violations).toEqual([])
 
-  await page.getByRole('button', { name: 'Playground' }).click()
+  await page.getByRole('link', { name: 'Playground' }).click()
   await expect(page.getByTestId('playground-response')).toHaveValue(/"observations"/)
   results = await new AxeBuilder({ page }).analyze()
   expect(results.violations).toEqual([])

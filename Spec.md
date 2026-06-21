@@ -94,7 +94,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 | **Ingestion + workers** | **Rust (tokio, reqwest, calamine, polars)** | Flat memory at millions of rows; shared types with API; `polars`/`arrow-rs` advantage |
 | **PDF extractor** | **Python FastAPI sidecar** with strategy backends (`pdfplumber` + `camelot` baseline; optional pinned local Docling/VLM fallback) | Deterministic extraction first; model assistance only when validation/format-drift requires it |
 | **SDK** | **TypeScript**, generated from OpenAPI (`openapi-typescript` + orval + hand-written ergonomic wrapper) | Consumer language; typed; tree-shakeable; Bun/Node/browser/Deno compatible |
-| **Client** | **TypeScript (Vite + React + TanStack Query + shadcn/ui)** | Reference app demonstrating SDK |
+| **Client** | **TypeScript (Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui)** | Reference app demonstrating SDK |
 | **DB** | **Timescale Cloud (Postgres 16 + TimescaleDB)** | Hypertables, continuous aggregates, compression; managed ops |
 | **Queue** | **Postgres-backed `Queue` trait implementation** | One fewer infra piece; transactional dequeue; retries + cron registration built in; trait lets us swap to `apalis` later |
 | **Cache + rate limit** | **Redis (`fred`)** | Token bucket, ETags, hot-path caching |
@@ -154,7 +154,7 @@ australian-kpis/
 │       └── au-kpis-cli/                    # Admin CLI (migrations, backfills)
 ├── apps/                                   # TS apps
 │   ├── pdf-extractor/                      # Python FastAPI (in apps/ for proximity)
-│   └── web/                                # Vite + React reference client
+│   └── web/                                # Next.js + React reference client
 ├── packages/                               # TS packages
 │   ├── sdk/                                # @au-kpis/sdk (published to npm)
 │   ├── sdk-generated/                      # auto-generated from openapi.json
@@ -808,7 +808,7 @@ const matches = await client.search('unemployment')
 
 ## Reference client (apps/web)
 
-Vite + React 18 + TanStack Query + Tailwind + shadcn/ui + Observable Plot.
+Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui dashboard components + Recharts.
 
 Pages:
 - **Explorer** — browse dataflows, pick dimensions, chart.
@@ -955,7 +955,7 @@ apps/web/e2e/               # Playwright
 | Compile | `cargo check --workspace` | clean |
 | Lint | `cargo clippy -- -D warnings`, `pnpm run lint` (`biome check` + `markdownlint-cli2`) | clean |
 | Format | `cargo fmt --check`, `biome format --check` | clean |
-| Tests | `cargo nextest run --workspace`, `vitest run`, Playwright | zero fail, zero flake |
+| Tests | `cargo nextest run --workspace`, TS typecheck/build, Playwright | zero fail, zero flake |
 | Coverage | `cargo-llvm-cov` | ≥80% line, ≥70% branch |
 | Snapshot | `insta` | no unreviewed drift |
 | OpenAPI | `oasdiff breaking` | no breaking without `/v2` |
@@ -986,7 +986,7 @@ parallel:
   - typecheck       (cargo check + tsc)
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
-  - test            (nextest + vitest, testcontainers, source-specific streaming memory guardrails such as the ABS DHAT fetch/parse profiles)
+  - test            (nextest + TS package tests, testcontainers, Playwright, source-specific streaming memory guardrails such as the ABS DHAT fetch/parse profiles)
   - coverage        (clean cargo-llvm-cov profile data with pinned nightly coverage toolchain → LCOV line/branch coverage → Codecov PR comment)
   - snapshot        (insta check)
   - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
@@ -1282,7 +1282,7 @@ Each phase ends demo-able.
 15. `crates/bins/au-kpis-api/src/main.rs`
 16. `crates/bins/au-kpis-ingestion/src/main.rs`
 17. `packages/sdk/src/client.ts`
-18. `apps/web/src/{App,pages/Explorer}.tsx`
+18. `apps/web/src/{app,features,components}/`
 19. `infra/compose/docker-compose.yml`
 20. `.github/workflows/ci.yml`
 
@@ -1299,7 +1299,7 @@ Each phase ends demo-able.
 - `curl localhost:3000/v1/openapi.json` → valid OpenAPI 3.1 doc (validated via the OpenAPI 3.1 JSON schema)
 - `SELECT * FROM timescaledb_information.hypertables` shows `observations` hypertable
 - Migrations round-trip: up → down → up yields identical schema
-- TS: `pnpm -w build` succeeds; SDK regen pipeline runs; `vitest run` passes
+- TS: `pnpm -w build` succeeds; SDK regen pipeline runs; web Playwright suite passes
 - `gitleaks`, `cargo-deny`, `cargo-audit`, `trivy` all clean
 - PR CI flow executes <5 min on warm cache
 - Post-deploy smoke script runs green against `docker-compose` stack

@@ -147,6 +147,32 @@ await run('observations.latest calls the series lookup endpoint', async () => {
   assertPath(mock.calls[0], `/v1/series/abs.cpi/${seriesKey}`)
 })
 
+await run('search.catalog calls the catalog search endpoint', async () => {
+  const response = {
+    query: 'index',
+    results: [
+      {
+        dataflow_ids: ['abs.cpi'],
+        description: 'Quarterly Consumer Price Index across Australian regions.',
+        id: 'abs.cpi',
+        kind: 'dataflow',
+        name: 'Consumer Price Index',
+        score: 1.2,
+        source_id: 'abs',
+      },
+    ],
+  }
+  const mock = mockFetch([jsonResponse(response)])
+  const client = createClient({ baseUrl: 'https://api.example.test', fetch: mock.fetch })
+
+  const result = await client.search.catalog({ limit: 5, q: 'index' })
+
+  assertEqual(result, response)
+  assertPath(mock.calls[0], '/v1/search')
+  assertSearch(mock.calls[0], 'q', 'index')
+  assertSearch(mock.calls[0], 'limit', '5')
+})
+
 await run('request retries respect Retry-After before succeeding', async () => {
   const slept: number[] = []
   const mock = mockFetch([

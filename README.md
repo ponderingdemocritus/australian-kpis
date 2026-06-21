@@ -9,7 +9,7 @@ A unified API, SDK, and client for Australian economic data — aggregating ABS,
 ## Stack
 
 - **API + ingestion**: Rust (axum, tokio, sqlx)
-- **SDK + client**: TypeScript (Bun, Vite, React)
+- **SDK + client**: TypeScript (Bun, Next.js, React)
 - **PDF extraction**: Python (FastAPI, pdfplumber, camelot)
 - **DB**: Postgres 16 + TimescaleDB (managed via Timescale Cloud)
 - **Queue**: apalis (Postgres backend)

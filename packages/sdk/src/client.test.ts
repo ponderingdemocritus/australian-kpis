@@ -4,6 +4,7 @@ import type {
   DataflowsResponse,
   ObservationsResponse,
   ObservationsRow,
+  SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 import { createClient } from './index'
@@ -38,6 +39,10 @@ const latest: Promise<SeriesLookupResponse> = client.observations.latest({
   dataflow: 'abs.cpi',
   seriesKey: 'a'.repeat(64),
 })
+const search: Promise<SearchResponse> = client.search.catalog({
+  limit: 5,
+  q: 'index',
+})
 const validatingClient = createClient({
   baseUrl: 'https://api.example.test',
   validate: true,
@@ -52,4 +57,5 @@ void codelist
 void observations
 void stream
 void latest
+void search
 void validatingDataflows

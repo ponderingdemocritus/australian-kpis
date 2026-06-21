@@ -1,6 +1,16 @@
+'use client'
+
 import { Field } from '@/components/field'
 import { PlotChart } from '@/components/plot-chart'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { NativeSelect } from '@/components/ui/native-select'
 import {
   Table,
@@ -94,11 +104,20 @@ export function ExplorerPage() {
   const comparisonRows = comparisonQuery.data ?? []
   const selectedRegionName = regionName(regions, selectedRegion)
   const latestObservation = selectedRows.at(-1)
+  const previousObservation = selectedRows.at(-2)
+  const firstObservation = selectedRows.at(0)
 
   const nationalChart = toChartPoints(nationalRows, 'Australia')
   const stateChart = comparisonRows.flatMap(({ observations, region }) =>
     toChartPoints(observations, region.name),
   )
+  const stateLatestValues = comparisonRows
+    .map(({ observations }) => observations.at(-1)?.value)
+    .filter((value): value is number => typeof value === 'number')
+  const stateSpread =
+    stateLatestValues.length === 0
+      ? undefined
+      : Math.max(...stateLatestValues) - Math.min(...stateLatestValues)
 
   const loading = [
     dataflowsQuery,
@@ -119,15 +138,28 @@ export function ExplorerPage() {
   ].find((query) => query.isError)?.error
 
   return (
-    <div className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-6 py-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <aside className="flex flex-col gap-4">
-        <Card>
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:py-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-normal">Explorer</h1>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+            Consumer Price Index trends by region, shown as index values and simple change cards.
+          </p>
+        </div>
+        <Badge variant="secondary">{activeDataflow?.frequency ?? 'quarterly'}</Badge>
+      </div>
+
+      {error instanceof Error ? <ErrorBanner message={error.message} /> : null}
+      {loading ? <LoadingBanner /> : null}
+
+      <section className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)]">
+        <Card className="order-2 min-w-0 lg:order-none">
           <CardHeader>
-            <CardTitle>Explorer</CardTitle>
-            <CardDescription>Browse dataflows and dimensions through the SDK.</CardDescription>
+            <CardTitle>Filters</CardTitle>
+            <CardDescription>Pick the dataflow and region.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <Field label="Dataflow" htmlFor="dataflow">
+            <Field htmlFor="dataflow" label="Dataflow">
               <NativeSelect
                 disabled={dataflows.length === 0}
                 id="dataflow"
@@ -145,7 +177,7 @@ export function ExplorerPage() {
               </NativeSelect>
             </Field>
 
-            <Field label="Region" htmlFor="region">
+            <Field htmlFor="region" label="Region">
               <NativeSelect
                 disabled={regions.length === 0}
                 id="region"
@@ -160,47 +192,50 @@ export function ExplorerPage() {
               </NativeSelect>
             </Field>
 
-            <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
-              <p className="font-medium">{activeDataflow?.frequency ?? 'quarterly'}</p>
-              <p className="mt-1 text-muted-foreground">
-                API base: <span className="break-all font-mono text-xs">{apiBaseUrl}</span>
-              </p>
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">
+              <p className="font-medium">{activeDataflow?.source_id?.toUpperCase() ?? 'ABS'}</p>
+              <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{apiBaseUrl}</p>
             </div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Latest observation</CardTitle>
-            <CardDescription>{selectedRegionName}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div data-testid="latest-observation">
-              <p className="text-3xl font-semibold">
-                {formatValue(latestObservation?.value)}
-                <span className="ml-2 text-sm font-normal text-muted-foreground">index</span>
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {latestObservation === undefined
-                  ? 'Waiting for observations'
-                  : formatDate(latestObservation.time)}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </aside>
+        <div className="order-1 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:order-none xl:grid-cols-4">
+          <MetricCard
+            label="Latest index"
+            testId="latest-observation"
+            value={formatValue(latestObservation?.value)}
+            detail={
+              latestObservation === undefined
+                ? 'Waiting for observations'
+                : `${selectedRegionName}, ${formatDate(latestObservation.time)}`
+            }
+          />
+          <MetricCard
+            label="Quarterly change"
+            value={formatDelta(latestObservation?.value, previousObservation?.value)}
+            detail="Latest quarter movement"
+          />
+          <MetricCard
+            label="Annual change"
+            value={formatDelta(latestObservation?.value, firstObservation?.value)}
+            detail="Change over loaded range"
+          />
+          <MetricCard
+            label="State spread"
+            value={formatValue(stateSpread)}
+            detail="Highest minus lowest latest state index"
+          />
+        </div>
+      </section>
 
       <section className="flex min-w-0 flex-col gap-5">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-normal">Consumer Price Index</h1>
+        <div className="min-w-0">
+          <h2 className="text-xl font-semibold tracking-normal">Consumer Price Index</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             {activeDataflow?.description ??
               'Quarterly Consumer Price Index observations from the Australian Bureau of Statistics.'}
           </p>
         </div>
-
-        {error instanceof Error ? <ErrorBanner message={error.message} /> : null}
-        {loading ? <LoadingBanner /> : null}
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
           <ChartCard
@@ -231,7 +266,7 @@ export function ExplorerPage() {
           />
         </div>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle>Observations</CardTitle>
             <CardDescription>
@@ -276,6 +311,27 @@ export function ExplorerPage() {
   )
 }
 
+type MetricCardProps = {
+  detail: string
+  label: string
+  testId?: string
+  value: string
+}
+
+function MetricCard({ detail, label, testId, value }: MetricCardProps) {
+  return (
+    <Card className="min-w-0" data-testid={testId}>
+      <CardHeader className="gap-1">
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="text-2xl">{value}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">{detail}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
 type ChartCardProps = {
   chart: ReactNode
   description: string
@@ -287,17 +343,17 @@ type ChartCardProps = {
 
 function ChartCard({ chart, description, latest, legend = [], testId, title }: ChartCardProps) {
   return (
-    <Card data-testid={testId}>
-      <CardHeader className="flex-row items-start justify-between gap-4">
+    <Card className="min-w-0" data-testid={testId}>
+      <CardHeader>
         <div>
-          <CardTitle>{title}</CardTitle>
+          <h3 className="leading-none font-semibold">{title}</h3>
           <CardDescription>{description}</CardDescription>
         </div>
         {latest === undefined ? null : (
-          <div className="text-right">
+          <CardAction className="text-right">
             <p className="text-lg font-semibold">{formatValue(latest.value)}</p>
             <p className="text-xs text-muted-foreground">{formatDate(latest.time)}</p>
-          </div>
+          </CardAction>
         )}
       </CardHeader>
       <CardContent>
@@ -309,7 +365,7 @@ function ChartCard({ chart, description, latest, legend = [], testId, title }: C
                 <span
                   aria-hidden="true"
                   className="size-2 rounded-full"
-                  style={{ backgroundColor: comparisonColors[region.name] ?? '#475569' }}
+                  style={{ backgroundColor: comparisonColors[region.name] ?? 'var(--chart-3)' }}
                 />
                 {region.name}
               </li>
@@ -324,7 +380,7 @@ function ChartCard({ chart, description, latest, legend = [], testId, title }: C
 function ErrorBanner({ message }: { message: string }) {
   return (
     <div
-      className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900"
+      className="rounded-md border border-destructive/40 bg-card p-3 text-sm text-destructive"
       role="alert"
     >
       Explorer could not load API data: {message}
@@ -334,9 +390,19 @@ function ErrorBanner({ message }: { message: string }) {
 
 function LoadingBanner() {
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
-      <RefreshCw aria-hidden="true" className="size-4 animate-spin" />
+    <div className="flex items-center gap-2 rounded-md border bg-card p-3 text-sm text-muted-foreground">
+      <RefreshCw aria-hidden="true" className="animate-spin" />
       Loading CPI data
     </div>
   )
+}
+
+function formatDelta(current: number | null | undefined, previous: number | null | undefined) {
+  if (current === null || current === undefined || previous === null || previous === undefined) {
+    return 'n/a'
+  }
+
+  const delta = current - previous
+  const sign = delta > 0 ? '+' : ''
+  return `${sign}${formatValue(delta)}`
 }
