@@ -23,7 +23,7 @@ export type ObservationGroup = {
 export type FeaturedIndicator = {
   current?: ObservationsRow
   dataflow?: Dataflow
-  id: 'abs-cpi' | 'rba-cash-rate' | 'abs-labour-force'
+  id: string
   label: string
   previous?: ObservationsRow
   seriesLabel: string
@@ -50,6 +50,13 @@ export type IndexData = {
   trendChart: ChartPoint[]
 }
 
+type FeaturedDefinition = {
+  dataflowId: string
+  id: string
+  label: string
+  region: string | undefined
+}
+
 const featuredDefinitions = [
   {
     dataflowId: 'abs.cpi',
@@ -69,12 +76,7 @@ const featuredDefinitions = [
     label: 'Labour Force',
     region: nationalRegion,
   },
-] as const satisfies readonly {
-  dataflowId: (typeof featuredDataflowIds)[number]
-  id: FeaturedIndicator['id']
-  label: string
-  region: string | undefined
-}[]
+] as const satisfies readonly FeaturedDefinition[]
 
 export function deriveIndexData(input: {
   codelists: CodelistLookup[]
@@ -85,7 +87,7 @@ export function deriveIndexData(input: {
   const latestRows = latestIndicatorRows(input.groups, input.codelists)
 
   return {
-    featured: featuredDefinitions.map((definition) =>
+    featured: featuredIndicatorDefinitions(input.groups).map((definition) =>
       featuredIndicator(
         definition.id,
         definition.label,
@@ -105,6 +107,25 @@ export function deriveIndexData(input: {
       'Australia',
     ),
   }
+}
+
+function featuredIndicatorDefinitions(groups: ObservationGroup[]): FeaturedDefinition[] {
+  const groupIds = new Set(groups.map((group) => group.detail.dataflow.id))
+  const preferred = featuredDefinitions.filter((definition) => groupIds.has(definition.dataflowId))
+  const preferredIds = new Set<string>(preferred.map((definition) => definition.dataflowId))
+  const fallback = groups
+    .filter((group) => !preferredIds.has(group.detail.dataflow.id))
+    .map((group): FeaturedDefinition => {
+      const dataflow = group.detail.dataflow
+      return {
+        dataflowId: dataflow.id,
+        id: dataflowIdToIndicatorId(dataflow.id),
+        label: dataflow.name,
+        region: dataflow.dimensions.includes('region') ? nationalRegion : undefined,
+      }
+    })
+
+  return [...preferred, ...fallback].slice(0, 3)
 }
 
 function featuredIndicator(
@@ -244,6 +265,13 @@ function distributionBy(
   return Array.from(counts.entries())
     .map(([label, value]) => ({ label, value }))
     .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label))
+}
+
+function dataflowIdToIndicatorId(dataflowId: string): string {
+  return dataflowId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 }
 
 function sortByTime(rows: ObservationsRow[]): ObservationsRow[] {

@@ -44,6 +44,30 @@ export async function collectObservationRows(
   return observations.sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
 }
 
+export async function collectLatestObservationRows(
+  dataflow: string,
+  dimensions?: Record<string, string>,
+  limit = 100,
+): Promise<ObservationsRow[]> {
+  if (limit <= 0) {
+    return []
+  }
+
+  const observations: ObservationsRow[] = []
+  for await (const observation of client.observations.stream({
+    dataflow,
+    dimensions,
+    limit: 100,
+  })) {
+    observations.push(observation)
+    if (observations.length > limit) {
+      observations.shift()
+    }
+  }
+
+  return observations.sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
+}
+
 export function toChartPoints(rows: ObservationsRow[], region: string): ChartPoint[] {
   return rows.flatMap((row) =>
     row.value === null || row.value === undefined

@@ -29,7 +29,7 @@ import {
 } from '@/features/index-data'
 import { apiBaseUrl, client } from '@/lib/api'
 import { formatDate, formatDelta, formatObservationValue } from '@/lib/format'
-import { collectObservationRows, comparisonColors } from '@/lib/observations'
+import { collectLatestObservationRows, comparisonColors } from '@/lib/observations'
 import type { Dataflow } from '@au-kpis/sdk-generated/client'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -160,7 +160,7 @@ export function IndexPage() {
         details.map(
           async (detail): Promise<ObservationGroup> => ({
             detail,
-            observations: await collectObservationRows(
+            observations: await collectLatestObservationRows(
               detail.dataflow.id,
               undefined,
               indexObservationLimit,
