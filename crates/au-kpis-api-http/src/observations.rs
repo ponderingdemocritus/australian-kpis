@@ -1872,6 +1872,21 @@ mod tests {
 
     #[test]
     fn validates_observation_query_edge_cases_before_db_access() {
+        let colon_dimension =
+            parse_observations_query(Some("dataflow=abs.cpi&dimensions[]=region:AUS")).unwrap();
+        assert_eq!(
+            colon_dimension.dimensions.get("region").map(String::as_str),
+            Some("AUS")
+        );
+
+        let empty_dimension_name =
+            parse_observations_query(Some("dataflow=abs.cpi&dimensions[]==AUS")).unwrap_err();
+        assert!(
+            empty_dimension_name
+                .to_string()
+                .contains("dimension filters")
+        );
+
         let empty_dimension =
             parse_observations_query(Some("dataflow=abs.cpi&dimensions[region]=")).unwrap_err();
         assert!(empty_dimension.to_string().contains("dimension filters"));
@@ -1889,6 +1904,13 @@ mod tests {
 
         let bad_limit = parse_observations_query(Some("dataflow=abs.cpi&limit=abc")).unwrap_err();
         assert!(bad_limit.to_string().contains("invalid limit"));
+
+        let zero_limit = parse_observations_query(Some("dataflow=abs.cpi&limit=0")).unwrap_err();
+        assert!(zero_limit.to_string().contains("limit must be"));
+
+        let invalid_since =
+            parse_observations_query(Some("dataflow=abs.cpi&since=not-a-date")).unwrap_err();
+        assert!(invalid_since.to_string().contains("invalid since"));
 
         let reversed_dates =
             parse_observations_query(Some("dataflow=abs.cpi&since=2024-06-30&until=2024-01-01"))
