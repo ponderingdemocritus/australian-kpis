@@ -811,8 +811,8 @@ const matches = await client.search('unemployment')
 Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui dashboard components + Recharts.
 
 Pages:
+- **Index** — overview of loaded sources, frequencies, featured indicators, and catalog/search coverage.
 - **Explorer** — browse dataflows, pick dimensions, chart.
-- **Search** — full-text across measures.
 - **Compare** — multiple series on one chart.
 - **Playground** — live query form → response viewer with curl / SDK snippet.
 

@@ -105,7 +105,10 @@ export function ExplorerPage() {
   const selectedRegionName = regionName(regions, selectedRegion)
   const latestObservation = selectedRows.at(-1)
   const previousObservation = selectedRows.at(-2)
-  const firstObservation = selectedRows.at(0)
+  const annualObservation =
+    latestObservation === undefined
+      ? undefined
+      : samePeriodPreviousYear(selectedRows, latestObservation)
 
   const nationalChart = toChartPoints(nationalRows, 'Australia')
   const stateChart = comparisonRows.flatMap(({ observations, region }) =>
@@ -217,8 +220,13 @@ export function ExplorerPage() {
           />
           <MetricCard
             label="Annual change"
-            value={formatDelta(latestObservation?.value, firstObservation?.value)}
-            detail="Change over loaded range"
+            testId="annual-change"
+            value={formatDelta(latestObservation?.value, annualObservation?.value)}
+            detail={
+              annualObservation === undefined
+                ? 'Same period previous year'
+                : `Since ${formatDate(annualObservation.time)}`
+            }
           />
           <MetricCard
             label="State spread"
@@ -405,4 +413,24 @@ function formatDelta(current: number | null | undefined, previous: number | null
   const delta = current - previous
   const sign = delta > 0 ? '+' : ''
   return `${sign}${formatValue(delta)}`
+}
+
+function samePeriodPreviousYear(
+  rows: ObservationsRow[],
+  current: ObservationsRow,
+): ObservationsRow | undefined {
+  const currentDate = new Date(current.time)
+  if (Number.isNaN(currentDate.getTime())) {
+    return undefined
+  }
+
+  const targetTime = Date.UTC(
+    currentDate.getUTCFullYear() - 1,
+    currentDate.getUTCMonth(),
+    currentDate.getUTCDate(),
+  )
+
+  return rows.find(
+    (row) => row.series_key === current.series_key && Date.parse(row.time) === targetTime,
+  )
 }

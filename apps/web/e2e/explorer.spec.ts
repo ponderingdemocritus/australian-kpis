@@ -7,7 +7,8 @@ test('renders the national CPI chart journey with state comparison', async ({ pa
   await expect(page.getByRole('navigation', { name: 'Dashboard sections' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Explorer' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Consumer Price Index' })).toBeVisible()
-  await expect(page.getByText('Annual change')).toBeVisible()
+  await expect(page.getByTestId('annual-change')).toContainText('Annual change')
+  await expect(page.getByTestId('annual-change')).toContainText('n/a')
   await expect(page.getByLabel('Dataflow')).toHaveValue('abs.cpi')
   await expect(page.getByLabel('Region')).toHaveValue('AUS')
   await expect(page.getByRole('heading', { name: 'National CPI' })).toBeVisible()
@@ -21,6 +22,7 @@ test('renders the national CPI chart journey with state comparison', async ({ pa
   await page.getByLabel('Region').selectOption('NSW')
 
   await expect(page.getByTestId('latest-observation')).toContainText('139.2')
+  await expect(page.getByTestId('annual-change')).toContainText('n/a')
   await expect(page.getByRole('table', { name: 'Observations' })).toContainText('New South Wales')
   await expect(page).toHaveScreenshot('explorer-national-cpi.png')
 })
