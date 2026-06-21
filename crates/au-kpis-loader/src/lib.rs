@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
@@ -391,7 +391,7 @@ pub async fn begin_staged_load(
     drop_staging_tables(&mut conn).await?;
     let mut tx = (&mut conn).begin().await?;
     create_series_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
-    create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
+    create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS", true).await?;
     tx.commit().await?;
 
     Ok(StagedLoad {
@@ -582,7 +582,7 @@ async fn load_observation_batch(
     create_series_staging_table(&mut tx).await?;
     create_observation_staging_table(&mut tx).await?;
     copy_series(&mut tx, batch).await?;
-    copy_observations(&mut tx, batch).await?;
+    copy_direct_observations(&mut tx, batch).await?;
     let observations_loaded = upsert_observations(&mut tx).await?;
     tx.commit().await?;
 
@@ -625,16 +625,22 @@ async fn create_series_staging_table_with_on_commit(
 async fn create_observation_staging_table(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), LoadError> {
-    create_observation_staging_table_with_on_commit(tx, "DROP").await
+    create_observation_staging_table_with_on_commit(tx, "DROP", false).await
 }
 
 async fn create_observation_staging_table_with_on_commit(
     tx: &mut Transaction<'_, Postgres>,
     on_commit: &str,
+    include_stage_row_id: bool,
 ) -> Result<(), LoadError> {
+    let stage_row_id = if include_stage_row_id {
+        "stage_row_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+    } else {
+        ""
+    };
     let query = format!(
         "CREATE TEMP TABLE staging_observations (
-             stage_row_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+             {stage_row_id}
              series_key_hex TEXT NOT NULL,
              time TIMESTAMPTZ NOT NULL,
              revision_no INTEGER NOT NULL,
@@ -731,8 +737,56 @@ async fn copy_observations(
     tx: &mut Transaction<'_, Postgres>,
     batch: &[LoadItem],
 ) -> Result<(), LoadError> {
-    let mut payload = String::new();
+    let payload = observation_copy_payload(batch.iter())?;
+    copy_observation_payload(tx, payload).await
+}
+
+async fn copy_observations_deduped(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &[LoadItem],
+) -> Result<(), LoadError> {
+    let mut rows = BTreeMap::new();
     for item in batch {
+        rows.insert(
+            (
+                item.observation.series_key,
+                item.observation.time,
+                item.observation.revision_no,
+            ),
+            item,
+        );
+    }
+    let payload = observation_copy_payload(rows.into_values())?;
+    copy_observation_payload(tx, payload).await
+}
+
+async fn copy_direct_observations(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &[LoadItem],
+) -> Result<(), LoadError> {
+    if has_duplicate_observation_keys(batch) {
+        copy_observations_deduped(tx, batch).await
+    } else {
+        copy_observations(tx, batch).await
+    }
+}
+
+fn has_duplicate_observation_keys(batch: &[LoadItem]) -> bool {
+    let mut seen = HashSet::with_capacity(batch.len());
+    batch.iter().any(|item| {
+        !seen.insert((
+            item.observation.series_key,
+            item.observation.time,
+            item.observation.revision_no,
+        ))
+    })
+}
+
+fn observation_copy_payload<'a>(
+    rows: impl IntoIterator<Item = &'a LoadItem>,
+) -> Result<String, LoadError> {
+    let mut payload = String::new();
+    for item in rows {
         let obs = &item.observation;
         push_copy_fields(
             &mut payload,
@@ -750,7 +804,13 @@ async fn copy_observations(
             ],
         );
     }
+    Ok(payload)
+}
 
+async fn copy_observation_payload(
+    tx: &mut Transaction<'_, Postgres>,
+    payload: String,
+) -> Result<(), LoadError> {
     let mut copy = tx
         .as_mut()
         .copy_in_raw(
@@ -767,30 +827,33 @@ async fn copy_observations(
 }
 
 async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
-    let observations_loaded = upsert_observations_in_chunks(tx, DEFAULT_MAX_ROWS).await?;
+    let result = sqlx::query(
+        "INSERT INTO observations AS existing (
+             series_key, time, revision_no, time_precision, value, status,
+             attributes, ingested_at, source_artifact_id
+         )
+         SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
+                value, status, attributes, ingested_at,
+                decode(source_artifact_hex, 'hex')
+         FROM staging_observations
+         ON CONFLICT (series_key, time, revision_no) DO UPDATE
+         SET time_precision = EXCLUDED.time_precision,
+             value = EXCLUDED.value,
+             status = EXCLUDED.status,
+             attributes = EXCLUDED.attributes,
+             ingested_at = EXCLUDED.ingested_at,
+             source_artifact_id = EXCLUDED.source_artifact_id
+         WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
+            OR existing.value IS DISTINCT FROM EXCLUDED.value
+            OR existing.status IS DISTINCT FROM EXCLUDED.status
+            OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
+            OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id",
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    let observations_loaded = result.rows_affected();
     enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
-
-    Ok(observations_loaded)
-}
-
-async fn upsert_observations_in_chunks(
-    tx: &mut Transaction<'_, Postgres>,
-    max_rows: usize,
-) -> Result<u64, LoadError> {
-    let chunk_limit = chunk_limit(max_rows)?;
-
-    let mut last_stage_row_id = 0_i64;
-    let mut observations_loaded = 0_u64;
-    loop {
-        let (max_stage_row_id, chunk_rows_loaded, had_rows) =
-            upsert_next_observation_chunk(tx, last_stage_row_id, chunk_limit).await?;
-        if !had_rows {
-            break;
-        }
-        observations_loaded += chunk_rows_loaded;
-        last_stage_row_id = max_stage_row_id;
-    }
-
     Ok(observations_loaded)
 }
 
