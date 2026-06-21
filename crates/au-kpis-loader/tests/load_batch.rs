@@ -7,7 +7,8 @@ use au_kpis_domain::{
     ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
 };
 use au_kpis_loader::{
-    LoadItem, LoadItemAudit, LoadOptions, begin_staged_load, load_batch, load_batch_with_options,
+    LoadItem, LoadItemAudit, LoadOptions, begin_staged_load, load_batch,
+    load_batch_boundary_reached, load_batch_with_options, should_flush_load_batch,
 };
 use au_kpis_testing::timescale::start_timescale;
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
@@ -177,6 +178,23 @@ fn permutations<T: Clone>(values: &[T]) -> Vec<Vec<T>> {
         }
     }
     result
+}
+
+#[test]
+fn load_batch_boundary_helpers_cover_row_and_byte_edges() {
+    let options = LoadOptions {
+        max_rows: 3,
+        max_bytes: 100,
+    };
+
+    assert!(!should_flush_load_batch(0, 99, 10, options));
+    assert!(should_flush_load_batch(3, 10, 1, options));
+    assert!(should_flush_load_batch(2, 95, 6, options));
+    assert!(!should_flush_load_batch(2, 90, 10, options));
+
+    assert!(load_batch_boundary_reached(3, 0, options));
+    assert!(load_batch_boundary_reached(1, 100, options));
+    assert!(!load_batch_boundary_reached(2, 99, options));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

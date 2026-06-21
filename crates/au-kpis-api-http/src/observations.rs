@@ -1686,6 +1686,37 @@ mod tests {
     }
 
     #[test]
+    fn database_enum_labels_parse_and_serialize_all_supported_values() {
+        for (raw, precision) in [
+            ("minute", TimePrecision::Minute),
+            ("day", TimePrecision::Day),
+            ("week", TimePrecision::Week),
+            ("month", TimePrecision::Month),
+            ("quarter", TimePrecision::Quarter),
+            ("year", TimePrecision::Year),
+        ] {
+            assert_eq!(parse_time_precision(raw).unwrap(), precision);
+            assert_eq!(time_precision_label(precision), raw);
+        }
+        assert!(parse_time_precision("fortnight").is_err());
+
+        for (raw, status) in [
+            ("normal", ObservationStatus::Normal),
+            ("estimated", ObservationStatus::Estimated),
+            ("forecast", ObservationStatus::Forecast),
+            ("imputed", ObservationStatus::Imputed),
+            ("missing", ObservationStatus::Missing),
+            ("provisional", ObservationStatus::Provisional),
+            ("revised", ObservationStatus::Revised),
+            ("break", ObservationStatus::Break),
+        ] {
+            assert_eq!(parse_observation_status(raw).unwrap(), status);
+            assert_eq!(observation_status_label(status), raw);
+        }
+        assert!(parse_observation_status("suppressed").is_err());
+    }
+
+    #[test]
     fn only_first_page_json_observations_use_response_cache() {
         let first_page = parse_observations_query(Some("dataflow=abs.cpi&limit=500")).unwrap();
         assert!(should_cache_json_observations(&first_page));
