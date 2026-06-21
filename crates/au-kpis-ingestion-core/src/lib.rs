@@ -609,6 +609,16 @@ struct ParseErrorRecord {
     row_context: Option<serde_json::Value>,
 }
 
+#[derive(Debug)]
+struct PendingArtifactCompletion {
+    artifact_id: ArtifactId,
+    source_id: SourceId,
+    dataflow_id: DataflowId,
+    observations_parsed: u64,
+    observations_loaded: u64,
+    correlation: JobCorrelation,
+}
+
 fn preferred_error(primary: IngestionError, errors: Vec<IngestionError>) -> IngestionError {
     if is_secondary_shutdown_error(&primary) {
         errors
@@ -1392,6 +1402,7 @@ async fn load_stage(
     let mut loaded = LoadStats::default();
     let mut pending = BTreeMap::<PendingLoadKey, PendingArtifactLoad>::new();
     let mut accepted = AcceptedLoadBuffer::new(options);
+    let mut accepted_completions = Vec::<PendingArtifactCompletion>::new();
     let mut draining = false;
 
     loop {
@@ -1418,7 +1429,14 @@ async fn load_stage(
                 let key = PendingLoadKey::new(artifact_id, correlation.clone());
                 let artifact = pending.entry(key).or_default();
                 if artifact.will_stage(item_bytes, options) {
-                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+                    flush_accepted_if_needed(
+                        &pool,
+                        &mut accepted,
+                        &mut accepted_completions,
+                        options,
+                        &mut loaded,
+                    )
+                    .await?;
                 }
                 artifact
                     .push(&pool, options, item, correlation, item_bytes)
@@ -1433,30 +1451,47 @@ async fn load_stage(
                 correlation,
             } => {
                 let key = PendingLoadKey::new(artifact_id, correlation);
-                let mut artifact_stats = LoadStats::default();
+                let mut artifact_stats = AcceptedArtifactStats::default();
+                let mut accepted_artifact = false;
                 if let Some(artifact) = pending.remove(&key) {
-                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
-                    let before = loaded;
-                    accept_artifact_load(artifact, &pool, options, &mut accepted, &mut loaded)
+                    if artifact.is_staged() {
+                        flush_accepted_if_needed(
+                            &pool,
+                            &mut accepted,
+                            &mut accepted_completions,
+                            options,
+                            &mut loaded,
+                        )
                         .await?;
-                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
-                    artifact_stats = load_stats_delta(loaded, before);
-                }
-                if observations_parsed > 0 && parse_errors == 0 && artifact_stats.parse_errors == 0
-                {
-                    au_kpis_db::record_artifact_load_completion(
+                    }
+                    artifact_stats = accept_artifact_load(
+                        artifact,
                         &pool,
-                        au_kpis_db::ArtifactLoadCompletion {
-                            artifact_id,
-                            source_id: &source_id,
-                            dataflow_id: &dataflow_id,
-                            observations_parsed,
-                            observations_loaded: artifact_stats.observations_loaded,
-                            job_id: Some(key.correlation.job_id.as_str()),
-                            trace_parent: key.correlation.trace_parent.as_deref(),
-                        },
+                        options,
+                        &mut accepted,
+                        &mut accepted_completions,
+                        &mut loaded,
                     )
                     .await?;
+                    accepted_artifact = true;
+                }
+                if accepted_artifact
+                    && observations_parsed > 0
+                    && parse_errors == 0
+                    && artifact_stats.parse_errors == 0
+                {
+                    accepted_completions.push(PendingArtifactCompletion {
+                        artifact_id,
+                        source_id,
+                        dataflow_id,
+                        observations_parsed,
+                        observations_loaded: artifact_stats.observations_loaded,
+                        correlation: key.correlation,
+                    });
+                    if artifact_stats.committed || accepted.batch.is_empty() {
+                        record_pending_artifact_completions(&pool, &mut accepted_completions)
+                            .await?;
+                    }
                 }
             }
             LoadStageItem::RejectArtifact {
@@ -1465,13 +1500,27 @@ async fn load_stage(
             } => {
                 let key = PendingLoadKey::new(artifact_id, correlation);
                 if let Some(artifact) = pending.remove(&key) {
-                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+                    flush_accepted_if_needed(
+                        &pool,
+                        &mut accepted,
+                        &mut accepted_completions,
+                        options,
+                        &mut loaded,
+                    )
+                    .await?;
                     let staged_stats = artifact.rollback(&pool, options).await?;
                     add_load_stats(&mut loaded, staged_stats);
                 }
             }
             LoadStageItem::ParseError(record) => {
-                flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+                flush_accepted_if_needed(
+                    &pool,
+                    &mut accepted,
+                    &mut accepted_completions,
+                    options,
+                    &mut loaded,
+                )
+                .await?;
                 let trace_parent = parse_error_trace_parent(&record).map(str::to_owned);
                 let span = info_span!(
                     "ingestion_load_parse_error",
@@ -1491,7 +1540,14 @@ async fn load_stage(
             }
         }
     }
-    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+    flush_accepted_if_needed(
+        &pool,
+        &mut accepted,
+        &mut accepted_completions,
+        options,
+        &mut loaded,
+    )
+    .await?;
     for (_, artifact) in pending {
         let staged_stats = artifact.rollback(&pool, options).await?;
         add_load_stats(&mut loaded, staged_stats);
@@ -1507,35 +1563,50 @@ async fn accept_artifact_load(
     pool: &PgPool,
     options: LoadOptions,
     accepted: &mut AcceptedLoadBuffer,
+    accepted_completions: &mut Vec<PendingArtifactCompletion>,
     loaded: &mut LoadStats,
-) -> Result<(), au_kpis_loader::LoadError> {
+) -> Result<AcceptedArtifactStats, IngestionError> {
     match artifact.accept(pool, options).await? {
         AcceptedArtifactLoad::Buffered {
             items,
             correlations,
         } => {
-            append_accepted_load_items(pool, options, accepted, loaded, items, correlations)
-                .await?;
+            append_accepted_load_items(
+                pool,
+                options,
+                accepted,
+                accepted_completions,
+                loaded,
+                items,
+                correlations,
+            )
+            .await
         }
         AcceptedArtifactLoad::Committed(stats) => {
             add_load_stats(loaded, stats);
+            Ok(AcceptedArtifactStats {
+                observations_loaded: stats.observations_loaded,
+                parse_errors: stats.parse_errors,
+                committed: true,
+            })
         }
     }
-    Ok(())
 }
 
 async fn append_accepted_load_items(
     pool: &PgPool,
     options: LoadOptions,
     accepted: &mut AcceptedLoadBuffer,
+    accepted_completions: &mut Vec<PendingArtifactCompletion>,
     loaded: &mut LoadStats,
     items: Vec<LoadItem>,
     correlations: Vec<JobCorrelation>,
-) -> Result<(), au_kpis_loader::LoadError> {
+) -> Result<AcceptedArtifactStats, IngestionError> {
     if items.len() != correlations.len() {
         return Err(au_kpis_loader::LoadError::Validation(
             "accepted load item/correlation count mismatch".into(),
-        ));
+        )
+        .into());
     }
     let audited_items = items
         .iter()
@@ -1547,8 +1618,12 @@ async fn append_accepted_load_items(
         .collect::<Vec<_>>();
     let reference_validation =
         au_kpis_loader::validate_load_references(pool, &audited_items).await?;
+    let mut artifact_stats = AcceptedArtifactStats {
+        parse_errors: reference_validation.stats.parse_errors,
+        ..AcceptedArtifactStats::default()
+    };
     if reference_validation.stats.parse_errors > 0 {
-        flush_accepted_if_needed(pool, accepted, options, loaded).await?;
+        flush_accepted_if_needed(pool, accepted, accepted_completions, options, loaded).await?;
         add_load_stats(loaded, reference_validation.stats);
     }
 
@@ -1560,6 +1635,7 @@ async fn append_accepted_load_items(
         if !valid {
             continue;
         }
+        artifact_stats.observations_loaded += 1;
         let item_bytes = au_kpis_loader::estimate_load_item_bytes(&item)?;
         if au_kpis_loader::should_flush_load_batch(
             accepted.batch.len(),
@@ -1571,6 +1647,7 @@ async fn append_accepted_load_items(
                 loaded,
                 flush_accepted_load_batch(pool, accepted, options).await?,
             );
+            record_pending_artifact_completions(pool, accepted_completions).await?;
         }
 
         accepted.batch_bytes += item_bytes;
@@ -1586,17 +1663,19 @@ async fn append_accepted_load_items(
                 loaded,
                 flush_accepted_load_batch(pool, accepted, options).await?,
             );
+            record_pending_artifact_completions(pool, accepted_completions).await?;
         }
     }
-    Ok(())
+    Ok(artifact_stats)
 }
 
 async fn flush_accepted_if_needed(
     pool: &PgPool,
     accepted: &mut AcceptedLoadBuffer,
+    accepted_completions: &mut Vec<PendingArtifactCompletion>,
     options: LoadOptions,
     loaded: &mut LoadStats,
-) -> Result<(), au_kpis_loader::LoadError> {
+) -> Result<(), IngestionError> {
     if accepted.batch.is_empty() {
         return Ok(());
     }
@@ -1604,6 +1683,30 @@ async fn flush_accepted_if_needed(
         loaded,
         flush_accepted_load_batch(pool, accepted, options).await?,
     );
+    record_pending_artifact_completions(pool, accepted_completions).await?;
+    Ok(())
+}
+
+async fn record_pending_artifact_completions(
+    pool: &PgPool,
+    completions: &mut Vec<PendingArtifactCompletion>,
+) -> Result<(), au_kpis_db::DbError> {
+    for completion in completions.iter() {
+        au_kpis_db::record_artifact_load_completion(
+            pool,
+            au_kpis_db::ArtifactLoadCompletion {
+                artifact_id: completion.artifact_id,
+                source_id: &completion.source_id,
+                dataflow_id: &completion.dataflow_id,
+                observations_parsed: completion.observations_parsed,
+                observations_loaded: completion.observations_loaded,
+                job_id: Some(completion.correlation.job_id.as_str()),
+                trace_parent: completion.correlation.trace_parent.as_deref(),
+            },
+        )
+        .await?;
+    }
+    completions.clear();
     Ok(())
 }
 
@@ -1633,6 +1736,10 @@ struct PendingArtifactLoad {
 }
 
 impl PendingArtifactLoad {
+    fn is_staged(&self) -> bool {
+        self.staged.is_some()
+    }
+
     async fn push(
         &mut self,
         pool: &PgPool,
@@ -1754,6 +1861,13 @@ impl PendingArtifactLoad {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct AcceptedArtifactStats {
+    observations_loaded: u64,
+    parse_errors: u64,
+    committed: bool,
+}
+
 #[derive(Debug)]
 enum AcceptedArtifactLoad {
     Buffered {
@@ -1838,17 +1952,6 @@ fn add_load_stats(total: &mut LoadStats, batch: LoadStats) {
     total.series_upserted += batch.series_upserted;
     total.parse_errors += batch.parse_errors;
     total.batches += batch.batches;
-}
-
-fn load_stats_delta(after: LoadStats, before: LoadStats) -> LoadStats {
-    LoadStats {
-        observations_loaded: after
-            .observations_loaded
-            .saturating_sub(before.observations_loaded),
-        series_upserted: after.series_upserted.saturating_sub(before.series_upserted),
-        parse_errors: after.parse_errors.saturating_sub(before.parse_errors),
-        batches: after.batches.saturating_sub(before.batches),
-    }
 }
 
 fn validate_source_id(

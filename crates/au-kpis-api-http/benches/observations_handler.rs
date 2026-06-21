@@ -20,7 +20,7 @@ use axum::{
 use chrono::{DateTime, TimeZone, Utc};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -245,33 +245,57 @@ fn request(uri: &str) -> Request<Body> {
 
 async fn direct_db_page(pool: &PgPool) -> usize {
     let metadata = sqlx::query(
-        "SELECT license, attribution, source_url
-         FROM dataflows
-         WHERE id = 'abs.cpi'",
+        "SELECT d.license,
+                d.attribution,
+                d.source_url,
+                count(s.series_key)::bigint AS series_count,
+                max(s.updated_at) AS max_series_updated_at
+         FROM dataflows d
+         LEFT JOIN series s ON s.dataflow_id = d.id
+         WHERE d.id = 'abs.cpi'
+         GROUP BY d.id, d.license, d.attribution, d.source_url",
     )
     .fetch_one(pool)
     .await
-    .expect("fetch metadata");
+    .expect("fetch metadata and fingerprint");
     black_box(metadata.get::<String, _>("license"));
     black_box(metadata.get::<String, _>("attribution"));
     black_box(metadata.get::<String, _>("source_url"));
+    black_box(metadata.get::<i64, _>("series_count"));
+    black_box(metadata.get::<Option<DateTime<Utc>>, _>("max_series_updated_at"));
 
-    let fingerprint = sqlx::query(
-        "SELECT count(*)::bigint AS row_count,
-                max(o.ingested_at) AS max_ingested_at,
-                max(o.time) AS max_time,
-                max(o.revision_no) AS max_revision_no
-         FROM observations_latest o
-         JOIN series s ON s.series_key = o.series_key
+    let candidates = sqlx::query(
+        "SELECT s.series_key,
+                s.first_observed,
+                s.last_observed
+         FROM series s
          JOIN dataflows d ON d.id = s.dataflow_id
-         WHERE s.dataflow_id = 'abs.cpi'",
+         WHERE s.dataflow_id = 'abs.cpi'
+         ORDER BY s.first_observed ASC, s.series_key ASC
+         LIMIT 16",
     )
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
-    .expect("fetch etag fingerprint");
-    black_box(fingerprint.get::<i64, _>("row_count"));
+    .expect("fetch candidate series");
+    black_box(candidates.len());
+    if candidates.is_empty() {
+        return 0;
+    }
 
-    let rows = sqlx::query(
+    let series_keys = candidates
+        .iter()
+        .map(|row| row.get::<Vec<u8>, _>("series_key"))
+        .collect::<Vec<_>>();
+    let lower_bound = candidates
+        .iter()
+        .filter_map(|row| row.get::<Option<DateTime<Utc>>, _>("first_observed"))
+        .min();
+    let upper_bound = candidates
+        .iter()
+        .filter_map(|row| row.get::<Option<DateTime<Utc>>, _>("last_observed"))
+        .max();
+
+    let mut rows_builder = QueryBuilder::<Postgres>::new(
         "SELECT o.series_key,
                 o.time,
                 o.revision_no,
@@ -280,20 +304,32 @@ async fn direct_db_page(pool: &PgPool) -> usize {
                 o.status,
                 o.attributes,
                 o.ingested_at,
-                o.source_artifact_id,
-                s.dimensions,
-                s.measure_id,
-                s.unit
-         FROM observations_latest o
-         JOIN series s ON s.series_key = o.series_key
-         JOIN dataflows d ON d.id = s.dataflow_id
-         WHERE s.dataflow_id = 'abs.cpi'
-         ORDER BY o.time ASC, o.series_key ASC
-         LIMIT 26",
-    )
-    .fetch_all(pool)
-    .await
-    .expect("fetch rows");
+                o.source_artifact_id
+         FROM observations o
+         WHERE o.series_key IN (",
+    );
+    {
+        let mut separated = rows_builder.separated(", ");
+        for series_key in &series_keys {
+            separated.push_bind(series_key.clone());
+        }
+    }
+    rows_builder.push(")");
+    if let Some(since) = lower_bound {
+        rows_builder.push(" AND o.time >= ");
+        rows_builder.push_bind(since);
+    }
+    if let Some(until) = upper_bound {
+        rows_builder.push(" AND o.time <= ");
+        rows_builder.push_bind(until);
+    }
+    rows_builder.push(" ORDER BY o.time ASC, o.series_key ASC, o.revision_no DESC LIMIT 52");
+
+    let rows = rows_builder
+        .build()
+        .fetch_all(pool)
+        .await
+        .expect("fetch rows");
     black_box(rows.len())
 }
 

@@ -147,14 +147,17 @@ jobs:
             docker compose -f infra/compose/docker-compose.yml up -d --build --wait --wait-timeout 180 minio pdf-extractor
 
       - name: Seed PDF fixture into MinIO
+        env:
+          AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-artifacts
         run: |
           uv run --project apps/pdf-extractor python - <<'PY'
+          import os
           from pathlib import Path
 
           import boto3
           from botocore.exceptions import ClientError
 
-          bucket = "au-kpis-local"
+          bucket = os.environ["AU_KPIS_OBJECT_STORE__BUCKET"]
           key = "artifacts/fixtures/bp4-agency-resourcing.pdf"
           fixture = Path("apps/pdf-extractor/tests/fixtures/bp4_agency_resourcing_tables_2026_27.pdf")
           client = boto3.client(
