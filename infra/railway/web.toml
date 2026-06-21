@@ -1,0 +1,23 @@
+[build]
+builder = "RAILPACK"
+buildCommand = "pnpm --filter @au-kpis/web build"
+watchPatterns = [
+  "/apps/web/**",
+  "/infra/railway/web.toml",
+  "/package.json",
+  "/packages/sdk/**",
+  "/packages/sdk-generated/**",
+  "/pnpm-lock.yaml",
+  "/pnpm-workspace.yaml",
+  "/tsconfig.base.json",
+  "/turbo.json",
+]
+
+[deploy]
+startCommand = "node apps/web/.next/standalone/apps/web/server.js"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+overlapSeconds = 20
+drainingSeconds = 30

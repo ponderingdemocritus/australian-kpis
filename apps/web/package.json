@@ -6,6 +6,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev --hostname 127.0.0.1",
+    "start": "node .next/standalone/apps/web/server.js",
     "test": "tsc -p tsconfig.json --pretty false",
     "test:e2e": "playwright test",
     "typecheck": "tsc -p tsconfig.json --pretty false"

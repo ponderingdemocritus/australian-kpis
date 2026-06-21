@@ -1,0 +1,20 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "infra/docker/au-kpis-api.Dockerfile"
+watchPatterns = [
+  "/Cargo.lock",
+  "/Cargo.toml",
+  "/crates/**",
+  "/infra/docker/au-kpis-api.Dockerfile",
+  "/infra/migrations/**",
+  "/infra/railway/api.toml",
+  "/rust-toolchain.toml",
+]
+
+[deploy]
+healthcheckPath = "/v1/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+overlapSeconds = 20
+drainingSeconds = 30

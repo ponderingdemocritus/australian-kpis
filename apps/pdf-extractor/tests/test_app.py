@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from au_kpis_pdf_extractor.app import _configured_max_pages, create_app
 from au_kpis_pdf_extractor.extractors import DeterministicExtractor
+from au_kpis_pdf_extractor.runtime import configured_port
 from au_kpis_pdf_extractor.storage import ObjectNotFound
 
 FIXTURE = Path(__file__).parent / "fixtures" / "bp4_agency_resourcing_tables_2026_27.pdf"
@@ -45,6 +46,22 @@ def test_configured_max_pages_reads_optional_env(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setenv("AU_KPIS_PDF_EXTRACTOR__MAX_PAGES", "")
     assert _configured_max_pages() is None
+
+
+def test_configured_port_reads_railway_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PORT", raising=False)
+    assert configured_port() == 8000
+
+    monkeypatch.setenv("PORT", "9123")
+    assert configured_port() == 9123
+
+    monkeypatch.setenv("PORT", "not-a-port")
+    with pytest.raises(ValueError, match="PORT must be a positive integer"):
+        configured_port()
+
+    monkeypatch.setenv("PORT", "70000")
+    with pytest.raises(ValueError, match="PORT must be between 1 and 65535"):
+        configured_port()
 
 
 def test_extract_fetches_s3_key_and_returns_real_budget_tables() -> None:
