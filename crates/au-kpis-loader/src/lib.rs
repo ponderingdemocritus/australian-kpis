@@ -47,6 +47,7 @@ pub struct LoadItemAudit {
 pub struct StagedLoad {
     conn: PoolConnection<Postgres>,
     stats: LoadStats,
+    promotion_max_rows: usize,
     cleaned: bool,
 }
 
@@ -396,6 +397,7 @@ pub async fn begin_staged_load(
     Ok(StagedLoad {
         conn,
         stats: LoadStats::default(),
+        promotion_max_rows: options.max_rows,
         cleaned: false,
     })
 }
@@ -455,8 +457,10 @@ impl StagedLoad {
         let result = async {
             let mut tx = (&mut self.conn).begin().await?;
             self.stats.series_upserted += upsert_series(&mut tx).await?;
-            self.stats.observations_loaded += upsert_observations(&mut tx).await?;
             tx.commit().await?;
+            self.stats.observations_loaded +=
+                upsert_observations_in_chunk_transactions(&mut self.conn, self.promotion_max_rows)
+                    .await?;
             Ok(self.stats)
         }
         .await;
@@ -630,6 +634,7 @@ async fn create_observation_staging_table_with_on_commit(
 ) -> Result<(), LoadError> {
     let query = format!(
         "CREATE TEMP TABLE staging_observations (
+             stage_row_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
              series_key_hex TEXT NOT NULL,
              time TIMESTAMPTZ NOT NULL,
              revision_no INTEGER NOT NULL,
@@ -762,27 +767,134 @@ async fn copy_observations(
 }
 
 async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
-    let result = sqlx::query(
-        "INSERT INTO observations (
-             series_key, time, revision_no, time_precision, value, status,
-             attributes, ingested_at, source_artifact_id
+    let observations_loaded = upsert_observations_in_chunks(tx, DEFAULT_MAX_ROWS).await?;
+    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
+
+    Ok(observations_loaded)
+}
+
+async fn upsert_observations_in_chunks(
+    tx: &mut Transaction<'_, Postgres>,
+    max_rows: usize,
+) -> Result<u64, LoadError> {
+    let chunk_limit = chunk_limit(max_rows)?;
+
+    let mut last_stage_row_id = 0_i64;
+    let mut observations_loaded = 0_u64;
+    loop {
+        let (max_stage_row_id, chunk_rows_loaded, had_rows) =
+            upsert_next_observation_chunk(tx, last_stage_row_id, chunk_limit).await?;
+        if !had_rows {
+            break;
+        }
+        observations_loaded += chunk_rows_loaded;
+        last_stage_row_id = max_stage_row_id;
+    }
+
+    Ok(observations_loaded)
+}
+
+async fn upsert_observations_in_chunk_transactions(
+    conn: &mut PoolConnection<Postgres>,
+    max_rows: usize,
+) -> Result<u64, LoadError> {
+    let chunk_limit = chunk_limit(max_rows)?;
+    let mut last_stage_row_id = 0_i64;
+    let mut observations_loaded = 0_u64;
+    loop {
+        let mut tx = (&mut *conn).begin().await?;
+        let (max_stage_row_id, chunk_rows_loaded, had_rows) =
+            upsert_next_observation_chunk(&mut tx, last_stage_row_id, chunk_limit).await?;
+        tx.commit().await?;
+
+        if !had_rows {
+            break;
+        }
+        observations_loaded += chunk_rows_loaded;
+        last_stage_row_id = max_stage_row_id;
+    }
+
+    let mut tx = (&mut *conn).begin().await?;
+    enqueue_webhook_deliveries_for_observations(&mut tx, observations_loaded).await?;
+    tx.commit().await?;
+
+    Ok(observations_loaded)
+}
+
+fn chunk_limit(max_rows: usize) -> Result<i64, LoadError> {
+    let chunk_limit = i64::try_from(max_rows)
+        .map_err(|_| LoadError::Validation("max_rows exceeds the database integer range".into()))?;
+    if chunk_limit <= 0 {
+        return Err(LoadError::Validation(
+            "max_rows must be greater than 0".into(),
+        ));
+    }
+    Ok(chunk_limit)
+}
+
+async fn upsert_next_observation_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    last_stage_row_id: i64,
+    chunk_limit: i64,
+) -> Result<(i64, u64, bool), LoadError> {
+    let (max_stage_row_id, chunk_rows_loaded, had_rows): (i64, i64, bool) = sqlx::query_as(
+        "WITH next_rows AS MATERIALIZED (
+             SELECT stage_row_id, series_key_hex, time, revision_no, time_precision,
+                    value, status, attributes, ingested_at, source_artifact_hex
+             FROM staging_observations
+             WHERE stage_row_id > $1
+             ORDER BY stage_row_id
+             LIMIT $2
+         ),
+         deduped_rows AS MATERIALIZED (
+             SELECT DISTINCT ON (series_key_hex, time, revision_no)
+                    stage_row_id, series_key_hex, time, revision_no, time_precision,
+                    value, status, attributes, ingested_at, source_artifact_hex
+             FROM next_rows
+             ORDER BY series_key_hex, time, revision_no, stage_row_id DESC
+         ),
+         inserted AS (
+             INSERT INTO observations AS existing (
+                 series_key, time, revision_no, time_precision, value, status,
+                 attributes, ingested_at, source_artifact_id
+             )
+             SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
+                    value, status, attributes, ingested_at,
+                    decode(source_artifact_hex, 'hex')
+             FROM deduped_rows
+             ON CONFLICT (series_key, time, revision_no) DO UPDATE
+             SET time_precision = EXCLUDED.time_precision,
+                 value = EXCLUDED.value,
+                 status = EXCLUDED.status,
+                 attributes = EXCLUDED.attributes,
+                 ingested_at = EXCLUDED.ingested_at,
+                 source_artifact_id = EXCLUDED.source_artifact_id
+             WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
+                OR existing.value IS DISTINCT FROM EXCLUDED.value
+                OR existing.status IS DISTINCT FROM EXCLUDED.status
+                OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
+                OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id
+             RETURNING 1
          )
-         SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
-                value, status, attributes, ingested_at,
-                decode(source_artifact_hex, 'hex')
-         FROM staging_observations
-         ON CONFLICT (series_key, time, revision_no) DO UPDATE
-         SET time_precision = EXCLUDED.time_precision,
-             value = EXCLUDED.value,
-             status = EXCLUDED.status,
-             attributes = EXCLUDED.attributes,
-             ingested_at = EXCLUDED.ingested_at,
-             source_artifact_id = EXCLUDED.source_artifact_id",
+         SELECT COALESCE((SELECT max(stage_row_id) FROM next_rows), $1)::BIGINT,
+                (SELECT count(*) FROM inserted)::BIGINT,
+                EXISTS(SELECT 1 FROM next_rows)",
     )
-    .execute(&mut **tx)
+    .bind(last_stage_row_id)
+    .bind(chunk_limit)
+    .fetch_one(&mut **tx)
     .await?;
 
-    let observations_loaded = result.rows_affected();
+    let chunk_rows_loaded = u64::try_from(chunk_rows_loaded)
+        .map_err(|_| LoadError::Validation("loaded observation count exceeded u64 range".into()))?;
+
+    Ok((max_stage_row_id, chunk_rows_loaded, had_rows))
+}
+
+async fn enqueue_webhook_deliveries_for_observations(
+    tx: &mut Transaction<'_, Postgres>,
+    observations_loaded: u64,
+) -> Result<(), LoadError> {
     let deliveries_enqueued = enqueue_webhook_deliveries_for_staging(tx).await?;
     if deliveries_enqueued > 0 {
         tracing::info!(
@@ -792,7 +904,7 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
         );
     }
 
-    Ok(observations_loaded)
+    Ok(())
 }
 
 async fn enqueue_webhook_deliveries_for_staging(
@@ -998,6 +1110,7 @@ fn escape_copy_field(payload: &mut String, field: &str) {
 
 fn time_precision_db(value: TimePrecision) -> &'static str {
     match value {
+        TimePrecision::Minute => "minute",
         TimePrecision::Day => "day",
         TimePrecision::Week => "week",
         TimePrecision::Month => "month",

@@ -191,6 +191,10 @@ pub enum IngestionError {
     #[error(transparent)]
     Load(#[from] au_kpis_loader::LoadError),
 
+    /// Database state lookup or write failed outside the loader.
+    #[error(transparent)]
+    Db(#[from] au_kpis_db::DbError),
+
     /// A one-source run received work for a different source.
     #[error("source mismatch in {stage}: expected `{expected}`, got `{actual}`")]
     SourceMismatch {
@@ -334,16 +338,19 @@ impl IngestionPipeline {
         restore_trace_parent(&parse_span, trace_parent.as_deref());
         tasks.spawn(
             parse_stage(
-                self.adapters.clone(),
-                artifact_rx,
-                contexts.parse,
-                load_tx,
-                source_id.clone(),
-                pipeline_token.clone(),
-                StageRuntime {
-                    concurrency: self.options.parse_concurrency,
-                    shutdown_grace: self.options.shutdown_grace,
+                ParseStageContext {
+                    adapters: self.adapters.clone(),
+                    pool: self.pool.clone(),
+                    ctx: contexts.parse,
+                    source_id: source_id.clone(),
+                    runtime: StageRuntime {
+                        concurrency: self.options.parse_concurrency,
+                        shutdown_grace: self.options.shutdown_grace,
+                    },
                 },
+                artifact_rx,
+                load_tx,
+                pipeline_token.clone(),
             )
             .instrument(parse_span)
             .with_current_subscriber(),
@@ -491,6 +498,15 @@ struct StageRuntime {
     shutdown_grace: Duration,
 }
 
+#[derive(Clone)]
+struct ParseStageContext {
+    adapters: Adapters,
+    pool: PgPool,
+    ctx: ParseCtx,
+    source_id: SourceId,
+    runtime: StageRuntime,
+}
+
 impl JobCorrelation {
     fn row_context(&self) -> serde_json::Value {
         serde_json::json!({
@@ -572,6 +588,10 @@ enum LoadStageItem {
     },
     AcceptArtifact {
         artifact_id: ArtifactId,
+        source_id: SourceId,
+        dataflow_id: DataflowId,
+        observations_parsed: u64,
+        parse_errors: u64,
         correlation: JobCorrelation,
     },
     ParseError(ParseErrorRecord),
@@ -732,14 +752,18 @@ async fn fetch_stage(
 }
 
 async fn parse_stage(
-    adapters: Adapters,
+    stage: ParseStageContext,
     mut rx: mpsc::Receiver<FetchedArtifact>,
-    ctx: ParseCtx,
     tx: mpsc::Sender<LoadStageItem>,
-    source_id: SourceId,
     cancellation: CancellationToken,
-    runtime: StageRuntime,
 ) -> Result<PipelineRunStats, IngestionError> {
+    let ParseStageContext {
+        adapters,
+        pool,
+        ctx,
+        source_id,
+        runtime,
+    } = stage;
     let mut parsed = 0;
     let mut input_closed = false;
     let mut draining = false;
@@ -767,6 +791,21 @@ async fn parse_stage(
                     continue;
                 };
                 validate_source_id("parse", &source_id, &fetched.artifact.source_id)?;
+                if artifact_load_completed_or_probe_unavailable(
+                    &pool,
+                    fetched.artifact.id,
+                    &source_id,
+                    &fetched.dataflow_id,
+                )
+                .await?
+                {
+                    tracing::info!(
+                        artifact_id = %fetched.artifact.id,
+                        dataflow_id = %fetched.dataflow_id,
+                        "skipping previously completed artifact load"
+                    );
+                    continue;
+                }
                 let parse_ctx = ctx.clone()
                     .with_expected_dataflow(fetched.dataflow_id.clone(), fetched.metadata.clone())
                     .with_job_correlation(
@@ -814,6 +853,32 @@ async fn parse_stage(
         parsed,
         ..PipelineRunStats::default()
     })
+}
+
+async fn artifact_load_completed_or_probe_unavailable(
+    pool: &PgPool,
+    artifact_id: ArtifactId,
+    source_id: &SourceId,
+    dataflow_id: &DataflowId,
+) -> Result<bool, IngestionError> {
+    match au_kpis_db::artifact_load_completed(pool, artifact_id, source_id, dataflow_id).await {
+        Ok(completed) => Ok(completed),
+        Err(err) if artifact_load_probe_unavailable(&err) => {
+            tracing::warn!(
+                artifact_id = %artifact_id,
+                source_id = %source_id,
+                dataflow_id = %dataflow_id,
+                error = %err,
+                "artifact load completion probe unavailable; continuing with parse"
+            );
+            Ok(false)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn artifact_load_probe_unavailable(err: &au_kpis_db::DbError) -> bool {
+    err.is_pool_acquire_unavailable()
 }
 
 async fn fetch_one(
@@ -883,6 +948,7 @@ async fn parse_one_artifact(
 
     async move {
         let mut parsed = 0;
+        let mut parse_errors = 0;
         let mut drained_after_cancellation = false;
         let mut cancellation_deadline = None;
         let mut observations = adapters.parse(source_id.as_str(), fetched.artifact, &parse_ctx)?;
@@ -979,6 +1045,7 @@ async fn parse_one_artifact(
                             &cancellation,
                         )
                         .await?;
+                        parse_errors += 1;
                     }
                     if cancellation.is_cancelled() {
                         finish_cancelled_parse(&tx, &audit, &mut early_adapter_errors, parsed)
@@ -1045,6 +1112,7 @@ async fn parse_one_artifact(
                 return Err(IngestionError::ArtifactMismatch { expected, actual });
             }
             if !early_adapter_errors.is_empty() {
+                parse_errors += early_adapter_errors.len() as u64;
                 send_adapter_parse_errors(&tx, &audit, &early_adapter_errors, false).await?;
                 early_adapter_errors.clear();
             }
@@ -1086,6 +1154,10 @@ async fn parse_one_artifact(
             &tx,
             LoadStageItem::AcceptArtifact {
                 artifact_id,
+                source_id: source_id.clone(),
+                dataflow_id: fetched.dataflow_id.clone(),
+                observations_parsed: parsed,
+                parse_errors,
                 correlation: fetched.correlation.clone(),
             },
             &cancellation,
@@ -1354,16 +1426,37 @@ async fn load_stage(
             }
             LoadStageItem::AcceptArtifact {
                 artifact_id,
+                source_id,
+                dataflow_id,
+                observations_parsed,
+                parse_errors,
                 correlation,
             } => {
                 let key = PendingLoadKey::new(artifact_id, correlation);
+                let mut artifact_stats = LoadStats::default();
                 if let Some(artifact) = pending.remove(&key) {
-                    if artifact.has_staged() {
-                        flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded)
-                            .await?;
-                    }
+                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+                    let before = loaded;
                     accept_artifact_load(artifact, &pool, options, &mut accepted, &mut loaded)
                         .await?;
+                    flush_accepted_if_needed(&pool, &mut accepted, options, &mut loaded).await?;
+                    artifact_stats = load_stats_delta(loaded, before);
+                }
+                if observations_parsed > 0 && parse_errors == 0 && artifact_stats.parse_errors == 0
+                {
+                    au_kpis_db::record_artifact_load_completion(
+                        &pool,
+                        au_kpis_db::ArtifactLoadCompletion {
+                            artifact_id,
+                            source_id: &source_id,
+                            dataflow_id: &dataflow_id,
+                            observations_parsed,
+                            observations_loaded: artifact_stats.observations_loaded,
+                            job_id: Some(key.correlation.job_id.as_str()),
+                            trace_parent: key.correlation.trace_parent.as_deref(),
+                        },
+                    )
+                    .await?;
                 }
             }
             LoadStageItem::RejectArtifact {
@@ -1579,10 +1672,6 @@ impl PendingArtifactLoad {
             || self.batch_bytes.saturating_add(next_item_bytes) >= options.max_bytes
     }
 
-    fn has_staged(&self) -> bool {
-        self.staged.is_some()
-    }
-
     async fn accept(
         mut self,
         pool: &PgPool,
@@ -1749,6 +1838,17 @@ fn add_load_stats(total: &mut LoadStats, batch: LoadStats) {
     total.series_upserted += batch.series_upserted;
     total.parse_errors += batch.parse_errors;
     total.batches += batch.batches;
+}
+
+fn load_stats_delta(after: LoadStats, before: LoadStats) -> LoadStats {
+    LoadStats {
+        observations_loaded: after
+            .observations_loaded
+            .saturating_sub(before.observations_loaded),
+        series_upserted: after.series_upserted.saturating_sub(before.series_upserted),
+        parse_errors: after.parse_errors.saturating_sub(before.parse_errors),
+        batches: after.batches.saturating_sub(before.batches),
+    }
 }
 
 fn validate_source_id(

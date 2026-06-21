@@ -75,6 +75,8 @@ async fn artifact_for(
 async fn serve_sidecar_once(
     expected_storage_key: String,
     expected_artifact_date: &'static str,
+    expected_first_page: u64,
+    expected_last_page: u64,
     response_body: String,
 ) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -92,6 +94,24 @@ async fn serve_sidecar_once(
         assert_eq!(json["source_id"], "state-budgets");
         assert_eq!(json["artifact_date"], expected_artifact_date);
         assert_eq!(json["strategy"], "deterministic");
+        let pages = json["pages"].as_array().expect("extract request pages");
+        assert_eq!(
+            pages.first().and_then(Value::as_u64),
+            Some(expected_first_page)
+        );
+        assert_eq!(
+            pages.last().and_then(Value::as_u64),
+            Some(expected_last_page)
+        );
+        assert!(
+            pages.len() <= 125,
+            "state budget extraction should use bounded page windows: {json}"
+        );
+        assert_eq!(
+            pages.len() as u64,
+            expected_last_page - expected_first_page + 1,
+            "state budget extraction pages should be contiguous: {json}"
+        );
 
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
@@ -239,6 +259,8 @@ async fn snapshot_fixture(case: FixtureCase, blob_store: BlobStore) -> FixtureSn
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         case.artifact_date,
+        1,
+        80,
         sidecar_response(&artifact.storage_key, case.cells),
     )
     .await;
@@ -303,6 +325,8 @@ async fn vic_snapshot_fixture(blob_store: BlobStore, cells: &[&[&str]]) -> Fixtu
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         "2026-05-05",
+        14,
+        14,
         sidecar_response(&artifact.storage_key, cells),
     )
     .await;
@@ -368,6 +392,8 @@ async fn qld_snapshot_fixture(blob_store: BlobStore, cells: &[&[&str]]) -> Fixtu
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         "2025-06-24",
+        113,
+        113,
         sidecar_response(&artifact.storage_key, cells),
     )
     .await;
@@ -478,6 +504,115 @@ async fn parses_nsw_budget_pdf_fixtures_through_sidecar_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_current_nsw_budget_split_header_aggregates_table() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let case = FixtureCase {
+        name: "nsw_bp1_key_budget_aggregates_2025_26_current_shape",
+        bytes: BP1_2025_26,
+        source_url: "https://www.nsw.gov.au/sites/default/files/noindex/2026-03/bp1-budget-statement-nsw-budget-2025-26.pdf",
+        budget_year: "2025-26",
+        artifact_date: "2026-03-20",
+        cells: &[
+            &["Government businesses.", "", "", "", "", "", ""],
+            &[
+                "Table 1.2:",
+                "Key budget aggregates for the general government sector",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
+            &[
+                "", "2023-24", "2024-25", "2025-26", "2026-27", "2027-28", "2028-29",
+            ],
+            &[
+                "",
+                "Actual",
+                "Revised",
+                "Budget",
+                "",
+                "Forward Estimates",
+                "",
+            ],
+            &[
+                "Revenue ($m)",
+                "110,219",
+                "118,090",
+                "124,154",
+                "128,038",
+                "133,232",
+                "137,135",
+            ],
+            &[
+                "Per cent of GSP",
+                "13.4",
+                "13.9",
+                "14.1",
+                "13.9",
+                "13.8",
+                "13.5",
+            ],
+            &[
+                "Expenses ($m)",
+                "120,909",
+                "123,805",
+                "127,581",
+                "129,186",
+                "132,101",
+                "136,078",
+            ],
+            &[
+                "Per cent of GSP",
+                "14.7",
+                "14.5",
+                "14.5",
+                "14.0",
+                "13.6",
+                "13.4",
+            ],
+            &[
+                "", "(10,690)", "(5,715)", "(3,427)", "(1,148)", "1,132", "1,058",
+            ],
+            &["Budget result ($m)", "", "", "", "", "", ""],
+            &[
+                "Per cent of GSP",
+                "(1.3)",
+                "(0.7)",
+                "(0.4)",
+                "(0.1)",
+                "0.1",
+                "0.1",
+            ],
+            &[
+                "Gross debt ($m)",
+                "154,276",
+                "166,012",
+                "178,755",
+                "188,340",
+                "193,609",
+                "199,680",
+            ],
+            &[
+                "Per cent of GSP",
+                "18.8",
+                "19.5",
+                "20.3",
+                "20.4",
+                "20.0",
+                "19.6",
+            ],
+        ],
+    };
+
+    let snapshot = snapshot_fixture(case, blob_store).await;
+
+    assert_eq!(snapshot.observation_count, 48);
+    assert_eq!(snapshot.series_count, 8);
+    insta::assert_json_snapshot!(case.name, snapshot);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parses_vic_budget_pdf_fixture_through_sidecar_contract() {
     let blob_store = BlobStore::new(InMemory::new());
     let cells: &[&[&str]] = &[
@@ -503,6 +638,54 @@ async fn parses_vic_budget_pdf_fixture_through_sidecar_contract() {
 
     assert!(snapshot.observation_count > 0);
     insta::assert_json_snapshot!("vic_bp5_statement_of_finances_2026_27", snapshot);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_current_vic_budget_operating_statement_shape() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let cells: &[&[&str]] = &[
+        &["COMPREHENSIVE OPERATING STATEMENT", "", "", "", ""][..],
+        &[
+            "For the financial year ending 30 June",
+            "",
+            "",
+            "",
+            "($ million)",
+        ][..],
+        &["", "2026-27", "2027-28", "2028-29", "2029-30"][..],
+        &["Notes", "budget", "estimate", "estimate", "estimate"][..],
+        &["Revenue and income from transactions", "", "", "", ""][..],
+        &["Taxation \n1.2.1", "43 179", "46 345", "47 960", "50 175"][..],
+        &["Interest income", "1 636", "1 474", "1 455", "1 446"][..],
+        &[
+            "Total revenue and income from transactions",
+            "115 564",
+            "117 059",
+            "121 022",
+            "125 358",
+        ][..],
+        &["Expenses from transactions", "", "", "", ""][..],
+        &[
+            "Total expenses from transactions \n1.3.7",
+            "114 516",
+            "115 194",
+            "119 085",
+            "123 386",
+        ][..],
+        &[
+            "Net result from transactions – Net operating balance",
+            "1 048",
+            "1 864",
+            "1 936",
+            "1 972",
+        ][..],
+    ];
+
+    let snapshot = vic_snapshot_fixture(blob_store, cells).await;
+
+    assert_eq!(snapshot.observation_count, 20);
+    assert_eq!(snapshot.series_count, 5);
+    insta::assert_json_snapshot!("vic_bp5_current_operating_statement_2026_27", snapshot);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -540,6 +723,100 @@ async fn parses_qld_budget_pdf_fixture_through_sidecar_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_current_qld_budget_split_title_operating_statement_shape() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let cells: &[&[&str]] = &[
+        &[
+            "Table 8.1",
+            "General Government Sector Operating Statement1",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ][..],
+        &[
+            "",
+            "2023–24",
+            "2024–25",
+            "2024–25",
+            "2025–26",
+            "2026–27",
+            "2027–28",
+            "2028–29",
+        ][..],
+        &[
+            "",
+            "Outcome",
+            "Budget",
+            "Est.Actual",
+            "Budget",
+            "Projection",
+            "Projection",
+            "Projection",
+        ][..],
+        &[
+            "",
+            "$ million",
+            "$ million",
+            "$ million",
+            "$ million",
+            "$ million",
+            "$ million",
+            "$ million",
+        ][..],
+        &["Revenue from Transactions", "", "", "", "", "", "", ""][..],
+        &[
+            "Taxation revenue",
+            "22,659",
+            "24,799",
+            "25,015",
+            "26,907",
+            "28,723",
+            "30,442",
+            "32,154",
+        ][..],
+        &[
+            "Grants revenue",
+            "42,254",
+            "41,994",
+            "43,598",
+            "45,398",
+            "46,275",
+            "47,849",
+            "49,741",
+        ][..],
+        &[
+            "Sales of goods and services",
+            "7,651",
+            "8,351",
+            "8,494",
+            "8,785",
+            "8,966",
+            "9,098",
+            "9,296",
+        ][..],
+        &[
+            "Plus      Change in inventories",
+            "(3)",
+            "38",
+            "(3)",
+            "164",
+            "..",
+            "16",
+            "(18)",
+        ][..],
+    ];
+
+    let snapshot = qld_snapshot_fixture(blob_store, cells).await;
+
+    assert_eq!(snapshot.observation_count, 24);
+    assert_eq!(snapshot.series_count, 4);
+    insta::assert_json_snapshot!("qld_bp2_current_operating_statement_2025_26", snapshot);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_rejects_nsw_schema_hash_drift() {
     let blob_store = BlobStore::new(InMemory::new());
     let case = FixtureCase {
@@ -564,6 +841,8 @@ async fn parse_rejects_nsw_schema_hash_drift() {
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         case.artifact_date,
+        1,
+        80,
         sidecar_response(&artifact.storage_key, case.cells),
     )
     .await;
@@ -616,6 +895,8 @@ async fn parse_rejects_vic_schema_hash_drift() {
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         "2026-05-05",
+        14,
+        14,
         sidecar_response(&artifact.storage_key, cells),
     )
     .await;
@@ -673,6 +954,8 @@ async fn parse_rejects_qld_schema_hash_drift() {
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         "2025-06-24",
+        113,
+        113,
         sidecar_response(&artifact.storage_key, cells),
     )
     .await;
@@ -812,8 +1095,14 @@ async fn parse_rejects_sidecar_artifact_key_mismatch() {
         "artifacts/not-the-requested-artifact",
         &[&["Fiscal aggregate", "2025-26 Budget"], &["Revenue", "1.0"]],
     );
-    let sidecar_url =
-        serve_sidecar_once(artifact.storage_key.clone(), case.artifact_date, response).await;
+    let sidecar_url = serve_sidecar_once(
+        artifact.storage_key.clone(),
+        case.artifact_date,
+        1,
+        80,
+        response,
+    )
+    .await;
     let adapter = NswBudgetAdapter::builder()
         .pdf_base_url(sidecar_url)
         .build();

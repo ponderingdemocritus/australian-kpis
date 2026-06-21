@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS series_dataflow_first_observed_series_key_idx;

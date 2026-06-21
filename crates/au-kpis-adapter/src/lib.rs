@@ -18,7 +18,8 @@ use std::{
 
 use async_trait::async_trait;
 use au_kpis_domain::{
-    Artifact, DataflowId, Observation, ResponseHeaders, SeriesDescriptor, SourceId, ids::ArtifactId,
+    Artifact, Dataflow, DataflowId, Observation, ResponseHeaders, SeriesDescriptor, Source,
+    SourceId, ids::ArtifactId,
 };
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
@@ -33,6 +34,8 @@ use zip::ZipArchive;
 
 const XLSX_MAX_COLUMN: u32 = 16_384;
 const XLSX_MAX_ROW: u32 = 1_048_576;
+const TRANSIENT_SEND_RETRIES: usize = 2;
+const TRANSIENT_SEND_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
 
 /// Streaming observation payload emitted by adapters during parse.
 pub type ObservationStream<'a> =
@@ -543,9 +546,11 @@ impl AdapterHttpClient {
     /// behaviour for discovery and metadata requests.
     pub fn new(rate_limit: RateLimit) -> Self {
         let client = reqwest::Client::builder()
+            .http1_only()
             .build()
             .expect("static reqwest client configuration is valid");
         let raw_artifact_client = reqwest::Client::builder()
+            .http1_only()
             .redirect(reqwest::redirect::Policy::none())
             .no_gzip()
             .no_brotli()
@@ -577,22 +582,38 @@ impl AdapterHttpClient {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AdapterError> {
-        self.circuit_breaker.before_request().await?;
-        self.limiter.wait_for_permit().await;
-        match request.send().await {
-            Ok(response) => {
-                if response.status().is_server_error() {
-                    self.circuit_breaker.record_failure().await;
-                } else {
-                    self.circuit_breaker.record_success().await;
+        let mut request = request;
+        for attempt in 0..=TRANSIENT_SEND_RETRIES {
+            let retry_request = if attempt < TRANSIENT_SEND_RETRIES {
+                request.try_clone()
+            } else {
+                None
+            };
+
+            self.circuit_breaker.before_request().await?;
+            self.limiter.wait_for_permit().await;
+            match request.send().await {
+                Ok(response) => {
+                    if response.status().is_server_error() {
+                        self.circuit_breaker.record_failure().await;
+                    } else {
+                        self.circuit_breaker.record_success().await;
+                    }
+                    return Ok(response);
                 }
-                Ok(response)
-            }
-            Err(err) => {
-                self.circuit_breaker.record_failure().await;
-                Err(err.into())
+                Err(err) if retry_request.is_some() && is_transient_send_error(&err) => {
+                    self.circuit_breaker.record_failure().await;
+                    sleep(TRANSIENT_SEND_RETRY_BASE_DELAY * (attempt as u32 + 1)).await;
+                    request = retry_request.expect("checked above");
+                }
+                Err(err) => {
+                    self.circuit_breaker.record_failure().await;
+                    return Err(err.into());
+                }
             }
         }
+
+        unreachable!("bounded retry loop returns on success or final error")
     }
 
     /// Convenience `GET` helper using the shared rate limiter.
@@ -600,6 +621,13 @@ impl AdapterHttpClient {
     pub async fn get(&self, url: &str) -> Result<reqwest::Response, AdapterError> {
         self.execute(self.client.get(url)).await
     }
+}
+
+fn is_transient_send_error(err: &reqwest::Error) -> bool {
+    !err.is_builder()
+        && !err.is_redirect()
+        && !err.is_status()
+        && (err.is_request() || err.is_connect() || err.is_timeout() || err.is_body())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1112,6 +1140,16 @@ pub trait SourceAdapter: fmt::Debug + Send + Sync + 'static {
     /// Static adapter metadata and operational policy.
     fn manifest(&self) -> &AdapterManifest;
 
+    /// Static source metadata that orchestration can sync into the catalog.
+    fn source_metadata(&self) -> Option<Source> {
+        None
+    }
+
+    /// Static dataflow metadata that orchestration can sync into the catalog.
+    fn dataflow_metadata(&self) -> Vec<Dataflow> {
+        Vec::new()
+    }
+
     /// Discover upstream work items that should be fetched.
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError>;
 
@@ -1149,6 +1187,11 @@ impl Adapters {
             .get(id)
             .cloned()
             .ok_or_else(|| AdapterError::UnknownAdapter(id.to_string()))
+    }
+
+    /// Iterate over registered adapters.
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn SourceAdapter>> {
+        self.by_id.values()
     }
 
     /// Dispatch discovery by source id.

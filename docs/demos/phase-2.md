@@ -76,7 +76,7 @@ Query the running API directly:
 
 ```bash
 curl -fsS \
-  'http://127.0.0.1:3000/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&limit=5' \
+  'http://127.0.0.1:3000/v1/observations?dataflow=abs.cpi&dimensions[measure]=1&dimensions[index]=10001&dimensions[tsest]=10&dimensions[region]=50&dimensions[freq]=Q&limit=5' \
   | jq '{metadata, first_observation: .observations[0], count: (.observations | length)}'
 ```
 
@@ -91,7 +91,7 @@ import { createClient } from '@au-kpis/sdk'
 const client = createClient({ baseUrl: 'http://127.0.0.1:3000', validate: true })
 const page = await client.observations.list({
   dataflow: 'abs.cpi',
-  dimensions: { region: 'AUS' },
+  dimensions: { measure: '1', index: '10001', tsest: '10', region: '50', freq: 'Q' },
   limit: 5,
 })
 

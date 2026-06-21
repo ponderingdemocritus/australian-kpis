@@ -393,6 +393,8 @@ pub struct ExtractRequest {
     artifact_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     strategy: Option<ExtractionStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pages: Option<Vec<u32>>,
 }
 
 impl ExtractRequest {
@@ -404,6 +406,7 @@ impl ExtractRequest {
             source_id: source_id.into(),
             artifact_date: None,
             strategy: None,
+            pages: None,
         }
     }
 
@@ -419,6 +422,28 @@ impl ExtractRequest {
     pub const fn strategy(mut self, strategy: ExtractionStrategy) -> Self {
         self.strategy = Some(strategy);
         self
+    }
+
+    /// Limit extraction to the provided 1-indexed PDF pages.
+    #[must_use]
+    pub fn pages<I>(mut self, pages: I) -> Self
+    where
+        I: IntoIterator<Item = u32>,
+    {
+        let pages = pages.into_iter().collect::<Vec<_>>();
+        self.pages = (!pages.is_empty()).then_some(pages);
+        self
+    }
+
+    /// Limit extraction to an inclusive 1-indexed PDF page range.
+    #[must_use]
+    pub fn page_range(self, first_page: u32, last_page: u32) -> Self {
+        assert!(first_page > 0, "first_page must be 1-indexed");
+        assert!(
+            last_page >= first_page,
+            "last_page must be greater than or equal to first_page"
+        );
+        self.pages(first_page..=last_page)
     }
 }
 
@@ -656,12 +681,14 @@ mod tests {
         let enriched = serde_json::to_value(
             ExtractRequest::new("raw/report.pdf", "treasury")
                 .artifact_date("2026-05-12")
-                .strategy(ExtractionStrategy::ModelFallback),
+                .strategy(ExtractionStrategy::ModelFallback)
+                .pages([12, 13]),
         )
         .unwrap();
         assert_eq!(enriched["source_id"], "treasury");
         assert_eq!(enriched["artifact_date"], "2026-05-12");
         assert_eq!(enriched["strategy"], "model_fallback");
+        assert_eq!(enriched["pages"], serde_json::json!([12, 13]));
     }
 
     #[test]

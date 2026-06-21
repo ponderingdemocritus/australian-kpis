@@ -34,7 +34,10 @@
 use std::time::Duration;
 
 use au_kpis_config::DatabaseConfig;
-use au_kpis_domain::{Artifact, SourceId, ids::ArtifactId};
+use au_kpis_domain::{
+    Artifact, SourceId,
+    ids::{ArtifactId, DataflowId},
+};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 /// PostgreSQL connection pool used by database helpers.
 pub use sqlx::PgPool;
@@ -67,6 +70,17 @@ pub enum DbError {
     /// Applying (or reverting) a migration failed.
     #[error("migration: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
+}
+
+impl DbError {
+    /// Return whether the error means a pooled connection could not be acquired.
+    #[must_use]
+    pub fn is_pool_acquire_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::Query(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed)
+        )
+    }
 }
 
 impl Classify for DbError {
@@ -240,6 +254,87 @@ pub async fn get_artifact(pool: &PgPool, id: ArtifactId) -> Result<Option<Artifa
     .transpose()
 }
 
+/// Return whether an artifact/dataflow pair has already completed a clean load.
+#[instrument(skip(pool))]
+pub async fn artifact_load_completed(
+    pool: &PgPool,
+    artifact_id: ArtifactId,
+    source_id: &SourceId,
+    dataflow_id: &DataflowId,
+) -> Result<bool, DbError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1
+             FROM artifact_loads
+             WHERE artifact_id = $1
+               AND source_id = $2
+               AND dataflow_id = $3
+         )",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(source_id.as_str())
+    .bind(dataflow_id.as_str())
+    .fetch_one(pool)
+    .await
+    .map_err(DbError::Query)
+}
+
+/// Fields persisted when an artifact/dataflow pair completes ingestion.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactLoadCompletion<'a> {
+    /// Content-addressed artifact id that was parsed.
+    pub artifact_id: ArtifactId,
+    /// Source that produced the artifact.
+    pub source_id: &'a SourceId,
+    /// Dataflow parsed from the artifact.
+    pub dataflow_id: &'a DataflowId,
+    /// Observations emitted by the parser for this artifact.
+    pub observations_parsed: u64,
+    /// Observations inserted or semantically updated by the loader.
+    pub observations_loaded: u64,
+    /// Discovery job id that produced this load.
+    pub job_id: Option<&'a str>,
+    /// Trace context propagated from discovery to load.
+    pub trace_parent: Option<&'a str>,
+}
+
+/// Record a completed artifact/dataflow load for future idempotent reruns.
+#[instrument(skip(pool))]
+pub async fn record_artifact_load_completion(
+    pool: &PgPool,
+    completion: ArtifactLoadCompletion<'_>,
+) -> Result<(), DbError> {
+    let observations_parsed = u64_to_i64("observations_parsed", completion.observations_parsed)?;
+    let observations_loaded = u64_to_i64("observations_loaded", completion.observations_loaded)?;
+
+    sqlx::query(
+        "INSERT INTO artifact_loads (
+             artifact_id, source_id, dataflow_id, observations_parsed,
+             observations_loaded, job_id, trace_parent
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (artifact_id, dataflow_id) DO UPDATE
+         SET source_id = EXCLUDED.source_id,
+             observations_parsed = EXCLUDED.observations_parsed,
+             observations_loaded = EXCLUDED.observations_loaded,
+             job_id = EXCLUDED.job_id,
+             trace_parent = EXCLUDED.trace_parent,
+             completed_at = now()",
+    )
+    .bind(completion.artifact_id.digest().as_bytes().as_slice())
+    .bind(completion.source_id.as_str())
+    .bind(completion.dataflow_id.as_str())
+    .bind(observations_parsed)
+    .bind(observations_loaded)
+    .bind(completion.job_id)
+    .bind(completion.trace_parent)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+
+    Ok(())
+}
+
 fn artifact_id_bytes(id_bytes: Vec<u8>) -> Result<[u8; 32], DbError> {
     id_bytes
         .try_into()
@@ -250,6 +345,14 @@ fn artifact_id_bytes(id_bytes: Vec<u8>) -> Result<[u8; 32], DbError> {
             ))
         })
         .map_err(DbError::Core)
+}
+
+fn u64_to_i64(name: &str, value: u64) -> Result<i64, DbError> {
+    i64::try_from(value).map_err(|_| {
+        DbError::Core(CoreError::Validation(format!(
+            "{name} value {value} exceeds BIGINT"
+        )))
+    })
 }
 
 /// Tunables for [`connect_with`]. Defaults suit a single API binary; workers
@@ -269,7 +372,7 @@ impl Default for ConnectOptions {
         Self {
             max_connections: 64,
             min_connections: 0,
-            acquire_timeout: Duration::from_secs(5),
+            acquire_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -385,6 +488,9 @@ mod tests {
         let opts = ConnectOptions::default();
         assert_eq!(opts.max_connections, 64);
         assert!(opts.min_connections <= opts.max_connections);
-        assert!(opts.acquire_timeout >= Duration::from_secs(1));
+        assert!(
+            opts.acquire_timeout >= Duration::from_secs(30),
+            "startup should tolerate local Timescale recovery without failing before health checks pass"
+        );
     }
 }

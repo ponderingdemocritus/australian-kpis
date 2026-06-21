@@ -223,6 +223,77 @@ async fn upserts_series_and_latest_revision() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duplicate_observations_in_same_batch_collapse_to_last_row() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let artifact_id = ArtifactId::of_content(b"loader duplicate observation fixture");
+    seed_reference_data(pool, artifact_id).await;
+    let aus = descriptor("AUS");
+    let time = ts(2024, 3, 1);
+
+    let stats = load_batch(
+        pool,
+        vec![
+            item(&aus, artifact_id, time, 0, 134.2),
+            item(&aus, artifact_id, time, 0, 135.0),
+        ],
+    )
+    .await
+    .expect("load duplicate observations");
+
+    assert_eq!(stats.observations_loaded, 1);
+    assert_eq!(stats.series_upserted, 1);
+    assert_eq!(stats.parse_errors, 0);
+
+    let row = sqlx::query(
+        "SELECT count(*) AS row_count, max(value) AS value
+         FROM observations
+         WHERE series_key = $1
+           AND time = $2
+           AND revision_no = 0",
+    )
+    .bind(aus.series_key.digest().as_bytes().as_slice())
+    .bind(time)
+    .fetch_one(pool)
+    .await
+    .expect("fetch deduped observation");
+
+    assert_eq!(row.get::<i64, _>("row_count"), 1);
+    assert_eq!(row.get::<Option<f64>, _>("value"), Some(135.0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn identical_observation_reload_does_not_rewrite_existing_row() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let artifact_id = ArtifactId::of_content(b"loader idempotent observation fixture");
+    seed_reference_data(pool, artifact_id).await;
+    seed_observation_update_counter(pool).await;
+    let aus = descriptor("AUS");
+    let row = item(&aus, artifact_id, ts(2024, 3, 1), 0, 134.2);
+
+    let first = load_batch(pool, vec![row.clone()])
+        .await
+        .expect("initial observation load");
+    assert_eq!(first.observations_loaded, 1);
+
+    let mut reload = row;
+    reload.observation.ingested_at = ts(2024, 4, 25);
+    let second = load_batch(pool, vec![reload])
+        .await
+        .expect("idempotent observation reload");
+
+    assert_eq!(second.observations_loaded, 0);
+    let updates: i32 = sqlx::query_scalar("SELECT count FROM observation_update_counter")
+        .fetch_one(pool)
+        .await
+        .expect("read update counter");
+    assert_eq!(updates, 0, "identical reload should not update the row");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn latest_revision_wins_for_every_insertion_order() {
     let _guard = TEST_LOCK.lock().await;
     let db = test_db().await;
@@ -398,6 +469,46 @@ async fn staged_load_cleanup_returns_live_connection_to_pool() {
         .await
         .expect("read backend pid after staged cleanup");
     assert_eq!(after_pid, initial_pid);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_load_commit_promotes_observations_in_configured_chunks() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let artifact_id = ArtifactId::of_content(b"loader staged chunked commit fixture");
+    seed_reference_data(pool, artifact_id).await;
+    seed_observation_statement_row_limit(pool, 2).await;
+
+    let aus = descriptor("AUS");
+    let rows: Vec<_> = (0_i64..5)
+        .map(|index| LoadItemAudit {
+            item: item(
+                &aus,
+                artifact_id,
+                ts(2024, 3, 1) + ChronoDuration::seconds(index),
+                0,
+                index as f64,
+            ),
+            row_context: None,
+        })
+        .collect();
+
+    let mut staged = begin_staged_load(
+        pool,
+        LoadOptions {
+            max_rows: 2,
+            max_bytes: 1024 * 1024,
+        },
+    )
+    .await
+    .expect("begin staged load");
+    staged.stage(rows).await.expect("stage rows");
+
+    let stats = staged.commit().await.expect("commit staged rows in chunks");
+
+    assert_eq!(stats.observations_loaded, 5);
+    assert_eq!(stats.parse_errors, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -679,4 +790,111 @@ async fn seed_webhook_subscriptions(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("insert webhook subscriptions");
+}
+
+async fn seed_observation_statement_row_limit(pool: &PgPool, max_rows: i32) {
+    sqlx::query(
+        "CREATE TABLE statement_row_counter (
+             count INTEGER NOT NULL
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("create statement counter");
+    sqlx::query("INSERT INTO statement_row_counter (count) VALUES (0)")
+        .execute(pool)
+        .await
+        .expect("seed statement counter");
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION test_limit_observation_statement_rows()
+         RETURNS trigger
+         LANGUAGE plpgsql
+         AS $$
+         DECLARE
+             next_count INTEGER;
+         BEGIN
+             UPDATE statement_row_counter
+             SET count = count + 1
+             RETURNING count INTO next_count;
+             IF next_count > TG_ARGV[0]::INTEGER THEN
+                 RAISE EXCEPTION 'observation statement exceeded test row limit';
+             END IF;
+             RETURN NEW;
+         END;
+         $$",
+    )
+    .execute(pool)
+    .await
+    .expect("create row limit trigger function");
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION test_reset_observation_statement_rows()
+         RETURNS trigger
+         LANGUAGE plpgsql
+         AS $$
+         BEGIN
+             UPDATE statement_row_counter SET count = 0;
+             RETURN NULL;
+         END;
+         $$",
+    )
+    .execute(pool)
+    .await
+    .expect("create row limit reset function");
+    let create_limit_trigger = format!(
+        "CREATE TRIGGER test_limit_observation_statement_rows
+         BEFORE INSERT OR UPDATE ON observations
+         FOR EACH ROW
+         EXECUTE FUNCTION test_limit_observation_statement_rows({max_rows})",
+    );
+    sqlx::query(&create_limit_trigger)
+        .execute(pool)
+        .await
+        .expect("create row limit trigger");
+    sqlx::query(
+        "CREATE TRIGGER test_reset_observation_statement_rows
+         AFTER INSERT OR UPDATE ON observations
+         FOR EACH STATEMENT
+         EXECUTE FUNCTION test_reset_observation_statement_rows()",
+    )
+    .execute(pool)
+    .await
+    .expect("create row limit reset trigger");
+}
+
+async fn seed_observation_update_counter(pool: &PgPool) {
+    sqlx::query(
+        "CREATE TABLE observation_update_counter (
+             count INTEGER NOT NULL
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("create observation update counter");
+    sqlx::query("INSERT INTO observation_update_counter (count) VALUES (0)")
+        .execute(pool)
+        .await
+        .expect("seed observation update counter");
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION test_count_observation_updates()
+         RETURNS trigger
+         LANGUAGE plpgsql
+         AS $$
+         BEGIN
+             UPDATE observation_update_counter SET count = count + 1;
+             RETURN NEW;
+         END;
+         $$",
+    )
+    .execute(pool)
+    .await
+    .expect("create observation update counter function");
+    sqlx::query(
+        "CREATE TRIGGER test_count_observation_updates
+         BEFORE UPDATE ON observations
+         FOR EACH ROW
+         EXECUTE FUNCTION test_count_observation_updates()",
+    )
+    .execute(pool)
+    .await
+    .expect("create observation update counter trigger");
 }

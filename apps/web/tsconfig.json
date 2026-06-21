@@ -6,6 +6,7 @@
     "declaration": false,
     "declarationMap": false,
     "emitDeclarationOnly": false,
+    "incremental": true,
     "jsx": "react-jsx",
     "noEmit": true,
     "plugins": [
@@ -18,5 +19,6 @@
     },
     "types": ["node"]
   },
-  "include": ["next-env.d.ts", ".next/types/**/*.ts", "src", "playwright.config.ts", "e2e"]
+  "include": ["next-env.d.ts", ".next/types/**/*.ts", "src", "playwright.config.ts", "e2e"],
+  "exclude": ["node_modules"]
 }

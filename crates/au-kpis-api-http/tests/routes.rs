@@ -503,6 +503,42 @@ async fn cors_preflight_allows_x_api_key_header_for_configured_origin() {
 }
 
 #[tokio::test]
+async fn cors_preflight_allows_private_network_for_configured_origin() {
+    let response = router(test_state_with_origins(vec![
+        "http://127.0.0.1:4173".into(),
+    ]))
+    .expect("router")
+    .oneshot(
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/v1/dataflows")
+            .header(header::ORIGIN, "http://127.0.0.1:4173")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header("access-control-request-private-network", "true")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+
+    assert!(response.status().is_success(), "preflight should succeed");
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "http://127.0.0.1:4173"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-private-network")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[tokio::test]
 async fn unsupported_subscription_methods_return_method_not_allowed_before_auth() {
     let response = router(test_state())
         .expect("router")

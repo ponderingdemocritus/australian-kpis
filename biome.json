@@ -11,6 +11,7 @@
       "**/dist/**",
       "**/build/**",
       "**/.turbo/**",
+      "**/next-env.d.ts",
       "**/node_modules/**",
       "**/target/**",
       "**/coverage/**",

@@ -295,7 +295,7 @@ function dimensionsQuery(dimensions: Record<string, string>): string[] {
 }
 
 function buildUrl(baseUrl: string, path: string, query: RequestSpec['query'] = {}): string {
-  const url = new URL(`${baseUrl}${path}`)
+  const url = newUrl(baseUrl, path)
 
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined) {
@@ -313,6 +313,20 @@ function buildUrl(baseUrl: string, path: string, query: RequestSpec['query'] = {
   }
 
   return url.toString()
+}
+
+function newUrl(baseUrl: string, path: string): URL {
+  const value = `${baseUrl}${path}`
+  if (/^[a-z][a-z\d+\-.]*:/i.test(value)) {
+    return new URL(value)
+  }
+
+  const origin = globalThis.location?.origin
+  if (origin === undefined) {
+    throw new Error('relative AU KPIs API base URL requires a browser location origin')
+  }
+
+  return new URL(value, origin)
 }
 
 function normalizeBaseUrl(baseUrl: string): string {

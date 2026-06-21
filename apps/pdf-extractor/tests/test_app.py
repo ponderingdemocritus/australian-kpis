@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,11 @@ from fastapi.testclient import TestClient
 
 from au_kpis_pdf_extractor.app import _configured_max_pages, create_app
 from au_kpis_pdf_extractor.extractors import DeterministicExtractor
+from au_kpis_pdf_extractor.models import (
+    BackendInfo,
+    ExtractionBackendKind,
+    ExtractionResponse,
+)
 from au_kpis_pdf_extractor.runtime import configured_port
 from au_kpis_pdf_extractor.storage import ObjectNotFound
 
@@ -27,6 +33,30 @@ class FixtureStorage:
 class MissingStorage:
     def fetch_to_path(self, s3_key: str, destination: Path) -> Path:
         raise ObjectNotFound(s3_key)
+
+
+class RecordingExtractor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[int, ...]]] = []
+
+    def extract(
+        self,
+        pdf_path: Path,
+        artifact_key: str,
+        pages: Sequence[int] | None = None,
+    ) -> ExtractionResponse:
+        assert pdf_path.exists()
+        self.calls.append((artifact_key, tuple(pages or ())))
+        return ExtractionResponse(
+            artifact_key=artifact_key,
+            backend=BackendInfo(
+                kind=ExtractionBackendKind.DETERMINISTIC,
+                name="recording",
+                version="test",
+                model_sha256=None,
+            ),
+            tables=[],
+        )
 
 
 def test_health_endpoint() -> None:
@@ -94,6 +124,34 @@ def test_extract_fetches_s3_key_and_returns_real_budget_tables() -> None:
     flattened = " ".join(cell for row in first_table["cells"] for cell in row)
     assert "Department" in flattened or "Agency Resourcing" in flattened
     assert first_table["diagnostics"]["source_backend"] in {"pdfplumber", "camelot"}
+
+
+def test_extract_forwards_requested_pages_to_extractor() -> None:
+    extractor = RecordingExtractor()
+    app = create_app(storage_client=FixtureStorage(), extractor=extractor)
+
+    response = TestClient(app).post(
+        "/extract",
+        json={
+            "s3_key": "artifacts/fixtures/bp4-agency-resourcing.pdf",
+            "source_id": "treasury",
+            "pages": [12, 13],
+        },
+    )
+
+    assert response.status_code == 200
+    assert extractor.calls == [("artifacts/fixtures/bp4-agency-resourcing.pdf", (12, 13))]
+
+
+def test_extract_rejects_invalid_page_numbers() -> None:
+    app = create_app(storage_client=FixtureStorage(), extractor=RecordingExtractor())
+
+    response = TestClient(app).post(
+        "/extract",
+        json={"s3_key": "artifacts/fixtures/report.pdf", "source_id": "treasury", "pages": [0]},
+    )
+
+    assert response.status_code == 422
 
 
 def test_extract_maps_missing_s3_object_to_404() -> None:

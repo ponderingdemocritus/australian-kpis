@@ -114,6 +114,36 @@ async fn discover_returns_hand_curated_nsw_budget_publications() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_nsw_discovery_uses_current_official_nsw_budget_urls() {
+    let adapter = NswBudgetAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 19, 0, 0, 0).unwrap());
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover default NSW budget");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(
+        jobs[0].source_url,
+        "https://www.nsw.gov.au/sites/default/files/noindex/2026-03/bp1-budget-statement-nsw-budget-2025-26.pdf"
+    );
+    assert_eq!(
+        jobs[0].metadata["source_index_url"],
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers"
+    );
+    assert_eq!(jobs[0].metadata["artifact_date"], "2026-03-20");
+    assert_eq!(jobs[0].metadata["budget_year"], "2025-26");
+
+    let dataflows = adapter.dataflow_metadata();
+    assert_eq!(
+        dataflows[0].source_url,
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_honours_requested_dataflow_scope() {
     let adapter = NswBudgetAdapter::builder()
         .publications(fixture_publications())
@@ -155,7 +185,7 @@ fn manifest_declares_nsw_rate_limit_and_dataflow_metadata() {
     assert_eq!(dataflows[0].attribution, "Source: NSW Treasury");
     assert_eq!(
         dataflows[0].source_url,
-        "https://www.budget.nsw.gov.au/2025-26/budget-papers"
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers"
     );
 }
 

@@ -30,8 +30,12 @@ backing service.
 ### Web dashboard
 
 ```text
-NEXT_PUBLIC_AU_KPIS_API_BASE_URL=https://<api-public-domain>
+AU_KPIS_API_BASE_URL=https://<api-public-domain>
 ```
+
+The production web build defaults browser traffic to `/api/au-kpis`, which is a
+Next.js proxy route. Set `NEXT_PUBLIC_AU_KPIS_API_BASE_URL` only when the
+browser should call the API directly instead of using that proxy.
 
 ### API
 

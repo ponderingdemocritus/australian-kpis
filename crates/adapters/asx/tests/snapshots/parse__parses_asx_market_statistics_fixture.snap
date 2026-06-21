@@ -1,0 +1,446 @@
+---
+source: crates/adapters/asx/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_ords_price_index"
+    },
+    "unit": "index",
+    "time": "2026-05-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 8965.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "sp_asx_200_price_index"
+    },
+    "unit": "index",
+    "time": "2026-05-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 8731.7,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "market_cap_aud_m"
+    },
+    "unit": "AUD millions",
+    "time": "2026-05-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 3251220.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_ords_price_index"
+    },
+    "unit": "index",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 8887.6,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "sp_asx_200_price_index"
+    },
+    "unit": "index",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 8665.8,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "market_cap_aud_m"
+    },
+    "unit": "AUD millions",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 3227932.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_ords_price_index"
+    },
+    "unit": "index",
+    "time": "2025-12-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 9018.8,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "sp_asx_200_price_index"
+    },
+    "unit": "index",
+    "time": "2025-12-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 8714.3,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "market_cap_aud_m"
+    },
+    "unit": "AUD millions",
+    "time": "2025-12-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 3282379.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_ords_price_index"
+    },
+    "unit": "index",
+    "time": "2020-12-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 6850.6,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "sp_asx_200_price_index"
+    },
+    "unit": "index",
+    "time": "2020-12-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 6587.1,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "market_cap_aud_m"
+    },
+    "unit": "AUD millions",
+    "time": "2020-12-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 2236723.04,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_ords_price_index"
+    },
+    "unit": "index",
+    "time": "2018-11-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 5749.3,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "sp_asx_200_price_index"
+    },
+    "unit": "index",
+    "time": "2018-11-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 5667.2,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "market_cap_aud_m"
+    },
+    "unit": "AUD millions",
+    "time": "2018-11-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 1814596.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_ords_price_index"
+    },
+    "unit": "index",
+    "time": "2017-11-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 6057.2,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "sp_asx_200_price_index"
+    },
+    "unit": "index",
+    "time": "2017-11-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 5969.9,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "market_cap_aud_m"
+    },
+    "unit": "AUD millions",
+    "time": "2017-11-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 1893560.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "end_of_month_values",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "listed_companies_total"
+    },
+    "unit": "count",
+    "time": "2026-05-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 1898.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "listed_counts",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_listed_entities"
+    },
+    "unit": "count",
+    "time": "2026-05-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 2040.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "listed_counts",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "listed_companies_total"
+    },
+    "unit": "count",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 1900.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "listed_counts",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  },
+  {
+    "dataflow_id": "asx.market_statistics",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "all_listed_entities"
+    },
+    "unit": "count",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Month",
+    "value": 2040.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "listed_counts",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+    },
+    "source_artifact_id": "799a8cbc99d2ac82fe1fe118a0c5ffa1191a917c060ccbed36bd823244bada8e"
+  }
+]

@@ -128,6 +128,7 @@ fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
             header::CONTENT_TYPE,
             header::HeaderName::from_static("x-api-key"),
         ])
+        .allow_private_network(true)
         .expose_headers([
             REQUEST_ID_HEADER,
             header::RETRY_AFTER,

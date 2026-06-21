@@ -162,7 +162,13 @@ async fn load_search_results(
     let rows = sqlx::query(
         "WITH search_input AS (
             SELECT websearch_to_tsquery('english', $1) AS tsq,
-                   $1::text AS raw
+                   $1::text AS raw,
+                   upper(regexp_replace($1::text, '[^[:alnum:]]', '', 'g')) AS compact_raw
+         ),
+         dataflow_rows AS (
+            SELECT d.*,
+                   upper(regexp_replace(d.name, '([[:alnum:]])[[:alnum:]]*[[:space:]]*', '\\1', 'g')) AS name_acronym
+            FROM dataflows d
          ),
          dataflow_matches AS (
             SELECT 'dataflow' AS kind,
@@ -180,13 +186,15 @@ async fn load_search_results(
                            similarity(d.name, si.raw),
                            similarity(COALESCE(d.description, ''), si.raw)
                        ) * 0.2
+                       + CASE WHEN d.name_acronym = si.compact_raw THEN 1.0 ELSE 0.0 END
                        + 0.5
                    )::double precision AS score
-            FROM dataflows d
+            FROM dataflow_rows d
             CROSS JOIN search_input si
             WHERE to_tsvector('english', d.name || ' ' || COALESCE(d.description, '')) @@ si.tsq
                OR d.name % si.raw
                OR d.description % si.raw
+               OR d.name_acronym = si.compact_raw
          ),
          measure_matches AS (
             SELECT 'measure' AS kind,

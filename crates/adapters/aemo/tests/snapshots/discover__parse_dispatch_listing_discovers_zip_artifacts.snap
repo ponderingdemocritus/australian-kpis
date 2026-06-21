@@ -1,0 +1,18 @@
+---
+source: crates/adapters/aemo/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "dispatch_interval": "2026-06-19T17:00:00Z",
+    "file_name": "PUBLIC_DISPATCHIS_202606191700_0000000523261454.zip",
+    "revision_key": "AEMO:dispatch:PUBLIC_DISPATCHIS_202606191700_0000000523261454.zip",
+    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191700_0000000523261454.zip"
+  },
+  {
+    "dispatch_interval": "2026-06-19T17:05:00Z",
+    "file_name": "PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+    "revision_key": "AEMO:dispatch:PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+  }
+]
