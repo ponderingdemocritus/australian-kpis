@@ -955,7 +955,7 @@ apps/web/e2e/               # Playwright
 | Compile | `cargo check --workspace` | clean |
 | Lint | `cargo clippy -- -D warnings`, `pnpm run lint` (`biome check` + `markdownlint-cli2`) | clean |
 | Format | `cargo fmt --check`, `biome format --check` | clean |
-| Tests | `cargo nextest run --workspace`, TS typecheck/build, Playwright | zero fail, zero flake |
+| Tests | `cargo nextest run --workspace`, `pnpm turbo run typecheck test`, SDK integration, Playwright | zero fail, zero flake |
 | Coverage | `cargo-llvm-cov` | ≥80% line, ≥70% branch |
 | Snapshot | `insta` | no unreviewed drift |
 | OpenAPI | `oasdiff breaking` | no breaking without `/v2` |
@@ -986,7 +986,7 @@ parallel:
   - typecheck       (cargo check + tsc)
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
-  - test            (nextest + TS package tests, testcontainers, Playwright, source-specific streaming memory guardrails such as the ABS DHAT fetch/parse profiles)
+  - test            (nextest + `pnpm turbo run typecheck test`, SDK runtime + compose integration, testcontainers, Playwright, source-specific streaming memory guardrails such as the ABS DHAT fetch/parse profiles)
   - coverage        (clean cargo-llvm-cov profile data with pinned nightly coverage toolchain → LCOV line/branch coverage → Codecov PR comment)
   - snapshot        (insta check)
   - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
@@ -1330,7 +1330,7 @@ Each phase ends demo-able.
 - Chaos: kill ingestion mid-load, restart, verify no duplicates / no missing rows
 
 ### Ongoing CI
-- Every PR: `cargo check/clippy/test`, `cargo deny`, `cargo audit`, `pnpm run lint`, TS typecheck/build, OpenAPI diff
+- Every PR: `cargo check/clippy/test`, `cargo deny`, `cargo audit`, `pnpm run lint`, `pnpm turbo run typecheck test`, SDK integration, OpenAPI diff
 - Staging deploy on merge to `main`
 - Prod deploy behind manual approval
 - Weekly dependency updates via Renovate

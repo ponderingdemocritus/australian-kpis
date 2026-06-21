@@ -74,6 +74,7 @@ const endpointDefinitions = [
 ] as const
 
 const chartPalette = ['#0f766e', '#2563eb', '#c2410c', '#7c3aed', '#64748b']
+const indexObservationLimit = 240
 
 type OpenApiDocument = {
   info?: {
@@ -159,7 +160,11 @@ export function IndexPage() {
         details.map(
           async (detail): Promise<ObservationGroup> => ({
             detail,
-            observations: await collectObservationRows(detail.dataflow.id, undefined, 10_000),
+            observations: await collectObservationRows(
+              detail.dataflow.id,
+              undefined,
+              indexObservationLimit,
+            ),
           }),
         ),
       ),

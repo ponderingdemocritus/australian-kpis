@@ -25,13 +25,20 @@ export async function collectObservationRows(
   dimensions?: Record<string, string>,
   limit = 100,
 ): Promise<ObservationsRow[]> {
+  if (limit <= 0) {
+    return []
+  }
+
   const observations: ObservationsRow[] = []
   for await (const observation of client.observations.stream({
     dataflow,
     dimensions,
-    limit,
+    limit: Math.min(limit, 100),
   })) {
     observations.push(observation)
+    if (observations.length >= limit) {
+      break
+    }
   }
 
   return observations.sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
