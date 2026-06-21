@@ -202,7 +202,9 @@ function previousObservation(
   current: ObservationsRow,
 ): ObservationsRow | undefined {
   const seriesRows = sortByTime(
-    rows.filter((row) => row.series_key === current.series_key && row.time !== current.time),
+    rows.filter(
+      (row) => row.series_key === current.series_key && compareObservationOrder(row, current) < 0,
+    ),
   )
   return seriesRows.at(-1)
 }

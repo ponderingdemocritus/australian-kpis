@@ -53,19 +53,23 @@ export async function collectLatestObservationRows(
     return []
   }
 
-  const observations: ObservationsRow[] = []
+  const bySeries = new Map<string, ObservationsRow[]>()
   for await (const observation of client.observations.stream({
     dataflow,
     dimensions,
     limit: 100,
   })) {
+    const observations = bySeries.get(observation.series_key) ?? []
     observations.push(observation)
     if (observations.length > limit) {
       observations.shift()
     }
+    bySeries.set(observation.series_key, observations)
   }
 
-  return observations.sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
+  return Array.from(bySeries.values())
+    .flat()
+    .sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
 }
 
 export function toChartPoints(rows: ObservationsRow[], region: string): ChartPoint[] {
