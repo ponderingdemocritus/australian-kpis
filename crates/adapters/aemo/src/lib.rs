@@ -358,6 +358,7 @@ impl SourceAdapter for AemoAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,

@@ -230,6 +230,7 @@ impl SourceAdapter for RbaAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -463,6 +464,7 @@ fn fuzz_artifact(bytes: &[u8], source_url: &str) -> ArtifactRef {
     let id = au_kpis_domain::ArtifactId::of_content(bytes);
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("rba").expect("static source id is valid"),
         source_url: source_url.to_string(),
         content_type: "application/octet-stream".into(),

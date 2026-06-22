@@ -211,6 +211,7 @@ impl SourceAdapter for StubAdapter {
 
         Ok(ArtifactRef {
             id: artifact_id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type: "application/json".into(),

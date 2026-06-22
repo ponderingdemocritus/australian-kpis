@@ -729,6 +729,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -832,6 +833,7 @@ async fn parse_preserves_transient_storage_read_classification() {
     let blob_store = BlobStore::new(FailingReadObjectStore);
     let artifact = ArtifactRef {
         id: ArtifactId::of_content(b"partial"),
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -873,6 +875,7 @@ async fn parse_observes_cancellation_before_reading_artifact() {
         .expect("store fixture artifact");
     let artifact = ArtifactRef {
         id: artifact_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -1029,6 +1032,7 @@ async fn parse_fixture_owned_with_url(
 
     let artifact = ArtifactRef {
         id: artifact_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: source_url.into(),
         content_type: "application/vnd.sdmx.data+json".into(),

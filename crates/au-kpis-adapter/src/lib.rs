@@ -47,7 +47,7 @@ pub type ArtifactRecorderRef = Arc<dyn ArtifactRecorder>;
 /// Persists artifact provenance after a fetch stores raw bytes.
 #[async_trait]
 pub trait ArtifactRecorder: fmt::Debug + Send + Sync + 'static {
-    /// Load a durable artifact row by content id, when one already exists.
+    /// Load durable blob metadata by content id, when one already exists.
     async fn get(&self, id: ArtifactId) -> Result<Option<Artifact>, AdapterError>;
 
     /// Persist one fetched artifact row.
@@ -931,7 +931,7 @@ impl FetchCtx {
         Ok(self.artifact_recorder.record(&artifact).await?.into())
     }
 
-    /// Load durable artifact provenance for a content id, if present.
+    /// Load durable blob metadata for a content id, if present.
     pub async fn get_artifact(&self, id: ArtifactId) -> Result<Option<ArtifactRef>, AdapterError> {
         Ok(self.artifact_recorder.get(id).await?.map(Into::into))
     }
@@ -1084,6 +1084,8 @@ pub struct DiscoveredJob {
 pub struct ArtifactRef {
     /// Content-addressed artifact id.
     pub id: ArtifactId,
+    /// Durable fetch provenance row for this parse reference, when persisted.
+    pub fetch_id: Option<i64>,
     /// Source that produced the artifact.
     pub source_id: SourceId,
     /// Canonical upstream URL.
@@ -1105,6 +1107,7 @@ impl From<Artifact> for ArtifactRef {
     fn from(artifact: Artifact) -> Self {
         Self {
             id: artifact.id,
+            fetch_id: artifact.fetch_id,
             source_id: artifact.source_id,
             source_url: artifact.source_url,
             content_type: artifact.content_type,
@@ -1120,6 +1123,7 @@ impl From<ArtifactRef> for Artifact {
     fn from(reference: ArtifactRef) -> Self {
         Self {
             id: reference.id,
+            fetch_id: reference.fetch_id,
             source_id: reference.source_id,
             source_url: reference.source_url,
             content_type: reference.content_type,

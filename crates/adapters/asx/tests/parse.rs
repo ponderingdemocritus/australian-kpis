@@ -121,6 +121,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("asx").unwrap(),
         source_url: source_url.into(),
         content_type: content_type.into(),
@@ -323,6 +324,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("asx").unwrap(),
         source_url: "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
             .into(),

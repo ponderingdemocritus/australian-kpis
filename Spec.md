@@ -480,7 +480,9 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 - **Compression** on chunks >7 days old (90%+ savings on numeric data).
 - **Continuous aggregates** for weekly/monthly/quarterly rollups per series, refreshed by policy.
 - `sources`, `dataflows`, `dimensions`, `codelists`, `codes`, `measures` — vanilla relational tables.
-- `artifacts` — content-addressed (sha256) → S3 key plus captured HTTP response headers, including repeated values for the same header name; dedup on hash so refetching same file is a no-op.
+- `artifacts` — content-addressed blob identity (sha256) → S3 key and first-seen compatibility metadata; storage remains deduplicated on hash.
+- `artifact_fetches` — one row per upstream retrieval, referencing `artifacts(id)` and preserving source id, URL, response headers, content type, size, storage key, and fetch timestamp so identical bytes from mirrors or different sources retain separate provenance.
+- `artifact_loads` — completed parse/load audit per artifact/dataflow, with optional `artifact_fetch_id` pointing at the exact retrieval used when available.
 - `parse_errors` — rows that failed validation, keyed to artifact for re-processing.
 - `api_keys` — hashed (argon2id), scopes, rate-limit tier.
 
