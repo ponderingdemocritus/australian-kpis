@@ -290,6 +290,9 @@ best = 100.0
 source_url = "https://www.oaic.gov.au/"
 license = "Manual review required"
 attribution = "Curated from OAIC, ANAO, FOI, and audit-office inputs"
+retrieved_at = "2026-06-22"
+reviewed_by = "aps-curation"
+reviewed_at = "2026-06-22"
 notes = "Manual input remains missing until reviewed with durable provenance."
 
 [[indicators]]
@@ -318,4 +321,69 @@ best = 0.5
 source_url = "https://budget.gov.au/"
 license = "Manual taxonomy required"
 attribution = "Future Treasury/state budget taxonomy"
+retrieved_at = "2026-06-22"
+reviewed_by = "aps-curation"
+reviewed_at = "2026-06-22"
 notes = "Visible-unscored input; excluded from APS point estimate and confidence band."
+
+[[indicators]]
+indicator_id = "surveillance.intensity"
+source_dataflow_id = "curated.surveillance_intensity"
+measure_id = "intensity_index"
+axis = "orientation"
+component = "governance"
+weight = 0.0
+direction = "lower_is_better"
+display_label = "Surveillance intensity"
+description = "Low-cadence AI surveillance-intensity context input."
+unit = "index"
+confidence = "low"
+coverage_status = "visible_unscored"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+
+[indicators.normalization]
+worst = 100.0
+best = 0.0
+
+[indicators.provenance]
+source_url = "https://carnegieendowment.org/"
+license = "Carnegie terms"
+attribution = "Source: Carnegie Endowment AI Global Surveillance index"
+retrieved_at = "2026-06-22"
+reviewed_by = "aps-curation"
+reviewed_at = "2026-06-22"
+notes = "Visible low-cadence context only until a scored surveillance taxonomy is reviewed."
+
+[[indicators]]
+indicator_id = "compute.datacentre-capacity"
+source_dataflow_id = "compute.au_datacentre_capacity_mw"
+measure_id = "capacity_mw"
+axis = "orientation"
+component = "ai"
+weight = 0.10
+direction = "higher_is_better"
+display_label = "Datacentre capacity"
+description = "Curated Australian datacentre capacity proxy until a licensed machine-readable source is available."
+unit = "MW"
+confidence = "low"
+coverage_status = "manual_pending"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+
+[indicators.normalization]
+worst = 0.0
+best = 1000.0
+
+[indicators.provenance]
+source_url = "https://example.test/compute-capacity"
+license = "Manual review required"
+attribution = "Curated datacentre capacity register"
+retrieved_at = "2026-06-22"
+reviewed_by = "aps-curation"
+reviewed_at = "2026-06-22"
+notes = "Low-confidence curated proxy; replace with licensed machine-readable capacity data when available."

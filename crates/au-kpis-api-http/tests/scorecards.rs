@@ -102,6 +102,14 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
             .unwrap()
             .contains("pilot")
     );
+    let oversight = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "oversight.reviewed-strength")
+        .expect("oversight curated indicator");
+    assert_eq!(oversight["coverage_status"], "manual_pending");
+    assert_eq!(oversight["provenance"]["retrieved_at"], "2026-06-22");
+    assert_eq!(oversight["provenance"]["reviewed_by"], "aps-curation");
+    assert_eq!(oversight["provenance"]["reviewed_at"], "2026-06-22");
 
     let cached = app
         .clone()
@@ -162,12 +170,13 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 75.0).abs() < 1e-9);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 82.75862068965517).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
+    assert_eq!(snapshot["confidence"], "low");
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 11);
+    assert_eq!(contributions.len(), 13);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -283,7 +292,25 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let visible = contribution(contributions, "control.enable-spend-ratio");
     assert_eq!(visible["coverage_status"], "visible_unscored");
+    assert_eq!(visible["raw_value"], 0.8);
     assert!(visible["normalized_value"].is_null());
+
+    let oversight = contribution(contributions, "oversight.reviewed-strength");
+    assert_eq!(oversight["raw_value"], 100.0);
+    assert_eq!(oversight["normalized_value"], 1.0);
+    assert_eq!(oversight["coverage_status"], "stale");
+    assert_eq!(oversight["confidence"], "medium");
+
+    let compute = contribution(contributions, "compute.datacentre-capacity");
+    assert_eq!(compute["raw_value"], 1000.0);
+    assert_eq!(compute["normalized_value"], 1.0);
+    assert_eq!(compute["coverage_status"], "resolved");
+    assert_eq!(compute["confidence"], "low");
+
+    let surveillance = contribution(contributions, "surveillance.intensity");
+    assert_eq!(surveillance["raw_value"], 40.0);
+    assert!(surveillance["normalized_value"].is_null());
+    assert_eq!(surveillance["coverage_status"], "visible_unscored");
 
     let history = app
         .oneshot(request(
@@ -397,6 +424,8 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
          VALUES
             ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL),
             ('apra', 'Australian Prudential Regulation Authority', 'https://www.apra.gov.au', NULL),
+            ('compute', 'Curated compute capacity register', 'https://example.test/compute', NULL),
+            ('curated', 'Curated APS inputs', 'https://example.test/curated', NULL),
             ('nhsac', 'National Housing Supply and Affordability Council', 'https://nhsac.gov.au', NULL),
             ('pc', 'Productivity Commission', 'https://www.pc.gov.au', NULL),
             ('worldbank', 'World Bank', 'https://www.worldbank.org', NULL)",
@@ -414,6 +443,10 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ('progress_to_target_pct', 'Housing Accord progress to target', NULL, 'percent', NULL),
             ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
             ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL),
+            ('capacity_mw', 'Datacentre capacity', NULL, 'MW', NULL),
+            ('intensity_index', 'Surveillance intensity', NULL, 'index', NULL),
+            ('ratio', 'Ratio', NULL, 'ratio', NULL),
+            ('reviewed_strength', 'Reviewed oversight strength', NULL, 'index', NULL),
             ('value', 'Value', NULL, '$ million', NULL)",
     )
     .execute(pool)
@@ -468,6 +501,30 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'Creative Commons Attribution 3.0 Australia Licence',
              'Source: Australian Prudential Regulation Authority',
              'https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics'
+         ),
+         (
+             'curated.oversight_strength', 'curated', 'Reviewed oversight strength', NULL,
+             ARRAY['country'], ARRAY['reviewed_strength'], 'annual', 'Manual review required',
+             'Curated from OAIC, ANAO, FOI, and audit-office inputs',
+             'https://www.oaic.gov.au/'
+         ),
+         (
+             'curated.control_enable_spend', 'curated', 'Control-vs-enable spend ratio', NULL,
+             ARRAY['country'], ARRAY['ratio'], 'annual', 'Manual taxonomy required',
+             'Future Treasury/state budget taxonomy',
+             'https://budget.gov.au/'
+         ),
+         (
+             'curated.surveillance_intensity', 'curated', 'Surveillance intensity', NULL,
+             ARRAY['country'], ARRAY['intensity_index'], 'annual', 'Carnegie terms',
+             'Source: Carnegie Endowment AI Global Surveillance index',
+             'https://carnegieendowment.org/'
+         ),
+         (
+             'compute.au_datacentre_capacity_mw', 'compute', 'Australian datacentre capacity', NULL,
+             ARRAY['country'], ARRAY['capacity_mw'], 'annual', 'Manual review required',
+             'Curated datacentre capacity register',
+             'https://example.test/compute-capacity'
          )",
     )
     .execute(pool)
@@ -482,6 +539,10 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     let bready_artifact = insert_artifact(pool, "worldbank", b"bready").await;
     let productive_infrastructure_artifact =
         insert_artifact(pool, "apra", b"super asset allocation").await;
+    let oversight_artifact = insert_artifact(pool, "curated", b"oversight strength").await;
+    let control_spend_artifact = insert_artifact(pool, "curated", b"control spend").await;
+    let surveillance_artifact = insert_artifact(pool, "curated", b"surveillance").await;
+    let compute_artifact = insert_artifact(pool, "compute", b"compute capacity").await;
 
     let housing = insert_series(
         pool,
@@ -545,6 +606,38 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ("asset_category", "total"),
             ("mapping", "productive_infrastructure_onshore"),
         ],
+    )
+    .await;
+    let oversight = insert_series(
+        pool,
+        "curated.oversight_strength",
+        "reviewed_strength",
+        "index",
+        [("country", "AUS")],
+    )
+    .await;
+    let control_spend = insert_series(
+        pool,
+        "curated.control_enable_spend",
+        "ratio",
+        "ratio",
+        [("country", "AUS")],
+    )
+    .await;
+    let surveillance = insert_series(
+        pool,
+        "curated.surveillance_intensity",
+        "intensity_index",
+        "index",
+        [("country", "AUS")],
+    )
+    .await;
+    let compute = insert_series(
+        pool,
+        "compute.au_datacentre_capacity_mw",
+        "capacity_mw",
+        "MW",
+        [("country", "AUS")],
     )
     .await;
 
@@ -640,6 +733,42 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         (2024, 2, 1),
         30000.0,
         "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
+        oversight,
+        oversight_artifact,
+        (2022, 1, 1),
+        100.0,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
+        control_spend,
+        control_spend_artifact,
+        (2024, 2, 1),
+        0.8,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
+        surveillance,
+        surveillance_artifact,
+        (2024, 2, 1),
+        40.0,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
+        compute,
+        compute_artifact,
+        (2024, 2, 1),
+        1000.0,
+        "year",
     )
     .await;
 }
