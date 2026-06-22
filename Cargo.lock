@@ -534,6 +534,7 @@ dependencies = [
  "au-kpis-db",
  "au-kpis-domain",
  "au-kpis-error",
+ "au-kpis-scorecard",
  "au-kpis-telemetry",
  "au-kpis-testing",
  "axum 0.7.9",
@@ -840,6 +841,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "toml",
+ "utoipa",
 ]
 
 [[package]]

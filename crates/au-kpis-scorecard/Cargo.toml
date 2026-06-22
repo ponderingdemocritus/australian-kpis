@@ -10,6 +10,7 @@ description = "Pure APS scorecard config validation and scoring logic."
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+utoipa = "5"
 # Used only to parse the checked-in, versioned APS scorecard config file.
 toml = "0.8"
 

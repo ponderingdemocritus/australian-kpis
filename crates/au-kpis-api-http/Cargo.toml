@@ -18,6 +18,7 @@ au-kpis-auth = { workspace = true }
 au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-domain = { workspace = true }
+au-kpis-scorecard = { workspace = true }
 au-kpis-telemetry = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
 base64 = "0.22" # opaque cursor encoding; std has no base64 codec

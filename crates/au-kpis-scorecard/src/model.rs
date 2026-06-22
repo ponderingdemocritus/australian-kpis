@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use utoipa::ToSchema;
 
 /// Scorecard axis used by APS v1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Axis {
     /// Delivery throughput normalized to `0..1`.
@@ -14,7 +15,7 @@ pub enum Axis {
 }
 
 /// Direction used to normalize raw indicator values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     /// Larger raw values move toward the best reference.
@@ -24,7 +25,7 @@ pub enum Direction {
 }
 
 /// Confidence label exposed for configs, contributions, and snapshots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     /// High-confidence source and transform.
@@ -54,7 +55,7 @@ impl Confidence {
 }
 
 /// Contribution coverage state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageStatus {
     /// Scored observation exists and is fresh enough for its cadence.
@@ -82,7 +83,7 @@ impl CoverageStatus {
 }
 
 /// APS score zone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScoreZone {
     /// Score in `0..33`.
@@ -94,7 +95,7 @@ pub enum ScoreZone {
 }
 
 /// Trend arrow comparing the latest score to a prior comparable snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Trend {
     /// Latest score increased by at least one point.
@@ -108,7 +109,7 @@ pub enum Trend {
 }
 
 /// Linear normalization references for one indicator.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Normalization {
     /// Worst reference value for this indicator.
     pub worst: f64,
@@ -117,7 +118,7 @@ pub struct Normalization {
 }
 
 /// Source and licensing metadata for a scorecard input.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Provenance {
     /// Canonical source URL for this input.
     pub source_url: String,
@@ -140,7 +141,7 @@ pub struct Provenance {
 }
 
 /// Static config for one APS indicator.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct IndicatorConfig {
     /// Stable indicator id.
     pub indicator_id: String,
@@ -178,7 +179,7 @@ pub struct IndicatorConfig {
 }
 
 /// APS config metadata and indicator list.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ScorecardConfig {
     /// Scorecard id.
     pub id: String,
@@ -199,7 +200,7 @@ pub struct ScorecardConfig {
 }
 
 /// Lower and upper score bounds.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ConfidenceBand {
     /// Worst-case score.
     pub low: f64,
@@ -208,7 +209,7 @@ pub struct ConfidenceBand {
 }
 
 /// Component-level score inside a sub-index.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ComponentScore {
     /// Component name.
     pub component: String,
@@ -221,7 +222,7 @@ pub struct ComponentScore {
 }
 
 /// Axis-level sub-index score.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SubIndexScore {
     /// Axis name.
     pub axis: Axis,
@@ -238,7 +239,7 @@ pub struct SubIndexScore {
 }
 
 /// Contribution row for one indicator.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct IndicatorContribution {
     /// Indicator id.
     pub indicator_id: String,
@@ -285,7 +286,7 @@ pub struct IndicatorContribution {
 }
 
 /// Full APS snapshot produced by the pure scorer.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ScorecardSnapshot {
     /// Scorecard id.
     pub scorecard_id: String,
