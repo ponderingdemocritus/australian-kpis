@@ -1,0 +1,34 @@
+{
+  "artifact_key": "artifacts/vago-major-projects-2026.pdf",
+  "retrieved_at": "2026-06-22",
+  "reviewer": "aps-state-capital-fixture",
+  "source_document": "VAGO major projects performance 2026",
+  "tables": [
+    {
+      "name": "major_projects",
+      "page": 14,
+      "rows": [
+        {
+          "jurisdiction": "VIC",
+          "project": "Metro Tunnel",
+          "category": "transport",
+          "period": "2026",
+          "budget_million": 12580.0,
+          "actual_cost_million": 14300.0,
+          "planned_completion": "2025-12-31",
+          "forecast_completion": "2026-06-30"
+        },
+        {
+          "jurisdiction": "VIC",
+          "project": "West Gate Tunnel",
+          "category": "transport",
+          "period": "2026",
+          "budget_million": 6800.0,
+          "actual_cost_million": 8000.0,
+          "planned_completion": "2024-12-31",
+          "forecast_completion": "2025-12-31"
+        }
+      ]
+    }
+  ]
+}

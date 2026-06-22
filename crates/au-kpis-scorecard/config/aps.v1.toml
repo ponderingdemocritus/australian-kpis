@@ -148,6 +148,37 @@ license = "CC-BY-4.0"
 attribution = "Source: Productivity Commission"
 
 [[indicators]]
+indicator_id = "infrastructure.major-project-performance"
+source_dataflow_id = "state_capital.vic_major_projects"
+measure_id = "value"
+axis = "throughput"
+component = "infrastructure"
+weight = 0.15
+direction = "lower_is_better"
+display_label = "Major project overruns"
+description = "Pilot Victorian major-project cost-overrun signal; visible as a state-scope coverage gap for national APS."
+unit = "percent"
+confidence = "low"
+coverage_status = "coverage_gap"
+cadence = "annual"
+
+[indicators.dimension_selector]
+jurisdiction = "VIC"
+project = "metro_tunnel"
+category = "transport"
+metric = "cost_overrun_pct"
+
+[indicators.normalization]
+worst = 50.0
+best = 0.0
+
+[indicators.provenance]
+source_url = "https://www.audit.vic.gov.au/"
+license = "State publication terms"
+attribution = "Pilot state capital sources: VAGO and Victorian Budget"
+notes = "State-scope pilot coverage only; excluded from national interpretation until multi-jurisdiction coverage is reviewed."
+
+[[indicators]]
 indicator_id = "permitting.bready"
 source_dataflow_id = "worldbank.bready"
 measure_id = "business_entry_score"

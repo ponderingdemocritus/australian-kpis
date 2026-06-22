@@ -26,6 +26,7 @@ use au_kpis_adapter_nhsac::NhsacAdapter;
 use au_kpis_adapter_pc::PcAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
+use au_kpis_adapter_state_capital::StateCapitalAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_adapter_worldbank::WorldbankAdapter;
 use au_kpis_config::load_ingestion;
@@ -76,6 +77,10 @@ const STATE_BUDGETS_VIC_DATAFLOW_SLUG: &str = "vic-budget";
 const STATE_BUDGETS_VIC_DATAFLOW_ID: &str = "state_budgets.vic_budget";
 const STATE_BUDGETS_QLD_DATAFLOW_SLUG: &str = "qld-budget";
 const STATE_BUDGETS_QLD_DATAFLOW_ID: &str = "state_budgets.qld_budget";
+const STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_SLUG: &str = "vic-major-projects";
+const STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID: &str = "state_capital.vic_major_projects";
+const STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG: &str = "budget-capital-papers";
+const STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID: &str = "state_capital.budget_capital_papers";
 const TREASURY_BUDGET_DATAFLOW_SLUG: &str = "budget-papers";
 const TREASURY_BUDGET_DATAFLOW_ID: &str = "treasury.budget_papers";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -884,6 +889,13 @@ fn build_adapters() -> anyhow::Result<Adapters> {
                 .context("build state budgets adapter")?,
         )
         .context("register state budgets adapter")?;
+    let state_capital = match env::var("AU_KPIS_STATE_CAPITAL_INDEX_URL") {
+        Ok(index_url) => StateCapitalAdapter::builder().index_url(index_url).build(),
+        Err(_) => StateCapitalAdapter::default(),
+    };
+    builder
+        .register(state_capital)
+        .context("register state capital adapter")?;
     Ok(builder.build())
 }
 
@@ -1070,6 +1082,15 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         {
             Ok(())
         }
+        "state_capital"
+            if matches!(
+                dataflow,
+                STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_SLUG
+                    | STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "treasury" if dataflow == TREASURY_BUDGET_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflows: {ABS_CPI_DATAFLOW_SLUG}, {ABS_BUILDING_APPROVALS_DATAFLOW_SLUG}, {ABS_BUILDING_ACTIVITY_DATAFLOW_SLUG}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG}"
@@ -1097,6 +1118,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         ),
         "state-budgets" => bail!(
             "unsupported dataflow `{dataflow}` for source `state-budgets`; supported dataflows: {STATE_BUDGETS_NSW_DATAFLOW_SLUG}, {STATE_BUDGETS_VIC_DATAFLOW_SLUG}, {STATE_BUDGETS_QLD_DATAFLOW_SLUG}"
+        ),
+        "state_capital" => bail!(
+            "unsupported dataflow `{dataflow}` for source `state_capital`; supported dataflows: {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_SLUG}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG}"
         ),
         "treasury" => bail!(
             "unsupported dataflow `{dataflow}` for source `treasury`; supported dataflow: {TREASURY_BUDGET_DATAFLOW_SLUG}"
@@ -1136,6 +1160,12 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         }
         "state-budgets" if dataflow == STATE_BUDGETS_QLD_DATAFLOW_SLUG => {
             STATE_BUDGETS_QLD_DATAFLOW_ID
+        }
+        "state_capital" if dataflow == STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_SLUG => {
+            STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID
+        }
+        "state_capital" if dataflow == STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG => {
+            STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID
         }
         "treasury" => TREASURY_BUDGET_DATAFLOW_ID,
         _ => unreachable!("source was validated above"),
@@ -1191,10 +1221,11 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
             | "worldbank"
             | "rba"
             | "state-budgets"
+            | "state_capital"
             | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, treasury"
+            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, treasury"
         );
     }
     Ok(())
@@ -1246,11 +1277,17 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "state-budgets" && dataflow_id == STATE_BUDGETS_QLD_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "state_capital" && dataflow_id == STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "state_capital" && dataflow_id == STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "treasury" && dataflow_id == TREASURY_BUDGET_DATAFLOW_ID {
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1648,6 +1685,30 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("state_budgets.qld_budget").unwrap())
+        );
+    }
+
+    #[test]
+    fn state_capital_once_mode_resolves_vic_major_projects_dataflow() {
+        let request = once_run_request("state_capital", "vic-major-projects")
+            .expect("VIC major projects are supported");
+
+        assert_eq!(request.source_id.as_str(), "state_capital");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("state_capital.vic_major_projects").unwrap())
+        );
+    }
+
+    #[test]
+    fn state_capital_once_mode_resolves_budget_capital_papers_dataflow() {
+        let request = once_run_request("state_capital", "budget-capital-papers")
+            .expect("state budget capital papers are supported");
+
+        assert_eq!(request.source_id.as_str(), "state_capital");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("state_capital.budget_capital_papers").unwrap())
         );
     }
 

@@ -1,0 +1,20 @@
+---
+source: crates/adapters/state-capital/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "state_capital.vic_major_projects",
+    "last_updated": "2026-06-12",
+    "publication_id": "vago-major-projects-2026",
+    "source_url": "https://www.audit.vic.gov.au/fixtures/vago-major-projects-2026.json",
+    "title": "VAGO major projects performance 2026"
+  },
+  {
+    "dataflow_id": "state_capital.budget_capital_papers",
+    "last_updated": "2026-05-05",
+    "publication_id": "vic-budget-capital-2026",
+    "source_url": "https://www.audit.vic.gov.au/fixtures/vic-budget-capital-2026.json",
+    "title": "Victorian budget capital program 2026"
+  }
+]

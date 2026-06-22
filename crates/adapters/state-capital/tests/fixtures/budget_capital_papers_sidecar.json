@@ -1,0 +1,28 @@
+{
+  "artifact_key": "artifacts/vic-budget-capital-2026.pdf",
+  "retrieved_at": "2026-06-22",
+  "reviewer": "aps-state-capital-fixture",
+  "source_document": "Victorian budget capital program 2026",
+  "tables": [
+    {
+      "name": "capital_program",
+      "page": 21,
+      "rows": [
+        {
+          "jurisdiction": "VIC",
+          "category": "transport",
+          "period": "2026",
+          "budgeted_capex_million": 24500.0,
+          "actual_capex_million": 23100.0
+        },
+        {
+          "jurisdiction": "VIC",
+          "category": "health",
+          "period": "2026",
+          "budgeted_capex_million": 6100.0,
+          "actual_capex_million": 6400.0
+        }
+      ]
+    }
+  ]
+}

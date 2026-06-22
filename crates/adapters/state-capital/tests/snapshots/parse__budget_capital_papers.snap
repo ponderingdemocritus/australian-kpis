@@ -1,0 +1,106 @@
+---
+source: crates/adapters/state-capital/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "state_capital.budget_capital_papers",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "transport",
+      "jurisdiction": "VIC",
+      "metric": "capital_delivery_pct"
+    },
+    "unit": "percent",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 94.2857,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vic-budget-capital-2026.pdf",
+      "sidecar_page": "21",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "Victorian budget capital program 2026",
+      "source_url": "https://www.budget.vic.gov.au/budget-capital-program-2026.json"
+    },
+    "source_artifact_id": "ab5b528f50424e12542d6b345a6648ce612ceaa00af05596bbf1315fa875ca4d"
+  },
+  {
+    "dataflow_id": "state_capital.budget_capital_papers",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "transport",
+      "jurisdiction": "VIC",
+      "metric": "capital_variance_million"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": -1400.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vic-budget-capital-2026.pdf",
+      "sidecar_page": "21",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "Victorian budget capital program 2026",
+      "source_url": "https://www.budget.vic.gov.au/budget-capital-program-2026.json"
+    },
+    "source_artifact_id": "ab5b528f50424e12542d6b345a6648ce612ceaa00af05596bbf1315fa875ca4d"
+  },
+  {
+    "dataflow_id": "state_capital.budget_capital_papers",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "health",
+      "jurisdiction": "VIC",
+      "metric": "capital_delivery_pct"
+    },
+    "unit": "percent",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 104.918,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vic-budget-capital-2026.pdf",
+      "sidecar_page": "21",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "Victorian budget capital program 2026",
+      "source_url": "https://www.budget.vic.gov.au/budget-capital-program-2026.json"
+    },
+    "source_artifact_id": "ab5b528f50424e12542d6b345a6648ce612ceaa00af05596bbf1315fa875ca4d"
+  },
+  {
+    "dataflow_id": "state_capital.budget_capital_papers",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "health",
+      "jurisdiction": "VIC",
+      "metric": "capital_variance_million"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 300.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vic-budget-capital-2026.pdf",
+      "sidecar_page": "21",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "Victorian budget capital program 2026",
+      "source_url": "https://www.budget.vic.gov.au/budget-capital-program-2026.json"
+    },
+    "source_artifact_id": "ab5b528f50424e12542d6b345a6648ce612ceaa00af05596bbf1315fa875ca4d"
+  }
+]
