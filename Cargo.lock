@@ -546,6 +546,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "au-kpis-adapter-state-planning"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "au-kpis-adapter",
+ "au-kpis-domain",
+ "au-kpis-storage",
+ "bytes",
+ "chrono",
+ "csv-async",
+ "futures",
+ "insta",
+ "object_store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "au-kpis-adapter-treasury"
 version = "0.1.0"
 dependencies = [
@@ -775,6 +796,7 @@ dependencies = [
  "au-kpis-adapter-rba",
  "au-kpis-adapter-state-budgets",
  "au-kpis-adapter-state-capital",
+ "au-kpis-adapter-state-planning",
  "au-kpis-adapter-treasury",
  "au-kpis-adapter-worldbank",
  "au-kpis-config",

@@ -232,6 +232,67 @@ license = "AEMO Copyright and Disclaimer Notice"
 attribution = "Source: Australian Energy Market Operator"
 
 [[indicators]]
+indicator_id = "planning.nsw-da-processing"
+source_dataflow_id = "state_planning.nsw_da_processing"
+measure_id = "value"
+axis = "throughput"
+component = "planning"
+weight = 0.10
+direction = "lower_is_better"
+display_label = "NSW DA processing time"
+description = "Quarterly NSW development-assessment median processing days; lower values improve throughput."
+unit = "days"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+jurisdiction = "NSW"
+council = "all"
+development_type = "all"
+metric = "median_assessment_days"
+
+[indicators.normalization]
+worst = 120.0
+best = 30.0
+
+[indicators.provenance]
+source_url = "https://www.planning.nsw.gov.au/data-and-insights"
+license = "State publication terms"
+attribution = "Source: NSW Planning"
+notes = "State-scope throughput input; national planning coverage remains partial until more jurisdictions publish compatible machine-readable data."
+
+[[indicators]]
+indicator_id = "planning.vic-permit-activity"
+source_dataflow_id = "state_planning.vic_permit_activity"
+measure_id = "value"
+axis = "throughput"
+component = "planning"
+weight = 0.10
+direction = "lower_is_better"
+display_label = "VIC permit decision time"
+description = "Quarterly Victorian planning-permit median decision days; lower values improve throughput."
+unit = "days"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+jurisdiction = "VIC"
+permit_type = "all"
+metric = "median_decision_days"
+
+[indicators.normalization]
+worst = 120.0
+best = 30.0
+
+[indicators.provenance]
+source_url = "https://www.planning.vic.gov.au/guides-and-resources/data-and-insights"
+license = "State publication terms"
+attribution = "Source: Victoria Planning"
+notes = "State-scope throughput input; national planning coverage remains partial until more jurisdictions publish compatible machine-readable data."
+
+[[indicators]]
 indicator_id = "infrastructure.major-project-performance"
 source_dataflow_id = "state_capital.vic_major_projects"
 measure_id = "value"

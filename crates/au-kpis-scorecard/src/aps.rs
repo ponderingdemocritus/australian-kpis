@@ -624,6 +624,38 @@ mod tests {
                     .map(String::as_str)
                     == Some("dispatchable_capacity")
         }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "planning.nsw-da-processing"
+                && indicator.source_dataflow_id == "state_planning.nsw_da_processing"
+                && indicator.measure_id == "value"
+                && indicator
+                    .dimension_selector
+                    .get("jurisdiction")
+                    .map(String::as_str)
+                    == Some("NSW")
+                && indicator
+                    .dimension_selector
+                    .get("metric")
+                    .map(String::as_str)
+                    == Some("median_assessment_days")
+                && indicator.direction == Direction::LowerIsBetter
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "planning.vic-permit-activity"
+                && indicator.source_dataflow_id == "state_planning.vic_permit_activity"
+                && indicator.measure_id == "value"
+                && indicator
+                    .dimension_selector
+                    .get("jurisdiction")
+                    .map(String::as_str)
+                    == Some("VIC")
+                && indicator
+                    .dimension_selector
+                    .get("metric")
+                    .map(String::as_str)
+                    == Some("median_decision_days")
+                && indicator.direction == Direction::LowerIsBetter
+        }));
         let oversight = config
             .indicators
             .iter()
