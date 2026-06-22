@@ -145,7 +145,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert_eq!(snapshot["coverage_pct"], 40.0);
+    assert_eq!(snapshot["coverage_pct"], 60.0);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
 
@@ -174,10 +174,26 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
             .starts_with("https://")
     );
 
-    let missing = contribution(contributions, "productivity.market-sector");
-    assert!(missing["raw_value"].is_null());
-    assert!(missing["normalized_value"].is_null());
-    assert_eq!(missing["coverage_status"], "missing_expected");
+    let productivity = contribution(contributions, "productivity.market-sector");
+    assert_eq!(productivity["raw_value"], 3.0);
+    assert_eq!(productivity["normalized_value"], 1.0);
+    assert_eq!(productivity["coverage_status"], "resolved");
+    assert!(
+        productivity["series_key"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        productivity["source_artifact_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(productivity["latest_period"], "2024-02-01");
+    assert_eq!(productivity["license"], "CC-BY-4.0");
+    assert_eq!(
+        productivity["source_url"],
+        "https://www.pc.gov.au/ongoing/productivity-insights"
+    );
 
     let visible = contribution(contributions, "control.enable-spend-ratio");
     assert_eq!(visible["coverage_status"], "visible_unscored");
@@ -294,6 +310,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "INSERT INTO sources (id, name, homepage, description)
          VALUES
             ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL),
+            ('pc', 'Productivity Commission', 'https://www.pc.gov.au', NULL),
             ('worldbank', 'World Bank', 'https://www.worldbank.org', NULL)",
     )
     .execute(pool)
@@ -304,6 +321,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "INSERT INTO measures (id, name, description, unit, scale)
          VALUES
             ('dwellings_approved', 'Dwellings approved', NULL, 'dwellings', NULL),
+            ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
             ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL)",
     )
     .execute(pool)
@@ -323,6 +341,12 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia'
          ),
          (
+             'pc.productivity_bulletin', 'pc', 'Productivity bulletin', NULL,
+             ARRAY['region', 'measure'], ARRAY['market_sector_growth'], 'annual', 'CC-BY-4.0',
+             'Source: Productivity Commission',
+             'https://www.pc.gov.au/ongoing/productivity-insights'
+         ),
+         (
              'worldbank.bready', 'worldbank', 'Business Ready', NULL,
              ARRAY['country'], ARRAY['business_entry_score'], 'annual', 'World Bank terms',
              'Source: World Bank B-READY',
@@ -334,6 +358,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     .expect("insert dataflows");
 
     let housing_artifact = insert_artifact(pool, "abs", b"housing approvals").await;
+    let productivity_artifact = insert_artifact(pool, "pc", b"productivity bulletin").await;
     let bready_artifact = insert_artifact(pool, "worldbank", b"bready").await;
 
     let housing = insert_series(
@@ -352,6 +377,14 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         [("country", "AUS")],
     )
     .await;
+    let productivity = insert_series(
+        pool,
+        "pc.productivity_bulletin",
+        "market_sector_growth",
+        "percent",
+        [("region", "AUS"), ("measure", "market_sector_growth")],
+    )
+    .await;
 
     insert_observation(
         pool,
@@ -365,6 +398,15 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     insert_observation(pool, bready, bready_artifact, (2024, 1, 1), 50.0, "year").await;
     insert_observation(
         pool,
+        productivity,
+        productivity_artifact,
+        (2024, 1, 1),
+        -2.0,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
         housing,
         housing_artifact,
         (2024, 2, 1),
@@ -373,6 +415,15 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     )
     .await;
     insert_observation(pool, bready, bready_artifact, (2024, 2, 1), 100.0, "year").await;
+    insert_observation(
+        pool,
+        productivity,
+        productivity_artifact,
+        (2024, 2, 1),
+        3.0,
+        "year",
+    )
+    .await;
 }
 
 async fn insert_artifact(pool: &PgPool, source_id: &str, content: &[u8]) -> ArtifactId {

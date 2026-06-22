@@ -1,0 +1,4 @@
+period,region,measure_id,measure_name,value,unit,status
+2023,AUS,market_sector_growth,Market-sector labour productivity growth,-0.3,percent,revised
+2024,AUS,market_sector_growth,Market-sector labour productivity growth,1.2,percent,normal
+2024,AUS,multifactor_productivity_growth,Market-sector multifactor productivity growth,0.4,percent,normal
