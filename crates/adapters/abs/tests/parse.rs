@@ -27,6 +27,24 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 const CPI_FIXTURE: &[u8] = include_bytes!("fixtures/cpi_sdmx.json");
+const BUILDING_APPROVALS_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Approvals, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>April 2026</dd>
+    <dt>Released</dt><dd>2/06/2026</dd>
+  </dl>
+  <h2>Dwellings approved</h2>
+  <section>
+    <h3>Dwelling units approved (a)</h3>
+    <p>Seasonally adjusted (no.) Trend (no.)</p>
+    <table>
+      <tr><th>Month</th><th>Seasonally adjusted</th><th>Trend</th></tr>
+      <tr><td>Mar-26</td><td>17,307</td><td>17,361</td></tr>
+      <tr><td>Apr-26</td><td>16,710</td><td>17,363</td></tr>
+    </table>
+  </section>
+</main>"#;
 const REORDERED_FIXTURE: &[u8] = br#"{
   "data": {
     "dataSets": [
@@ -302,6 +320,29 @@ async fn parse_streams_cpi_sdmx_observations_from_artifact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_streams_building_approvals_release_page() {
+    let rows = parse_fixture_owned_with_url(
+        BUILDING_APPROVALS_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release",
+    )
+    .await
+    .expect("parse Building Approvals fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_approvals"
+            && row.measure_id == "dwellings_approved"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str) == Some("dwellings_approved")
+            && row.time == "2026-04-01T00:00:00+00:00"
+            && row.time_precision == "month"
+            && row.value == Some(16_710.0)
+    }));
+    insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_cpi_fixture_stays_under_runtime_budget() {
     let started = Instant::now();
     let rows = parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture");
@@ -456,7 +497,7 @@ async fn parse_rejects_non_time_observation_dimension() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parse_rejects_non_cpi_artifact_url() {
+async fn parse_rejects_unsupported_abs_sdmx_artifact_url() {
     let err = parse_fixture_owned_with_url(
         CPI_FIXTURE.to_vec(),
         "https://data.api.abs.gov.au/rest/data/ABS,WPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD",
@@ -467,13 +508,32 @@ async fn parse_rejects_non_cpi_artifact_url() {
     assert!(matches!(err, AdapterError::Validation(_)));
     assert_eq!(err.class(), ErrorClass::Validation);
     assert!(
-        err.to_string().contains("does not match CPI dataflow"),
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
         "{err}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parse_rejects_artifact_url_without_cpi_dataflow_provenance() {
+async fn parse_rejects_building_approvals_artifact_without_release_provenance() {
+    let err = parse_fixture_owned_with_url(
+        BUILDING_APPROVALS_FIXTURE.to_vec(),
+        "https://mirror.example.test/building-approvals.html",
+    )
+    .await
+    .expect_err("mirrored Building Approvals artifact should be rejected");
+
+    assert!(matches!(err, AdapterError::Validation(_)));
+    assert_eq!(err.class(), ErrorClass::Validation);
+    assert!(
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_artifact_url_without_supported_dataflow_provenance() {
     let err = parse_fixture_owned_with_url(
         CPI_FIXTURE.to_vec(),
         "https://mirror.example.test/archive/cpi_sdmx.json",
@@ -484,7 +544,8 @@ async fn parse_rejects_artifact_url_without_cpi_dataflow_provenance() {
     assert!(matches!(err, AdapterError::Validation(_)));
     assert_eq!(err.class(), ErrorClass::Validation);
     assert!(
-        err.to_string().contains("missing CPI dataflow provenance"),
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
         "{err}"
     );
 }
@@ -758,10 +819,11 @@ proptest! {
 }
 
 async fn parse_fixture_rows() -> Vec<ParsedRow> {
-    parse_fixture_raw(CPI_FIXTURE)
-        .await
-        .expect("parse fixture")
-        .into_iter()
+    rows_to_parsed_rows(parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture"))
+}
+
+fn rows_to_parsed_rows(rows: Vec<(SeriesDescriptor, Observation)>) -> Vec<ParsedRow> {
+    rows.into_iter()
         .map(|(series, observation)| ParsedRow {
             series_key: series.series_key.to_string(),
             dataflow_id: series.dataflow_id.to_string(),

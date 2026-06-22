@@ -1,7 +1,8 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, io, time::Duration};
 
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, DiscoveryCtx, SourceAdapter};
 use au_kpis_adapter_abs::{AbsAdapter, DataflowRevision};
+use au_kpis_domain::DataflowId;
 use au_kpis_error::{Classify, ErrorClass};
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
@@ -90,6 +91,19 @@ const MULTI_VERSION_CPI_FIXTURE: &str = r#"{
   }
 }"#;
 
+const BUILDING_APPROVALS_RELEASE_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Building Approvals, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>April 2026</dd>
+    <dt>Released</dt><dd>2/06/2026</dd>
+  </dl>
+  <h2>Dwellings approved</h2>
+  <p>Provides the number of dwelling units and value of buildings approved.</p>
+</main>
+"#;
+
 async fn serve_once(body: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -149,6 +163,43 @@ async fn serve_gzip_once(body: &'static [u8]) -> String {
     });
 
     format!("http://{addr}/rest")
+}
+
+async fn serve_building_approvals_release_once(body: &'static str) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.starts_with("GET /building-approvals/latest-release HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+
+    Some(format!("http://{addr}/building-approvals/latest-release"))
 }
 
 #[test]
@@ -479,8 +530,44 @@ fn manifest_declares_abs_cpi_and_conservative_rate_limit() {
     assert_eq!(adapter.id(), "abs");
     assert_eq!(manifest.source_id.as_str(), "abs");
     assert_eq!(manifest.dataflows[0].as_str(), "abs.cpi");
+    assert!(
+        manifest
+            .dataflows
+            .iter()
+            .any(|dataflow| dataflow.as_str() == "abs.building_approvals")
+    );
     assert_eq!(manifest.rate_limit.max_requests, 60);
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_fetches_building_approvals_release_page_when_requested() {
+    let Some(release_url) =
+        serve_building_approvals_release_once(BUILDING_APPROVALS_RELEASE_FIXTURE).await
+    else {
+        return;
+    };
+    let adapter = AbsAdapter::builder()
+        .building_approvals_release_url(&release_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap())
+        .with_requested_dataflow_id(DataflowId::new("abs.building_approvals").unwrap())
+        .with_trace_parent(TRACE_PARENT);
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover Building Approvals release");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].source_id.as_str(), "abs");
+    assert_eq!(jobs[0].dataflow_id.as_str(), "abs.building_approvals");
+    assert_eq!(jobs[0].source_url, release_url);
+    assert_eq!(jobs[0].trace_parent.as_deref(), Some(TRACE_PARENT));
+    assert_eq!(jobs[0].metadata["revision_key"], "ABS:building-approvals");
+    assert_eq!(jobs[0].metadata["revision_version"], "April 2026");
+    assert_eq!(jobs[0].metadata["released"], "2/06/2026");
 }
 
 proptest! {

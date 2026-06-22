@@ -346,7 +346,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
          VALUES
          (
              'abs.building_approvals', 'abs', 'Building approvals', NULL,
-             ARRAY['region'], ARRAY['dwellings_approved'], 'monthly', 'CC-BY-4.0',
+             ARRAY['region', 'measure'], ARRAY['dwellings_approved'], 'monthly', 'CC-BY-4.0',
              'Source: Australian Bureau of Statistics',
              'https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia'
          ),
@@ -383,7 +383,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "abs.building_approvals",
         "dwellings_approved",
         "dwellings",
-        [("region", "AUS")],
+        [("region", "AUS"), ("measure", "dwellings_approved")],
     )
     .await;
     let bready = insert_series(

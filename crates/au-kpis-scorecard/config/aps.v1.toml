@@ -23,6 +23,7 @@ cadence = "monthly"
 
 [indicators.dimension_selector]
 region = "AUS"
+measure = "dwellings_approved"
 
 [indicators.normalization]
 worst = 10000.0
