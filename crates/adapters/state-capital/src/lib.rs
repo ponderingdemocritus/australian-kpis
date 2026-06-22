@@ -711,7 +711,8 @@ fn publication_url_provenance(source_url: &str) -> Option<PublicationUrlProvenan
     } else {
         return None;
     };
-    let host = source_url.split_once("://")?.1.split('/').next()?;
+    let host_port = source_url.split_once("://")?.1.split('/').next()?;
+    let host = host_port.split(':').next().unwrap_or(host_port);
     if !matches!(
         host,
         "www.audit.vic.gov.au"

@@ -889,6 +889,12 @@ async fn successful_artifact_load_records_completion_marker() {
     let artifact_id = ArtifactId::of_content(b"job-1");
     let second_artifact_id = ArtifactId::of_content(b"job-2");
     seed_stub_reference_data(&pool, artifact_id).await;
+    seed_stub_artifact(
+        &pool,
+        second_artifact_id,
+        "https://example.test/cpi-job-2.json",
+    )
+    .await;
 
     let stats = pipeline_with_pool(
         StubMode::RevisionRows,
@@ -2013,7 +2019,14 @@ async fn pipeline_preserves_revision_chain_and_latest_view_selects_highest_revis
     let pool = connect_with_retry(&cfg).await;
     migrate(&pool).await.expect("apply migrations");
     let artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
     seed_stub_reference_data(&pool, artifact_id).await;
+    seed_stub_artifact(
+        &pool,
+        second_artifact_id,
+        "https://example.test/cpi-job-2.json",
+    )
+    .await;
 
     let stats = pipeline_with_pool(
         StubMode::RevisionRows,
