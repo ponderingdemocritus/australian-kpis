@@ -1353,4 +1353,23 @@ mod tests {
 
         assert!(err.to_string().contains("RBA XLSX worksheet"), "{err}");
     }
+
+    #[test]
+    fn malformed_xlsx_with_shifted_zip_header_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-shifted-zip-header.xlsx.hex"
+        ));
+
+        let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("RBA workbook has unsupported XLS/XLSX signature"),
+            "{err}"
+        );
+    }
 }
