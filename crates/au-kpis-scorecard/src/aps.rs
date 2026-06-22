@@ -625,6 +625,38 @@ mod tests {
                     == Some("dispatchable_capacity")
         }));
         assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "ai.adoption"
+                && indicator.source_dataflow_id == "naic.ai_adoption_tracker"
+                && indicator.measure_id == "adoption_rate_pct"
+                && indicator.confidence == Confidence::Low
+                && indicator
+                    .dimension_selector
+                    .get("segment")
+                    .map(String::as_str)
+                    == Some("all")
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "ai.rd"
+                && indicator.source_dataflow_id == "abs.ai_rd"
+                && indicator.measure_id == "value"
+                && indicator
+                    .dimension_selector
+                    .get("metric")
+                    .map(String::as_str)
+                    == Some("ai_rd_spend_m")
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "ai.talent"
+                && indicator.source_dataflow_id == "home_affairs.skillselect_talent_proxy"
+                && indicator.measure_id == "value"
+                && indicator.confidence == Confidence::Low
+                && indicator
+                    .dimension_selector
+                    .get("occupation_group")
+                    .map(String::as_str)
+                    == Some("ai_related")
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
             indicator.indicator_id == "planning.nsw-da-processing"
                 && indicator.source_dataflow_id == "state_planning.nsw_da_processing"
                 && indicator.measure_id == "value"

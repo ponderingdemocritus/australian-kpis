@@ -1,0 +1,3 @@
+period,country,occupation_group,metric,measure_id,value,unit
+2026-06-30,AUS,ai_related,invitations_issued,value,6400.0,count
+2026-06-30,AUS,software_engineers,invitations_issued,value,5200.0,count

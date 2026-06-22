@@ -1,0 +1,48 @@
+---
+source: crates/adapters/ai-readiness/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "naic.ai_adoption_tracker",
+    "measure_id": "adoption_rate_pct",
+    "dimensions": {
+      "country": "AUS",
+      "segment": "all"
+    },
+    "unit": "percent",
+    "time": "2026-03-31T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 42.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "naic-ai-adoption-tracker-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://www.industry.gov.au/data/naic-ai-adoption-tracker-2026.csv"
+    },
+    "source_artifact_id": "2c368799b4b77111757a8c3c5af61f5d7ee3f491c3bc016200da88703af11604"
+  },
+  {
+    "dataflow_id": "naic.ai_adoption_tracker",
+    "measure_id": "adoption_rate_pct",
+    "dimensions": {
+      "country": "AUS",
+      "segment": "small_business"
+    },
+    "unit": "percent",
+    "time": "2026-03-31T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 31.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "naic-ai-adoption-tracker-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://www.industry.gov.au/data/naic-ai-adoption-tracker-2026.csv"
+    },
+    "source_artifact_id": "2c368799b4b77111757a8c3c5af61f5d7ee3f491c3bc016200da88703af11604"
+  }
+]

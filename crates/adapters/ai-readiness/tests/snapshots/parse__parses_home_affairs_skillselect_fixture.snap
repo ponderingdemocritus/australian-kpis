@@ -1,0 +1,50 @@
+---
+source: crates/adapters/ai-readiness/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "home_affairs.skillselect_talent_proxy",
+    "measure_id": "value",
+    "dimensions": {
+      "country": "AUS",
+      "metric": "invitations_issued",
+      "occupation_group": "ai_related"
+    },
+    "unit": "count",
+    "time": "2026-06-30T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 6400.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "home-affairs-skillselect-talent-proxy-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://immi.homeaffairs.gov.au/reports/home-affairs-skillselect-talent-proxy-2026.csv"
+    },
+    "source_artifact_id": "91eeb20754f14817b40fef0b9de78eee09d8e6507c6f500a43640dc7df243c8e"
+  },
+  {
+    "dataflow_id": "home_affairs.skillselect_talent_proxy",
+    "measure_id": "value",
+    "dimensions": {
+      "country": "AUS",
+      "metric": "invitations_issued",
+      "occupation_group": "software_engineers"
+    },
+    "unit": "count",
+    "time": "2026-06-30T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 5200.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "home-affairs-skillselect-talent-proxy-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://immi.homeaffairs.gov.au/reports/home-affairs-skillselect-talent-proxy-2026.csv"
+    },
+    "source_artifact_id": "91eeb20754f14817b40fef0b9de78eee09d8e6507c6f500a43640dc7df243c8e"
+  }
+]

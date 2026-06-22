@@ -1,0 +1,50 @@
+---
+source: crates/adapters/ai-readiness/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "abs.ai_rd",
+    "measure_id": "value",
+    "dimensions": {
+      "country": "AUS",
+      "metric": "ai_rd_spend_m",
+      "sector": "all"
+    },
+    "unit": "$ million",
+    "time": "2026-06-30T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 1850.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "abs-ai-rd-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://www.abs.gov.au/statistics/research-and-development/abs-ai-rd-2026.csv"
+    },
+    "source_artifact_id": "18f845b7af0edd285c5d49a54284bbce711d348532a9890711f0de81a34d0645"
+  },
+  {
+    "dataflow_id": "abs.ai_rd",
+    "measure_id": "value",
+    "dimensions": {
+      "country": "AUS",
+      "metric": "ai_rd_spend_m",
+      "sector": "business"
+    },
+    "unit": "$ million",
+    "time": "2026-06-30T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 1120.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "abs-ai-rd-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://www.abs.gov.au/statistics/research-and-development/abs-ai-rd-2026.csv"
+    },
+    "source_artifact_id": "18f845b7af0edd285c5d49a54284bbce711d348532a9890711f0de81a34d0645"
+  }
+]

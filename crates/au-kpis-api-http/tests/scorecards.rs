@@ -138,6 +138,33 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
         vic_planning["dimension_selector"]["metric"],
         "median_decision_days"
     );
+    let ai_adoption = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "ai.adoption")
+        .expect("AI adoption indicator");
+    assert_eq!(
+        ai_adoption["source_dataflow_id"],
+        "naic.ai_adoption_tracker"
+    );
+    assert_eq!(ai_adoption["dimension_selector"]["segment"], "all");
+    let ai_rd = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "ai.rd")
+        .expect("AI R&D indicator");
+    assert_eq!(ai_rd["source_dataflow_id"], "abs.ai_rd");
+    assert_eq!(ai_rd["dimension_selector"]["metric"], "ai_rd_spend_m");
+    let ai_talent = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "ai.talent")
+        .expect("AI talent indicator");
+    assert_eq!(
+        ai_talent["source_dataflow_id"],
+        "home_affairs.skillselect_talent_proxy"
+    );
+    assert_eq!(
+        ai_talent["dimension_selector"]["occupation_group"],
+        "ai_related"
+    );
     let oversight = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "oversight.reviewed-strength")
@@ -206,13 +233,13 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 85.71428571428571).abs() < 1e-9);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 96.05263157894737).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
     assert_eq!(snapshot["confidence"], "low");
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 18);
+    assert_eq!(contributions.len(), 21);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -358,6 +385,40 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
         dispatchable_capacity["dimensions"]["metric"],
         "dispatchable_capacity"
     );
+
+    let ai_readiness = contribution(contributions, "ai.readiness");
+    assert_eq!(ai_readiness["raw_value"], 90.0);
+    assert_eq!(ai_readiness["normalized_value"], 1.0);
+    assert_eq!(ai_readiness["coverage_status"], "resolved");
+    assert_eq!(ai_readiness["source_dataflow_id"], "oxford.gari");
+    assert_eq!(ai_readiness["confidence"], "low");
+
+    let ai_adoption = contribution(contributions, "ai.adoption");
+    assert_eq!(ai_adoption["raw_value"], 100.0);
+    assert_eq!(ai_adoption["normalized_value"], 1.0);
+    assert_eq!(ai_adoption["coverage_status"], "resolved");
+    assert_eq!(
+        ai_adoption["source_dataflow_id"],
+        "naic.ai_adoption_tracker"
+    );
+    assert_eq!(ai_adoption["dimensions"]["segment"], "all");
+
+    let ai_rd = contribution(contributions, "ai.rd");
+    assert_eq!(ai_rd["raw_value"], 5000.0);
+    assert_eq!(ai_rd["normalized_value"], 1.0);
+    assert_eq!(ai_rd["coverage_status"], "resolved");
+    assert_eq!(ai_rd["source_dataflow_id"], "abs.ai_rd");
+    assert_eq!(ai_rd["dimensions"]["metric"], "ai_rd_spend_m");
+
+    let ai_talent = contribution(contributions, "ai.talent");
+    assert_eq!(ai_talent["raw_value"], 10000.0);
+    assert_eq!(ai_talent["normalized_value"], 1.0);
+    assert_eq!(ai_talent["coverage_status"], "resolved");
+    assert_eq!(
+        ai_talent["source_dataflow_id"],
+        "home_affairs.skillselect_talent_proxy"
+    );
+    assert_eq!(ai_talent["dimensions"]["occupation_group"], "ai_related");
 
     let nsw_planning = contribution(contributions, "planning.nsw-da-processing");
     assert_eq!(nsw_planning["raw_value"], 30.0);
@@ -518,6 +579,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
          VALUES
             ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL),
             ('aemo', 'Australian Energy Market Operator', 'https://aemo.com.au', NULL),
+            ('ai-readiness', 'AI readiness sources', 'https://www.industry.gov.au', NULL),
             ('apra', 'Australian Prudential Regulation Authority', 'https://www.apra.gov.au', NULL),
             ('compute', 'Curated compute capacity register', 'https://example.test/compute', NULL),
             ('curated', 'Curated APS inputs', 'https://example.test/curated', NULL),
@@ -539,6 +601,8 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ('progress_to_target_pct', 'Housing Accord progress to target', NULL, 'percent', NULL),
             ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
             ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL),
+            ('ai_readiness_score', 'AI readiness score', NULL, 'index', NULL),
+            ('adoption_rate_pct', 'AI adoption rate', NULL, 'percent', NULL),
             ('generation_mw', 'Generation', NULL, 'MW', NULL),
             ('capacity_mw', 'Datacentre capacity', NULL, 'MW', NULL),
             ('intensity_index', 'Surveillance intensity', NULL, 'index', NULL),
@@ -618,6 +682,32 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/'
          ),
          (
+             'oxford.gari', 'ai-readiness', 'Oxford Government AI Readiness Index', NULL,
+             ARRAY['country'], ARRAY['ai_readiness_score'], 'annual', 'Oxford Insights terms',
+             'Source: Oxford Insights Government AI Readiness Index',
+             'https://oxfordinsights.com/ai-readiness/ai-readiness-index/'
+         ),
+         (
+             'naic.ai_adoption_tracker', 'ai-readiness', 'National AI Centre adoption tracker', NULL,
+             ARRAY['country', 'segment'], ARRAY['adoption_rate_pct'], 'quarterly',
+             'National AI Centre terms',
+             'Source: National AI Centre',
+             'https://www.industry.gov.au/science-technology-and-innovation/technology/national-ai-centre'
+         ),
+         (
+             'abs.ai_rd', 'ai-readiness', 'ABS AI research and development', NULL,
+             ARRAY['country', 'sector', 'metric'], ARRAY['value'], 'annual', 'CC-BY-4.0',
+             'Source: Australian Bureau of Statistics',
+             'https://www.abs.gov.au/statistics/research-and-development'
+         ),
+         (
+             'home_affairs.skillselect_talent_proxy', 'ai-readiness', 'Home Affairs SkillSelect talent proxy', NULL,
+             ARRAY['country', 'occupation_group', 'metric'], ARRAY['value'], 'quarterly',
+             'Home Affairs publication terms',
+             'Source: Department of Home Affairs',
+             'https://immi.homeaffairs.gov.au/what-we-do/skilled-migration-program'
+         ),
+         (
              'state_planning.nsw_da_processing', 'state-planning', 'NSW development assessment processing', NULL,
              ARRAY['jurisdiction', 'council', 'development_type', 'metric'], ARRAY['value'], 'quarterly',
              'State publication terms',
@@ -671,6 +761,10 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     let energy_dispatch_artifact = insert_artifact(pool, "aemo", b"aemo dispatch").await;
     let energy_generation_artifact = insert_artifact(pool, "aemo", b"aemo generation mix").await;
     let energy_capacity_artifact = insert_artifact(pool, "aemo", b"aemo capacity").await;
+    let ai_readiness_artifact = insert_artifact(pool, "ai-readiness", b"oxford gari").await;
+    let ai_adoption_artifact = insert_artifact(pool, "ai-readiness", b"naic adoption").await;
+    let ai_rd_artifact = insert_artifact(pool, "ai-readiness", b"abs ai rd").await;
+    let ai_talent_artifact = insert_artifact(pool, "ai-readiness", b"home affairs talent").await;
     let nsw_planning_artifact =
         insert_artifact(pool, "state-planning", b"nsw planning throughput").await;
     let vic_planning_artifact =
@@ -766,6 +860,46 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "value",
         "MW",
         [("region", "NSW1"), ("metric", "dispatchable_capacity")],
+    )
+    .await;
+    let ai_readiness = insert_series(
+        pool,
+        "oxford.gari",
+        "ai_readiness_score",
+        "index",
+        [("country", "AUS")],
+    )
+    .await;
+    let ai_adoption = insert_series(
+        pool,
+        "naic.ai_adoption_tracker",
+        "adoption_rate_pct",
+        "percent",
+        [("country", "AUS"), ("segment", "all")],
+    )
+    .await;
+    let ai_rd = insert_series(
+        pool,
+        "abs.ai_rd",
+        "value",
+        "$ million",
+        [
+            ("country", "AUS"),
+            ("sector", "all"),
+            ("metric", "ai_rd_spend_m"),
+        ],
+    )
+    .await;
+    let ai_talent = insert_series(
+        pool,
+        "home_affairs.skillselect_talent_proxy",
+        "value",
+        "count",
+        [
+            ("country", "AUS"),
+            ("occupation_group", "ai_related"),
+            ("metric", "invitations_issued"),
+        ],
     )
     .await;
     let nsw_planning = insert_series(
@@ -902,6 +1036,34 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     .await;
     insert_observation(
         pool,
+        ai_readiness,
+        ai_readiness_artifact,
+        (2024, 1, 1),
+        30.0,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
+        ai_adoption,
+        ai_adoption_artifact,
+        (2024, 1, 1),
+        0.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(pool, ai_rd, ai_rd_artifact, (2024, 1, 1), 0.0, "year").await;
+    insert_observation(
+        pool,
+        ai_talent,
+        ai_talent_artifact,
+        (2024, 1, 1),
+        0.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
         nsw_planning,
         nsw_planning_artifact,
         (2024, 1, 1),
@@ -990,6 +1152,34 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         (2024, 2, 1),
         15000.0,
         "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
+        ai_readiness,
+        ai_readiness_artifact,
+        (2024, 2, 1),
+        90.0,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
+        ai_adoption,
+        ai_adoption_artifact,
+        (2024, 2, 1),
+        100.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(pool, ai_rd, ai_rd_artifact, (2024, 2, 1), 5000.0, "year").await;
+    insert_observation(
+        pool,
+        ai_talent,
+        ai_talent_artifact,
+        (2024, 2, 1),
+        10000.0,
+        "quarter",
     )
     .await;
     insert_observation(

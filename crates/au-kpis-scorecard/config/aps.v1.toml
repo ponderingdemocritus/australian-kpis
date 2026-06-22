@@ -410,6 +410,95 @@ attribution = "Source: Oxford Insights Government AI Readiness Index"
 notes = "Low-confidence proxy until a reviewed APS data contract is available."
 
 [[indicators]]
+indicator_id = "ai.adoption"
+source_dataflow_id = "naic.ai_adoption_tracker"
+measure_id = "adoption_rate_pct"
+axis = "orientation"
+component = "ai"
+weight = 0.10
+direction = "higher_is_better"
+display_label = "AI adoption"
+description = "National AI Centre adoption tracker proxy for business AI uptake."
+unit = "percent"
+confidence = "low"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+country = "AUS"
+segment = "all"
+
+[indicators.normalization]
+worst = 0.0
+best = 100.0
+
+[indicators.provenance]
+source_url = "https://www.industry.gov.au/science-technology-and-innovation/technology/national-ai-centre"
+license = "National AI Centre terms"
+attribution = "Source: National AI Centre"
+notes = "Low-confidence adoption proxy until a reviewed, regularly licensed time series is available."
+
+[[indicators]]
+indicator_id = "ai.rd"
+source_dataflow_id = "abs.ai_rd"
+measure_id = "value"
+axis = "orientation"
+component = "ai"
+weight = 0.10
+direction = "higher_is_better"
+display_label = "AI R&D spend"
+description = "ABS-derived AI research and development proxy."
+unit = "$ million"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+sector = "all"
+metric = "ai_rd_spend_m"
+
+[indicators.normalization]
+worst = 0.0
+best = 5000.0
+
+[indicators.provenance]
+source_url = "https://www.abs.gov.au/statistics/research-and-development"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+notes = "Proxy should be replaced by a reviewed AI-specific R&D series when available."
+
+[[indicators]]
+indicator_id = "ai.talent"
+source_dataflow_id = "home_affairs.skillselect_talent_proxy"
+measure_id = "value"
+axis = "orientation"
+component = "ai"
+weight = 0.10
+direction = "higher_is_better"
+display_label = "AI talent proxy"
+description = "SkillSelect invitation proxy for AI-related skilled talent flow."
+unit = "count"
+confidence = "low"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+country = "AUS"
+occupation_group = "ai_related"
+metric = "invitations_issued"
+
+[indicators.normalization]
+worst = 0.0
+best = 10000.0
+
+[indicators.provenance]
+source_url = "https://immi.homeaffairs.gov.au/what-we-do/skilled-migration-program"
+license = "Home Affairs publication terms"
+attribution = "Source: Department of Home Affairs"
+notes = "Low-confidence talent-flow proxy; visible as provisional until occupation mapping is reviewed."
+
+[[indicators]]
 indicator_id = "oversight.reviewed-strength"
 source_dataflow_id = "curated.oversight_strength"
 measure_id = "reviewed_strength"
