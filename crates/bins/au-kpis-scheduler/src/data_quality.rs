@@ -9,6 +9,7 @@ use serde::Serialize;
 use sqlx::{PgPool, Row};
 
 const PAGERDUTY_SOURCE: &str = "au-kpis-data-quality";
+const MINUTES_PER_DAY: i64 = 24 * 60;
 
 /// One dataflow-specific data-quality rule set.
 #[derive(Debug, Clone, Copy)]
@@ -24,7 +25,7 @@ pub struct DataQualityRule {
     /// Required fraction of active series present in the latest period.
     pub latest_period_cardinality_floor: f64,
     /// Maximum age allowed for the newest observation.
-    pub max_recency_lag_days: i64,
+    pub max_recency_lag_minutes: i64,
     /// Maximum revised rows ingested in the last 24 hours.
     pub max_daily_revisions: i64,
     /// Rolling z-score threshold for suspicious values.
@@ -181,14 +182,14 @@ pub fn default_data_quality_rules() -> &'static [DataQualityRule] {
     &DEFAULT_RULES
 }
 
-const DEFAULT_RULES: [DataQualityRule; 11] = [
+const DEFAULT_RULES: [DataQualityRule; 12] = [
     DataQualityRule {
         dataflow_id: "abs.cpi",
         min_value: 0.0,
         max_value: 1_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.75,
-        max_recency_lag_days: 180,
+        max_recency_lag_minutes: 180 * MINUTES_PER_DAY,
         max_daily_revisions: 500,
         z_score_sigma: 5.0,
     },
@@ -198,7 +199,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.50,
-        max_recency_lag_days: 14,
+        max_recency_lag_minutes: 14 * MINUTES_PER_DAY,
         max_daily_revisions: 5_000,
         z_score_sigma: 5.0,
     },
@@ -208,9 +209,19 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.50,
-        max_recency_lag_days: 180,
+        max_recency_lag_minutes: 180 * MINUTES_PER_DAY,
         max_daily_revisions: 5_000,
         z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "aemo.dispatch",
+        min_value: -10_000.0,
+        max_value: 100_000.0,
+        min_active_series: 10,
+        latest_period_cardinality_floor: 1.0,
+        max_recency_lag_minutes: 15,
+        max_daily_revisions: 100_000,
+        z_score_sigma: 8.0,
     },
     DataQualityRule {
         dataflow_id: "treasury.budget_papers",
@@ -218,7 +229,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.50,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 2_000,
         z_score_sigma: 5.0,
     },
@@ -228,7 +239,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.50,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 1_000,
         z_score_sigma: 5.0,
     },
@@ -238,7 +249,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.50,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 1_000,
         z_score_sigma: 5.0,
     },
@@ -248,7 +259,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 0.50,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 1_000,
         z_score_sigma: 5.0,
     },
@@ -258,7 +269,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 100.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 1.0,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 50,
         z_score_sigma: 5.0,
     },
@@ -268,7 +279,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 10.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 1.0,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 50,
         z_score_sigma: 5.0,
     },
@@ -278,7 +289,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 100.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 1.0,
-        max_recency_lag_days: 800,
+        max_recency_lag_minutes: 800 * MINUTES_PER_DAY,
         max_daily_revisions: 50,
         z_score_sigma: 5.0,
     },
@@ -288,7 +299,7 @@ const DEFAULT_RULES: [DataQualityRule; 11] = [
         max_value: 1_000_000.0,
         min_active_series: 1,
         latest_period_cardinality_floor: 1.0,
-        max_recency_lag_days: 450,
+        max_recency_lag_minutes: 450 * MINUTES_PER_DAY,
         max_daily_revisions: 50,
         z_score_sigma: 5.0,
     },
@@ -526,7 +537,7 @@ fn push_recency_anomaly(
     now: DateTime<Utc>,
     latest: Option<DateTime<Utc>>,
 ) {
-    let allowed = chrono::Duration::days(rule.max_recency_lag_days);
+    let allowed = chrono::Duration::minutes(rule.max_recency_lag_minutes);
     match latest {
         Some(value) if now.signed_duration_since(value) <= allowed => {}
         Some(value) => anomalies.push(DataQualityAnomaly {
@@ -535,9 +546,9 @@ fn push_recency_anomaly(
             severity: "page".to_string(),
             summary: "latest observation is older than expected cadence".to_string(),
             details: format!(
-                "latest={}, max_lag_days={}",
+                "latest={}, max_lag_minutes={}",
                 value.to_rfc3339(),
-                rule.max_recency_lag_days
+                rule.max_recency_lag_minutes
             ),
         }),
         None => anomalies.push(DataQualityAnomaly {
@@ -545,7 +556,7 @@ fn push_recency_anomaly(
             rule: "recency".to_string(),
             severity: "page".to_string(),
             summary: "dataflow has no observations".to_string(),
-            details: format!("max_lag_days={}", rule.max_recency_lag_days),
+            details: format!("max_lag_minutes={}", rule.max_recency_lag_minutes),
         }),
     }
 }
@@ -754,6 +765,43 @@ mod tests {
     }
 
     #[test]
+    fn recency_rule_uses_minute_level_windows() {
+        let rule = DataQualityRule {
+            dataflow_id: "aemo.dispatch",
+            min_value: -10_000.0,
+            max_value: 100_000.0,
+            min_active_series: 10,
+            latest_period_cardinality_floor: 1.0,
+            max_recency_lag_minutes: 15,
+            max_daily_revisions: 100_000,
+            z_score_sigma: 8.0,
+        };
+        let now = DateTime::parse_from_rfc3339("2026-06-19T17:20:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut anomalies = Vec::new();
+
+        push_recency_anomaly(
+            &mut anomalies,
+            &rule,
+            now,
+            Some(now - chrono::Duration::minutes(15)),
+        );
+        assert!(anomalies.is_empty());
+
+        push_recency_anomaly(
+            &mut anomalies,
+            &rule,
+            now,
+            Some(now - chrono::Duration::minutes(16)),
+        );
+
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].rule, "recency");
+        assert!(anomalies[0].details.contains("max_lag_minutes=15"));
+    }
+
+    #[test]
     fn default_rules_cover_current_catalog() {
         let rules = default_data_quality_rules();
         assert!(rules.iter().any(|rule| rule.dataflow_id == "abs.cpi"));
@@ -772,12 +820,17 @@ mod tests {
                 .iter()
                 .any(|rule| { rule.dataflow_id == "compute.au_datacentre_capacity_mw" })
         );
+        let aemo = rules
+            .iter()
+            .find(|rule| rule.dataflow_id == "aemo.dispatch")
+            .expect("AEMO dispatch default data-quality rule");
+        assert_eq!(aemo.max_recency_lag_minutes, 15);
         assert!(
             rules
                 .iter()
                 .all(|rule| rule.latest_period_cardinality_floor > 0.0)
         );
-        assert!(rules.iter().all(|rule| rule.max_recency_lag_days > 0));
+        assert!(rules.iter().all(|rule| rule.max_recency_lag_minutes > 0));
     }
 
     #[test]
@@ -813,7 +866,14 @@ mod tests {
     async fn notify_pagerduty_posts_events_v2_payload() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping local PagerDuty fixture: loopback bind denied by sandbox");
+                return;
+            }
+            Err(err) => panic!("bind PagerDuty fixture server: {err}"),
+        };
         let addr = listener.local_addr().unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
         let server = tokio::spawn(async move {
