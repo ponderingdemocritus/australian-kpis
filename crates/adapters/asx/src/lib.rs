@@ -746,8 +746,10 @@ fn push_announcement_observation(
             code_id_from_label("category", category)?,
         ),
     ]);
+    let measure_id = MeasureId::new("announcement_count").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -755,7 +757,7 @@ fn push_announcement_observation(
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("announcement_count").expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: "count".into(),
     };
@@ -907,8 +909,10 @@ fn push_eod_observation(
             CodeId::new(metric.id).expect("static code id is valid"),
         ),
     ]);
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -916,7 +920,7 @@ fn push_eod_observation(
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("value").expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: metric.unit.into(),
     };

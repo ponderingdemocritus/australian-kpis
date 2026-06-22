@@ -1854,6 +1854,7 @@ mod tests {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             series_key: SeriesKey::derive(
                 &DataflowId::new("abs.cpi").unwrap(),
+                &MeasureId::new("index").unwrap(),
                 [("region", "AUS")],
             ),
         })

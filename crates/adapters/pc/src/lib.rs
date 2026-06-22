@@ -249,6 +249,7 @@ impl SourceAdapter for PcAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -389,6 +390,7 @@ fn parse_productivity_rows(
         ]);
         let series_key = SeriesKey::derive(
             &dataflow_id,
+            &measure,
             dimensions
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),

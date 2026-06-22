@@ -263,6 +263,7 @@ impl SourceAdapter for StatePlanningAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -625,8 +626,10 @@ fn planning_observation(
         }
     };
     let dataflow_id = provenance.dataflow_id.clone();
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -634,7 +637,7 @@ fn planning_observation(
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("value").expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: row.unit.clone(),
     };
