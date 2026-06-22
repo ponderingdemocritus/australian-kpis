@@ -5,6 +5,8 @@ import type {
   ObservationsResponse,
   ObservationsRow,
   SearchResponse,
+  ScorecardConfig,
+  ScorecardSnapshot,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 import { createClient } from './index'
@@ -43,6 +45,12 @@ const search: Promise<SearchResponse> = client.search.catalog({
   limit: 5,
   q: 'index',
 })
+const apsConfig: Promise<ScorecardConfig> = client.scorecards.aps.config()
+const apsLatest: Promise<ScorecardSnapshot> = client.scorecards.aps.latest()
+const apsHistory: Promise<ScorecardSnapshot[]> = client.scorecards.aps.history({
+  since: '2024-01-01',
+  until: '2024-12-31',
+})
 const validatingClient = createClient({
   baseUrl: 'https://api.example.test',
   validate: true,
@@ -58,4 +66,7 @@ void observations
 void stream
 void latest
 void search
+void apsConfig
+void apsLatest
+void apsHistory
 void validatingDataflows

@@ -23,6 +23,7 @@ const client = createClient({
 })
 
 const dataflows = await client.dataflows.list({ source: 'abs' })
+const apsLatest = await client.scorecards.aps.latest()
 
 const cpi = await client.observations.list({
   dataflow: 'abs.cpi',
@@ -34,7 +35,19 @@ const cpi = await client.observations.list({
 })
 
 console.log(dataflows.dataflows.length)
+console.log(apsLatest.score, apsLatest.zone)
 console.log(cpi.observations[0])
+```
+
+```ts
+const apsConfig = await client.scorecards.aps.config()
+const apsHistory = await client.scorecards.aps.history({
+  since: '2024-01-01',
+  until: '2024-12-31',
+})
+
+console.log(apsConfig.version)
+console.log(apsHistory.map((snapshot) => snapshot.score))
 ```
 
 ## Runtime targets

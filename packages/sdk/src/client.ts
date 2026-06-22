@@ -8,6 +8,8 @@ import type {
   ObservationsRow,
   SearchCatalogParams,
   SearchResponse,
+  ScorecardConfig,
+  ScorecardSnapshot,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 
@@ -57,6 +59,11 @@ export type ObservationLatestParams = {
   seriesKey: string
 }
 
+export type ScorecardHistoryParams = {
+  since?: string
+  until?: string
+}
+
 export type AuKpisClient = {
   dataflows: {
     codelists: (id: string, dim: string) => Promise<DataflowCodelistResponse>
@@ -72,6 +79,13 @@ export type AuKpisClient = {
   openapi: () => Promise<unknown>
   search: {
     catalog: (params: SearchCatalogParams) => Promise<SearchResponse>
+  }
+  scorecards: {
+    aps: {
+      config: () => Promise<ScorecardConfig>
+      history: (params?: ScorecardHistoryParams) => Promise<ScorecardSnapshot[]>
+      latest: () => Promise<ScorecardSnapshot>
+    }
   }
 }
 
@@ -106,6 +120,9 @@ type SchemaName =
   | 'HealthResponse'
   | 'ObservationsResponse'
   | 'SearchResponse'
+  | 'ScorecardConfig'
+  | 'ScorecardSnapshot'
+  | 'ScorecardSnapshotList'
   | 'SeriesLookupResponse'
 
 type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
@@ -178,6 +195,26 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
           query: params,
           schema: 'SearchResponse',
         }),
+    },
+    scorecards: {
+      aps: {
+        config: () =>
+          requestJson<ScorecardConfig>(context, {
+            path: '/v1/scorecards/aps/config',
+            schema: 'ScorecardConfig',
+          }),
+        history: (params) =>
+          requestJson<ScorecardSnapshot[]>(context, {
+            path: '/v1/scorecards/aps/history',
+            query: params,
+            schema: 'ScorecardSnapshotList',
+          }),
+        latest: () =>
+          requestJson<ScorecardSnapshot>(context, {
+            path: '/v1/scorecards/aps/latest',
+            schema: 'ScorecardSnapshot',
+          }),
+      },
     },
   }
 }

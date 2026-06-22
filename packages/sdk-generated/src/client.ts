@@ -190,6 +190,249 @@ export interface HealthResponse {
 }
 
 /**
+ * Scorecard axis used by APS v1.
+ */
+export type Axis = typeof Axis[keyof typeof Axis];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Axis = {
+  throughput: 'throughput',
+  orientation: 'orientation',
+} as const;
+
+/**
+ * Direction used to normalize raw indicator values.
+ */
+export type Direction = typeof Direction[keyof typeof Direction];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Direction = {
+  higher_is_better: 'higher_is_better',
+  lower_is_better: 'lower_is_better',
+} as const;
+
+/**
+ * Confidence label exposed for configs, contributions, and snapshots.
+ */
+export type Confidence = typeof Confidence[keyof typeof Confidence];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Confidence = {
+  high: 'high',
+  medium: 'medium',
+  low: 'low',
+} as const;
+
+/**
+ * Contribution coverage state.
+ */
+export type CoverageStatus = typeof CoverageStatus[keyof typeof CoverageStatus];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const CoverageStatus = {
+  resolved: 'resolved',
+  stale: 'stale',
+  missing_expected: 'missing_expected',
+  coverage_gap: 'coverage_gap',
+  manual_pending: 'manual_pending',
+  visible_unscored: 'visible_unscored',
+} as const;
+
+/**
+ * APS score zone.
+ */
+export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ScoreZone = {
+  red: 'red',
+  yellow: 'yellow',
+  green: 'green',
+} as const;
+
+/**
+ * Trend arrow comparing the latest score to a prior comparable snapshot.
+ */
+export type Trend = typeof Trend[keyof typeof Trend];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Trend = {
+  up: 'up',
+  down: 'down',
+  flat: 'flat',
+  unavailable: 'unavailable',
+} as const;
+
+/**
+ * Linear normalization references for one indicator.
+ */
+export interface Normalization {
+  /** Best reference value for this indicator. */
+  best: number;
+  /** Worst reference value for this indicator. */
+  worst: number;
+}
+
+export type ProvenanceNotes = string | null;
+
+export type ProvenanceRetrievedAt = string | null;
+
+export type ProvenanceReviewedAt = string | null;
+
+export type ProvenanceReviewedBy = string | null;
+
+/**
+ * Source and licensing metadata for a scorecard input.
+ */
+export interface Provenance {
+  /** Attribution text shown in API/UI responses. */
+  attribution: string;
+  /** License identifier or source-specific license note. */
+  license: string;
+  /** Optional source or review notes. */
+  notes?: ProvenanceNotes;
+  /** Optional retrieval date for curated/manual inputs. */
+  retrieved_at?: ProvenanceRetrievedAt;
+  /** Optional review date for curated/manual inputs. */
+  reviewed_at?: ProvenanceReviewedAt;
+  /** Optional reviewer identifier for curated/manual inputs. */
+  reviewed_by?: ProvenanceReviewedBy;
+  /** Canonical source URL for this input. */
+  source_url: string;
+}
+
+export type IndicatorConfigDimensionSelector = {[key: string]: string};
+
+/**
+ * Static config for one APS indicator.
+ */
+export interface IndicatorConfig {
+  axis: Axis;
+  cadence: string;
+  component: string;
+  confidence: Confidence;
+  coverage_status: CoverageStatus;
+  description: string;
+  dimension_selector?: IndicatorConfigDimensionSelector;
+  direction: Direction;
+  display_label: string;
+  indicator_id: string;
+  measure_id: string;
+  normalization: Normalization;
+  provenance: Provenance;
+  source_dataflow_id: string;
+  unit: string;
+  weight: number;
+}
+
+/**
+ * APS config metadata and indicator list.
+ */
+export interface ScorecardConfig {
+  attribution: string;
+  description: string;
+  formula: string;
+  id: string;
+  indicators: IndicatorConfig[];
+  label: string;
+  license: string;
+  version: string;
+}
+
+/**
+ * Lower and upper score bounds.
+ */
+export interface ConfidenceBand {
+  /** Best-case score. */
+  high: number;
+  /** Worst-case score. */
+  low: number;
+}
+
+/**
+ * Component-level score inside a sub-index.
+ */
+export interface ComponentScore {
+  component: string;
+  coverage_pct: number;
+  score: number;
+  weight: number;
+}
+
+/**
+ * Axis-level sub-index score.
+ */
+export interface SubIndexScore {
+  axis: Axis;
+  components: ComponentScore[];
+  confidence_band: ConfidenceBand;
+  coverage_pct: number;
+  score: number;
+  weight: number;
+}
+
+export type IndicatorContributionDimensions = {[key: string]: string};
+
+export type IndicatorContributionLatestPeriod = string | null;
+
+export type IndicatorContributionNormalizedValue = number | null;
+
+export type IndicatorContributionNotes = string | null;
+
+export type IndicatorContributionRawValue = number | null;
+
+export type IndicatorContributionSeriesKey = string | null;
+
+export type IndicatorContributionSourceArtifactId = string | null;
+
+/**
+ * Contribution row for one indicator.
+ */
+export interface IndicatorContribution {
+  attribution: string;
+  axis: Axis;
+  component: string;
+  confidence: Confidence;
+  coverage_status: CoverageStatus;
+  dimensions: IndicatorContributionDimensions;
+  direction: Direction;
+  indicator_id: string;
+  label: string;
+  latest_period?: IndicatorContributionLatestPeriod;
+  license: string;
+  measure_id: string;
+  normalized_value?: IndicatorContributionNormalizedValue;
+  notes?: IndicatorContributionNotes;
+  raw_value?: IndicatorContributionRawValue;
+  series_key?: IndicatorContributionSeriesKey;
+  source_artifact_id?: IndicatorContributionSourceArtifactId;
+  source_dataflow_id: string;
+  source_url: string;
+  unit: string;
+  weight: number;
+}
+
+export type ScorecardSnapshotLatestPeriod = string | null;
+
+/**
+ * Full APS snapshot produced by the pure scorer.
+ */
+export interface ScorecardSnapshot {
+  as_of: string;
+  confidence: Confidence;
+  confidence_band: ConfidenceBand;
+  config_version: string;
+  contributions: IndicatorContribution[];
+  coverage_pct: number;
+  latest_period?: ScorecardSnapshotLatestPeriod;
+  score: number;
+  scorecard_id: string;
+  sub_indexes: SubIndexScore[];
+  trend: Trend;
+  zone: ScoreZone;
+}
+
+/**
  * Escape hatch for licenses not yet enumerated. Carries the SPDX-style id.
  */
 export type LicenseOneOf = {
