@@ -145,7 +145,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 66.66666666666666).abs() < 1e-9);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 77.08333333333334).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
 
@@ -195,6 +195,17 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
             .as_str()
             .unwrap()
             .contains("building-activity-australia")
+    );
+
+    let completion = contribution(contributions, "construction.completion-time");
+    assert_eq!(completion["raw_value"], 12.0);
+    assert_eq!(completion["normalized_value"], 1.0);
+    assert_eq!(completion["coverage_status"], "resolved");
+    assert_eq!(completion["latest_period"], "2024-02-01");
+    assert_eq!(completion["license"], "CC-BY-4.0");
+    assert_eq!(
+        completion["dimensions"]["dwelling_type"], "apartments",
+        "APS construction input should resolve the explicit apartments proxy"
     );
 
     let accord = contribution(contributions, "housing.accord-progress");
@@ -354,6 +365,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
          VALUES
             ('dwellings_approved', 'Dwellings approved', NULL, 'dwellings', NULL),
             ('dwellings_commenced', 'Dwellings commenced', NULL, 'dwellings', NULL),
+            ('average_completion_months', 'Average completion time', NULL, 'months', NULL),
             ('progress_to_target_pct', 'Housing Accord progress to target', NULL, 'percent', NULL),
             ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
             ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL)",
@@ -381,6 +393,12 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia'
          ),
          (
+             'abs.dwelling_completion_times', 'abs', 'Dwelling completion times', NULL,
+             ARRAY['region', 'measure', 'dwelling_type'], ARRAY['average_completion_months'], 'annual', 'CC-BY-4.0',
+             'Source: Australian Bureau of Statistics',
+             'https://www.abs.gov.au/articles/average-dwelling-completion-times'
+         ),
+         (
              'nhsac.housing_accord_progress', 'nhsac', 'Housing Accord progress', NULL,
              ARRAY['region', 'measure'], ARRAY['progress_to_target_pct'], 'annual', 'NHSAC copyright',
              'Source: National Housing Supply and Affordability Council',
@@ -405,6 +423,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
 
     let housing_artifact = insert_artifact(pool, "abs", b"housing approvals").await;
     let commenced_artifact = insert_artifact(pool, "abs", b"building activity").await;
+    let completion_artifact = insert_artifact(pool, "abs", b"dwelling completion times").await;
     let accord_artifact = insert_artifact(pool, "nhsac", b"housing accord").await;
     let productivity_artifact = insert_artifact(pool, "pc", b"productivity bulletin").await;
     let bready_artifact = insert_artifact(pool, "worldbank", b"bready").await;
@@ -423,6 +442,18 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "dwellings_commenced",
         "dwellings",
         [("region", "AUS"), ("measure", "dwellings_commenced")],
+    )
+    .await;
+    let completion = insert_series(
+        pool,
+        "abs.dwelling_completion_times",
+        "average_completion_months",
+        "months",
+        [
+            ("region", "AUS"),
+            ("measure", "average_completion_months"),
+            ("dwelling_type", "apartments"),
+        ],
     )
     .await;
     let bready = insert_series(
@@ -462,6 +493,15 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     insert_observation(pool, bready, bready_artifact, (2024, 1, 1), 50.0, "year").await;
     insert_observation(
         pool,
+        completion,
+        completion_artifact,
+        (2024, 1, 1),
+        30.0,
+        "year",
+    )
+    .await;
+    insert_observation(
+        pool,
         commenced,
         commenced_artifact,
         (2024, 1, 1),
@@ -489,6 +529,15 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     )
     .await;
     insert_observation(pool, bready, bready_artifact, (2024, 2, 1), 100.0, "year").await;
+    insert_observation(
+        pool,
+        completion,
+        completion_artifact,
+        (2024, 2, 1),
+        12.0,
+        "year",
+    )
+    .await;
     insert_observation(
         pool,
         commenced,

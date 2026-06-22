@@ -117,6 +117,18 @@ const BUILDING_ACTIVITY_RELEASE_FIXTURE: &str = r#"
 </main>
 "#;
 
+const DWELLING_COMPLETION_TIMES_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Average dwelling completion times</h1>
+  <dl>
+    <dt>Released</dt><dd>9/10/2019</dd>
+    <dt>Source</dt><dd>Building Activity, Australia, June 2019</dd>
+  </dl>
+  <p>The Building Activity: Average dwelling completion times data cube is released annually.</p>
+</main>
+"#;
+
 async fn serve_once(body: &'static str) -> Option<String> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -260,6 +272,45 @@ async fn serve_building_activity_release_once(body: &'static str) -> Option<Stri
     });
 
     Some(format!("http://{addr}/building-activity/latest-release"))
+}
+
+async fn serve_dwelling_completion_times_once(body: &'static str) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.starts_with("GET /articles/average-dwelling-completion-times HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+
+    Some(format!(
+        "http://{addr}/articles/average-dwelling-completion-times"
+    ))
 }
 
 #[test]
@@ -610,6 +661,12 @@ fn manifest_declares_abs_cpi_and_conservative_rate_limit() {
             .iter()
             .any(|dataflow| dataflow.as_str() == "abs.building_activity")
     );
+    assert!(
+        manifest
+            .dataflows
+            .iter()
+            .any(|dataflow| dataflow.as_str() == "abs.dwelling_completion_times")
+    );
     assert_eq!(manifest.rate_limit.max_requests, 60);
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
 }
@@ -672,6 +729,42 @@ async fn discover_fetches_building_activity_release_page_when_requested() {
     assert_eq!(jobs[0].metadata["revision_key"], "ABS:building-activity");
     assert_eq!(jobs[0].metadata["revision_version"], "December 2025");
     assert_eq!(jobs[0].metadata["released"], "8/04/2026");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_fetches_dwelling_completion_times_article_when_requested() {
+    let Some(article_url) =
+        serve_dwelling_completion_times_once(DWELLING_COMPLETION_TIMES_FIXTURE).await
+    else {
+        return;
+    };
+    let adapter = AbsAdapter::builder()
+        .dwelling_completion_times_url(&article_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap())
+        .with_requested_dataflow_id(DataflowId::new("abs.dwelling_completion_times").unwrap())
+        .with_trace_parent(TRACE_PARENT);
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover dwelling completion times article");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].source_id.as_str(), "abs");
+    assert_eq!(
+        jobs[0].dataflow_id.as_str(),
+        "abs.dwelling_completion_times"
+    );
+    assert_eq!(jobs[0].source_url, article_url);
+    assert_eq!(jobs[0].trace_parent.as_deref(), Some(TRACE_PARENT));
+    assert_eq!(
+        jobs[0].metadata["revision_key"],
+        "ABS:dwelling-completion-times"
+    );
+    assert_eq!(jobs[0].metadata["revision_version"], "9/10/2019");
+    assert_eq!(jobs[0].metadata["released"], "9/10/2019");
 }
 
 proptest! {

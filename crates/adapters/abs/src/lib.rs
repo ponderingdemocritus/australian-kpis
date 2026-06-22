@@ -38,13 +38,18 @@ const CPI_DATAFLOW_ID: &str = "CPI";
 const CPI_CANONICAL_DATAFLOW_ID: &str = "abs.cpi";
 const BUILDING_APPROVALS_CANONICAL_DATAFLOW_ID: &str = "abs.building_approvals";
 const BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID: &str = "abs.building_activity";
+const DWELLING_COMPLETION_TIMES_CANONICAL_DATAFLOW_ID: &str = "abs.dwelling_completion_times";
 const BUILDING_APPROVALS_DATAFLOW_SLUG: &str = "building-approvals";
 const BUILDING_ACTIVITY_DATAFLOW_SLUG: &str = "building-activity";
+const DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG: &str = "dwelling-completion-times";
 const BUILDING_APPROVALS_MEASURE_ID: &str = "dwellings_approved";
 const BUILDING_ACTIVITY_COMMENCED_MEASURE_ID: &str = "dwellings_commenced";
 const BUILDING_ACTIVITY_COMPLETED_MEASURE_ID: &str = "dwellings_completed";
+const DWELLING_COMPLETION_TIMES_MEASURE_ID: &str = "average_completion_months";
 const DEFAULT_BUILDING_APPROVALS_RELEASE_URL: &str = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release";
 const DEFAULT_BUILDING_ACTIVITY_RELEASE_URL: &str = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release";
+const DEFAULT_DWELLING_COMPLETION_TIMES_URL: &str =
+    "https://www.abs.gov.au/articles/average-dwelling-completion-times";
 const ABS_ATTRIBUTION: &str = "Source: Australian Bureau of Statistics";
 const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
@@ -55,6 +60,7 @@ pub struct AbsAdapter {
     base_url: String,
     building_approvals_release_url: String,
     building_activity_release_url: String,
+    dwelling_completion_times_url: String,
 }
 
 impl Default for AbsAdapter {
@@ -179,6 +185,17 @@ impl AbsAdapter {
                 url: job.source_url.clone(),
             });
         }
+        if job.dataflow_id.as_str() == DWELLING_COMPLETION_TIMES_CANONICAL_DATAFLOW_ID {
+            if !is_dwelling_completion_times_url(&job.source_url) {
+                return Err(AdapterError::Validation(format!(
+                    "ABS fetch URL `{}` is not a dwelling completion times article artifact",
+                    job.source_url
+                )));
+            }
+            return Ok(AbsFetchKind::DwellingCompletionTimes {
+                url: job.source_url.clone(),
+            });
+        }
         Err(AdapterError::Validation(format!(
             "ABS fetch received unsupported dataflow `{}`",
             job.dataflow_id.as_str()
@@ -196,6 +213,10 @@ impl AbsAdapter {
     fn building_activity_release_url(&self) -> &str {
         &self.building_activity_release_url
     }
+
+    fn dwelling_completion_times_url(&self) -> &str {
+        &self.dwelling_completion_times_url
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +224,7 @@ enum AbsFetchKind {
     Cpi { url: String },
     BuildingApprovals { url: String },
     BuildingActivity { url: String },
+    DwellingCompletionTimes { url: String },
 }
 
 impl AbsFetchKind {
@@ -210,23 +232,26 @@ impl AbsFetchKind {
         match self {
             Self::Cpi { url }
             | Self::BuildingApprovals { url }
-            | Self::BuildingActivity { url } => url,
+            | Self::BuildingActivity { url }
+            | Self::DwellingCompletionTimes { url } => url,
         }
     }
 
     fn accept(&self) -> &'static str {
         match self {
             Self::Cpi { .. } => DATA_JSON_ACCEPT,
-            Self::BuildingApprovals { .. } | Self::BuildingActivity { .. } => {
-                "text/html,application/xhtml+xml"
-            }
+            Self::BuildingApprovals { .. }
+            | Self::BuildingActivity { .. }
+            | Self::DwellingCompletionTimes { .. } => "text/html,application/xhtml+xml",
         }
     }
 
     fn default_content_type(&self) -> &'static str {
         match self {
             Self::Cpi { .. } => DATA_JSON_ACCEPT,
-            Self::BuildingApprovals { .. } | Self::BuildingActivity { .. } => "text/html",
+            Self::BuildingApprovals { .. }
+            | Self::BuildingActivity { .. }
+            | Self::DwellingCompletionTimes { .. } => "text/html",
         }
     }
 }
@@ -321,6 +346,29 @@ impl SourceAdapter for AbsAdapter {
                 attribution: ABS_ATTRIBUTION.into(),
                 source_url: DEFAULT_BUILDING_ACTIVITY_RELEASE_URL.into(),
             },
+            Dataflow {
+                id: DataflowId::new(DWELLING_COMPLETION_TIMES_CANONICAL_DATAFLOW_ID)
+                    .expect("static dataflow id is valid"),
+                source_id: SourceId::new("abs").expect("static source id is valid"),
+                name: "Average dwelling completion times".into(),
+                description: Some(
+                    "Annual Australian average dwelling completion times by dwelling type from the ABS completion-times article."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("region").expect("static dimension id is valid"),
+                    DimensionId::new("measure").expect("static dimension id is valid"),
+                    DimensionId::new("dwelling_type").expect("static dimension id is valid"),
+                ],
+                measures: vec![
+                    MeasureId::new(DWELLING_COMPLETION_TIMES_MEASURE_ID)
+                        .expect("static measure id is valid"),
+                ],
+                frequency: Frequency::Annual,
+                license: License::CcBy40,
+                attribution: ABS_ATTRIBUTION.into(),
+                source_url: DEFAULT_DWELLING_COMPLETION_TIMES_URL.into(),
+            },
         ]
     }
 
@@ -329,6 +377,7 @@ impl SourceAdapter for AbsAdapter {
         let requested = ctx.requested_dataflow_id();
         let building_dataflow_id = building_approvals_dataflow_id();
         let building_activity_dataflow_id = building_activity_dataflow_id();
+        let dwelling_completion_times_dataflow_id = dwelling_completion_times_dataflow_id();
         let cpi_dataflow_id = cpi_dataflow_id();
         if requested == Some(&building_dataflow_id) {
             let response = ctx
@@ -372,6 +421,30 @@ impl SourceAdapter for AbsAdapter {
                 .known_revisions()
                 .get(&job.metadata["revision_key"])
                 .is_none_or(|known| known != &release.revision());
+            return Ok(if should_emit { vec![job] } else { Vec::new() });
+        }
+        if requested == Some(&dwelling_completion_times_dataflow_id) {
+            let response = ctx
+                .http
+                .execute(
+                    ctx.http
+                        .raw()
+                        .get(self.dwelling_completion_times_url())
+                        .header("user-agent", USER_AGENT)
+                        .header("accept", "text/html,application/xhtml+xml"),
+                )
+                .await?
+                .error_for_status()?;
+            let body = response.text().await?;
+            let article = parse_dwelling_completion_times_article(
+                &body,
+                self.dwelling_completion_times_url(),
+            )?;
+            let job = article.to_discovered_job(ctx.trace_parent());
+            let should_emit = ctx
+                .known_revisions()
+                .get(&job.metadata["revision_key"])
+                .is_none_or(|known| known != &article.revision());
             return Ok(if should_emit { vec![job] } else { Vec::new() });
         }
         if requested.is_some_and(|requested| requested != &cpi_dataflow_id) {
@@ -515,6 +588,9 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
         }
         Ok(AbsParseKind::BuildingActivity) => {
             parse_building_activity_artifact_stream(artifact, ctx)
+        }
+        Ok(AbsParseKind::DwellingCompletionTimes) => {
+            parse_dwelling_completion_times_artifact_stream(artifact, ctx)
         }
         Err(err) => Box::pin(stream::once(async move { Err(err) })),
     }
@@ -708,11 +784,78 @@ fn parse_building_activity_artifact_stream(
     }))
 }
 
+fn parse_dwelling_completion_times_artifact_stream(
+    artifact: ArtifactRef,
+    ctx: &ParseCtx,
+) -> ObservationStream<'_> {
+    let blob_store = ctx.blob_store.clone();
+    let started_at = ctx.started_at;
+    let cancellation = ctx.cancellation().clone();
+    let (row_tx, row_rx) = tokio::sync::mpsc::channel(128);
+
+    tokio::spawn(async move {
+        let key = StorageKey::from_persisted(artifact.storage_key.clone());
+        let identity = tokio::select! {
+            () = cancellation.cancelled() => Err(cancelled_parse_error()),
+            result = verify_parse_artifact_identity(&blob_store, &key, &artifact) => result,
+        };
+        if let Err(err) = identity {
+            let _ = row_tx.send(Err(err)).await;
+            return;
+        }
+
+        let mut chunks = match tokio::select! {
+            () = cancellation.cancelled() => Err(cancelled_parse_error()),
+            chunks = blob_store.get(&key) => chunks.map_err(AdapterError::from),
+        } {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                let _ = row_tx.send(Err(err)).await;
+                return;
+            }
+        };
+        let mut bytes = Vec::new();
+        while let Some(chunk) = tokio::select! {
+            () = cancellation.cancelled() => {
+                let _ = row_tx.send(Err(cancelled_parse_error())).await;
+                return;
+            }
+            chunk = chunks.next() => chunk,
+        } {
+            match chunk {
+                Ok(chunk) => bytes.extend_from_slice(&chunk),
+                Err(err) => {
+                    let _ = row_tx.send(Err(err.into())).await;
+                    return;
+                }
+            }
+        }
+
+        match parse_dwelling_completion_times_html(&bytes, &artifact, started_at) {
+            Ok(rows) => {
+                for row in rows {
+                    if row_tx.send(Ok(row)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(err) => {
+                let _ = row_tx.send(Err(err)).await;
+            }
+        }
+    });
+
+    Box::pin(stream::unfold(row_rx, |mut row_rx| async {
+        row_rx.recv().await.map(|item| (item, row_rx))
+    }))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AbsParseKind {
     Cpi,
     BuildingApprovals,
     BuildingActivity,
+    DwellingCompletionTimes,
 }
 
 fn validate_parse_artifact(
@@ -740,6 +883,11 @@ fn validate_parse_artifact(
         (
             AbsParseKind::BuildingActivity,
             building_activity_dataflow_id(),
+        )
+    } else if is_dwelling_completion_times_url(&artifact.source_url) {
+        (
+            AbsParseKind::DwellingCompletionTimes,
+            dwelling_completion_times_dataflow_id(),
         )
     } else {
         return Err(AdapterError::Validation(format!(
@@ -1094,6 +1242,235 @@ fn building_activity_observation(
     Ok((descriptor, observation))
 }
 
+fn parse_dwelling_completion_times_html(
+    bytes: &[u8],
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let body = String::from_utf8(bytes.to_vec()).map_err(|err| {
+        AdapterError::FormatDrift(format!("ABS article HTML is not UTF-8: {err}"))
+    })?;
+    let article = parse_dwelling_completion_times_article(&body, &artifact.source_url)?;
+    let mut rows = Vec::new();
+    let mut section = CompletionTimesSection::None;
+
+    for line in html_text_lines(&body) {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("graph 1:")
+            && lower.contains("new houses")
+            && lower.contains("new townhouses")
+        {
+            section = CompletionTimesSection::HousesAndTownhouses;
+            continue;
+        }
+        if lower.contains("graph 2:")
+            && (lower.contains("new flats") || lower.contains("new apartments"))
+        {
+            section = CompletionTimesSection::Apartments;
+            continue;
+        }
+        if lower.contains("graph 3:")
+            || lower.contains("state and territories")
+            || lower.contains("back to top")
+        {
+            section = CompletionTimesSection::None;
+            continue;
+        }
+
+        let Some(row) = parse_completion_times_row(&line, section)? else {
+            continue;
+        };
+        for value in row.values {
+            rows.push(dwelling_completion_times_observation(
+                row.time,
+                &row.financial_year,
+                value.dwelling_type,
+                value.months,
+                &article,
+                artifact,
+                ingested_at,
+            )?);
+        }
+    }
+
+    if rows.is_empty() {
+        return Err(AdapterError::FormatDrift(
+            "ABS dwelling completion times article has no national completion-time rows".into(),
+        ));
+    }
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionTimesSection {
+    None,
+    HousesAndTownhouses,
+    Apartments,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CompletionTimesRow {
+    time: DateTime<Utc>,
+    financial_year: String,
+    values: Vec<CompletionTimesValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CompletionTimesValue {
+    dwelling_type: &'static str,
+    months: f64,
+}
+
+fn parse_completion_times_row(
+    line: &str,
+    section: CompletionTimesSection,
+) -> Result<Option<CompletionTimesRow>, AdapterError> {
+    if section == CompletionTimesSection::None {
+        return Ok(None);
+    }
+    let mut parts = line.split_whitespace();
+    let Some(period) = parts.next() else {
+        return Ok(None);
+    };
+    let Some(time) = parse_financial_year_start(period)? else {
+        return Ok(None);
+    };
+    let parsed = parts
+        .map(|value| {
+            value.parse::<f64>().map_err(|err| {
+                AdapterError::FormatDrift(format!(
+                    "ABS dwelling completion time value `{value}` in `{line}` is invalid: {err}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let values = match section {
+        CompletionTimesSection::HousesAndTownhouses => {
+            if parsed.len() < 2 {
+                return Err(AdapterError::FormatDrift(format!(
+                    "ABS dwelling completion row `{line}` is missing house/townhouse values"
+                )));
+            }
+            vec![
+                CompletionTimesValue {
+                    dwelling_type: "houses",
+                    months: quarters_to_months(parsed[0]),
+                },
+                CompletionTimesValue {
+                    dwelling_type: "townhouses",
+                    months: quarters_to_months(parsed[1]),
+                },
+            ]
+        }
+        CompletionTimesSection::Apartments => {
+            let Some(value) = parsed.first().copied() else {
+                return Err(AdapterError::FormatDrift(format!(
+                    "ABS dwelling completion row `{line}` is missing apartment value"
+                )));
+            };
+            vec![CompletionTimesValue {
+                dwelling_type: "apartments",
+                months: quarters_to_months(value),
+            }]
+        }
+        CompletionTimesSection::None => unreachable!("handled above"),
+    };
+    Ok(Some(CompletionTimesRow {
+        time,
+        financial_year: period.to_string(),
+        values,
+    }))
+}
+
+fn parse_financial_year_start(period: &str) -> Result<Option<DateTime<Utc>>, AdapterError> {
+    let Some((start, end)) = period.split_once('-') else {
+        return Ok(None);
+    };
+    if start.len() != 4 || end.len() != 4 {
+        return Ok(None);
+    }
+    let start = start.parse::<i32>().map_err(|err| {
+        AdapterError::FormatDrift(format!(
+            "invalid ABS dwelling completion financial year `{period}`: {err}"
+        ))
+    })?;
+    let end = end.parse::<i32>().map_err(|err| {
+        AdapterError::FormatDrift(format!(
+            "invalid ABS dwelling completion financial year `{period}`: {err}"
+        ))
+    })?;
+    if end != start + 1 {
+        return Err(AdapterError::FormatDrift(format!(
+            "ABS dwelling completion financial year `{period}` must span one year"
+        )));
+    }
+    date_at_midnight(start, 7, 1)
+        .map(Some)
+        .map_err(AdapterError::FormatDrift)
+}
+
+fn quarters_to_months(quarters: f64) -> f64 {
+    (quarters * 300.0).round() / 100.0
+}
+
+fn dwelling_completion_times_observation(
+    time: DateTime<Utc>,
+    financial_year: &str,
+    dwelling_type: &str,
+    value: f64,
+    article: &DwellingCompletionTimesArticle,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<(SeriesDescriptor, Observation), AdapterError> {
+    let dataflow_id = dwelling_completion_times_dataflow_id();
+    let dimensions = BTreeMap::from([
+        (
+            DimensionId::new("dwelling_type").expect("static dimension id is valid"),
+            CodeId::new(dwelling_type).expect("static dwelling type code is valid"),
+        ),
+        (
+            DimensionId::new("measure").expect("static dimension id is valid"),
+            CodeId::new(DWELLING_COMPLETION_TIMES_MEASURE_ID)
+                .expect("static completion-time measure code is valid"),
+        ),
+        (
+            DimensionId::new("region").expect("static dimension id is valid"),
+            CodeId::new("AUS").expect("static region code is valid"),
+        ),
+    ]);
+    let series_key = SeriesKey::derive(
+        &dataflow_id,
+        dimensions
+            .iter()
+            .map(|(dimension, code)| (dimension.as_str(), code.as_str())),
+    );
+    let descriptor = SeriesDescriptor {
+        series_key,
+        dataflow_id,
+        measure_id: MeasureId::new(DWELLING_COMPLETION_TIMES_MEASURE_ID)
+            .expect("static measure id is valid"),
+        dimensions,
+        unit: "months".into(),
+    };
+    let observation = Observation {
+        series_key,
+        time,
+        time_precision: TimePrecision::Year,
+        value: Some(value),
+        status: ObservationStatus::Normal,
+        revision_no: 0,
+        attributes: BTreeMap::from([
+            ("abs_article".into(), article.title.clone()),
+            ("abs_financial_year".into(), financial_year.to_string()),
+            ("abs_original_unit".into(), "quarters".into()),
+            ("source_url".into(), artifact.source_url.clone()),
+        ]),
+        ingested_at,
+        source_artifact_id: artifact.id,
+    };
+    Ok((descriptor, observation))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BuildingApprovalsRelease {
     source_url: String,
@@ -1195,6 +1572,56 @@ impl BuildingActivityRelease {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DwellingCompletionTimesArticle {
+    source_url: String,
+    title: String,
+    released: String,
+}
+
+impl DwellingCompletionTimesArticle {
+    fn revision(&self) -> UpstreamRevision {
+        UpstreamRevision::new(self.released.clone(), Some(self.title.clone()))
+    }
+
+    fn to_discovered_job(&self, trace_parent: Option<&str>) -> DiscoveredJob {
+        let revision = self.revision();
+        let revision_version = revision.version().to_string();
+        let revision_key = "ABS:dwelling-completion-times".to_string();
+        let metadata = BTreeMap::from([
+            ("adapter".into(), "abs".into()),
+            ("artifact_format".into(), "html".into()),
+            ("attribution".into(), ABS_ATTRIBUTION.into()),
+            ("cadence".into(), "annual".into()),
+            (
+                "dataflow_id".into(),
+                DWELLING_COMPLETION_TIMES_CANONICAL_DATAFLOW_ID.into(),
+            ),
+            ("license".into(), "CC-BY-4.0".into()),
+            (
+                "measure_id".into(),
+                DWELLING_COMPLETION_TIMES_MEASURE_ID.into(),
+            ),
+            ("released".into(), self.released.clone()),
+            ("revision_key".into(), revision_key),
+            ("revision_version".into(), revision_version.clone()),
+            ("title".into(), self.title.clone()),
+        ]);
+        DiscoveredJob {
+            id: format!(
+                "abs:{}:{}",
+                DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG,
+                revision_token(Some(&revision_version))
+            ),
+            source_id: SourceId::new("abs").expect("static source id is valid"),
+            dataflow_id: dwelling_completion_times_dataflow_id(),
+            source_url: self.source_url.clone(),
+            trace_parent: trace_parent.map(ToOwned::to_owned),
+            metadata,
+        }
+    }
+}
+
 fn parse_building_approvals_release(
     body: &str,
     source_url: &str,
@@ -1237,6 +1664,33 @@ fn parse_building_activity_release(
     Ok(BuildingActivityRelease {
         source_url: source_url.to_string(),
         reference_period,
+        released,
+    })
+}
+
+fn parse_dwelling_completion_times_article(
+    body: &str,
+    source_url: &str,
+) -> Result<DwellingCompletionTimesArticle, AdapterError> {
+    if !is_dwelling_completion_times_url(source_url) {
+        return Err(AdapterError::Validation(format!(
+            "ABS dwelling completion times URL `{source_url}` is not supported"
+        )));
+    }
+    let lines = html_text_lines(body);
+    let title = lines
+        .iter()
+        .find(|line| line.eq_ignore_ascii_case("Average dwelling completion times"))
+        .cloned()
+        .unwrap_or_else(|| "Average dwelling completion times".into());
+    let released = labeled_text_value(&lines, "Released").ok_or_else(|| {
+        AdapterError::FormatDrift(
+            "ABS dwelling completion times article is missing released date".into(),
+        )
+    })?;
+    Ok(DwellingCompletionTimesArticle {
+        source_url: source_url.to_string(),
+        title,
         released,
     })
 }
@@ -1299,6 +1753,13 @@ fn is_building_activity_release_url(source_url: &str) -> bool {
         || without_query.contains("/building-activity/")
 }
 
+fn is_dwelling_completion_times_url(source_url: &str) -> bool {
+    let without_query = source_url
+        .split_once('?')
+        .map_or(source_url, |(source_url, _)| source_url);
+    without_query.contains("/articles/average-dwelling-completion-times")
+}
+
 fn cpi_dataflow_id() -> DataflowId {
     DataflowId::new(CPI_CANONICAL_DATAFLOW_ID).expect("static dataflow id is valid")
 }
@@ -1309,6 +1770,11 @@ fn building_approvals_dataflow_id() -> DataflowId {
 
 fn building_activity_dataflow_id() -> DataflowId {
     DataflowId::new(BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID).expect("static dataflow id is valid")
+}
+
+fn dwelling_completion_times_dataflow_id() -> DataflowId {
+    DataflowId::new(DWELLING_COMPLETION_TIMES_CANONICAL_DATAFLOW_ID)
+        .expect("static dataflow id is valid")
 }
 
 async fn verify_parse_artifact_identity(
@@ -2633,6 +3099,7 @@ pub struct AbsAdapterBuilder {
     base_url: String,
     building_approvals_release_url: String,
     building_activity_release_url: String,
+    dwelling_completion_times_url: String,
 }
 
 impl Default for AbsAdapterBuilder {
@@ -2641,6 +3108,7 @@ impl Default for AbsAdapterBuilder {
             base_url: DEFAULT_BASE_URL.to_string(),
             building_approvals_release_url: DEFAULT_BUILDING_APPROVALS_RELEASE_URL.to_string(),
             building_activity_release_url: DEFAULT_BUILDING_ACTIVITY_RELEASE_URL.to_string(),
+            dwelling_completion_times_url: DEFAULT_DWELLING_COMPLETION_TIMES_URL.to_string(),
         }
     }
 }
@@ -2667,6 +3135,13 @@ impl AbsAdapterBuilder {
         self
     }
 
+    /// Override the dwelling completion times article URL. Intended for fixture tests.
+    #[must_use]
+    pub fn dwelling_completion_times_url(mut self, url: impl Into<String>) -> Self {
+        self.dwelling_completion_times_url = url.into();
+        self
+    }
+
     /// Build the adapter.
     #[must_use]
     pub fn build(self) -> AbsAdapter {
@@ -2684,11 +3159,14 @@ impl AbsAdapterBuilder {
                         .expect("static dataflow id is valid"),
                     DataflowId::new(BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID)
                         .expect("static dataflow id is valid"),
+                    DataflowId::new(DWELLING_COMPLETION_TIMES_CANONICAL_DATAFLOW_ID)
+                        .expect("static dataflow id is valid"),
                 ],
             },
             base_url: self.base_url,
             building_approvals_release_url: self.building_approvals_release_url,
             building_activity_release_url: self.building_activity_release_url,
+            dwelling_completion_times_url: self.dwelling_completion_times_url,
         }
     }
 }

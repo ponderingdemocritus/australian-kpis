@@ -93,27 +93,29 @@ attribution = "Source: National Housing Supply and Affordability Council"
 [[indicators]]
 indicator_id = "construction.completion-time"
 source_dataflow_id = "abs.dwelling_completion_times"
-measure_id = "median_months"
+measure_id = "average_completion_months"
 axis = "throughput"
 component = "housing"
 weight = 0.25
 direction = "lower_is_better"
-display_label = "Dwelling completion time"
-description = "Median completion time for dwellings; lower values improve throughput."
+display_label = "Apartment completion time"
+description = "Average completion time for new apartments; lower values improve throughput."
 unit = "months"
 confidence = "medium"
 coverage_status = "missing_expected"
-cadence = "quarterly"
+cadence = "annual"
 
 [indicators.dimension_selector]
 region = "AUS"
+measure = "average_completion_months"
+dwelling_type = "apartments"
 
 [indicators.normalization]
 worst = 30.0
 best = 12.0
 
 [indicators.provenance]
-source_url = "https://www.abs.gov.au/statistics/industry/building-and-construction"
+source_url = "https://www.abs.gov.au/articles/average-dwelling-completion-times"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
 

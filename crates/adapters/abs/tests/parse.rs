@@ -73,6 +73,33 @@ const BUILDING_ACTIVITY_FIXTURE: &[u8] = br#"<!doctype html>
     </table>
   </section>
 </main>"#;
+const DWELLING_COMPLETION_TIMES_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Average dwelling completion times</h1>
+  <dl>
+    <dt>Released</dt><dd>9/10/2019</dd>
+  </dl>
+  <p>Data presented in this article are available in the Building Activity data cube.</p>
+  <h2>Results</h2>
+  <section>
+    <h3>Graph 1: Average completion times of new houses and new townhouses, Australia</h3>
+    <p>New houses (quarters) New townhouses (quarters)</p>
+    <table>
+      <tr><th>Financial year</th><th>New houses</th><th>New townhouses</th></tr>
+      <tr><td>2017-2018</td><td>2.23</td><td>3.09</td></tr>
+      <tr><td>2018-2019</td><td>2.22</td><td>3.36</td></tr>
+    </table>
+  </section>
+  <section>
+    <h3>Graph 2: Average completion times of new flats, units or apartments, Australia</h3>
+    <p>New apartments (quarters)</p>
+    <table>
+      <tr><th>Financial year</th><th>New apartments</th></tr>
+      <tr><td>2017-2018</td><td>6.47</td></tr>
+      <tr><td>2018-2019</td><td>6.66</td></tr>
+    </table>
+  </section>
+</main>"#;
 const REORDERED_FIXTURE: &[u8] = br#"{
   "data": {
     "dataSets": [
@@ -403,6 +430,31 @@ async fn parse_streams_building_activity_release_page() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_streams_dwelling_completion_times_article() {
+    let rows = parse_fixture_owned_with_url(
+        DWELLING_COMPLETION_TIMES_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/articles/average-dwelling-completion-times",
+    )
+    .await
+    .expect("parse dwelling completion times fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.dwelling_completion_times"
+            && row.measure_id == "average_completion_months"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str)
+                == Some("average_completion_months")
+            && row.dimensions.get("dwelling_type").map(String::as_str) == Some("apartments")
+            && row.time == "2018-07-01T00:00:00+00:00"
+            && row.time_precision == "year"
+            && row.value == Some(19.98)
+    }));
+    insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_cpi_fixture_stays_under_runtime_budget() {
     let started = Instant::now();
     let rows = parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture");
@@ -600,6 +652,24 @@ async fn parse_rejects_building_activity_artifact_without_release_provenance() {
     )
     .await
     .expect_err("mirrored Building Activity artifact should be rejected");
+
+    assert!(matches!(err, AdapterError::Validation(_)));
+    assert_eq!(err.class(), ErrorClass::Validation);
+    assert!(
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_dwelling_completion_times_without_article_provenance() {
+    let err = parse_fixture_owned_with_url(
+        DWELLING_COMPLETION_TIMES_FIXTURE.to_vec(),
+        "https://mirror.example.test/average-dwelling-completion-times.html",
+    )
+    .await
+    .expect_err("mirrored completion times artifact should be rejected");
 
     assert!(matches!(err, AdapterError::Validation(_)));
     assert_eq!(err.class(), ErrorClass::Validation);
