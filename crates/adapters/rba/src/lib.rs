@@ -1372,4 +1372,19 @@ mod tests {
             "{err}"
         );
     }
+
+    #[test]
+    fn malformed_xlsx_with_case_mismatched_worksheet_entry_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-case-mismatched-worksheet-entry.xlsx.hex"
+        ));
+
+        let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(err.to_string().contains("RBA XLSX worksheet"), "{err}");
+    }
 }

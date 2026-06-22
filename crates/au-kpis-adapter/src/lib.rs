@@ -123,11 +123,18 @@ pub fn validate_xlsx_workbook_cell_refs(bytes: &[u8], source: &str) -> Result<()
             AdapterError::FormatDrift(format!("{source} XLSX ZIP entry is unreadable: {err}"))
         })?;
         let name = entry.name().to_string();
-        if name.starts_with("xl/worksheets/") && name.ends_with(".xml") {
+        if is_xlsx_worksheet_entry(&name) {
             validate_xlsx_worksheet_cell_refs(source, &name, BufReader::new(entry))?;
         }
     }
     Ok(())
+}
+
+fn is_xlsx_worksheet_entry(name: &str) -> bool {
+    let name = name.as_bytes();
+    name.len() > b"xl/worksheets/.xml".len()
+        && name[..14].eq_ignore_ascii_case(b"xl/worksheets/")
+        && name[name.len() - 4..].eq_ignore_ascii_case(b".xml")
 }
 
 fn validate_xlsx_worksheet_cell_refs<R: BufRead>(

@@ -1953,6 +1953,24 @@ mod tests {
     }
 
     #[test]
+    fn malformed_xlsx_with_case_mismatched_worksheet_entry_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-case-mismatched-worksheet-entry.xlsx.hex"
+        ));
+        let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+
+        let parsed = std::panic::catch_unwind(|| {
+            parse_xls_workbook(bytes, artifact, provenance, ingested_at)
+        });
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(err.to_string().contains("APRA XLSX worksheet"), "{err}");
+    }
+
+    #[test]
     fn validate_fetch_job_rejects_wrong_source_dataflow_and_url() {
         let adapter = ApraAdapter::default();
         let releases = ApraAdapter::parse_release_calendar(
