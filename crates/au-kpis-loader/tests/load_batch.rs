@@ -4,7 +4,7 @@ use au_kpis_config::DatabaseConfig;
 use au_kpis_db::{connect, migrate};
 use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
-    ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
+    ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey, Sha256Digest},
 };
 use au_kpis_loader::{
     LoadItem, LoadItemAudit, LoadOptions, begin_staged_load, load_batch,
@@ -117,7 +117,12 @@ async fn seed_artifact(pool: &PgPool, artifact_id: ArtifactId, source_url: &str)
 }
 
 fn descriptor(region: &str) -> SeriesDescriptor {
+    descriptor_with_measure(region, "index")
+}
+
+fn descriptor_with_measure(region: &str, measure_id: &str) -> SeriesDescriptor {
     let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+    let measure_id = MeasureId::new(measure_id).unwrap();
     let dimensions: BTreeMap<DimensionId, CodeId> = [(
         DimensionId::new("region").unwrap(),
         CodeId::new(region).unwrap(),
@@ -126,6 +131,7 @@ fn descriptor(region: &str) -> SeriesDescriptor {
     .collect();
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -134,10 +140,22 @@ fn descriptor(region: &str) -> SeriesDescriptor {
     SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("index").unwrap(),
+        measure_id,
         dimensions,
         unit: "index".to_string(),
     }
+}
+
+fn legacy_series_key_without_measure(descriptor: &SeriesDescriptor) -> SeriesKey {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(descriptor.dataflow_id.as_str().as_bytes());
+    for (key, value) in &descriptor.dimensions {
+        bytes.push(0);
+        bytes.extend_from_slice(key.as_str().as_bytes());
+        bytes.push(b'=');
+        bytes.extend_from_slice(value.as_str().as_bytes());
+    }
+    SeriesKey::from_digest(Sha256Digest::hash(&bytes))
 }
 
 fn observation(
@@ -213,6 +231,16 @@ fn load_batch_boundary_helpers_cover_row_and_byte_edges() {
     assert!(load_batch_boundary_reached(3, 0, options));
     assert!(load_batch_boundary_reached(1, 100, options));
     assert!(!load_batch_boundary_reached(2, 99, options));
+}
+
+#[test]
+fn descriptor_keys_include_measure_id() {
+    let count = descriptor_with_measure("AUS", "count");
+    let value = descriptor_with_measure("AUS", "value");
+
+    assert_ne!(count.series_key, value.series_key);
+    assert_eq!(count.dimensions, value.dimensions);
+    assert_eq!(count.dataflow_id, value.dataflow_id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -478,6 +506,34 @@ async fn validation_errors_are_recorded_without_failing_valid_rows() {
 
     assert_eq!(observation_count, 1);
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn descriptors_with_legacy_measureless_keys_are_rejected() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let artifact_id = ArtifactId::of_content(b"loader stale series key fixture");
+    seed_reference_data(pool, artifact_id).await;
+
+    let mut stale = descriptor("AUS");
+    stale.series_key = legacy_series_key_without_measure(&stale);
+    let mut stale_item = item(&stale, artifact_id, ts(2024, 3, 1), 0, 134.2);
+    stale_item.observation.series_key = stale.series_key;
+
+    let stats = load_batch(pool, vec![stale_item])
+        .await
+        .expect("record stale series key as parse error");
+
+    assert_eq!(stats.observations_loaded, 0);
+    assert_eq!(stats.series_upserted, 0);
+    assert_eq!(stats.parse_errors, 1);
+
+    let error: String = sqlx::query_scalar("SELECT error_message FROM parse_errors")
+        .fetch_one(pool)
+        .await
+        .expect("fetch parse error");
+    assert!(error.contains("does not match computed key"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

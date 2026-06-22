@@ -1280,3 +1280,65 @@ fn observation_status_db(value: ObservationStatus) -> &'static str {
         ObservationStatus::Break => "break",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use au_kpis_domain::ids::{CodeId, DataflowId, DimensionId, MeasureId, Sha256Digest};
+    use chrono::TimeZone;
+
+    #[test]
+    fn validate_item_rejects_legacy_measureless_series_key() {
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let measure_id = MeasureId::new("index").unwrap();
+        let dimensions: BTreeMap<DimensionId, CodeId> = [(
+            DimensionId::new("region").unwrap(),
+            CodeId::new("AUS").unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let series_key = legacy_series_key_without_measure(&dataflow_id, &dimensions);
+        let artifact_id = ArtifactId::of_content(b"legacy key fixture");
+        let observed_at = chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+        let ingested_at = chrono::Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap();
+
+        let item = LoadItem {
+            series: SeriesDescriptor {
+                series_key,
+                dataflow_id,
+                measure_id,
+                dimensions,
+                unit: "index".into(),
+            },
+            observation: Observation {
+                series_key,
+                time: observed_at,
+                time_precision: TimePrecision::Quarter,
+                value: Some(134.2),
+                status: ObservationStatus::Normal,
+                revision_no: 0,
+                attributes: BTreeMap::new(),
+                ingested_at,
+                source_artifact_id: artifact_id,
+            },
+        };
+
+        let err = validate_item(&item).expect_err("legacy series key should be rejected");
+        assert!(err.contains("does not match computed key"), "{err}");
+    }
+
+    fn legacy_series_key_without_measure(
+        dataflow_id: &DataflowId,
+        dimensions: &BTreeMap<DimensionId, CodeId>,
+    ) -> SeriesKey {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(dataflow_id.as_str().as_bytes());
+        for (key, value) in dimensions {
+            bytes.push(0);
+            bytes.extend_from_slice(key.as_str().as_bytes());
+            bytes.push(b'=');
+            bytes.extend_from_slice(value.as_str().as_bytes());
+        }
+        SeriesKey::from_digest(Sha256Digest::hash(&bytes))
+    }
+}

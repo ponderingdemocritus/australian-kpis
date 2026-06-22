@@ -101,6 +101,7 @@ async fn seed_reference_data(pool: &PgPool) {
 
 fn descriptor() -> SeriesDescriptor {
     let dataflow_id = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
+    let measure_id = MeasureId::new("index").expect("static measure id is valid");
     let dimensions: BTreeMap<DimensionId, CodeId> = [(
         DimensionId::new("region").expect("static dimension id is valid"),
         CodeId::new("AUS").expect("static code id is valid"),
@@ -109,6 +110,7 @@ fn descriptor() -> SeriesDescriptor {
     .collect();
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -117,7 +119,7 @@ fn descriptor() -> SeriesDescriptor {
     SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("index").expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: "index".to_string(),
     }

@@ -662,8 +662,10 @@ fn parse_table_rows(
                 ),
             ]);
             let dataflow_id = dataflow_id();
+            let measure_id = MeasureId::new("value").expect("static measure id is valid");
             let series_key = SeriesKey::derive(
                 &dataflow_id,
+                &measure_id,
                 dimensions
                     .iter()
                     .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -671,7 +673,7 @@ fn parse_table_rows(
             let descriptor = SeriesDescriptor {
                 series_key,
                 dataflow_id,
-                measure_id: MeasureId::new("value").expect("static measure id is valid"),
+                measure_id,
                 dimensions,
                 unit,
             };

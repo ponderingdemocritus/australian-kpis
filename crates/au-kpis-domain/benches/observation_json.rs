@@ -1,16 +1,18 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use au_kpis_domain::{
-    ArtifactId, DataflowId, Observation, ObservationStatus, SeriesKey, TimePrecision,
+    ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesKey, TimePrecision,
 };
 use chrono::{TimeZone, Utc};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 fn sample_observations() -> Vec<Observation> {
     let dataflow = DataflowId::new("abs.cpi").expect("valid dataflow id");
+    let measure = MeasureId::new("all-groups-cpi").expect("valid measure id");
     let artifact = ArtifactId::of_content(b"benchmark-artifact");
     let series_key = SeriesKey::derive(
         &dataflow,
+        &measure,
         [("region", "AUS"), ("measure", "all-groups-cpi")],
     );
     let ingested_at = Utc
