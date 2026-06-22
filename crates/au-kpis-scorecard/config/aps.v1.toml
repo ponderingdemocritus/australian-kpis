@@ -34,6 +34,34 @@ license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
 
 [[indicators]]
+indicator_id = "housing.accord-progress"
+source_dataflow_id = "nhsac.housing_accord_progress"
+measure_id = "progress_to_target_pct"
+axis = "throughput"
+component = "housing"
+weight = 0.20
+direction = "higher_is_better"
+display_label = "Housing Accord progress"
+description = "Annual national progress against the Housing Accord supply target."
+unit = "percent"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "annual"
+
+[indicators.dimension_selector]
+measure = "progress_to_target_pct"
+region = "AUS"
+
+[indicators.normalization]
+worst = 0.0
+best = 100.0
+
+[indicators.provenance]
+source_url = "https://nhsac.gov.au/publications"
+license = "NHSAC copyright"
+attribution = "Source: National Housing Supply and Affordability Council"
+
+[[indicators]]
 indicator_id = "construction.completion-time"
 source_dataflow_id = "abs.dwelling_completion_times"
 measure_id = "median_months"
