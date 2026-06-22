@@ -154,6 +154,11 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
         csv.headers().get(header::CONTENT_TYPE).unwrap(),
         "text/csv; charset=utf-8"
     );
+    assert_eq!(
+        csv.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=60, stale-while-revalidate=300"
+    );
+    assert!(!csv.headers().contains_key(header::ETAG));
     let body = String::from_utf8(
         to_bytes(csv.into_body(), usize::MAX)
             .await
@@ -194,7 +199,7 @@ async fn observations_endpoint_streams_decodable_parquet_with_headers() {
         response.headers().get(header::CACHE_CONTROL).unwrap(),
         "public, max-age=60, stale-while-revalidate=300"
     );
-    assert!(response.headers().contains_key(header::ETAG));
+    assert!(!response.headers().contains_key(header::ETAG));
 
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -798,6 +803,13 @@ async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
 }
 
 fn docker_available() -> bool {
-    std::env::var_os("DOCKER_HOST").is_some()
-        || std::path::Path::new("/var/run/docker.sock").exists()
+    if let Some(host) = std::env::var_os("DOCKER_HOST") {
+        let host = host.to_string_lossy();
+        if let Some(path) = host.strip_prefix("unix://") {
+            return std::os::unix::net::UnixStream::connect(path).is_ok();
+        }
+        return true;
+    }
+
+    std::os::unix::net::UnixStream::connect("/var/run/docker.sock").is_ok()
 }

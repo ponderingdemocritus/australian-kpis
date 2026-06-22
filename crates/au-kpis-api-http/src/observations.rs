@@ -172,52 +172,63 @@ pub async fn list_observations(
     uri: Uri,
 ) -> Result<Response, ApiError> {
     let query = parse_observations_query(uri.query())?;
-    let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
-    validate_observation_query_bounds(&query, &fingerprint)?;
-    let json_cache_key = observations_json_cache_key(uri.query(), &query);
-    if should_cache_json_observations(&query) {
+    if requires_cache_fingerprint(&query) {
+        let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
+        validate_observation_query_bounds(&query, &fingerprint)?;
+        let json_cache_key = observations_json_cache_key(uri.query(), &query);
         if let Some(cached) = read_cached_json_observations(&state, &json_cache_key).await {
             return cached_json_observations_response(&headers, cached);
         }
-    }
 
-    let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
-    let etag = compute_etag(&query, &fingerprint)?;
-    let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
-    let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
-        tracing::error!(error = %err, "generated invalid ETag header");
-        ApiError::Internal
-    })?;
+        let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
+        let etag = compute_etag(&query, &fingerprint)?;
+        let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
+        let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
+            tracing::error!(error = %err, "generated invalid ETag header");
+            ApiError::Internal
+        })?;
 
-    if if_none_match_fresh(&headers, &etag) {
-        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        if if_none_match_fresh(&headers, &etag) {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, cache_control);
+            response.headers_mut().insert(header::ETAG, etag_header);
+            return Ok(response);
+        }
+
+        let body =
+            render_json_observations(state.db.clone(), query.clone(), metadata.clone()).await?;
+        write_cached_json_observations(
+            &state,
+            &json_cache_key,
+            &CachedJsonObservations {
+                etag: etag.clone(),
+                body: body.clone(),
+            },
+        )
+        .await;
+        let mut response = Response::new(Body::from(body));
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, cache_control);
         response.headers_mut().insert(header::ETAG, etag_header);
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
         return Ok(response);
     }
 
+    validate_streaming_observation_query_bounds(&state.db, &query).await?;
+    let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
+    let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
     let content_type = match query.format {
         ResponseFormat::Json => HeaderValue::from_static("application/json"),
         ResponseFormat::Csv => HeaderValue::from_static("text/csv; charset=utf-8"),
         ResponseFormat::Parquet => HeaderValue::from_static("application/vnd.apache.parquet"),
     };
     let stream = match query.format {
-        ResponseFormat::Json if should_cache_json_observations(&query) => {
-            let body =
-                render_json_observations(state.db.clone(), query.clone(), metadata.clone()).await?;
-            write_cached_json_observations(
-                &state,
-                &json_cache_key,
-                &CachedJsonObservations {
-                    etag: etag.clone(),
-                    body: body.clone(),
-                },
-            )
-            .await;
-            Body::from(body)
-        }
         ResponseFormat::Json => {
             Body::from_stream(json_observations_stream(state.db.clone(), query, metadata))
         }
@@ -235,7 +246,6 @@ pub async fn list_observations(
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, cache_control);
-    response.headers_mut().insert(header::ETAG, etag_header);
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
@@ -547,6 +557,18 @@ fn validate_latest_query_cardinality(
     Ok(())
 }
 
+async fn validate_streaming_observation_query_bounds(
+    pool: &PgPool,
+    query: &ParsedObservationsQuery,
+) -> Result<(), ApiError> {
+    if rollup_grain(query).is_some() {
+        return Ok(());
+    }
+
+    let candidates = load_candidate_series(pool, query).await?;
+    validate_latest_query_cardinality(query, candidates.len() as i64)
+}
+
 fn etag_seed(query: &ParsedObservationsQuery, fingerprint: &CacheFingerprint) -> String {
     format!(
         "dataflow={};dimensions={:?};since={:?};until={:?};frequency={:?};format={};cursor={:?};limit={};series_count={};max_series_updated_at={:?}",
@@ -578,6 +600,15 @@ fn if_none_match_fresh(headers: &HeaderMap, etag: &str) -> bool {
 fn should_cache_json_observations(query: &ParsedObservationsQuery) -> bool {
     // Keep the hot-path cache bounded; cursor pages and export formats stay streaming.
     query.format == ResponseFormat::Json && query.cursor.is_none() && query.limit <= DEFAULT_LIMIT
+}
+
+fn requires_cache_fingerprint(query: &ParsedObservationsQuery) -> bool {
+    should_cache_json_observations(query)
+}
+
+#[cfg(test)]
+fn emits_etag_header(query: &ParsedObservationsQuery) -> bool {
+    requires_cache_fingerprint(query)
 }
 
 fn observations_json_cache_key(raw_query: Option<&str>, query: &ParsedObservationsQuery) -> String {
@@ -1946,6 +1977,25 @@ mod tests {
         assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
         headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
         assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
+    }
+
+    #[test]
+    fn only_json_observation_pages_require_cache_fingerprints() {
+        let json = parse_observations_query(Some("dataflow=abs.cpi")).unwrap();
+        assert!(requires_cache_fingerprint(&json));
+        assert!(emits_etag_header(&json));
+
+        let oversized_json = parse_observations_query(Some("dataflow=abs.cpi&limit=1001")).unwrap();
+        assert!(!requires_cache_fingerprint(&oversized_json));
+        assert!(!emits_etag_header(&oversized_json));
+
+        let csv = parse_observations_query(Some("dataflow=abs.cpi&format=csv")).unwrap();
+        assert!(!requires_cache_fingerprint(&csv));
+        assert!(!emits_etag_header(&csv));
+
+        let parquet = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
+        assert!(!requires_cache_fingerprint(&parquet));
+        assert!(!emits_etag_header(&parquet));
     }
 
     fn test_observation_row() -> ObservationsRow {
