@@ -12,7 +12,9 @@
   "paths": {
     "/v1/dataflows": {
       "get": {
-        "tags": ["dataflows"],
+        "tags": [
+          "dataflows"
+        ],
         "summary": "`GET /v1/dataflows`.",
         "operationId": "listDataflows",
         "parameters": [
@@ -83,7 +85,9 @@
     },
     "/v1/dataflows/{id}": {
       "get": {
-        "tags": ["dataflows"],
+        "tags": [
+          "dataflows"
+        ],
         "summary": "`GET /v1/dataflows/{id}`.",
         "operationId": "getDataflow",
         "parameters": [
@@ -153,7 +157,9 @@
     },
     "/v1/dataflows/{id}/codelists/{dim}": {
       "get": {
-        "tags": ["dataflows"],
+        "tags": [
+          "dataflows"
+        ],
         "summary": "`GET /v1/dataflows/{id}/codelists/{dim}`.",
         "operationId": "getDataflowCodelist",
         "parameters": [
@@ -263,7 +269,9 @@
     },
     "/v1/observations": {
       "get": {
-        "tags": ["observations"],
+        "tags": [
+          "observations"
+        ],
         "summary": "`GET /v1/observations`.",
         "operationId": "listObservations",
         "parameters": [
@@ -492,9 +500,236 @@
         }
       }
     },
+    "/v1/scorecards/aps/config": {
+      "get": {
+        "tags": [
+          "scorecards"
+        ],
+        "summary": "`GET /v1/scorecards/aps/config`.",
+        "operationId": "getApsScorecardConfig",
+        "responses": {
+          "200": {
+            "description": "Versioned APS scorecard config.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong entity tag for the config JSON."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardConfig"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's cached config is still fresh.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong entity tag for the config JSON."
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/scorecards/aps/history": {
+      "get": {
+        "tags": [
+          "scorecards"
+        ],
+        "summary": "`GET /v1/scorecards/aps/history`.",
+        "operationId": "listApsScorecardHistory",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Inclusive upper snapshot date in `YYYY-MM-DD` form.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time-ordered APS scorecard snapshots.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong entity tag for the history JSON."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScorecardSnapshot"
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's cached history response is still fresh.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong entity tag for the history JSON."
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query string.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/scorecards/aps/latest": {
+      "get": {
+        "tags": [
+          "scorecards"
+        ],
+        "summary": "`GET /v1/scorecards/aps/latest`.",
+        "operationId": "getApsScorecardLatest",
+        "responses": {
+          "200": {
+            "description": "Latest APS scorecard snapshot.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong entity tag for the latest snapshot JSON."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardSnapshot"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's cached latest snapshot is still fresh.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong entity tag for the latest snapshot JSON."
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/search": {
       "get": {
-        "tags": ["search"],
+        "tags": [
+          "search"
+        ],
         "summary": "`GET /v1/search`.",
         "operationId": "searchCatalog",
         "parameters": [
@@ -565,7 +800,9 @@
     },
     "/v1/series/{dataflow}/{series_key}": {
       "get": {
-        "tags": ["series"],
+        "tags": [
+          "series"
+        ],
         "summary": "`GET /v1/series/{dataflow}/{series_key}`.",
         "operationId": "getSeries",
         "parameters": [
@@ -639,7 +876,9 @@
     },
     "/v1/subscriptions": {
       "post": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`POST /v1/subscriptions`.",
         "operationId": "createSubscription",
         "requestBody": {
@@ -711,17 +950,32 @@
         "maxLength": 64,
         "minLength": 64
       },
+      "Axis": {
+        "type": "string",
+        "description": "Scorecard axis used by APS v1.",
+        "enum": [
+          "throughput",
+          "orientation"
+        ]
+      },
       "Code": {
         "type": "object",
         "description": "A single code within a codelist (e.g. `VIC` → \"Victoria\").",
-        "required": ["id", "codelist_id", "name"],
+        "required": [
+          "id",
+          "codelist_id",
+          "name"
+        ],
         "properties": {
           "codelist_id": {
             "$ref": "#/components/schemas/CodelistId",
             "description": "The codelist this code belongs to. Denormalised here so a `Code`\nemitted from the API is self-contained."
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/CodeId"
@@ -749,7 +1003,11 @@
       "Codelist": {
         "type": "object",
         "description": "A reusable vocabulary of codes attached to dimensions.",
-        "required": ["id", "name", "codes"],
+        "required": [
+          "id",
+          "name",
+          "codes"
+        ],
         "properties": {
           "codes": {
             "type": "array",
@@ -758,7 +1016,10 @@
             }
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/CodelistId"
@@ -772,10 +1033,84 @@
         "type": "string",
         "description": "Identifier for a codelist (e.g. `CL_STATE_AU`)."
       },
+      "ComponentScore": {
+        "type": "object",
+        "description": "Component-level score inside a sub-index.",
+        "required": [
+          "component",
+          "score",
+          "weight",
+          "coverage_pct"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "Component name."
+          },
+          "coverage_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Weight-aware coverage percentage."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Component score in the axis scale."
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Weight represented by this component."
+          }
+        }
+      },
+      "Confidence": {
+        "type": "string",
+        "description": "Confidence label exposed for configs, contributions, and snapshots.",
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ]
+      },
+      "ConfidenceBand": {
+        "type": "object",
+        "description": "Lower and upper score bounds.",
+        "required": [
+          "low",
+          "high"
+        ],
+        "properties": {
+          "high": {
+            "type": "number",
+            "format": "double",
+            "description": "Best-case score."
+          },
+          "low": {
+            "type": "number",
+            "format": "double",
+            "description": "Worst-case score."
+          }
+        }
+      },
+      "CoverageStatus": {
+        "type": "string",
+        "description": "Contribution coverage state.",
+        "enum": [
+          "resolved",
+          "stale",
+          "missing_expected",
+          "coverage_gap",
+          "manual_pending",
+          "visible_unscored"
+        ]
+      },
       "CreateSubscriptionRequest": {
         "type": "object",
         "description": "Request body for `POST /v1/subscriptions`.",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
           "dataflow_ids": {
             "type": "array",
@@ -793,7 +1128,9 @@
       "CreateSubscriptionResponse": {
         "type": "object",
         "description": "Response body for `POST /v1/subscriptions`.",
-        "required": ["subscription"],
+        "required": [
+          "subscription"
+        ],
         "properties": {
           "subscription": {
             "$ref": "#/components/schemas/SubscriptionDetails",
@@ -821,7 +1158,10 @@
             "description": "Required attribution string shown to end-users alongside derived charts."
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "dimensions": {
             "type": "array",
@@ -861,7 +1201,11 @@
       "DataflowCodelistResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/dataflows/{id}/codelists/{dim}`.",
-        "required": ["dataflow_id", "dimension_id", "codelist"],
+        "required": [
+          "dataflow_id",
+          "dimension_id",
+          "codelist"
+        ],
         "properties": {
           "codelist": {
             "$ref": "#/components/schemas/Codelist",
@@ -880,7 +1224,10 @@
       "DataflowDetailResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/dataflows/{id}`.",
-        "required": ["dataflow", "dimensions"],
+        "required": [
+          "dataflow",
+          "dimensions"
+        ],
         "properties": {
           "dataflow": {
             "$ref": "#/components/schemas/Dataflow",
@@ -930,7 +1277,9 @@
       "DataflowsResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/dataflows`.",
-        "required": ["dataflows"],
+        "required": [
+          "dataflows"
+        ],
         "properties": {
           "dataflows": {
             "type": "array",
@@ -944,13 +1293,21 @@
       "Dimension": {
         "type": "object",
         "description": "A single dimension within a dataflow. Binds a dimension id to a codelist\nthat enumerates the permitted values.",
-        "required": ["id", "name", "codelist_id", "position"],
+        "required": [
+          "id",
+          "name",
+          "codelist_id",
+          "position"
+        ],
         "properties": {
           "codelist_id": {
             "$ref": "#/components/schemas/CodelistId"
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/DimensionId"
@@ -970,15 +1327,32 @@
         "type": "string",
         "description": "Identifier for a dimension within a dataflow (e.g. `region`)."
       },
+      "Direction": {
+        "type": "string",
+        "description": "Direction used to normalize raw indicator values.",
+        "enum": [
+          "higher_is_better",
+          "lower_is_better"
+        ]
+      },
       "Frequency": {
         "type": "string",
         "description": "Cadence at which a dataflow publishes new observations. Informational —\nused by the scheduler to pick discovery intervals and by the SLO alerting\nrule `dataflow-no-new-observations`.",
-        "enum": ["daily", "weekly", "monthly", "quarterly", "annual", "irregular"]
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly",
+          "quarterly",
+          "annual",
+          "irregular"
+        ]
       },
       "HealthResponse": {
         "type": "object",
         "description": "Health endpoint response.",
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "properties": {
           "status": {
             "type": "string",
@@ -986,28 +1360,266 @@
           }
         }
       },
+      "IndicatorConfig": {
+        "type": "object",
+        "description": "Static config for one APS indicator.",
+        "required": [
+          "indicator_id",
+          "source_dataflow_id",
+          "measure_id",
+          "axis",
+          "component",
+          "weight",
+          "direction",
+          "normalization",
+          "display_label",
+          "description",
+          "unit",
+          "confidence",
+          "coverage_status",
+          "cadence",
+          "provenance"
+        ],
+        "properties": {
+          "axis": {
+            "$ref": "#/components/schemas/Axis",
+            "description": "APS axis."
+          },
+          "cadence": {
+            "type": "string",
+            "description": "Expected update cadence."
+          },
+          "component": {
+            "type": "string",
+            "description": "Display grouping within the axis."
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Confidence for this input."
+          },
+          "coverage_status": {
+            "$ref": "#/components/schemas/CoverageStatus",
+            "description": "Default configured coverage status."
+          },
+          "description": {
+            "type": "string",
+            "description": "User-facing indicator description."
+          },
+          "dimension_selector": {
+            "type": "object",
+            "description": "Exact dimension selector for the intended APS series.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction",
+            "description": "Direction-aware normalization rule."
+          },
+          "display_label": {
+            "type": "string",
+            "description": "User-facing indicator label."
+          },
+          "indicator_id": {
+            "type": "string",
+            "description": "Stable indicator id."
+          },
+          "measure_id": {
+            "type": "string",
+            "description": "Source measure id."
+          },
+          "normalization": {
+            "$ref": "#/components/schemas/Normalization",
+            "description": "Normalization references."
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance",
+            "description": "Source and licensing metadata."
+          },
+          "source_dataflow_id": {
+            "type": "string",
+            "description": "Canonical source dataflow id."
+          },
+          "unit": {
+            "type": "string",
+            "description": "Display unit."
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Scored weight within the axis. Visible-unscored inputs may use zero."
+          }
+        }
+      },
+      "IndicatorContribution": {
+        "type": "object",
+        "description": "Contribution row for one indicator.",
+        "required": [
+          "indicator_id",
+          "label",
+          "axis",
+          "component",
+          "source_dataflow_id",
+          "measure_id",
+          "dimensions",
+          "unit",
+          "weight",
+          "direction",
+          "coverage_status",
+          "confidence",
+          "license",
+          "attribution",
+          "source_url"
+        ],
+        "properties": {
+          "attribution": {
+            "type": "string",
+            "description": "Attribution metadata."
+          },
+          "axis": {
+            "$ref": "#/components/schemas/Axis",
+            "description": "APS axis."
+          },
+          "component": {
+            "type": "string",
+            "description": "Component name."
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Contribution confidence."
+          },
+          "coverage_status": {
+            "$ref": "#/components/schemas/CoverageStatus",
+            "description": "Coverage status."
+          },
+          "dimensions": {
+            "type": "object",
+            "description": "Dimension selector used for this input.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction",
+            "description": "Normalization direction."
+          },
+          "indicator_id": {
+            "type": "string",
+            "description": "Indicator id."
+          },
+          "label": {
+            "type": "string",
+            "description": "Indicator label."
+          },
+          "latest_period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Latest resolved period, when available."
+          },
+          "license": {
+            "type": "string",
+            "description": "License metadata."
+          },
+          "measure_id": {
+            "type": "string",
+            "description": "Source measure id."
+          },
+          "normalized_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Normalized value in the axis scale, when scored."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional notes."
+          },
+          "raw_value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Raw observation value, when resolved."
+          },
+          "series_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved series key, when available."
+          },
+          "source_artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved source artifact id, when available."
+          },
+          "source_dataflow_id": {
+            "type": "string",
+            "description": "Source dataflow id."
+          },
+          "source_url": {
+            "type": "string",
+            "description": "Source URL."
+          },
+          "unit": {
+            "type": "string",
+            "description": "Display unit."
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Configured weight."
+          }
+        }
+      },
       "License": {
         "oneOf": [
           {
             "type": "string",
-            "enum": ["CC-BY-4.0"]
+            "enum": [
+              "CC-BY-4.0"
+            ]
           },
           {
             "type": "string",
-            "enum": ["CC-BY-ND-4.0"]
+            "enum": [
+              "CC-BY-ND-4.0"
+            ]
           },
           {
             "type": "string",
-            "enum": ["CC-BY-SA-4.0"]
+            "enum": [
+              "CC-BY-SA-4.0"
+            ]
           },
           {
             "type": "string",
-            "enum": ["public-domain"]
+            "enum": [
+              "public-domain"
+            ]
           },
           {
             "type": "object",
             "description": "Escape hatch for licenses not yet enumerated. Carries the SPDX-style id.",
-            "required": ["other"],
+            "required": [
+              "other"
+            ],
             "properties": {
               "other": {
                 "type": "string",
@@ -1021,6 +1633,26 @@
       "MeasureId": {
         "type": "string",
         "description": "Identifier for a measure (e.g. `unemployment_rate`)."
+      },
+      "Normalization": {
+        "type": "object",
+        "description": "Linear normalization references for one indicator.",
+        "required": [
+          "worst",
+          "best"
+        ],
+        "properties": {
+          "best": {
+            "type": "number",
+            "format": "double",
+            "description": "Best reference value for this indicator."
+          },
+          "worst": {
+            "type": "number",
+            "format": "double",
+            "description": "Worst reference value for this indicator."
+          }
+        }
       },
       "Observation": {
         "type": "object",
@@ -1073,7 +1705,10 @@
             "$ref": "#/components/schemas/TimePrecision"
           },
           "value": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "`None` when `status = Missing`."
           }
@@ -1096,7 +1731,12 @@
       "ObservationsMetadata": {
         "type": "object",
         "description": "Attribution and licensing metadata that applies to an observations page.",
-        "required": ["dataflow", "attribution", "license", "source_url"],
+        "required": [
+          "dataflow",
+          "attribution",
+          "license",
+          "source_url"
+        ],
         "properties": {
           "attribution": {
             "type": "string",
@@ -1119,7 +1759,11 @@
       "ObservationsResponse": {
         "type": "object",
         "description": "JSON response envelope for `/v1/observations`.",
-        "required": ["metadata", "observations", "pagination"],
+        "required": [
+          "metadata",
+          "observations",
+          "pagination"
+        ],
         "properties": {
           "metadata": {
             "$ref": "#/components/schemas/ObservationsMetadata",
@@ -1216,7 +1860,10 @@
             "description": "Unit for the series values."
           },
           "value": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "Numeric value; null when status is `missing`."
           }
@@ -1227,7 +1874,10 @@
         "description": "Cursor metadata for the current observations page.",
         "properties": {
           "next_cursor": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Opaque cursor for the next page, or null when the page is complete."
           }
         }
@@ -1235,14 +1885,24 @@
       "ProblemDetails": {
         "type": "object",
         "description": "RFC 7807 problem details body.",
-        "required": ["type", "title", "status"],
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
         "properties": {
           "detail": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Request-specific detail, if any."
           },
           "instance": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Resource-specific identifier, if any."
           },
           "status": {
@@ -1261,13 +1921,227 @@
           }
         }
       },
+      "Provenance": {
+        "type": "object",
+        "description": "Source and licensing metadata for a scorecard input.",
+        "required": [
+          "source_url",
+          "license",
+          "attribution"
+        ],
+        "properties": {
+          "attribution": {
+            "type": "string",
+            "description": "Attribution text shown in API/UI responses."
+          },
+          "license": {
+            "type": "string",
+            "description": "License identifier or source-specific license note."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional source or review notes."
+          },
+          "retrieved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional retrieval date for curated/manual inputs."
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional review date for curated/manual inputs."
+          },
+          "reviewed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional reviewer identifier for curated/manual inputs."
+          },
+          "source_url": {
+            "type": "string",
+            "description": "Canonical source URL for this input."
+          }
+        }
+      },
+      "ScoreZone": {
+        "type": "string",
+        "description": "APS score zone.",
+        "enum": [
+          "red",
+          "yellow",
+          "green"
+        ]
+      },
+      "ScorecardConfig": {
+        "type": "object",
+        "description": "APS config metadata and indicator list.",
+        "required": [
+          "id",
+          "version",
+          "label",
+          "description",
+          "formula",
+          "indicators",
+          "license",
+          "attribution"
+        ],
+        "properties": {
+          "attribution": {
+            "type": "string",
+            "description": "Attribution note for the derived scorecard config."
+          },
+          "description": {
+            "type": "string",
+            "description": "User-facing description."
+          },
+          "formula": {
+            "type": "string",
+            "description": "Formula metadata."
+          },
+          "id": {
+            "type": "string",
+            "description": "Scorecard id."
+          },
+          "indicators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndicatorConfig"
+            },
+            "description": "Indicator definitions."
+          },
+          "label": {
+            "type": "string",
+            "description": "User-facing label."
+          },
+          "license": {
+            "type": "string",
+            "description": "License note for the derived scorecard config."
+          },
+          "version": {
+            "type": "string",
+            "description": "Versioned config id."
+          }
+        }
+      },
+      "ScorecardHistoryQuery": {
+        "type": "object",
+        "description": "Query string for APS history snapshots.",
+        "properties": {
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inclusive upper snapshot date in `YYYY-MM-DD` form."
+          }
+        }
+      },
+      "ScorecardSnapshot": {
+        "type": "object",
+        "description": "Full APS snapshot produced by the pure scorer.",
+        "required": [
+          "scorecard_id",
+          "config_version",
+          "as_of",
+          "score",
+          "zone",
+          "trend",
+          "confidence_band",
+          "confidence",
+          "coverage_pct",
+          "sub_indexes",
+          "contributions"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "description": "Snapshot timestamp or date chosen by the caller."
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Snapshot confidence label."
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand",
+            "description": "Worst/best APS confidence band."
+          },
+          "config_version": {
+            "type": "string",
+            "description": "Config version used for the score."
+          },
+          "contributions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndicatorContribution"
+            },
+            "description": "Indicator-level contribution rows."
+          },
+          "coverage_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Weight-aware coverage percentage."
+          },
+          "latest_period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Latest period represented by resolved inputs."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "APS score in `0..100`."
+          },
+          "scorecard_id": {
+            "type": "string",
+            "description": "Scorecard id."
+          },
+          "sub_indexes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubIndexScore"
+            },
+            "description": "Axis-level scores."
+          },
+          "trend": {
+            "$ref": "#/components/schemas/Trend",
+            "description": "Trend relative to prior comparable score."
+          },
+          "zone": {
+            "$ref": "#/components/schemas/ScoreZone",
+            "description": "Score zone."
+          }
+        }
+      },
       "SearchQuery": {
         "type": "object",
         "description": "Query parameters for `GET /v1/search`.",
-        "required": ["q"],
+        "required": [
+          "q"
+        ],
         "properties": {
           "limit": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
             "description": "Maximum number of catalog results to return.",
             "minimum": 0
@@ -1281,7 +2155,10 @@
       "SearchResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/search`.",
-        "required": ["query", "results"],
+        "required": [
+          "query",
+          "results"
+        ],
         "properties": {
           "query": {
             "type": "string",
@@ -1299,7 +2176,13 @@
       "SearchResult": {
         "type": "object",
         "description": "A ranked catalog search result.",
-        "required": ["kind", "id", "name", "score", "dataflow_ids"],
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "score",
+          "dataflow_ids"
+        ],
         "properties": {
           "dataflow_ids": {
             "type": "array",
@@ -1309,7 +2192,10 @@
             "description": "Dataflows directly represented by this match."
           },
           "description": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional catalog description."
           },
           "id": {
@@ -1345,12 +2231,22 @@
       "SearchResultKind": {
         "type": "string",
         "description": "Catalog object types returned by search.",
-        "enum": ["dataflow", "measure"]
+        "enum": [
+          "dataflow",
+          "measure"
+        ]
       },
       "Series": {
         "type": "object",
         "description": "One time series within a dataflow. `dimensions` is the sorted bag of\n`(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.",
-        "required": ["series_key", "dataflow_id", "measure_id", "dimensions", "unit", "active"],
+        "required": [
+          "series_key",
+          "dataflow_id",
+          "measure_id",
+          "dimensions",
+          "unit",
+          "active"
+        ],
         "properties": {
           "active": {
             "type": "boolean",
@@ -1371,11 +2267,17 @@
             }
           },
           "first_observed": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "last_observed": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "measure_id": {
@@ -1399,7 +2301,9 @@
       "SeriesLookupResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/series/{dataflow}/{series_key}`.",
-        "required": ["series"],
+        "required": [
+          "series"
+        ],
         "properties": {
           "latest_observation": {
             "oneOf": [
@@ -1432,7 +2336,12 @@
       "SeriesRevisionMetadata": {
         "type": "object",
         "description": "Revision details for the latest observation returned with a series lookup.",
-        "required": ["revision_no", "is_revision", "ingested_at", "source_artifact_id"],
+        "required": [
+          "revision_no",
+          "is_revision",
+          "ingested_at",
+          "source_artifact_id"
+        ],
         "properties": {
           "ingested_at": {
             "type": "string",
@@ -1459,10 +2368,61 @@
         "type": "string",
         "description": "Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`)."
       },
+      "SubIndexScore": {
+        "type": "object",
+        "description": "Axis-level sub-index score.",
+        "required": [
+          "axis",
+          "score",
+          "coverage_pct",
+          "weight",
+          "confidence_band",
+          "components"
+        ],
+        "properties": {
+          "axis": {
+            "$ref": "#/components/schemas/Axis",
+            "description": "Axis name."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComponentScore"
+            },
+            "description": "Component scores for this axis."
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand",
+            "description": "Axis confidence band in the axis scale."
+          },
+          "coverage_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Weight-aware coverage percentage."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Axis score (`0..1` for throughput, `-1..1` for orientation)."
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Expected scored weight for this axis."
+          }
+        }
+      },
       "SubscriptionDetails": {
         "type": "object",
         "description": "Created webhook subscription details.",
-        "required": ["id", "url", "dataflow_ids", "status", "created_at", "signing_secret"],
+        "required": [
+          "id",
+          "url",
+          "dataflow_ids",
+          "status",
+          "created_at",
+          "signing_secret"
+        ],
         "properties": {
           "created_at": {
             "type": "string",
@@ -1498,7 +2458,24 @@
       "TimePrecision": {
         "type": "string",
         "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
-        "enum": ["minute", "day", "week", "month", "quarter", "year"]
+        "enum": [
+          "minute",
+          "day",
+          "week",
+          "month",
+          "quarter",
+          "year"
+        ]
+      },
+      "Trend": {
+        "type": "string",
+        "description": "Trend arrow comparing the latest score to a prior comparable snapshot.",
+        "enum": [
+          "up",
+          "down",
+          "flat",
+          "unavailable"
+        ]
       }
     },
     "securitySchemes": {
@@ -1517,6 +2494,10 @@
     {
       "name": "observations",
       "description": "Time-series observations"
+    },
+    {
+      "name": "scorecards",
+      "description": "Derived scorecards"
     },
     {
       "name": "search",
