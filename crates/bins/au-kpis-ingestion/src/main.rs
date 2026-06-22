@@ -56,6 +56,8 @@ const ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG: &str = "dwelling-completion-t
 const ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID: &str = "abs.dwelling_completion_times";
 const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
 const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
+const APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG: &str = "super-asset-allocation";
+const APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID: &str = "apra.super_asset_allocation";
 const AEMO_DISPATCH_DATAFLOW_SLUG: &str = "dispatch";
 const AEMO_DISPATCH_DATAFLOW_ID: &str = "aemo.dispatch";
 const ASX_MARKET_STATISTICS_DATAFLOW_SLUG: &str = "market-statistics";
@@ -1044,7 +1046,14 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         {
             Ok(())
         }
-        "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
+        "apra"
+            if matches!(
+                dataflow,
+                APRA_QUARTERLY_DATAFLOW_SLUG | APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => Ok(()),
         "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => Ok(()),
         "nhsac" if dataflow == NHSAC_HOUSING_ACCORD_DATAFLOW_SLUG => Ok(()),
@@ -1066,7 +1075,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflows: {ABS_CPI_DATAFLOW_SLUG}, {ABS_BUILDING_APPROVALS_DATAFLOW_SLUG}, {ABS_BUILDING_ACTIVITY_DATAFLOW_SLUG}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG}"
         ),
         "apra" => bail!(
-            "unsupported dataflow `{dataflow}` for source `apra`; supported dataflow: {APRA_QUARTERLY_DATAFLOW_SLUG}"
+            "unsupported dataflow `{dataflow}` for source `apra`; supported dataflows: {APRA_QUARTERLY_DATAFLOW_SLUG}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG}"
         ),
         "aemo" => bail!(
             "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflow: {AEMO_DISPATCH_DATAFLOW_SLUG}"
@@ -1109,7 +1118,10 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         "abs" if dataflow == ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG => {
             ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID
         }
-        "apra" => APRA_QUARTERLY_DATAFLOW_ID,
+        "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => APRA_QUARTERLY_DATAFLOW_ID,
+        "apra" if dataflow == APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG => {
+            APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID
+        }
         "aemo" => AEMO_DISPATCH_DATAFLOW_ID,
         "asx" => ASX_MARKET_STATISTICS_DATAFLOW_ID,
         "nhsac" => NHSAC_HOUSING_ACCORD_DATAFLOW_ID,
@@ -1204,6 +1216,9 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "apra" && dataflow_id == APRA_QUARTERLY_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "apra" && dataflow_id == APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "aemo" && dataflow_id == AEMO_DISPATCH_DATAFLOW_ID {
         return Ok(());
     }
@@ -1235,7 +1250,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1573,6 +1588,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("apra.quarterly_statistics").unwrap())
+        );
+    }
+
+    #[test]
+    fn apra_once_mode_resolves_super_asset_allocation_dataflow() {
+        let request = once_run_request("apra", "super-asset-allocation")
+            .expect("APRA super asset allocation is supported");
+
+        assert_eq!(request.source_id.as_str(), "apra");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("apra.super_asset_allocation").unwrap())
         );
     }
 

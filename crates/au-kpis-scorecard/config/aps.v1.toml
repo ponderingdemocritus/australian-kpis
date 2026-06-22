@@ -176,6 +176,36 @@ license = "World Bank terms"
 attribution = "Source: World Bank B-READY"
 
 [[indicators]]
+indicator_id = "capital.super-productive-infrastructure"
+source_dataflow_id = "apra.super_asset_allocation"
+measure_id = "value"
+axis = "orientation"
+component = "capital"
+weight = 0.25
+direction = "higher_is_better"
+display_label = "Super productive infrastructure"
+description = "APRA superannuation asset allocation mapped to reviewed onshore productive-infrastructure exposure."
+unit = "$ million"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+fund_type = "all"
+asset_category = "total"
+mapping = "productive_infrastructure_onshore"
+
+[indicators.normalization]
+worst = 0.0
+best = 30000.0
+
+[indicators.provenance]
+source_url = "https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics"
+license = "Creative Commons Attribution 3.0 Australia Licence"
+attribution = "Source: Australian Prudential Regulation Authority"
+notes = "Scored only from reviewed mappings that explicitly identify onshore infrastructure."
+
+[[indicators]]
 indicator_id = "ai.readiness"
 source_dataflow_id = "oxford.gari"
 measure_id = "ai_readiness_score"
