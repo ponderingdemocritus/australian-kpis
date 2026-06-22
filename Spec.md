@@ -557,7 +557,9 @@ Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no sepa
 
 - Fetch: S3 key = `sha256(content)` → content-addressed, write is idempotent.
 - Parse: snapshot tested; same artifact → same observations.
-- Load: `ON CONFLICT (dataflow_id, series_key, time, revision_no) DO UPDATE`; revisions tracked not overwritten.
+- Load: the loader owns effective `revision_no` assignment. Exact replays of
+  the same observation/artifact are no-ops; changed value/status/attributes or
+  source artifact for the same `(series_key, time)` inserts `max(revision_no)+1`.
 - Jobs carry correlation ID from discovery to load for tracing.
 
 ### Failure handling
@@ -579,13 +581,13 @@ async fn load_batch(
     batch: Vec<Observation>,
 ) -> Result<LoadStats, LoadError> {
     // 1000-row batches → single COPY into staging table
-    // Then INSERT ... ON CONFLICT from staging → hypertable
+    // Then INSERT changed rows from staging → hypertable with loader-assigned revisions.
     // Staging table is TEMP, dropped automatically at tx end.
     let mut tx = pool.begin().await?;
     let mut copy = tx.copy_in_raw("COPY staging_obs (...) FROM STDIN BINARY").await?;
     for obs in &batch { copy.send(encode_row(obs)).await?; }
     copy.finish().await?;
-    sqlx::query("INSERT INTO observations (...) SELECT ... FROM staging_obs ON CONFLICT ... DO UPDATE ...")
+    sqlx::query("INSERT INTO observations (...) SELECT ... max(revision_no)+1 FROM staging_obs ...")
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -595,6 +597,9 @@ async fn load_batch(
 
 - COPY is 10-50x faster than row-by-row INSERT for bulk loads.
 - Batches bounded at 1000 rows or 10MB, whichever first.
+- Adapter-emitted `revision_no` is provisional for normal ingestion. The loader
+  preserves the original row, skips exact artifact replays, and appends a new
+  revision when the persisted observation content or source artifact changes.
 - Loader owns COPY batch sizing and byte estimation. Orchestrators may buffer
   accepted rows for artifact-level commit/rollback semantics, but must delegate
   row/byte boundary decisions to `au-kpis-loader` helpers so staging and direct
@@ -1518,7 +1523,7 @@ Each phase ends demo-able.
 Pass 1 over the plan. Fixes applied in-place:
 
 1. **Series vs Observation split** — added explicit `series` table so dimensions aren't duplicated across millions of observation rows. Hot table (`observations`) stays narrow: `(series_key, time, revision_no, value, status, attributes, artifact_id)`. Dimensional queries ("all VIC CPI") go through `series` with GIN index, then join to hypertable.
-2. **Revision handling** — `revision_no` as part of PK rather than `revision_of` pointer. Simpler. `observations_latest` view (continuous aggregate) is the default query target.
+2. **Revision handling** — `revision_no` as part of PK rather than `revision_of` pointer. The loader assigns effective revisions from existing `(series_key, time)` rows; adapters may emit `0`. `observations_latest` view (continuous aggregate) is the default query target.
 3. **`SeriesKey` as a newtype** — type-safe at every boundary; prevents string/id mix-ups.
 4. **Queue trait abstraction** — `au-kpis-queue` exports a `Queue` trait backed by Postgres transactional leasing. Business logic depends on the trait, so the backend remains swappable later.
 5. **`async-trait` justified** — adapters live behind `Arc<dyn SourceAdapter>` for the registry pattern; native async-fn-in-trait does not yet support this cleanly. Revisit when Rust stabilises dyn-compat for async.

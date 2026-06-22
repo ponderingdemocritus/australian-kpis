@@ -167,6 +167,7 @@ impl SourceAdapter for StubAdapter {
                 | StubMode::TwoJobsCancelAfterFirstFetch
                 | StubMode::TwoArtifactsPanicFirstParse
                 | StubMode::AcceptedThenStagedLoadError
+                | StubMode::RevisionRows
                 | StubMode::DuplicateArtifactRejectSecondJob
         ) {
             jobs.push(DiscoveredJob {
@@ -343,14 +344,12 @@ impl SourceAdapter for StubAdapter {
                 }
             }
             StubMode::RevisionRows => {
-                let (series, revision_0) = row;
-                let mut revision_1 = revision_0.clone();
-                revision_1.revision_no = 1;
-                revision_1.value = Some(456.7);
-                Box::pin(stream::iter([
-                    Ok((series.clone(), revision_0)),
-                    Ok((series, revision_1)),
-                ]))
+                let (series, mut observation) = row;
+                if artifact.id == ArtifactId::of_content(b"job-2") {
+                    observation.value = Some(456.7);
+                }
+                observation.revision_no = 0;
+                Box::pin(stream::iter([Ok((series, observation))]))
             }
             StubMode::TwoArtifactsCancelAfterFirstParse => {
                 let (series, mut observation) = row;
@@ -888,6 +887,7 @@ async fn successful_artifact_load_records_completion_marker() {
     let pool = connect_with_retry(&cfg).await;
     migrate(&pool).await.expect("apply migrations");
     let artifact_id = ArtifactId::of_content(b"job-1");
+    let second_artifact_id = ArtifactId::of_content(b"job-2");
     seed_stub_reference_data(&pool, artifact_id).await;
 
     let stats = pipeline_with_pool(
@@ -913,7 +913,11 @@ async fn successful_artifact_load_records_completion_marker() {
 
     assert_eq!(stats.parsed, 2);
     assert_eq!(stats.loaded.observations_loaded, 2);
-    assert_eq!(artifact_load_counts(&pool, artifact_id).await, Some((2, 2)));
+    assert_eq!(artifact_load_counts(&pool, artifact_id).await, Some((1, 1)));
+    assert_eq!(
+        artifact_load_counts(&pool, second_artifact_id).await,
+        Some((1, 1))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2031,6 +2035,7 @@ async fn pipeline_preserves_revision_chain_and_latest_view_selects_highest_revis
     .expect("pipeline should load both revisions");
 
     assert_eq!(stats.loaded.observations_loaded, 2);
+    assert_eq!(stats.parsed, 2);
 
     let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
         .fetch_one(&pool)

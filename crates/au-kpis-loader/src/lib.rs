@@ -625,7 +625,7 @@ async fn create_series_staging_table_with_on_commit(
 async fn create_observation_staging_table(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), LoadError> {
-    create_observation_staging_table_with_on_commit(tx, "DROP", false).await
+    create_observation_staging_table_with_on_commit(tx, "DROP", true).await
 }
 
 async fn create_observation_staging_table_with_on_commit(
@@ -827,27 +827,63 @@ async fn copy_observation_payload(
 }
 
 async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
+    // Adapter revision numbers are provisional. Persist only changed staged rows
+    // and derive the effective revision from the existing chain.
     let result = sqlx::query(
-        "INSERT INTO observations AS existing (
+        "WITH deduped_rows AS MATERIALIZED (
+             SELECT DISTINCT ON (series_key_hex, time)
+                    decode(series_key_hex, 'hex') AS series_key,
+                    time,
+                    time_precision,
+                    value,
+                    status,
+                    attributes,
+                    ingested_at,
+                    decode(source_artifact_hex, 'hex') AS source_artifact_id
+             FROM staging_observations
+             ORDER BY series_key_hex, time, revision_no DESC, stage_row_id DESC
+         ),
+         changed_rows AS MATERIALIZED (
+             SELECT staged.*
+             FROM deduped_rows staged
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM observations existing
+                 WHERE existing.series_key = staged.series_key
+                   AND existing.time = staged.time
+                   AND existing.time_precision = staged.time_precision
+                   AND existing.value IS NOT DISTINCT FROM staged.value
+                   AND existing.status = staged.status
+                   AND existing.attributes = staged.attributes
+                   AND existing.source_artifact_id = staged.source_artifact_id
+             )
+         ),
+         assigned_rows AS MATERIALIZED (
+             SELECT staged.series_key,
+                    staged.time,
+                    (COALESCE(max(existing.revision_no), -1) + 1)::INTEGER AS revision_no,
+                    staged.time_precision,
+                    staged.value,
+                    staged.status,
+                    staged.attributes,
+                    staged.ingested_at,
+                    staged.source_artifact_id
+             FROM changed_rows staged
+             LEFT JOIN observations existing
+               ON existing.series_key = staged.series_key
+              AND existing.time = staged.time
+             GROUP BY staged.series_key, staged.time, staged.time_precision,
+                      staged.value, staged.status, staged.attributes,
+                      staged.ingested_at, staged.source_artifact_id
+         )
+         INSERT INTO observations (
              series_key, time, revision_no, time_precision, value, status,
              attributes, ingested_at, source_artifact_id
          )
-         SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
-                value, status, attributes, ingested_at,
-                decode(source_artifact_hex, 'hex')
-         FROM staging_observations
-         ON CONFLICT (series_key, time, revision_no) DO UPDATE
-         SET time_precision = EXCLUDED.time_precision,
-             value = EXCLUDED.value,
-             status = EXCLUDED.status,
-             attributes = EXCLUDED.attributes,
-             ingested_at = EXCLUDED.ingested_at,
-             source_artifact_id = EXCLUDED.source_artifact_id
-         WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
-            OR existing.value IS DISTINCT FROM EXCLUDED.value
-            OR existing.status IS DISTINCT FROM EXCLUDED.status
-            OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
-            OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id",
+         SELECT series_key, time, revision_no, time_precision, value, status,
+                attributes, ingested_at, source_artifact_id
+         FROM assigned_rows
+         ON CONFLICT (series_key, time, revision_no) DO NOTHING",
     )
     .execute(&mut **tx)
     .await?;
@@ -919,6 +955,9 @@ async fn upsert_next_observation_chunk(
     last_stage_row_id: i64,
     chunk_limit: i64,
 ) -> Result<(i64, u64, bool), LoadError> {
+    // Keep staged promotion semantics aligned with direct batch loads: staged
+    // rows are deduped per series/time, exact replays are skipped, and changed
+    // rows append to the existing revision chain.
     let (max_stage_row_id, chunk_rows_loaded, had_rows): (i64, i64, bool) = sqlx::query_as(
         "WITH next_rows AS MATERIALIZED (
              SELECT stage_row_id, series_key_hex, time, revision_no, time_precision,
@@ -929,33 +968,61 @@ async fn upsert_next_observation_chunk(
              LIMIT $2
          ),
          deduped_rows AS MATERIALIZED (
-             SELECT DISTINCT ON (series_key_hex, time, revision_no)
-                    stage_row_id, series_key_hex, time, revision_no, time_precision,
-                    value, status, attributes, ingested_at, source_artifact_hex
+             SELECT DISTINCT ON (series_key_hex, time)
+                    stage_row_id,
+                    decode(series_key_hex, 'hex') AS series_key,
+                    time,
+                    time_precision,
+                    value,
+                    status,
+                    attributes,
+                    ingested_at,
+                    decode(source_artifact_hex, 'hex') AS source_artifact_id
              FROM next_rows
-             ORDER BY series_key_hex, time, revision_no, stage_row_id DESC
+             ORDER BY series_key_hex, time, stage_row_id DESC
+         ),
+         changed_rows AS MATERIALIZED (
+             SELECT staged.*
+             FROM deduped_rows staged
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM observations existing
+                 WHERE existing.series_key = staged.series_key
+                   AND existing.time = staged.time
+                   AND existing.time_precision = staged.time_precision
+                   AND existing.value IS NOT DISTINCT FROM staged.value
+                   AND existing.status = staged.status
+                   AND existing.attributes = staged.attributes
+                   AND existing.source_artifact_id = staged.source_artifact_id
+             )
+         ),
+         assigned_rows AS MATERIALIZED (
+             SELECT staged.series_key,
+                    staged.time,
+                    (COALESCE(max(existing.revision_no), -1) + 1)::INTEGER AS revision_no,
+                    staged.time_precision,
+                    staged.value,
+                    staged.status,
+                    staged.attributes,
+                    staged.ingested_at,
+                    staged.source_artifact_id
+             FROM changed_rows staged
+             LEFT JOIN observations existing
+               ON existing.series_key = staged.series_key
+              AND existing.time = staged.time
+             GROUP BY staged.series_key, staged.time, staged.time_precision,
+                      staged.value, staged.status, staged.attributes,
+                      staged.ingested_at, staged.source_artifact_id
          ),
          inserted AS (
-             INSERT INTO observations AS existing (
+             INSERT INTO observations (
                  series_key, time, revision_no, time_precision, value, status,
                  attributes, ingested_at, source_artifact_id
              )
-             SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
-                    value, status, attributes, ingested_at,
-                    decode(source_artifact_hex, 'hex')
-             FROM deduped_rows
-             ON CONFLICT (series_key, time, revision_no) DO UPDATE
-             SET time_precision = EXCLUDED.time_precision,
-                 value = EXCLUDED.value,
-                 status = EXCLUDED.status,
-                 attributes = EXCLUDED.attributes,
-                 ingested_at = EXCLUDED.ingested_at,
-                 source_artifact_id = EXCLUDED.source_artifact_id
-             WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
-                OR existing.value IS DISTINCT FROM EXCLUDED.value
-                OR existing.status IS DISTINCT FROM EXCLUDED.status
-                OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
-                OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id
+             SELECT series_key, time, revision_no, time_precision, value, status,
+                    attributes, ingested_at, source_artifact_id
+             FROM assigned_rows
+             ON CONFLICT (series_key, time, revision_no) DO NOTHING
              RETURNING 1
          )
          SELECT COALESCE((SELECT max(stage_row_id) FROM next_rows), $1)::BIGINT,
