@@ -44,6 +44,19 @@ const SYSTEM_FILES_RELEASE_FIXTURE: &str = r#"
 </main>
 "#;
 
+const SUPER_RELEASE_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Quarterly superannuation statistics</h1>
+  <a href="/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx" data-updated="2026-05-28">
+    Quarterly superannuation performance statistics - December 2004 to March 2026 XLSX
+  </a>
+  <a href="/sites/default/files/2026-05/Quarterly%20MySuper%20statistics%20from%20September%202020%20to%20March%202026.xlsx" data-updated="2026-05-28">
+    Quarterly MySuper statistics from September 2020 to March 2026 XLSX
+  </a>
+</main>
+"#;
+
 async fn serve_release_calendar_once(body: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -160,7 +173,9 @@ fn discoverable_jobs_apply_release_revision_and_source_metadata() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_scrapes_apra_release_calendar_over_http() {
     let release_url = serve_release_calendar_once(RELEASE_FIXTURE).await;
-    let adapter = ApraAdapter::builder().release_url(&release_url).build();
+    let adapter = ApraAdapter::builder()
+        .super_release_url(&release_url)
+        .build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 5, 27, 0, 0, 0).unwrap())
         .with_trace_parent(TRACE_PARENT);
@@ -184,6 +199,27 @@ async fn discover_scrapes_apra_release_calendar_over_http() {
     assert_eq!(jobs[0].metadata["artifact_format"], "xls");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_honours_super_asset_allocation_dataflow_scope() {
+    let release_url = serve_release_calendar_once(SUPER_RELEASE_FIXTURE).await;
+    let adapter = ApraAdapter::builder().release_url(&release_url).build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 5, 28, 0, 0, 0).unwrap())
+        .with_requested_dataflow_id(
+            au_kpis_domain::DataflowId::new("apra.super_asset_allocation").unwrap(),
+        );
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover APRA super asset allocation release");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].dataflow_id.as_str(), "apra.super_asset_allocation");
+    assert_eq!(jobs[0].metadata["publication_slug"], "super-performance");
+    assert_eq!(jobs[0].metadata["cadence"], "quarterly");
+}
+
 #[test]
 fn manifest_declares_apra_rate_limit_and_dataflow_metadata() {
     let adapter = ApraAdapter::default();
@@ -194,11 +230,14 @@ fn manifest_declares_apra_rate_limit_and_dataflow_metadata() {
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
     assert_eq!(
         manifest.dataflows,
-        vec![au_kpis_domain::DataflowId::new("apra.quarterly_statistics").unwrap()]
+        vec![
+            au_kpis_domain::DataflowId::new("apra.quarterly_statistics").unwrap(),
+            au_kpis_domain::DataflowId::new("apra.super_asset_allocation").unwrap(),
+        ]
     );
 
     let dataflows = adapter.dataflow_metadata();
-    assert_eq!(dataflows.len(), 1);
+    assert_eq!(dataflows.len(), 2);
     assert_eq!(dataflows[0].id.as_str(), "apra.quarterly_statistics");
     assert_eq!(dataflows[0].frequency, au_kpis_domain::Frequency::Quarterly);
     assert_eq!(
@@ -208,5 +247,14 @@ fn manifest_declares_apra_rate_limit_and_dataflow_metadata() {
     assert_eq!(
         dataflows[0].source_url,
         "https://www.apra.gov.au/quarterly-authorised-deposit-taking-institution-statistics"
+    );
+    assert_eq!(dataflows[1].id.as_str(), "apra.super_asset_allocation");
+    assert_eq!(
+        dataflows[1]
+            .dimensions
+            .iter()
+            .map(au_kpis_domain::DimensionId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["fund_type", "asset_category", "mapping"]
     );
 }

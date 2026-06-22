@@ -145,12 +145,12 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 77.08333333333334).abs() < 1e-9);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 79.24528301886792).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 9);
+    assert_eq!(contributions.len(), 10);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -235,6 +235,27 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(
         productivity["source_url"],
         "https://www.pc.gov.au/ongoing/productivity-insights"
+    );
+
+    let productive_infrastructure =
+        contribution(contributions, "capital.super-productive-infrastructure");
+    assert_eq!(productive_infrastructure["raw_value"], 30000.0);
+    assert_eq!(productive_infrastructure["normalized_value"], 1.0);
+    assert_eq!(productive_infrastructure["coverage_status"], "resolved");
+    assert_eq!(productive_infrastructure["latest_period"], "2024-02-01");
+    assert_eq!(
+        productive_infrastructure["dimensions"]["mapping"],
+        "productive_infrastructure_onshore"
+    );
+    assert_eq!(
+        productive_infrastructure["license"],
+        "Creative Commons Attribution 3.0 Australia Licence"
+    );
+    assert!(
+        productive_infrastructure["source_url"]
+            .as_str()
+            .unwrap()
+            .contains("apra")
     );
 
     let visible = contribution(contributions, "control.enable-spend-ratio");
@@ -352,6 +373,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "INSERT INTO sources (id, name, homepage, description)
          VALUES
             ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL),
+            ('apra', 'Australian Prudential Regulation Authority', 'https://www.apra.gov.au', NULL),
             ('nhsac', 'National Housing Supply and Affordability Council', 'https://nhsac.gov.au', NULL),
             ('pc', 'Productivity Commission', 'https://www.pc.gov.au', NULL),
             ('worldbank', 'World Bank', 'https://www.worldbank.org', NULL)",
@@ -368,7 +390,8 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ('average_completion_months', 'Average completion time', NULL, 'months', NULL),
             ('progress_to_target_pct', 'Housing Accord progress to target', NULL, 'percent', NULL),
             ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
-            ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL)",
+            ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL),
+            ('value', 'Value', NULL, '$ million', NULL)",
     )
     .execute(pool)
     .await
@@ -415,6 +438,13 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              ARRAY['country', 'measure'], ARRAY['business_entry_score'], 'annual', 'World Bank terms',
              'Source: World Bank B-READY',
              'https://www.worldbank.org/en/businessready'
+         ),
+         (
+             'apra.super_asset_allocation', 'apra', 'Super asset allocation', NULL,
+             ARRAY['fund_type', 'asset_category', 'mapping'], ARRAY['value'], 'quarterly',
+             'Creative Commons Attribution 3.0 Australia Licence',
+             'Source: Australian Prudential Regulation Authority',
+             'https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics'
          )",
     )
     .execute(pool)
@@ -427,6 +457,8 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     let accord_artifact = insert_artifact(pool, "nhsac", b"housing accord").await;
     let productivity_artifact = insert_artifact(pool, "pc", b"productivity bulletin").await;
     let bready_artifact = insert_artifact(pool, "worldbank", b"bready").await;
+    let productive_infrastructure_artifact =
+        insert_artifact(pool, "apra", b"super asset allocation").await;
 
     let housing = insert_series(
         pool,
@@ -480,6 +512,18 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         [("region", "AUS"), ("measure", "progress_to_target_pct")],
     )
     .await;
+    let productive_infrastructure = insert_series(
+        pool,
+        "apra.super_asset_allocation",
+        "value",
+        "$ million",
+        [
+            ("fund_type", "all"),
+            ("asset_category", "total"),
+            ("mapping", "productive_infrastructure_onshore"),
+        ],
+    )
+    .await;
 
     insert_observation(
         pool,
@@ -521,6 +565,15 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     insert_observation(pool, accord, accord_artifact, (2024, 1, 1), 0.0, "year").await;
     insert_observation(
         pool,
+        productive_infrastructure,
+        productive_infrastructure_artifact,
+        (2024, 1, 1),
+        0.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
         housing,
         housing_artifact,
         (2024, 2, 1),
@@ -557,6 +610,15 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     )
     .await;
     insert_observation(pool, accord, accord_artifact, (2024, 2, 1), 100.0, "year").await;
+    insert_observation(
+        pool,
+        productive_infrastructure,
+        productive_infrastructure_artifact,
+        (2024, 2, 1),
+        30000.0,
+        "quarter",
+    )
+    .await;
 }
 
 async fn insert_artifact(pool: &PgPool, source_id: &str, content: &[u8]) -> ArtifactId {
