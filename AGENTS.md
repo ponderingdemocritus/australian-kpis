@@ -193,6 +193,17 @@ oasdiff breaking openapi-main.json openapi.json    # must be empty
 
 **Lefthook** runs `cargo fmt --check`, `biome format --check`, `gitleaks protect`, and a >5 MB file block on every commit. Don't disable it.
 
+### CI-fix checklist before committing
+
+When committing a CI-only or CI-follow-up fix, tick this checklist locally or document what could not run:
+
+- [ ] Re-read the failing job logs and tie each edit to a named failing check.
+- [ ] If API handlers, schemas, or OpenAPI docs changed, regenerate `openapi.json` and run the OpenAPI drift check.
+- [ ] If `openapi.json` or generated SDK files changed, run Biome formatting/checks on those files.
+- [ ] If SDK package imports, validation, or runtime exports changed, run the SDK runtime checks for Node and Deno at minimum.
+- [ ] If a RustSec advisory failed CI, prefer a dependency or lockfile update over adding an ignore; record the advisory id and fixed version in the PR notes.
+- [ ] If local network, Docker, or registry access blocks a check, say so in the PR and verify the same check in GitHub Actions after pushing.
+
 ## 7. PR rules
 
 ### Required
