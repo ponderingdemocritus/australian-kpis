@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.3` |
+| **Version** | `v0.1.4` |
 | **Status** | Approved |
-| **Last updated** | 2026-05-01 |
+| **Last updated** | 2026-06-22 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -25,23 +25,24 @@
 8. [Ingestion pipeline](#ingestion-pipeline)
 9. [PDF extractor service (Python)](#pdf-extractor-service-python)
 10. [API surface](#api-surface)
-11. [TypeScript SDK](#typescript-sdk)
-12. [Reference client (apps/web)](#reference-client-appsweb)
-13. [Observability](#observability)
-14. [Testing strategy](#testing-strategy)
-15. [CI/CD pipeline](#cicd-pipeline)
-16. [Benchmarking](#benchmarking)
-17. [Security posture](#security-posture)
-18. [Data licensing and attribution](#data-licensing-and-attribution)
-19. [Deployment](#deployment)
-20. [Phased rollout](#phased-rollout)
-21. [Critical files/modules to create (Phase 1 + 2)](#critical-filesmodules-to-create-phase-1--2)
-22. [Verification plan](#verification-plan)
-23. [Review findings — best practices + abstraction checks](#review-findings--best-practices--abstraction-checks)
-24. [Decisions log](#decisions-log)
-25. [Glossary](#glossary)
-26. [References](#references)
-27. [Changelog](#changelog)
+11. [Derived scorecards](#derived-scorecards)
+12. [TypeScript SDK](#typescript-sdk)
+13. [Reference client (apps/web)](#reference-client-appsweb)
+14. [Observability](#observability)
+15. [Testing strategy](#testing-strategy)
+16. [CI/CD pipeline](#cicd-pipeline)
+17. [Benchmarking](#benchmarking)
+18. [Security posture](#security-posture)
+19. [Data licensing and attribution](#data-licensing-and-attribution)
+20. [Deployment](#deployment)
+21. [Phased rollout](#phased-rollout)
+22. [Critical files/modules to create (Phase 1 + 2)](#critical-filesmodules-to-create-phase-1--2)
+23. [Verification plan](#verification-plan)
+24. [Review findings — best practices + abstraction checks](#review-findings--best-practices--abstraction-checks)
+25. [Decisions log](#decisions-log)
+26. [Glossary](#glossary)
+27. [References](#references)
+28. [Changelog](#changelog)
 
 ---
 
@@ -700,6 +701,9 @@ GET  /v1/observations
 GET  /v1/observations/latest
 GET  /v1/series/{dataflow}/{series_key}
 GET  /v1/search?q=unemployment
+GET  /v1/scorecards/aps/config
+GET  /v1/scorecards/aps/latest
+GET  /v1/scorecards/aps/history?since=2025-01-01&until=2026-01-01
 POST /v1/subscriptions                        # phase 5
 GET  /v1/health
 GET  /v1/openapi.json
@@ -709,7 +713,7 @@ GET  /v1/openapi.json
 
 - **Auth**: `X-API-Key` header. Keys stored **argon2id-hashed** in DB; lookup cached in Redis with short TTL; constant-time compare. JWT for client app.
 - **Rate limits** (free tier defaults): 60 rps / 1000 requests per hour per key. Burst allowance of 2x. Token bucket in Redis via `fred`. Returns `429` with `Retry-After` header and `X-RateLimit-*` headers on every response. Anonymous (no key) tier: 10 rps / 100 per hour per IP.
-- **Caching**: Dataflow metadata long TTL. Observation responses ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Cloudflare CDN in front.
+- **Caching**: Dataflow metadata long TTL. Observation responses ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Scorecard config responses are immutable per version and use long-lived public cache headers; scorecard latest/history responses use ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Cloudflare CDN in front.
 - **Pagination**: cursor-based (opaque base64 of `(time, series_key)` pair). Max 10k rows per page.
 - **High-cardinality latest reads**: `/v1/observations` latest-revision requests
   must be dimension-filtered enough to match fewer than 512 series. Broader
@@ -753,6 +757,133 @@ pub struct ApiDoc;
   `GET /v1/openapi.json` response against the OpenAPI 3.1 schema before
   fuzzing covered routes with Schemathesis.
 - CI compares against committed `openapi.json`; drift is a PR comment.
+
+---
+
+## Derived scorecards
+
+Derived scorecards are public read models computed from auditable observations
+and explicit configuration. They do not replace the time-series API: every
+scored value must either resolve to a source observation with provenance or be
+reported as a coverage gap/manual input. Scorecards are additive `/v1` API
+surface because they introduce new routes and schemas without changing existing
+observation contracts.
+
+### Abundance Position Score (APS) v1
+
+APS v1 is a national Australia scorecard. State or jurisdiction drilldowns are
+allowed only where the underlying source has defensible jurisdictional coverage;
+otherwise the contribution must be marked as missing for that jurisdiction.
+
+The canonical formula is:
+
+```text
+APS = 100 * T * (0.5 + 0.5 * O)
+```
+
+Where:
+
+- `T` is the weighted throughput sub-index normalized to `[0, 1]`.
+- `O` is the weighted orientation sub-index normalized to `[-1, 1]`.
+- The final APS point estimate is clamped to `[0, 100]` after floating-point
+  rounding.
+
+Score zones:
+
+| Range | Zone |
+|---:|---|
+| `0..=33` | `scarcity` |
+| `34..=66` | `mixed` |
+| `67..=100` | `abundance` |
+
+### Scorecard configuration
+
+Scorecards are config-driven, not hard-coded in UI components. APS config is
+versioned and includes:
+
+- `scorecard_id` and `version`.
+- Indicator `id`, display label, description, component, and axis.
+- `source_id`, `dataflow_id`, `measure_id`, and dimension selector for
+  observation-backed indicators.
+- Weight, scoring direction (`higher_is_better` or `lower_is_better`), and
+  normalization reference (`min`, `max`, `target`, or source-defined baseline).
+- Coverage status (`resolved`, `expected_missing`, `manual`, `unscored`, or
+  `experimental`) and confidence (`high`, `medium`, `low`) for every indicator.
+- Required attribution and license notes for indicator-level source drilldowns.
+
+Manual or low-cadence inputs must include source URL, retrieval date, cadence,
+reviewer or review process, and confidence. Red/yellow/manual orientation inputs
+may be visible in APS v1, but they must not silently reduce the point estimate
+unless the config marks them as scored and the source taxonomy has been
+reviewed.
+
+### Missing data, coverage, and confidence
+
+Missing indicators are excluded from point estimates. Coverage reports the
+share of configured scored weight that resolved to a usable value for the
+snapshot. Missing, manual, visible-unscored, and experimental inputs remain in
+the contribution list so clients can show gaps instead of implying full
+coverage.
+
+The confidence band is computed by re-running the APS calculation with missing
+inputs at conservative bounds:
+
+- Missing throughput inputs contribute `[0, 1]`.
+- Missing orientation inputs contribute `[-1, 1]`.
+- Resolved inputs keep their normalized value.
+- Visible-unscored inputs do not affect the point estimate or confidence band.
+
+Trend arrows compare the latest snapshot to the previous comparable snapshot:
+`up`, `flat`, `down`, or `unavailable`. The APS config defines the minimum
+absolute score movement required to leave `flat`; v1 default is one APS point.
+
+### APS API schemas
+
+`GET /v1/scorecards/aps/config` returns `ScorecardConfig`.
+
+`GET /v1/scorecards/aps/latest` returns the latest `ScorecardSnapshot`.
+
+`GET /v1/scorecards/aps/history?since=&until=` returns ordered
+`ScorecardSnapshot` values within the inclusive date range.
+
+Core schema names:
+
+- `ScorecardConfig`
+- `ScorecardSnapshot`
+- `SubIndexScore`
+- `IndicatorContribution`
+- `CoverageStatus`
+- `ScoreZone`
+
+Each `IndicatorContribution` includes:
+
+- Indicator id, label, component, axis, weight, direction, normalized value, raw
+  value, unit, coverage status, and confidence.
+- Source id, dataflow id, measure id, dimensions, latest period, and source URL.
+- Series key and source artifact id when resolved from an observation.
+- Attribution/license text suitable for source drilldowns.
+
+### APS v1 source register
+
+APS v1 uses the following planned source/dataflow ids. Missing sources must be
+reported as expected coverage gaps until their adapter issue lands.
+
+| APS area | Source/dataflow ids | v1 scoring status |
+|---|---|---|
+| Housing approvals/activity/completion time | `abs.building_approvals`, `abs.building_activity`, `abs.dwelling_completion_times` | Scored when resolved |
+| Housing Accord progress | `nhsac.housing_accord_progress` | Scored when resolved |
+| Planning approval throughput | `state_planning.nsw_da_processing`, `state_planning.vic_permit_activity` | Scored with explicit jurisdiction coverage |
+| Permitting/public-services proxy | `worldbank.bready` | Scored when resolved |
+| Productivity | `pc.productivity_bulletin`; optional later `abs.industry_mfp` | Scored when resolved |
+| Energy price/demand/generation/capacity | `aemo.dispatch`, `aemo.generation_mix`, `aemo.dispatchability_capacity` | Scored when resolved |
+| Infrastructure delivery | `state_capital.vic_major_projects`, `state_capital.budget_capital_papers` | Pilot/experimental unless coverage broadens |
+| Cost to serve per transaction | curated annual Services Australia/DTA inputs | Visible manual unless provenance is reviewed |
+| Control-vs-enable spend ratio | Treasury/state budget taxonomy | Visible unscored until taxonomy review |
+| Oversight strength | curated OAIC, ANAO, FOI, and audit-office statutory/funding inputs | Manual/low cadence |
+| Surveillance intensity | Carnegie AIGS-derived input | Low confidence/manual |
+| Compute capacity | `compute.au_datacentre_capacity_mw` | Low confidence/manual unless licensed machine-readable data exists |
+| Super productive infrastructure | `apra.super_asset_allocation` | Scored when reviewed category mapping exists |
+| AI readiness/adoption/talent | `oxford.gari`, `naic.ai_adoption_tracker`, `abs.ai_rd`, `home_affairs.skillselect_talent_proxy` | Scored or low-confidence according to source quality |
 
 ---
 
@@ -808,12 +939,18 @@ for await (const obs of client.observations.stream({
 // Catalog
 const dataflows = await client.dataflows.list({ source: 'abs' })
 const matches = await client.search.catalog({ q: 'unemployment' })
+
+// Derived scorecards
+const aps = await client.scorecards.aps.latest()
+console.log(aps.score, aps.zone, aps.coverage.weighted_percent)
 ```
 
 - **Runtime validation** (optional, off by default): Zod schemas generated from OpenAPI via `openapi-zod-client`; consumers pass `{ validate: true }` to enable.
 - **Retries + Retry-After** awareness built in.
 - **Bun + Node + browser + Deno** compatible — `fetch` only.
 - **Tree-shakeable**: subpath imports supported.
+- **Scorecards**: ergonomic helpers wrap `/v1/scorecards/aps/config`,
+  `/v1/scorecards/aps/latest`, and `/v1/scorecards/aps/history`.
 
 ---
 
@@ -822,12 +959,18 @@ const matches = await client.search.catalog({ q: 'unemployment' })
 Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui dashboard components + Recharts.
 
 Pages:
-- **Index** — overview of loaded sources, frequencies, featured indicators, and catalog/search coverage.
+- **Index** — APS product view with score spectrum, marker, throughput and
+  orientation sub-indexes, trend, confidence band, coverage meter, source
+  drilldowns, config/weight panel, and indicator register.
 - **Explorer** — browse dataflows, pick dimensions, chart.
 - **Compare** — multiple series on one chart.
 - **Playground** — live query form → response viewer with curl / SDK snippet.
 
-Demonstrates the SDK and doubles as internal data browser.
+Explorer, Compare, and Playground remain secondary "Data tools" views.
+The homepage must consume the scorecard API/SDK response and must not duplicate
+APS scoring math in UI code. Missing/manual inputs are shown as coverage states,
+not hidden rows. The app demonstrates the SDK and doubles as internal data
+browser.
 
 ---
 
@@ -871,6 +1014,9 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - In-memory, no I/O.
 - Rule: every public fn in every `au-kpis-*` crate has at least one test.
 - Coverage floor: **80% line, 70% branch** (`cargo-llvm-cov`, uploaded to Codecov, PR comment diff).
+- APS scorecard tests cover formula bounds, zone bands, weighted means,
+  direction-aware normalization, missing-data exclusion, coverage percentage,
+  confidence-band bounds, visible-unscored behavior, and trend-arrow rules.
 
 **Property-based** (`proptest`)
 - Parse/serialize round-trip: `parse(serialize(obs)) == obs`
@@ -884,6 +1030,7 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - PDF sidecar fixtures: raw table candidates snapshot per backend. Adapter
   snapshots remain the merge contract for final observations.
 - Golden API responses (JSON shape stability).
+- APS scorecard config snapshots make reviewed weight/config changes obvious.
 - OpenAPI spec snapshot — intentional changes get committed; drift needs review.
 
 **Integration** (`testcontainers` — real PG+Timescale+Redis+Minio per test file)
@@ -892,6 +1039,10 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - PDF sidecar: deterministic backend, model fallback trigger, validation
   failure, and provenance metadata covered with committed fixtures.
 - API: full request through middleware stack → DB → response validated against OpenAPI schema.
+- Scorecards: seeded observations/config → APS config/latest/history responses
+  prove source attribution, formula output, confidence-band bounds, cache
+  headers, missing indicators, manual/visible-unscored inputs, and contribution
+  provenance.
 - Queue: enqueue → worker dequeue → retry on failure → DLQ on exhaustion.
 - Migrations: apply forward; apply backward (where reversible); apply forward again — idempotent.
 
@@ -903,9 +1054,14 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 **SDK integration**
 - TS SDK test suite runs against real API via docker-compose.
 - Verifies each SDK method: hits right endpoint, parses response, handles `4xx`/`5xx`, retries on `Retry-After`, streams correctly, types match runtime.
+- Scorecard SDK tests verify APS config/latest/history helpers, generated
+  response types, history query serialization, and optional runtime validation.
 
 **End-to-end** (Playwright — `apps/web/e2e/`)
 - Critical journeys: land → search "CPI" → pick series → view chart → download CSV → copy SDK snippet.
+- APS journeys: land on APS → inspect score spectrum and confidence band →
+  open source drilldown → inspect config/weights → navigate to Explorer,
+  Compare, and Playground.
 - Visual regression (screenshot diff vs committed baseline, per-breakpoint).
 - Accessibility: `axe-core` on every key page; WCAG AA required.
 
@@ -932,6 +1088,9 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 
 **Data-quality** (scheduled, runs against prod data)
 - Per-dataflow rules: values within plausible ranges, cardinality stable, recency matches cadence.
+- APS input rules: every configured indicator has freshness, plausible range,
+  cardinality, coverage-status, and expected-missing checks; stale manual inputs
+  are reported separately from machine-ingested gaps.
 - Alerts on violation; does not fail CI (production-only).
 
 ### Test organisation
@@ -1447,6 +1606,7 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v0.1.4 (2026-06-22)** — Added derived scorecards and APS v1: scorecard config, APS formula, missing-data and confidence-band semantics, `/v1/scorecards/aps/*` API endpoints, SDK/web expectations, source register, and APS-specific testing requirements.
 - **v0.1.3 (2026-05-01)** — Clarified repeated artifact response-header retention and source-specific streaming memory guardrails in PR CI.
 - **v0.1.2 (2026-04-30)** — Clarified that artifact records retain upstream fetch response headers alongside the content-addressed storage key.
 - **v0.1.1 (2026-04-28)** — Clarified PDF extraction architecture: deterministic `pdfplumber`/`camelot` remains the baseline, with optional pinned local document-model backends for fallback/comparison. Added validation, provenance, testing, and model-governance requirements.
