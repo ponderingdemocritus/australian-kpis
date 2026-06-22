@@ -2738,6 +2738,7 @@ impl ParsedStructure {
         })?;
         let series_key = SeriesKey::derive(
             &dataflow_id,
+            &measure_id,
             dimensions
                 .iter()
                 .map(|(dimension, code)| (dimension.as_str(), code.as_str())),

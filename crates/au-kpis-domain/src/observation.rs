@@ -57,14 +57,15 @@ pub struct Observation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{ArtifactId, DataflowId, SeriesKey, Sha256Digest};
+    use crate::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey, Sha256Digest};
     use chrono::TimeZone;
     use proptest::{collection::btree_map, prelude::*};
 
     #[test]
     fn roundtrips() {
         let df = DataflowId::new("abs.cpi").unwrap();
-        let key = SeriesKey::derive(&df, [("region", "AUS")]);
+        let measure = MeasureId::new("index").unwrap();
+        let key = SeriesKey::derive(&df, &measure, [("region", "AUS")]);
         let obs = Observation {
             series_key: key,
             time: DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")
@@ -90,7 +91,8 @@ mod tests {
     #[test]
     fn missing_value_roundtrips() {
         let df = DataflowId::new("abs.cpi").unwrap();
-        let key = SeriesKey::derive(&df, [("region", "AUS")]);
+        let measure = MeasureId::new("index").unwrap();
+        let key = SeriesKey::derive(&df, &measure, [("region", "AUS")]);
         let obs = Observation {
             series_key: key,
             time: DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")

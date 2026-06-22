@@ -10,7 +10,8 @@ use utoipa::ToSchema;
 use crate::ids::{CodeId, DataflowId, DimensionId, MeasureId, SeriesKey};
 
 /// One time series within a dataflow. `dimensions` is the sorted bag of
-/// `(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
+/// `(key, value)` pairs that, together with `dataflow_id` and `measure_id`,
+/// seeds `series_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Series {
     pub series_key: SeriesKey,
@@ -36,6 +37,7 @@ impl Series {
     pub fn compute_series_key(&self) -> SeriesKey {
         SeriesKey::derive(
             &self.dataflow_id,
+            &self.measure_id,
             self.dimensions
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str())),
@@ -59,6 +61,7 @@ impl SeriesDescriptor {
     pub fn compute_series_key(&self) -> SeriesKey {
         SeriesKey::derive(
             &self.dataflow_id,
+            &self.measure_id,
             self.dimensions
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str())),
@@ -81,11 +84,16 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let key = SeriesKey::derive(&df, dims.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        let measure = MeasureId::new("index").unwrap();
+        let key = SeriesKey::derive(
+            &df,
+            &measure,
+            dims.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+        );
         Series {
             series_key: key,
             dataflow_id: df,
-            measure_id: MeasureId::new("index").unwrap(),
+            measure_id: measure,
             dimensions: dims,
             unit: "index".into(),
             first_observed: Some(

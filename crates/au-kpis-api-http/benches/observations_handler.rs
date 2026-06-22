@@ -10,7 +10,7 @@ use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, To
 use au_kpis_config::{
     AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
 };
-use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     Router,
@@ -152,11 +152,13 @@ async fn seed_observations(pool: &PgPool) {
 
 async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
     let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
+    let measure = MeasureId::new("index").expect("static measure id is valid");
     let dimensions: BTreeMap<String, String> = [("region".to_string(), region.to_string())]
         .into_iter()
         .collect();
     let key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),

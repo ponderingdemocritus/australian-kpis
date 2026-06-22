@@ -445,7 +445,7 @@ Defined in `au-kpis-domain`. Core decomposition: **`Series` (metadata + dimensio
 // crates/au-kpis-domain/src/series.rs
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Series {
-    pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || sorted dimensions)
+    pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || measure_id || sorted dimensions)
     pub dataflow_id: DataflowId,
     pub measure_id: MeasureId,
     pub dimensions: BTreeMap<DimensionId, CodeId>,  // JSONB in DB, GIN-indexed
@@ -486,7 +486,7 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 
 Typical latest-observation query plan:
 ```
-1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
+1. Resolve Dataflow + Measure + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
 2. If a latest-observation request still matches a high-cardinality series set,
    reject it with `400` and ask the client to add more dimension filters.
 3. Query `observations` by the accepted concrete `series_key` values, ordered by
@@ -1024,7 +1024,7 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 
 **Property-based** (`proptest`)
 - Parse/serialize round-trip: `parse(serialize(obs)) == obs`
-- `SeriesKey` determinism: same dimensions → same hash; different dimensions → different hash (no collisions over 1M samples)
+- `SeriesKey` determinism: same dataflow, measure, and dimensions → same hash; different measure or dimensions → different hash (no collisions over 1M samples)
 - Pagination invariants: `concat(pages) == full_result`
 - Revision chain: latest revision always wins regardless of insertion order
 - Chunk exclusion: queries with narrow time windows never scan chunks outside range
@@ -1560,8 +1560,8 @@ All confirmed 2026-04-23:
 | **Codelist** | A reusable vocabulary of codes for a dimension (e.g. Australian states). |
 | **Measure** | What is being counted (unemployment rate, CPI index, GDP $). |
 | **Observation** | A single data point — one row in the `observations` hypertable. |
-| **Series** | A conceptual time-series identified by `(dataflow, dimension values)`. Stored in `series` table. |
-| **Series key** | Deterministic hash of `dataflow_id + sorted dimensions` — primary identifier for a series. |
+| **Series** | A conceptual time-series identified by `(dataflow, measure, dimension values)`. Stored in `series` table. |
+| **Series key** | Deterministic hash of `dataflow_id + measure_id + sorted dimensions` — primary identifier for a series. |
 | **Revision** | A later-published correction to a previously-observed value. Tracked via `revision_no`; `observations_latest` view shows latest per `(series_key, time)`. |
 | **Hypertable** | TimescaleDB-partitioned table. `observations` is partitioned by `time` (monthly chunks) + space-partitioned by `series_key` hash. |
 | **Continuous aggregate** | TimescaleDB materialized view that incrementally maintains aggregates (e.g. monthly averages) as new data arrives. |
