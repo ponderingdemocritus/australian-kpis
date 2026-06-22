@@ -148,6 +148,35 @@ await run('observations.list encodes dimensions and returns the response envelop
   assertSearchValues(mock.calls[0], 'dimensions[]', ['measure=All groups CPI', 'region=AUS'])
 })
 
+await run('observations.parquet requests raw bulk parquet export', async () => {
+  const mock = mockFetch([
+    new Response(new Uint8Array([80, 65, 82, 49]), {
+      headers: { 'content-type': 'application/vnd.apache.parquet' },
+      status: 200,
+    }),
+  ])
+  const client = createClient({ baseUrl: 'https://api.example.test', fetch: mock.fetch })
+
+  const response = await client.observations.parquet({
+    dataflow: 'abs.cpi',
+    dimensions: { region: 'AUS' },
+    limit: 50_000,
+    since: '2024-01-01',
+  })
+
+  assertEqual(response.headers.get('content-type'), 'application/vnd.apache.parquet')
+  assertPath(mock.calls[0], '/v1/observations')
+  assertSearch(mock.calls[0], 'dataflow', 'abs.cpi')
+  assertSearch(mock.calls[0], 'format', 'parquet')
+  assertSearch(mock.calls[0], 'limit', '50000')
+  assertSearch(mock.calls[0], 'since', '2024-01-01')
+  assertSearchValues(mock.calls[0], 'dimensions[]', ['region=AUS'])
+  assertEqual(
+    new Headers(mock.calls[0]?.init?.headers).get('accept'),
+    'application/vnd.apache.parquet',
+  )
+})
+
 await run('observations.stream follows pagination cursors', async () => {
   const first = observationsPage({ nextCursor: 'cursor-2', value: 136.2 })
   const second = observationsPage({ nextCursor: null, value: 136.9 })

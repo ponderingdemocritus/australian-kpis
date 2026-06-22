@@ -37,6 +37,25 @@ console.log(dataflows.dataflows.length)
 console.log(cpi.observations[0])
 ```
 
+## Bulk Parquet
+
+JSON and CSV observation requests are page-sized and capped at 10,000 rows.
+For larger analytical pulls, request Parquet as a raw streaming response:
+
+```ts
+const response = await client.observations.parquet({
+  dataflow: 'abs.cpi',
+  dimensions: { region: 'AUS' },
+  since: '2010-01-01',
+  limit: 50_000,
+})
+
+const bytes = new Uint8Array(await response.arrayBuffer())
+```
+
+Parquet exports use `Cache-Control: no-store`, omit ETags, and are capped by
+the API bulk-export row limit.
+
 ## Runtime targets
 
 - Node 20+ through the global `fetch` implementation.

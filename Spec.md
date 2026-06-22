@@ -715,14 +715,22 @@ GET  /v1/openapi.json
   are streaming responses; they omit ETag, use `Cache-Control: no-store`, and
   must not run the full ETag fingerprint aggregate before streaming. Cloudflare
   CDN in front.
-- **Pagination**: cursor-based (opaque base64 of `(time, series_key)` pair). Max 10k rows per page.
+- **Pagination and bulk export**: JSON/CSV reads are cursor-based (opaque
+  base64 of `(time, series_key)` pair) and capped at 10k rows per page. Parquet
+  is a bulk streaming export path, not a JSON page envelope; it may stream up
+  to 1,000,000 rows per request under the same rate limits and query
+  cardinality guardrails.
 - **High-cardinality latest reads**: `/v1/observations` latest-revision requests
   must be dimension-filtered enough to match fewer than 512 series. Broader
   requests return `400` with a problem detail explaining that more
   `dimensions[]` filters are required; clients should use codelist/catalog
   endpoints to discover the needed dimension values first. Rollup requests use
   their aggregate views and are exempt from this latest-read guard.
-- **Formats**: JSON default; CSV; **Parquet streamed via arrow-rs** — this is the killer feature for data-science consumers.
+- **Formats**: JSON default; CSV; **Parquet streamed via arrow-rs** — this is
+  the killer feature for data-science consumers. Parquet responses return
+  `application/vnd.apache.parquet`, `Cache-Control: no-store`, and no cursor
+  payload; clients narrow the query or raise the explicit bulk `limit` up to
+  the configured cap.
 - **Versioning**: additive changes same version; breaking changes → `/v2`. OpenAPI diff enforced in CI via `oasdiff`.
 - **Problem+JSON** error bodies (RFC 7807).
 
@@ -1452,6 +1460,9 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v0.1.5 (2026-06-22)** — Separated Parquet bulk export limits from JSON/CSV
+  pagination: JSON/CSV stay capped at 10k rows, while Parquet can stream up to
+  the configured 1,000,000-row bulk cap with `Cache-Control: no-store`.
 - **v0.1.4 (2026-06-22)** — Clarified observation response caching: bounded first-page JSON keeps ETags, while CSV/Parquet and other streaming responses skip fingerprint pre-scans and use `Cache-Control: no-store`.
 - **v0.1.3 (2026-05-01)** — Clarified repeated artifact response-header retention and source-specific streaming memory guardrails in PR CI.
 - **v0.1.2 (2026-04-30)** — Clarified that artifact records retain upstream fetch response headers alongside the content-addressed storage key.
