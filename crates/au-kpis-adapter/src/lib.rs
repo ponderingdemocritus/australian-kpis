@@ -95,15 +95,24 @@ pub fn retry_after_delta(headers: &ResponseHeaders) -> Option<Duration> {
         })
 }
 
-/// Validate worksheet cell references before handing XLSX bytes to downstream
-/// workbook parsers.
+const XLSX_ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
+const XLS_LEGACY_OLE_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Validate workbook signatures and worksheet cell references before handing
+/// XLS/XLSX bytes to downstream workbook parsers.
 ///
 /// Malformed cell coordinates have triggered panics in third-party XLSX
-/// readers. This helper treats invalid ZIP/XML/cell references as source
-/// format drift and leaves non-XLSX byte streams untouched.
+/// readers. Malformed ZIP-looking byte streams can also reach panic paths when
+/// the fuzz target is built with aborting panics, so unsupported signatures are
+/// rejected before parser autodetection.
 pub fn validate_xlsx_workbook_cell_refs(bytes: &[u8], source: &str) -> Result<(), AdapterError> {
-    if !bytes.starts_with(b"PK") {
+    if bytes.starts_with(XLS_LEGACY_OLE_SIGNATURE) {
         return Ok(());
+    }
+    if !bytes.starts_with(XLSX_ZIP_SIGNATURE) {
+        return Err(AdapterError::FormatDrift(format!(
+            "{source} workbook has unsupported XLS/XLSX signature"
+        )));
     }
 
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|err| {

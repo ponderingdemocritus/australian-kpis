@@ -151,6 +151,7 @@ dependencies = [
  "calamine",
  "chrono",
  "csv-async",
+ "encoding_rs",
  "futures",
  "tokio",
  "tokio-util",
