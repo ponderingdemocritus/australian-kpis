@@ -264,6 +264,7 @@ impl SourceAdapter for StateCapitalAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -527,8 +528,10 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
             code_id("project", &slugify_code(project))?,
         );
     }
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &input.dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -536,7 +539,7 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id: input.dataflow_id,
-        measure_id: MeasureId::new("value").expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: input.unit.into(),
     };

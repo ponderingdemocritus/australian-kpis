@@ -4,7 +4,7 @@ expression: rows
 ---
 [
   {
-    "series_key": "3ea16e9bd99bb07bc0d8901d1b1ff052bb92177a38cb6605bb4742146aae1f25",
+    "series_key": "5348c7551b35f24b021e74845f14fdc2e15cb5fc45c5213b05e464ed095f1e6f",
     "dataflow_id": "abs.building_activity",
     "measure_id": "dwellings_commenced",
     "dimensions": {
@@ -22,7 +22,7 @@ expression: rows
     }
   },
   {
-    "series_key": "3ea16e9bd99bb07bc0d8901d1b1ff052bb92177a38cb6605bb4742146aae1f25",
+    "series_key": "5348c7551b35f24b021e74845f14fdc2e15cb5fc45c5213b05e464ed095f1e6f",
     "dataflow_id": "abs.building_activity",
     "measure_id": "dwellings_commenced",
     "dimensions": {
@@ -40,7 +40,7 @@ expression: rows
     }
   },
   {
-    "series_key": "b1d2f6bccc018817007b3ec2ae2f85795155535618411c94dfd92b8bc28307cc",
+    "series_key": "d872466b460b38677b8c8baac82ce92bed9166fc2c81ee06a3e73edf0b727bbf",
     "dataflow_id": "abs.building_activity",
     "measure_id": "dwellings_completed",
     "dimensions": {
@@ -58,7 +58,7 @@ expression: rows
     }
   },
   {
-    "series_key": "b1d2f6bccc018817007b3ec2ae2f85795155535618411c94dfd92b8bc28307cc",
+    "series_key": "d872466b460b38677b8c8baac82ce92bed9166fc2c81ee06a3e73edf0b727bbf",
     "dataflow_id": "abs.building_activity",
     "measure_id": "dwellings_completed",
     "dimensions": {

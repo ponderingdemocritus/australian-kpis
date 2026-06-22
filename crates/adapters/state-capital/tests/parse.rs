@@ -38,6 +38,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("state_capital").unwrap(),
         source_url: source_url.into(),
         content_type: "application/json".into(),
@@ -182,6 +183,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("state_capital").unwrap(),
         source_url: "https://www.audit.vic.gov.au/report/major-projects-performance-2026.json"
             .into(),

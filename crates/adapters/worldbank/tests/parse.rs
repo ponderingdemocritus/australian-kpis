@@ -37,6 +37,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("worldbank").unwrap(),
         source_url: source_url.into(),
         content_type: "text/csv".into(),
@@ -185,6 +186,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("worldbank").unwrap(),
         source_url: "https://www.worldbank.org/en/businessready/bready-australia-2026.csv".into(),
         content_type: "text/csv".into(),

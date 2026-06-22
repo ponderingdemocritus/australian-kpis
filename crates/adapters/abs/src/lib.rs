@@ -1043,8 +1043,11 @@ fn building_approvals_observation(
             CodeId::new("AUS").expect("static region code is valid"),
         ),
     ]);
+    let measure_id =
+        MeasureId::new(BUILDING_APPROVALS_MEASURE_ID).expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(dimension, code)| (dimension.as_str(), code.as_str())),
@@ -1052,8 +1055,7 @@ fn building_approvals_observation(
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new(BUILDING_APPROVALS_MEASURE_ID)
-            .expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: "dwellings".into(),
     };
@@ -1209,8 +1211,10 @@ fn building_activity_observation(
             CodeId::new("AUS").expect("static region code is valid"),
         ),
     ]);
+    let measure_id = MeasureId::new(measure_id).expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(dimension, code)| (dimension.as_str(), code.as_str())),
@@ -1218,7 +1222,7 @@ fn building_activity_observation(
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new(measure_id).expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: "dwellings".into(),
     };
@@ -1439,8 +1443,11 @@ fn dwelling_completion_times_observation(
             CodeId::new("AUS").expect("static region code is valid"),
         ),
     ]);
+    let measure_id =
+        MeasureId::new(DWELLING_COMPLETION_TIMES_MEASURE_ID).expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(dimension, code)| (dimension.as_str(), code.as_str())),
@@ -1448,8 +1455,7 @@ fn dwelling_completion_times_observation(
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new(DWELLING_COMPLETION_TIMES_MEASURE_ID)
-            .expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: "months".into(),
     };

@@ -5,7 +5,7 @@ use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, To
 use au_kpis_config::{
     AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
 };
-use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
@@ -1271,8 +1271,10 @@ async fn insert_series<const N: usize>(
         .into_iter()
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect();
+    let measure = MeasureId::new(measure_id).unwrap();
     let key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
