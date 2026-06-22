@@ -36,6 +36,7 @@ use crate::{AppState, error::ApiError};
 const DEFAULT_LIMIT: usize = 1_000;
 const MAX_LIMIT: usize = 10_000;
 const CACHE_CONTROL_VALUE: &str = "public, max-age=60, stale-while-revalidate=300";
+const STREAMING_CACHE_CONTROL_VALUE: &str = "no-store";
 const JSON_RESPONSE_CACHE_TTL: Duration = Duration::from_secs(300);
 const PARQUET_ROW_GROUP_TARGET_BYTES: usize = 1_000_000;
 const PARQUET_BATCH_ROWS: usize = 1_024;
@@ -127,16 +128,16 @@ pub struct ObservationsResponse {
                 (String = "application/vnd.apache.parquet")
             ),
             headers(
-                ("ETag" = String, description = "Weak entity tag for this page."),
-                ("Cache-Control" = String, description = "Public CDN cache policy.")
+                ("ETag" = String, description = "Weak entity tag for cacheable JSON pages."),
+                ("Cache-Control" = String, description = "Cache policy for JSON pages or streaming exports.")
             )
         ),
         (
             status = 304,
             description = "The client's cached page is still fresh.",
             headers(
-                ("ETag" = String, description = "Weak entity tag for this page."),
-                ("Cache-Control" = String, description = "Public CDN cache policy.")
+                ("ETag" = String, description = "Weak entity tag for cacheable JSON pages."),
+                ("Cache-Control" = String, description = "Cache policy for JSON pages or streaming exports.")
             )
         ),
         (
@@ -172,31 +173,48 @@ pub async fn list_observations(
     uri: Uri,
 ) -> Result<Response, ApiError> {
     let query = parse_observations_query(uri.query())?;
-    let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
-    validate_observation_query_bounds(&query, &fingerprint)?;
-    let json_cache_key = observations_json_cache_key(uri.query(), &query);
-    if should_cache_json_observations(&query) {
-        if let Some(cached) = read_cached_json_observations(&state, &json_cache_key).await {
+    let etag = if requires_cache_fingerprint(&query) {
+        let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
+        validate_observation_query_bounds(&query, &fingerprint)?;
+        Some(compute_etag(&query, &fingerprint)?)
+    } else {
+        validate_streaming_observation_query_bounds(&state.db, &query).await?;
+        None
+    };
+    let json_cache_key = should_cache_json_observations(&query)
+        .then(|| observations_json_cache_key(uri.query(), &query));
+    if let Some(json_cache_key) = &json_cache_key {
+        if let Some(cached) = read_cached_json_observations(&state, json_cache_key).await {
             return cached_json_observations_response(&headers, cached);
         }
     }
 
     let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
-    let etag = compute_etag(&query, &fingerprint)?;
-    let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
-    let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
-        tracing::error!(error = %err, "generated invalid ETag header");
-        ApiError::Internal
-    })?;
+    let cache_control = if etag.is_some() {
+        HeaderValue::from_static(CACHE_CONTROL_VALUE)
+    } else {
+        HeaderValue::from_static(STREAMING_CACHE_CONTROL_VALUE)
+    };
 
-    if if_none_match_fresh(&headers, &etag) {
-        let mut response = StatusCode::NOT_MODIFIED.into_response();
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, cache_control);
-        response.headers_mut().insert(header::ETAG, etag_header);
-        return Ok(response);
-    }
+    let etag_header = if let Some(etag) = &etag {
+        let etag_header = HeaderValue::from_str(etag).map_err(|err| {
+            tracing::error!(error = %err, "generated invalid ETag header");
+            ApiError::Internal
+        })?;
+
+        if if_none_match_fresh(&headers, etag) {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, cache_control);
+            response.headers_mut().insert(header::ETAG, etag_header);
+            return Ok(response);
+        }
+
+        Some(etag_header)
+    } else {
+        None
+    };
 
     let content_type = match query.format {
         ResponseFormat::Json => HeaderValue::from_static("application/json"),
@@ -209,9 +227,11 @@ pub async fn list_observations(
                 render_json_observations(state.db.clone(), query.clone(), metadata.clone()).await?;
             write_cached_json_observations(
                 &state,
-                &json_cache_key,
+                json_cache_key
+                    .as_deref()
+                    .expect("cacheable JSON has a cache key"),
                 &CachedJsonObservations {
-                    etag: etag.clone(),
+                    etag: etag.clone().expect("cacheable JSON has an ETag"),
                     body: body.clone(),
                 },
             )
@@ -235,7 +255,9 @@ pub async fn list_observations(
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, cache_control);
-    response.headers_mut().insert(header::ETAG, etag_header);
+    if let Some(etag_header) = etag_header {
+        response.headers_mut().insert(header::ETAG, etag_header);
+    }
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
@@ -533,6 +555,18 @@ fn validate_observation_query_bounds(
     validate_latest_query_cardinality(query, fingerprint.series_count)
 }
 
+async fn validate_streaming_observation_query_bounds(
+    pool: &PgPool,
+    query: &ParsedObservationsQuery,
+) -> Result<(), ApiError> {
+    if rollup_grain(query).is_some() {
+        return Ok(());
+    }
+
+    let candidate_series_count = load_candidate_series(pool, query).await?.len() as i64;
+    validate_latest_query_cardinality(query, candidate_series_count)
+}
+
 fn validate_latest_query_cardinality(
     query: &ParsedObservationsQuery,
     candidate_series_count: i64,
@@ -578,6 +612,10 @@ fn if_none_match_fresh(headers: &HeaderMap, etag: &str) -> bool {
 fn should_cache_json_observations(query: &ParsedObservationsQuery) -> bool {
     // Keep the hot-path cache bounded; cursor pages and export formats stay streaming.
     query.format == ResponseFormat::Json && query.cursor.is_none() && query.limit <= DEFAULT_LIMIT
+}
+
+fn requires_cache_fingerprint(query: &ParsedObservationsQuery) -> bool {
+    should_cache_json_observations(query)
 }
 
 fn observations_json_cache_key(raw_query: Option<&str>, query: &ParsedObservationsQuery) -> String {
@@ -1738,6 +1776,33 @@ mod tests {
         let cursor_page =
             parse_observations_query(Some(&format!("dataflow=abs.cpi&cursor={cursor}"))).unwrap();
         assert!(!should_cache_json_observations(&cursor_page));
+    }
+
+    #[test]
+    fn only_cacheable_json_pages_require_cache_fingerprints() {
+        let first_page = parse_observations_query(Some("dataflow=abs.cpi&limit=500")).unwrap();
+        assert!(requires_cache_fingerprint(&first_page));
+
+        let large_json = parse_observations_query(Some("dataflow=abs.cpi&limit=1001")).unwrap();
+        assert!(!requires_cache_fingerprint(&large_json));
+
+        let csv = parse_observations_query(Some("dataflow=abs.cpi&format=csv")).unwrap();
+        assert!(!requires_cache_fingerprint(&csv));
+
+        let parquet = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
+        assert!(!requires_cache_fingerprint(&parquet));
+
+        let cursor = encode_cursor(&ObservationCursor {
+            time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            series_key: SeriesKey::derive(
+                &DataflowId::new("abs.cpi").unwrap(),
+                [("region", "AUS")],
+            ),
+        })
+        .unwrap();
+        let cursor_page =
+            parse_observations_query(Some(&format!("dataflow=abs.cpi&cursor={cursor}"))).unwrap();
+        assert!(!requires_cache_fingerprint(&cursor_page));
     }
 
     #[test]
