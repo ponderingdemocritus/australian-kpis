@@ -1,0 +1,5 @@
+period,region,measure_id,measure_name,value,unit,status
+2023,AUS,progress_to_target_pct,Housing Accord progress to target,50,percent,revised
+2024,AUS,progress_to_target_pct,Housing Accord progress to target,100,percent,normal
+2024,AUS,homes_completed,Homes completed under Housing Accord,240000,dwellings,normal
+2024,AUS,annual_target,Annual pro-rata Housing Accord target,240000,dwellings,normal

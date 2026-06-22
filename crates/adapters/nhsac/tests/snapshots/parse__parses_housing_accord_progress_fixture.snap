@@ -1,0 +1,82 @@
+---
+source: crates/adapters/nhsac/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "nhsac.housing_accord_progress",
+    "measure_id": "progress_to_target_pct",
+    "dimensions": {
+      "measure": "progress_to_target_pct",
+      "region": "AUS"
+    },
+    "unit": "percent",
+    "time": "2023-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 50.0,
+    "status": "Revised",
+    "attributes": {
+      "nhsac_measure_id": "progress_to_target_pct",
+      "nhsac_measure_name": "Housing Accord progress to target",
+      "source_url": "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv"
+    },
+    "source_artifact_id": "b31ac960f246cc5b62a580d167839b8ce6e875fb7ee932dd972a5c4bc01cc049"
+  },
+  {
+    "dataflow_id": "nhsac.housing_accord_progress",
+    "measure_id": "progress_to_target_pct",
+    "dimensions": {
+      "measure": "progress_to_target_pct",
+      "region": "AUS"
+    },
+    "unit": "percent",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 100.0,
+    "status": "Normal",
+    "attributes": {
+      "nhsac_measure_id": "progress_to_target_pct",
+      "nhsac_measure_name": "Housing Accord progress to target",
+      "source_url": "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv"
+    },
+    "source_artifact_id": "b31ac960f246cc5b62a580d167839b8ce6e875fb7ee932dd972a5c4bc01cc049"
+  },
+  {
+    "dataflow_id": "nhsac.housing_accord_progress",
+    "measure_id": "homes_completed",
+    "dimensions": {
+      "measure": "homes_completed",
+      "region": "AUS"
+    },
+    "unit": "dwellings",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 240000.0,
+    "status": "Normal",
+    "attributes": {
+      "nhsac_measure_id": "homes_completed",
+      "nhsac_measure_name": "Homes completed under Housing Accord",
+      "source_url": "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv"
+    },
+    "source_artifact_id": "b31ac960f246cc5b62a580d167839b8ce6e875fb7ee932dd972a5c4bc01cc049"
+  },
+  {
+    "dataflow_id": "nhsac.housing_accord_progress",
+    "measure_id": "annual_target",
+    "dimensions": {
+      "measure": "annual_target",
+      "region": "AUS"
+    },
+    "unit": "dwellings",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 240000.0,
+    "status": "Normal",
+    "attributes": {
+      "nhsac_measure_id": "annual_target",
+      "nhsac_measure_name": "Annual pro-rata Housing Accord target",
+      "source_url": "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv"
+    },
+    "source_artifact_id": "b31ac960f246cc5b62a580d167839b8ce6e875fb7ee932dd972a5c4bc01cc049"
+  }
+]

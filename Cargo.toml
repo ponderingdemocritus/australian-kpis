@@ -23,6 +23,7 @@ members = [
     "crates/adapters/abs",
     "crates/adapters/rba",
     "crates/adapters/pc",
+    "crates/adapters/nhsac",
     "crates/adapters/apra",
     "crates/adapters/asx",
     "crates/adapters/treasury",
@@ -55,6 +56,7 @@ au-kpis-auth = { path = "crates/au-kpis-auth" }
 au-kpis-pdf-client = { path = "crates/au-kpis-pdf-client" }
 au-kpis-adapter = { path = "crates/au-kpis-adapter" }
 au-kpis-adapter-pc = { path = "crates/adapters/pc" }
+au-kpis-adapter-nhsac = { path = "crates/adapters/nhsac" }
 au-kpis-loader = { path = "crates/au-kpis-loader" }
 au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
 au-kpis-scorecard = { path = "crates/au-kpis-scorecard" }

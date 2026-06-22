@@ -145,12 +145,12 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert_eq!(snapshot["coverage_pct"], 60.0);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 63.63636363636363).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 7);
+    assert_eq!(contributions.len(), 8);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -173,6 +173,14 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
             .unwrap()
             .starts_with("https://")
     );
+
+    let accord = contribution(contributions, "housing.accord-progress");
+    assert_eq!(accord["raw_value"], 100.0);
+    assert_eq!(accord["normalized_value"], 1.0);
+    assert_eq!(accord["coverage_status"], "resolved");
+    assert_eq!(accord["latest_period"], "2024-02-01");
+    assert_eq!(accord["license"], "NHSAC copyright");
+    assert_eq!(accord["source_url"], "https://nhsac.gov.au/publications");
 
     let productivity = contribution(contributions, "productivity.market-sector");
     assert_eq!(productivity["raw_value"], 3.0);
@@ -310,6 +318,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "INSERT INTO sources (id, name, homepage, description)
          VALUES
             ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL),
+            ('nhsac', 'National Housing Supply and Affordability Council', 'https://nhsac.gov.au', NULL),
             ('pc', 'Productivity Commission', 'https://www.pc.gov.au', NULL),
             ('worldbank', 'World Bank', 'https://www.worldbank.org', NULL)",
     )
@@ -321,6 +330,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "INSERT INTO measures (id, name, description, unit, scale)
          VALUES
             ('dwellings_approved', 'Dwellings approved', NULL, 'dwellings', NULL),
+            ('progress_to_target_pct', 'Housing Accord progress to target', NULL, 'percent', NULL),
             ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
             ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL)",
     )
@@ -341,6 +351,12 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia'
          ),
          (
+             'nhsac.housing_accord_progress', 'nhsac', 'Housing Accord progress', NULL,
+             ARRAY['region', 'measure'], ARRAY['progress_to_target_pct'], 'annual', 'NHSAC copyright',
+             'Source: National Housing Supply and Affordability Council',
+             'https://nhsac.gov.au/publications'
+         ),
+         (
              'pc.productivity_bulletin', 'pc', 'Productivity bulletin', NULL,
              ARRAY['region', 'measure'], ARRAY['market_sector_growth'], 'annual', 'CC-BY-4.0',
              'Source: Productivity Commission',
@@ -358,6 +374,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     .expect("insert dataflows");
 
     let housing_artifact = insert_artifact(pool, "abs", b"housing approvals").await;
+    let accord_artifact = insert_artifact(pool, "nhsac", b"housing accord").await;
     let productivity_artifact = insert_artifact(pool, "pc", b"productivity bulletin").await;
     let bready_artifact = insert_artifact(pool, "worldbank", b"bready").await;
 
@@ -385,6 +402,14 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         [("region", "AUS"), ("measure", "market_sector_growth")],
     )
     .await;
+    let accord = insert_series(
+        pool,
+        "nhsac.housing_accord_progress",
+        "progress_to_target_pct",
+        "percent",
+        [("region", "AUS"), ("measure", "progress_to_target_pct")],
+    )
+    .await;
 
     insert_observation(
         pool,
@@ -405,6 +430,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "year",
     )
     .await;
+    insert_observation(pool, accord, accord_artifact, (2024, 1, 1), 0.0, "year").await;
     insert_observation(
         pool,
         housing,
@@ -424,6 +450,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "year",
     )
     .await;
+    insert_observation(pool, accord, accord_artifact, (2024, 2, 1), 100.0, "year").await;
 }
 
 async fn insert_artifact(pool: &PgPool, source_id: &str, content: &[u8]) -> ArtifactId {
