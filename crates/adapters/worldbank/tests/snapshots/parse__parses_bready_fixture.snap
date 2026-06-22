@@ -1,0 +1,63 @@
+---
+source: crates/adapters/worldbank/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "worldbank.bready",
+    "measure_id": "business_entry_score",
+    "dimensions": {
+      "country": "AUS",
+      "measure": "business_entry_score"
+    },
+    "unit": "index",
+    "time": "2023-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 50.0,
+    "status": "Revised",
+    "attributes": {
+      "source_url": "https://www.worldbank.org/en/businessready/bready-australia-2026.csv",
+      "worldbank_measure_id": "business_entry_score",
+      "worldbank_measure_name": "Business entry score"
+    },
+    "source_artifact_id": "79076b5202c43eb983a64612be8f6e1a67e02c873b0c84329b7164950149134b"
+  },
+  {
+    "dataflow_id": "worldbank.bready",
+    "measure_id": "business_entry_score",
+    "dimensions": {
+      "country": "AUS",
+      "measure": "business_entry_score"
+    },
+    "unit": "index",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 100.0,
+    "status": "Normal",
+    "attributes": {
+      "source_url": "https://www.worldbank.org/en/businessready/bready-australia-2026.csv",
+      "worldbank_measure_id": "business_entry_score",
+      "worldbank_measure_name": "Business entry score"
+    },
+    "source_artifact_id": "79076b5202c43eb983a64612be8f6e1a67e02c873b0c84329b7164950149134b"
+  },
+  {
+    "dataflow_id": "worldbank.bready",
+    "measure_id": "public_services_score",
+    "dimensions": {
+      "country": "AUS",
+      "measure": "public_services_score"
+    },
+    "unit": "index",
+    "time": "2024-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 75.0,
+    "status": "Normal",
+    "attributes": {
+      "source_url": "https://www.worldbank.org/en/businessready/bready-australia-2026.csv",
+      "worldbank_measure_id": "public_services_score",
+      "worldbank_measure_name": "Public services score"
+    },
+    "source_artifact_id": "79076b5202c43eb983a64612be8f6e1a67e02c873b0c84329b7164950149134b"
+  }
+]

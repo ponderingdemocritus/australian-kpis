@@ -133,6 +133,7 @@ cadence = "annual"
 
 [indicators.dimension_selector]
 country = "AUS"
+measure = "business_entry_score"
 
 [indicators.normalization]
 worst = 50.0

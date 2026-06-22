@@ -364,7 +364,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
          ),
          (
              'worldbank.bready', 'worldbank', 'Business Ready', NULL,
-             ARRAY['country'], ARRAY['business_entry_score'], 'annual', 'World Bank terms',
+             ARRAY['country', 'measure'], ARRAY['business_entry_score'], 'annual', 'World Bank terms',
              'Source: World Bank B-READY',
              'https://www.worldbank.org/en/businessready'
          )",
@@ -391,7 +391,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "worldbank.bready",
         "business_entry_score",
         "index",
-        [("country", "AUS")],
+        [("country", "AUS"), ("measure", "business_entry_score")],
     )
     .await;
     let productivity = insert_series(

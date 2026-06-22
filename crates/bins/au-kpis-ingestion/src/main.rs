@@ -27,6 +27,7 @@ use au_kpis_adapter_pc::PcAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
+use au_kpis_adapter_worldbank::WorldbankAdapter;
 use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
 use au_kpis_domain::{
@@ -57,6 +58,8 @@ const NHSAC_HOUSING_ACCORD_DATAFLOW_SLUG: &str = "housing-accord-progress";
 const NHSAC_HOUSING_ACCORD_DATAFLOW_ID: &str = "nhsac.housing_accord_progress";
 const PC_PRODUCTIVITY_BULLETIN_DATAFLOW_SLUG: &str = "productivity-bulletin";
 const PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID: &str = "pc.productivity_bulletin";
+const WORLDBANK_BREADY_DATAFLOW_SLUG: &str = "bready";
+const WORLDBANK_BREADY_DATAFLOW_ID: &str = "worldbank.bready";
 const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
 const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
 const STATE_BUDGETS_NSW_DATAFLOW_SLUG: &str = "nsw-budget";
@@ -818,6 +821,13 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => PcAdapter::default(),
     };
     builder.register(pc).context("register PC adapter")?;
+    let worldbank = match env::var("AU_KPIS_WORLDBANK_INDEX_URL") {
+        Ok(index_url) => WorldbankAdapter::builder().index_url(index_url).build(),
+        Err(_) => WorldbankAdapter::default(),
+    };
+    builder
+        .register(worldbank)
+        .context("register World Bank adapter")?;
     let pdf_base_url = env::var("AU_KPIS_PDF_BASE_URL").ok();
     let pdf_request_timeout = pdf_request_timeout_from_env()?;
     let pdf_client = pdf_base_url
@@ -1013,6 +1023,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => Ok(()),
         "nhsac" if dataflow == NHSAC_HOUSING_ACCORD_DATAFLOW_SLUG => Ok(()),
         "pc" if dataflow == PC_PRODUCTIVITY_BULLETIN_DATAFLOW_SLUG => Ok(()),
+        "worldbank" if dataflow == WORLDBANK_BREADY_DATAFLOW_SLUG => Ok(()),
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
         "state-budgets"
             if matches!(
@@ -1043,6 +1054,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         "pc" => bail!(
             "unsupported dataflow `{dataflow}` for source `pc`; supported dataflow: {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_SLUG}"
         ),
+        "worldbank" => bail!(
+            "unsupported dataflow `{dataflow}` for source `worldbank`; supported dataflow: {WORLDBANK_BREADY_DATAFLOW_SLUG}"
+        ),
         "rba" => bail!(
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
         ),
@@ -1065,6 +1079,7 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         "asx" => ASX_MARKET_STATISTICS_DATAFLOW_ID,
         "nhsac" => NHSAC_HOUSING_ACCORD_DATAFLOW_ID,
         "pc" => PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID,
+        "worldbank" => WORLDBANK_BREADY_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
         "state-budgets" if dataflow == STATE_BUDGETS_NSW_DATAFLOW_SLUG => {
             STATE_BUDGETS_NSW_DATAFLOW_ID
@@ -1120,10 +1135,19 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     if !matches!(
         source,
-        "abs" | "aemo" | "apra" | "asx" | "nhsac" | "pc" | "rba" | "state-budgets" | "treasury"
+        "abs"
+            | "aemo"
+            | "apra"
+            | "asx"
+            | "nhsac"
+            | "pc"
+            | "worldbank"
+            | "rba"
+            | "state-budgets"
+            | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, rba, state-budgets, treasury"
+            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, treasury"
         );
     }
     Ok(())
@@ -1148,6 +1172,9 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "pc" && dataflow_id == PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "worldbank" && dataflow_id == WORLDBANK_BREADY_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "rba" && dataflow_id == RBA_STAT_TABLES_DATAFLOW_ID {
         return Ok(());
     }
@@ -1164,7 +1191,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1376,7 +1403,11 @@ mod tests {
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs, aemo, apra, asx, nhsac, pc, rba, state-budgets, treasury"));
+        assert!(
+            err.contains(
+                "abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, treasury"
+            )
+        );
     }
 
     #[test]
@@ -1435,6 +1466,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("nhsac.housing_accord_progress").unwrap())
+        );
+    }
+
+    #[test]
+    fn worldbank_once_mode_resolves_bready_dataflow() {
+        let request =
+            once_run_request("worldbank", "bready").expect("World Bank B-READY is supported");
+
+        assert_eq!(request.source_id.as_str(), "worldbank");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("worldbank.bready").unwrap())
         );
     }
 
@@ -1551,6 +1594,24 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("nhsac.housing_accord_progress").unwrap())
+        );
+    }
+
+    #[test]
+    fn backfill_jobs_accept_worldbank_bready_scope() {
+        let request = job_run_request(
+            &JobKind::Backfill {
+                source_id: SourceId::new("worldbank").unwrap(),
+                dataflow_id: Some(DataflowId::new("worldbank.bready").unwrap()),
+            },
+            None,
+        )
+        .expect("build World Bank backfill request");
+
+        assert_eq!(request.source_id.as_str(), "worldbank");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("worldbank.bready").unwrap())
         );
     }
 

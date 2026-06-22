@@ -1,0 +1,4 @@
+period,country,measure_id,measure_name,value,unit,status
+2023,AUS,business_entry_score,Business entry score,50,index,revised
+2024,AUS,business_entry_score,Business entry score,100,index,normal
+2024,AUS,public_services_score,Public services score,75,index,normal
