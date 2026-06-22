@@ -586,8 +586,11 @@ pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
     };
     let provenance =
         release_url_provenance_for_parse(source_url).expect("static APRA URL has provenance");
-    parse_xls_workbook(bytes.to_vec(), artifact, provenance, fuzz_ingested_at())
-        .map(|rows| rows.len())
+    let plan = ApraParsePlan {
+        provenance,
+        dataflow: ApraDataflow::QuarterlyStatistics,
+    };
+    parse_xls_workbook(bytes.to_vec(), artifact, plan, fuzz_ingested_at()).map(|rows| rows.len())
 }
 
 #[cfg(feature = "fuzzing")]
