@@ -295,8 +295,11 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "observations",
         "observations_latest",
         "observations_rollup_monthly",
+        "observations_rollup_monthly_points",
         "observations_rollup_quarterly",
+        "observations_rollup_quarterly_points",
         "observations_rollup_weekly",
+        "observations_rollup_weekly_points",
         "parse_errors",
         "series",
         "sources",
@@ -327,9 +330,9 @@ async fn migration_creates_hypertable_and_compression_policy() {
     }
 
     for expected in [
-        "observations_rollup_weekly",
-        "observations_rollup_monthly",
-        "observations_rollup_quarterly",
+        "observations_rollup_weekly_points",
+        "observations_rollup_monthly_points",
+        "observations_rollup_quarterly_points",
     ] {
         assert!(
             continuous_aggregate_exists(&pool, expected).await,
