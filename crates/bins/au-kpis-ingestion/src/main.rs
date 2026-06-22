@@ -63,6 +63,10 @@ const AEMO_DISPATCH_DATAFLOW_SLUG: &str = "dispatch";
 const AEMO_DISPATCH_DATAFLOW_ID: &str = "aemo.dispatch";
 const ASX_MARKET_STATISTICS_DATAFLOW_SLUG: &str = "market-statistics";
 const ASX_MARKET_STATISTICS_DATAFLOW_ID: &str = "asx.market_statistics";
+const ASX_ANNOUNCEMENTS_DATAFLOW_SLUG: &str = "announcements";
+const ASX_ANNOUNCEMENTS_DATAFLOW_ID: &str = "asx.announcements";
+const ASX_EOD_DATAFLOW_SLUG: &str = "eod";
+const ASX_EOD_DATAFLOW_ID: &str = "asx.eod";
 const NHSAC_HOUSING_ACCORD_DATAFLOW_SLUG: &str = "housing-accord-progress";
 const NHSAC_HOUSING_ACCORD_DATAFLOW_ID: &str = "nhsac.housing_accord_progress";
 const PC_PRODUCTIVITY_BULLETIN_DATAFLOW_SLUG: &str = "productivity-bulletin";
@@ -827,12 +831,17 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => AemoAdapter::default(),
     };
     builder.register(aemo).context("register AEMO adapter")?;
-    let asx = match env::var("AU_KPIS_ASX_MARKET_STATISTICS_URL") {
-        Ok(market_statistics_url) => AsxAdapter::builder()
-            .market_statistics_url(market_statistics_url)
-            .build(),
-        Err(_) => AsxAdapter::default(),
-    };
+    let mut asx = AsxAdapter::builder();
+    if let Ok(market_statistics_url) = env::var("AU_KPIS_ASX_MARKET_STATISTICS_URL") {
+        asx = asx.market_statistics_url(market_statistics_url);
+    }
+    if let Ok(announcements_rss_url) = env::var("AU_KPIS_ASX_ANNOUNCEMENTS_RSS_URL") {
+        asx = asx.announcements_rss_url(announcements_rss_url);
+    }
+    if let Ok(eod_csv_url) = env::var("AU_KPIS_ASX_EOD_CSV_URL") {
+        asx = asx.eod_csv_url(eod_csv_url);
+    }
+    let asx = asx.build();
     builder.register(asx).context("register ASX adapter")?;
     let nhsac = match env::var("AU_KPIS_NHSAC_INDEX_URL") {
         Ok(index_url) => NhsacAdapter::builder().index_url(index_url).build(),
@@ -1067,7 +1076,16 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
             Ok(())
         }
         "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => Ok(()),
-        "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => Ok(()),
+        "asx"
+            if matches!(
+                dataflow,
+                ASX_MARKET_STATISTICS_DATAFLOW_SLUG
+                    | ASX_ANNOUNCEMENTS_DATAFLOW_SLUG
+                    | ASX_EOD_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "nhsac" if dataflow == NHSAC_HOUSING_ACCORD_DATAFLOW_SLUG => Ok(()),
         "pc" if dataflow == PC_PRODUCTIVITY_BULLETIN_DATAFLOW_SLUG => Ok(()),
         "worldbank" if dataflow == WORLDBANK_BREADY_DATAFLOW_SLUG => Ok(()),
@@ -1102,7 +1120,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
             "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflow: {AEMO_DISPATCH_DATAFLOW_SLUG}"
         ),
         "asx" => bail!(
-            "unsupported dataflow `{dataflow}` for source `asx`; supported dataflow: {ASX_MARKET_STATISTICS_DATAFLOW_SLUG}"
+            "unsupported dataflow `{dataflow}` for source `asx`; supported dataflows: {ASX_MARKET_STATISTICS_DATAFLOW_SLUG}, {ASX_ANNOUNCEMENTS_DATAFLOW_SLUG}, {ASX_EOD_DATAFLOW_SLUG}"
         ),
         "nhsac" => bail!(
             "unsupported dataflow `{dataflow}` for source `nhsac`; supported dataflow: {NHSAC_HOUSING_ACCORD_DATAFLOW_SLUG}"
@@ -1147,7 +1165,11 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
             APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID
         }
         "aemo" => AEMO_DISPATCH_DATAFLOW_ID,
-        "asx" => ASX_MARKET_STATISTICS_DATAFLOW_ID,
+        "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => {
+            ASX_MARKET_STATISTICS_DATAFLOW_ID
+        }
+        "asx" if dataflow == ASX_ANNOUNCEMENTS_DATAFLOW_SLUG => ASX_ANNOUNCEMENTS_DATAFLOW_ID,
+        "asx" if dataflow == ASX_EOD_DATAFLOW_SLUG => ASX_EOD_DATAFLOW_ID,
         "nhsac" => NHSAC_HOUSING_ACCORD_DATAFLOW_ID,
         "pc" => PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID,
         "worldbank" => WORLDBANK_BREADY_DATAFLOW_ID,
@@ -1256,6 +1278,12 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "asx" && dataflow_id == ASX_MARKET_STATISTICS_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "asx" && dataflow_id == ASX_ANNOUNCEMENTS_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "asx" && dataflow_id == ASX_EOD_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "nhsac" && dataflow_id == NHSAC_HOUSING_ACCORD_DATAFLOW_ID {
         return Ok(());
     }
@@ -1287,7 +1315,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1565,6 +1593,29 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("asx.market_statistics").unwrap())
+        );
+    }
+
+    #[test]
+    fn asx_once_mode_resolves_announcements_dataflow() {
+        let request =
+            once_run_request("asx", "announcements").expect("ASX announcements are supported");
+
+        assert_eq!(request.source_id.as_str(), "asx");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("asx.announcements").unwrap())
+        );
+    }
+
+    #[test]
+    fn asx_once_mode_resolves_eod_dataflow() {
+        let request = once_run_request("asx", "eod").expect("ASX EOD is supported");
+
+        assert_eq!(request.source_id.as_str(), "asx");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("asx.eod").unwrap())
         );
     }
 

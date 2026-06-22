@@ -13,7 +13,7 @@ fn current_jobs_emit_market_statistics_page_with_source_metadata() {
         Some(TRACE_PARENT),
     );
 
-    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs.len(), 3);
     assert_eq!(jobs[0].id, "asx:market-statistics:2026-06");
     assert_eq!(jobs[0].source_id.as_str(), "asx");
     assert_eq!(jobs[0].dataflow_id.as_str(), "asx.market_statistics");
@@ -21,6 +21,16 @@ fn current_jobs_emit_market_statistics_page_with_source_metadata() {
     assert_eq!(jobs[0].metadata["revision_key"], "ASX:market-statistics");
     assert_eq!(jobs[0].metadata["revision_version"], "2026-06");
     assert_eq!(jobs[0].metadata["attribution"], "Source: ASX");
+
+    assert_eq!(jobs[1].id, "asx:announcements:2026-06-19");
+    assert_eq!(jobs[1].dataflow_id.as_str(), "asx.announcements");
+    assert_eq!(jobs[1].metadata["artifact_format"], "rss");
+    assert_eq!(jobs[1].metadata["cadence"], "daily");
+
+    assert_eq!(jobs[2].id, "asx:eod:2026-06-19");
+    assert_eq!(jobs[2].dataflow_id.as_str(), "asx.eod");
+    assert_eq!(jobs[2].metadata["artifact_format"], "csv");
+    assert_eq!(jobs[2].metadata["cadence"], "daily");
 }
 
 #[test]
@@ -33,12 +43,18 @@ fn manifest_declares_asx_market_statistics_metadata() {
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
     assert_eq!(
         manifest.dataflows,
-        vec![au_kpis_domain::DataflowId::new("asx.market_statistics").unwrap()]
+        vec![
+            au_kpis_domain::DataflowId::new("asx.market_statistics").unwrap(),
+            au_kpis_domain::DataflowId::new("asx.announcements").unwrap(),
+            au_kpis_domain::DataflowId::new("asx.eod").unwrap(),
+        ]
     );
 
     let dataflows = adapter.dataflow_metadata();
-    assert_eq!(dataflows.len(), 1);
+    assert_eq!(dataflows.len(), 3);
     assert_eq!(dataflows[0].id.as_str(), "asx.market_statistics");
+    assert_eq!(dataflows[1].id.as_str(), "asx.announcements");
+    assert_eq!(dataflows[2].id.as_str(), "asx.eod");
     assert_eq!(dataflows[0].attribution, "Source: ASX");
     assert_eq!(
         dataflows[0].source_url,

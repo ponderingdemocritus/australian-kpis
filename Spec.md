@@ -511,6 +511,10 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 | **AEMO** | `crates/adapters/aemo` (`au-kpis-adapter-aemo`) | NEMWeb directory listings | CSV (frequent) | `csv-async` |
 | **State budgets** | `crates/adapters/state-budgets` (`au-kpis-adapter-state-budgets`) | Hand-curated | PDF | Python sidecar extraction strategy |
 
+ASX emits `asx.announcements` for RSS announcement counts and `asx.eod`
+for daily OHLCV observations. `asx.market_statistics` remains a supplemental
+monthly public market-statistics dataflow while that ASX page is available.
+
 ### Guardrails
 
 - Every adapter has a **golden-file test** (insta snapshot): fixture → expected observations.

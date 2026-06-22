@@ -1,9 +1,9 @@
-//! ASX adapter for public historical market statistics.
+//! ASX adapter for public announcements, EOD prices, and market statistics.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, io, time::Duration};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -16,14 +16,21 @@ use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_storage::{BlobStore, StorageKey};
+use bytes::Bytes;
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
+use csv_async::AsyncReaderBuilder;
 use futures::{StreamExt, stream};
-use tokio_util::sync::CancellationToken;
+use quick_xml::{Reader as XmlReader, events::Event};
+use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 const DEFAULT_MARKET_STATISTICS_URL: &str =
     "https://www.asx.com.au/about/market-statistics/historical-market-statistics";
+const DEFAULT_ANNOUNCEMENTS_RSS_URL: &str = "https://www.asx.com.au/asx/rss/announcements.xml";
+const DEFAULT_EOD_CSV_URL: &str = "https://www.asx.com.au/data/eod/eod.csv";
 const USER_AGENT: &str = concat!("au-kpis-adapter-asx/", env!("CARGO_PKG_VERSION"));
-const DATAFLOW_ID: &str = "asx.market_statistics";
+const MARKET_STATISTICS_DATAFLOW_ID: &str = "asx.market_statistics";
+const ANNOUNCEMENTS_DATAFLOW_ID: &str = "asx.announcements";
+const EOD_DATAFLOW_ID: &str = "asx.eod";
 const SOURCE_NAME: &str = "ASX";
 const ATTRIBUTION: &str = "Source: ASX";
 const LICENSE_NAME: &str = "ASX Terms of Use";
@@ -34,6 +41,8 @@ const LICENSE_URL: &str = "https://www.asx.com.au/terms-of-use";
 pub struct AsxAdapter {
     manifest: AdapterManifest,
     market_statistics_url: String,
+    announcements_rss_url: String,
+    eod_csv_url: String,
 }
 
 impl Default for AsxAdapter {
@@ -55,11 +64,13 @@ impl AsxAdapter {
         started_at: DateTime<Utc>,
         trace_parent: Option<&str>,
     ) -> Vec<DiscoveredJob> {
-        vec![market_statistics_job(
+        current_jobs_for_urls(
             DEFAULT_MARKET_STATISTICS_URL,
+            DEFAULT_ANNOUNCEMENTS_RSS_URL,
+            DEFAULT_EOD_CSV_URL,
             started_at,
             trace_parent,
-        )]
+        )
     }
 
     /// Diff the current monthly page revision against stored upstream revisions.
@@ -70,44 +81,91 @@ impl AsxAdapter {
         started_at: DateTime<Utc>,
         trace_parent: Option<&str>,
     ) -> Vec<DiscoveredJob> {
-        let job = market_statistics_job(market_statistics_url, started_at, trace_parent);
-        let known = known_revisions.get(&job.metadata["revision_key"]);
-        let revision = UpstreamRevision::new(
-            job.metadata["revision_version"].clone(),
-            Some(job.source_url.clone()),
-        );
-        if known.is_none_or(|known| known != &revision) {
-            vec![job]
-        } else {
-            Vec::new()
-        }
+        discoverable_jobs_for_urls(
+            market_statistics_url,
+            DEFAULT_ANNOUNCEMENTS_RSS_URL,
+            DEFAULT_EOD_CSV_URL,
+            known_revisions,
+            started_at,
+            trace_parent,
+        )
     }
 
     /// Static metadata for ASX market-statistics observations.
     #[must_use]
     pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
-        vec![Dataflow {
-            id: dataflow_id(),
-            source_id: source_id(),
-            name: "ASX historical market statistics".into(),
-            description: Some(
-                "Monthly ASX index, market capitalisation, and listed-entity counts from the public historical market statistics page."
-                    .into(),
-            ),
-            dimensions: vec![DimensionId::new("metric").expect("static dimension id is valid")],
-            measures: vec![MeasureId::new("value").expect("static measure id is valid")],
-            frequency: Frequency::Monthly,
-            license: License::Other(LICENSE_NAME.into()),
-            attribution: ATTRIBUTION.into(),
-            source_url: DEFAULT_MARKET_STATISTICS_URL.into(),
-        }]
+        vec![
+            Dataflow {
+                id: market_statistics_dataflow_id(),
+                source_id: source_id(),
+                name: "ASX historical market statistics".into(),
+                description: Some(
+                    "Monthly ASX index, market capitalisation, and listed-entity counts from the public historical market statistics page."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("metric").expect("static dimension id is valid")
+                ],
+                measures: vec![MeasureId::new("value").expect("static measure id is valid")],
+                frequency: Frequency::Monthly,
+                license: License::Other(LICENSE_NAME.into()),
+                attribution: ATTRIBUTION.into(),
+                source_url: DEFAULT_MARKET_STATISTICS_URL.into(),
+            },
+            Dataflow {
+                id: announcements_dataflow_id(),
+                source_id: source_id(),
+                name: "ASX company announcements".into(),
+                description: Some(
+                    "Timestamped public ASX announcement feed represented as count observations with announcement provenance attributes."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("symbol").expect("static dimension id is valid"),
+                    DimensionId::new("category").expect("static dimension id is valid"),
+                ],
+                measures: vec![
+                    MeasureId::new("announcement_count").expect("static measure id is valid"),
+                ],
+                frequency: Frequency::Irregular,
+                license: License::Other(LICENSE_NAME.into()),
+                attribution: ATTRIBUTION.into(),
+                source_url: DEFAULT_ANNOUNCEMENTS_RSS_URL.into(),
+            },
+            Dataflow {
+                id: eod_dataflow_id(),
+                source_id: source_id(),
+                name: "ASX end-of-day prices".into(),
+                description: Some(
+                    "Daily ASX open, high, low, close, and volume observations from public EOD CSV exports."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("symbol").expect("static dimension id is valid"),
+                    DimensionId::new("metric").expect("static dimension id is valid"),
+                ],
+                measures: vec![MeasureId::new("value").expect("static measure id is valid")],
+                frequency: Frequency::Daily,
+                license: License::Other(LICENSE_NAME.into()),
+                attribution: ATTRIBUTION.into(),
+                source_url: DEFAULT_EOD_CSV_URL.into(),
+            },
+        ]
     }
 
     fn market_statistics_url(&self) -> &str {
         &self.market_statistics_url
     }
 
-    fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<(), AdapterError> {
+    fn announcements_rss_url(&self) -> &str {
+        &self.announcements_rss_url
+    }
+
+    fn eod_csv_url(&self) -> &str {
+        &self.eod_csv_url
+    }
+
+    fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<AsxArtifactKind, AdapterError> {
         if job.source_id != self.manifest.source_id {
             return Err(AdapterError::Validation(format!(
                 "ASX fetch received job for source `{}`",
@@ -125,13 +183,26 @@ impl AsxAdapter {
                 job.dataflow_id.as_str()
             )));
         }
-        market_statistics_provenance(&job.source_url).ok_or_else(|| {
+        let expected = asx_artifact_kind_for_dataflow(&job.dataflow_id).ok_or_else(|| {
             AdapterError::Validation(format!(
-                "ASX fetch URL `{}` is not the market-statistics page",
+                "ASX fetch received unsupported dataflow `{}`",
+                job.dataflow_id.as_str()
+            ))
+        })?;
+        let observed = asx_artifact_kind(&job.source_url).ok_or_else(|| {
+            AdapterError::Validation(format!(
+                "ASX fetch URL `{}` does not identify an ASX artifact kind",
                 job.source_url
             ))
         })?;
-        Ok(())
+        if observed != expected {
+            return Err(AdapterError::Validation(format!(
+                "ASX fetch URL `{}` does not match dataflow `{}`",
+                job.source_url,
+                job.dataflow_id.as_str()
+            )));
+        }
+        Ok(expected)
     }
 }
 
@@ -163,8 +234,10 @@ impl SourceAdapter for AsxAdapter {
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
-        Ok(Self::discoverable_jobs_with_started_at(
+        Ok(discoverable_jobs_for_urls(
             self.market_statistics_url(),
+            self.announcements_rss_url(),
+            self.eod_csv_url(),
             ctx.known_revisions(),
             ctx.started_at,
             ctx.trace_parent(),
@@ -173,7 +246,7 @@ impl SourceAdapter for AsxAdapter {
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
-        self.validate_fetch_job(&job)?;
+        let kind = self.validate_fetch_job(&job)?;
         let response = ctx
             .http
             .execute(
@@ -181,7 +254,7 @@ impl SourceAdapter for AsxAdapter {
                     .raw_artifact()
                     .get(&job.source_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", "text/html,application/xhtml+xml"),
+                    .header("accept", kind.accept_header()),
             )
             .await?;
         let response_headers = capture_response_headers(response.headers());
@@ -197,7 +270,7 @@ impl SourceAdapter for AsxAdapter {
             .headers()
             .get("content-type")
             .and_then(|value| value.to_str().ok())
-            .map_or_else(|| "text/html".to_string(), str::to_string);
+            .map_or_else(|| kind.default_content_type().to_string(), str::to_string);
 
         let staged = ctx
             .blob_store
@@ -228,12 +301,16 @@ impl SourceAdapter for AsxAdapter {
 #[derive(Debug, Clone)]
 pub struct AsxAdapterBuilder {
     market_statistics_url: String,
+    announcements_rss_url: String,
+    eod_csv_url: String,
 }
 
 impl Default for AsxAdapterBuilder {
     fn default() -> Self {
         Self {
             market_statistics_url: DEFAULT_MARKET_STATISTICS_URL.into(),
+            announcements_rss_url: DEFAULT_ANNOUNCEMENTS_RSS_URL.into(),
+            eod_csv_url: DEFAULT_EOD_CSV_URL.into(),
         }
     }
 }
@@ -243,6 +320,20 @@ impl AsxAdapterBuilder {
     #[must_use]
     pub fn market_statistics_url(mut self, url: impl Into<String>) -> Self {
         self.market_statistics_url = url.into();
+        self
+    }
+
+    /// Override the public announcements RSS URL.
+    #[must_use]
+    pub fn announcements_rss_url(mut self, url: impl Into<String>) -> Self {
+        self.announcements_rss_url = url.into();
+        self
+    }
+
+    /// Override the public end-of-day CSV URL.
+    #[must_use]
+    pub fn eod_csv_url(mut self, url: impl Into<String>) -> Self {
+        self.eod_csv_url = url.into();
         self
     }
 
@@ -256,17 +347,169 @@ impl AsxAdapterBuilder {
                 version: env!("CARGO_PKG_VERSION").into(),
                 rate_limit: RateLimit::new(30, Duration::from_secs(60))
                     .expect("static ASX rate limit is valid"),
-                dataflows: vec![dataflow_id()],
+                dataflows: vec![
+                    market_statistics_dataflow_id(),
+                    announcements_dataflow_id(),
+                    eod_dataflow_id(),
+                ],
             },
             market_statistics_url: self.market_statistics_url,
+            announcements_rss_url: self.announcements_rss_url,
+            eod_csv_url: self.eod_csv_url,
         }
     }
 }
 
-fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
-    if let Err(err) = validate_parse_artifact(&artifact) {
-        return Box::pin(stream::once(async move { Err(err) }));
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsxArtifactKind {
+    MarketStatistics,
+    Announcements,
+    Eod,
+}
+
+impl AsxArtifactKind {
+    fn dataflow_id(self) -> DataflowId {
+        match self {
+            Self::MarketStatistics => market_statistics_dataflow_id(),
+            Self::Announcements => announcements_dataflow_id(),
+            Self::Eod => eod_dataflow_id(),
+        }
     }
+
+    fn job_slug(self) -> &'static str {
+        match self {
+            Self::MarketStatistics => "market-statistics",
+            Self::Announcements => "announcements",
+            Self::Eod => "eod",
+        }
+    }
+
+    fn revision_key(self) -> &'static str {
+        match self {
+            Self::MarketStatistics => "ASX:market-statistics",
+            Self::Announcements => "ASX:announcements",
+            Self::Eod => "ASX:eod",
+        }
+    }
+
+    fn artifact_format(self) -> &'static str {
+        match self {
+            Self::MarketStatistics => "html",
+            Self::Announcements => "rss",
+            Self::Eod => "csv",
+        }
+    }
+
+    fn cadence(self) -> &'static str {
+        match self {
+            Self::MarketStatistics => "monthly",
+            Self::Announcements | Self::Eod => "daily",
+        }
+    }
+
+    fn accept_header(self) -> &'static str {
+        match self {
+            Self::MarketStatistics => "text/html,application/xhtml+xml",
+            Self::Announcements => "application/rss+xml,application/xml,text/xml,*/*",
+            Self::Eod => "text/csv,text/plain,*/*",
+        }
+    }
+
+    fn default_content_type(self) -> &'static str {
+        match self {
+            Self::MarketStatistics => "text/html",
+            Self::Announcements => "application/rss+xml",
+            Self::Eod => "text/csv",
+        }
+    }
+
+    fn revision_version(self, started_at: DateTime<Utc>) -> String {
+        match self {
+            Self::MarketStatistics => format!("{}-{:02}", started_at.year(), started_at.month()),
+            Self::Announcements | Self::Eod => started_at.format("%Y-%m-%d").to_string(),
+        }
+    }
+}
+
+fn asx_artifact_kind_for_dataflow(dataflow_id: &DataflowId) -> Option<AsxArtifactKind> {
+    match dataflow_id.as_str() {
+        MARKET_STATISTICS_DATAFLOW_ID => Some(AsxArtifactKind::MarketStatistics),
+        ANNOUNCEMENTS_DATAFLOW_ID => Some(AsxArtifactKind::Announcements),
+        EOD_DATAFLOW_ID => Some(AsxArtifactKind::Eod),
+        _ => None,
+    }
+}
+
+fn asx_artifact_kind(source_url: &str) -> Option<AsxArtifactKind> {
+    let lower = source_url.to_ascii_lowercase();
+    if lower.contains("announcement") || lower.contains("/rss/") {
+        return Some(AsxArtifactKind::Announcements);
+    }
+    if lower.contains("/eod") || lower.contains("end-of-day") || lower.ends_with("eod.csv") {
+        return Some(AsxArtifactKind::Eod);
+    }
+    if lower.contains("market-statistics") || lower.contains("historical-market-statistics") {
+        return Some(AsxArtifactKind::MarketStatistics);
+    }
+    None
+}
+
+fn current_jobs_for_urls(
+    market_statistics_url: &str,
+    announcements_rss_url: &str,
+    eod_csv_url: &str,
+    started_at: DateTime<Utc>,
+    trace_parent: Option<&str>,
+) -> Vec<DiscoveredJob> {
+    vec![
+        asx_job(
+            AsxArtifactKind::MarketStatistics,
+            market_statistics_url,
+            started_at,
+            trace_parent,
+        ),
+        asx_job(
+            AsxArtifactKind::Announcements,
+            announcements_rss_url,
+            started_at,
+            trace_parent,
+        ),
+        asx_job(AsxArtifactKind::Eod, eod_csv_url, started_at, trace_parent),
+    ]
+}
+
+fn discoverable_jobs_for_urls(
+    market_statistics_url: &str,
+    announcements_rss_url: &str,
+    eod_csv_url: &str,
+    known_revisions: &BTreeMap<String, UpstreamRevision>,
+    started_at: DateTime<Utc>,
+    trace_parent: Option<&str>,
+) -> Vec<DiscoveredJob> {
+    current_jobs_for_urls(
+        market_statistics_url,
+        announcements_rss_url,
+        eod_csv_url,
+        started_at,
+        trace_parent,
+    )
+    .into_iter()
+    .filter(|job| {
+        let known = known_revisions.get(&job.metadata["revision_key"]);
+        let revision = UpstreamRevision::new(
+            job.metadata["revision_version"].clone(),
+            Some(job.source_url.clone()),
+        );
+        known.is_none_or(|known| known != &revision)
+    })
+    .collect()
+}
+
+fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
+    let kind = match validate_parse_artifact(&artifact) {
+        Ok(kind) => kind,
+        Err(err) => return Box::pin(stream::once(async move { Err(err) })),
+    };
 
     let blob_store = ctx.blob_store.clone();
     let started_at = ctx.started_at;
@@ -284,7 +527,8 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        let result = parse_market_statistics_artifact(
+        let result = parse_asx_artifact(
+            kind,
             blob_store,
             key,
             artifact,
@@ -303,7 +547,8 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     }))
 }
 
-async fn parse_market_statistics_artifact(
+async fn parse_asx_artifact(
+    kind: AsxArtifactKind,
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
@@ -322,9 +567,24 @@ async fn parse_market_statistics_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
-    let html = String::from_utf8(bytes)
-        .map_err(|err| AdapterError::FormatDrift(format!("ASX market statistics HTML: {err}")))?;
-    let rows = market_statistics_observations(&html, &artifact, ingested_at)?;
+    let rows = match kind {
+        AsxArtifactKind::MarketStatistics => {
+            let html = String::from_utf8(bytes).map_err(|err| {
+                AdapterError::FormatDrift(format!("ASX market statistics HTML: {err}"))
+            })?;
+            market_statistics_observations(&html, &artifact, ingested_at)?
+        }
+        AsxArtifactKind::Announcements => {
+            let rss = String::from_utf8(bytes).map_err(|err| {
+                AdapterError::FormatDrift(format!("ASX announcements RSS: {err}"))
+            })?;
+            announcement_observations(&rss, &artifact, ingested_at)?
+        }
+        AsxArtifactKind::Eod => {
+            let records = parse_eod_csv(bytes, cancellation.clone()).await?;
+            eod_observations(records, &artifact, ingested_at)?
+        }
+    };
     for row in rows {
         if tx.send(Ok(row)).await.is_err() {
             return Ok(());
@@ -367,6 +627,317 @@ fn market_statistics_observations(
         ));
     }
     Ok(observations)
+}
+
+fn announcement_observations(
+    rss: &str,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let mut reader = XmlReader::from_reader(io::Cursor::new(rss.as_bytes()));
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut in_item = false;
+    let mut field: Option<Vec<u8>> = None;
+    let mut item = AnnouncementItem::default();
+    let mut observations = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) if element.local_name().as_ref() == b"item" => {
+                in_item = true;
+                item = AnnouncementItem::default();
+            }
+            Ok(Event::Start(element)) if in_item => {
+                field = Some(element.local_name().as_ref().to_vec());
+            }
+            Ok(Event::Text(text)) if in_item => {
+                if let Some(field) = field.as_deref() {
+                    item.apply_field(field, xml_text(text.as_ref()));
+                }
+            }
+            Ok(Event::CData(text)) if in_item => {
+                if let Some(field) = field.as_deref() {
+                    item.apply_field(field, xml_text(text.as_ref()));
+                }
+            }
+            Ok(Event::End(element)) if element.local_name().as_ref() == b"item" => {
+                push_announcement_observation(&item, artifact, ingested_at, &mut observations)?;
+                in_item = false;
+                field = None;
+            }
+            Ok(Event::End(_)) if in_item => {
+                field = None;
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(err) => {
+                return Err(AdapterError::FormatDrift(format!(
+                    "ASX announcements RSS is malformed XML: {err}"
+                )));
+            }
+        }
+        buffer.clear();
+    }
+
+    if observations.is_empty() {
+        return Err(AdapterError::FormatDrift(
+            "ASX announcements RSS yielded no observations".into(),
+        ));
+    }
+    Ok(observations)
+}
+
+#[derive(Debug, Default)]
+struct AnnouncementItem {
+    title: Option<String>,
+    link: Option<String>,
+    guid: Option<String>,
+    pub_date: Option<String>,
+    category: Option<String>,
+    symbol: Option<String>,
+}
+
+impl AnnouncementItem {
+    fn apply_field(&mut self, field: &[u8], value: String) {
+        if value.is_empty() {
+            return;
+        }
+        match field {
+            b"title" => self.title = Some(value),
+            b"link" => self.link = Some(value),
+            b"guid" => self.guid = Some(value),
+            b"pubDate" | b"pubdate" => self.pub_date = Some(value),
+            b"category" => self.category = Some(value),
+            b"code" | b"asxCode" | b"asxcode" => self.symbol = Some(value),
+            _ => {}
+        }
+    }
+}
+
+fn push_announcement_observation(
+    item: &AnnouncementItem,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+    observations: &mut Vec<(SeriesDescriptor, Observation)>,
+) -> Result<(), AdapterError> {
+    let title = item.title.as_deref().unwrap_or("untitled ASX announcement");
+    let symbol = item
+        .symbol
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| title.split([' ', '-']).next())
+        .unwrap_or("UNKNOWN")
+        .trim()
+        .to_ascii_uppercase();
+    let category = item.category.as_deref().unwrap_or("uncategorised");
+    let time = parse_announcement_time(item.pub_date.as_deref().ok_or_else(|| {
+        AdapterError::FormatDrift(format!("ASX announcement `{title}` is missing pubDate"))
+    })?)?;
+    let dataflow_id = announcements_dataflow_id();
+    let dimensions = BTreeMap::from([
+        (
+            DimensionId::new("symbol").expect("static dimension id is valid"),
+            asx_code_id("symbol", &symbol)?,
+        ),
+        (
+            DimensionId::new("category").expect("static dimension id is valid"),
+            code_id_from_label("category", category)?,
+        ),
+    ]);
+    let series_key = SeriesKey::derive(
+        &dataflow_id,
+        dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    let descriptor = SeriesDescriptor {
+        series_key,
+        dataflow_id,
+        measure_id: MeasureId::new("announcement_count").expect("static measure id is valid"),
+        dimensions,
+        unit: "count".into(),
+    };
+    let mut attributes = BTreeMap::from([
+        ("source".into(), SOURCE_NAME.into()),
+        ("source_url".into(), artifact.source_url.clone()),
+        ("license".into(), LICENSE_NAME.into()),
+        ("license_url".into(), LICENSE_URL.into()),
+        ("announcement_title".into(), title.to_string()),
+        ("announcement_category".into(), category.to_string()),
+    ]);
+    if let Some(link) = item.link.as_deref() {
+        attributes.insert("announcement_url".into(), link.to_string());
+    }
+    if let Some(guid) = item.guid.as_deref() {
+        attributes.insert("announcement_guid".into(), guid.to_string());
+    }
+    let observation = Observation {
+        series_key,
+        time,
+        time_precision: TimePrecision::Minute,
+        value: Some(1.0),
+        status: ObservationStatus::Normal,
+        revision_no: 0,
+        attributes,
+        ingested_at,
+        source_artifact_id: artifact.id,
+    };
+    observations.push((descriptor, observation));
+    Ok(())
+}
+
+async fn parse_eod_csv(
+    bytes: Vec<u8>,
+    cancellation: CancellationToken,
+) -> Result<Vec<Vec<String>>, AdapterError> {
+    let io_stream = stream::iter([Ok::<_, io::Error>(Bytes::from(bytes))]);
+    let reader = StreamReader::new(io_stream);
+    let mut csv = AsyncReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .create_reader(reader);
+    let mut records = csv.records();
+    let mut rows = Vec::new();
+    while let Some(record) = tokio::select! {
+        () = cancellation.cancelled() => return Err(cancelled_parse_error()),
+        record = records.next() => record,
+    } {
+        let record = record.map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
+        rows.push(record.iter().map(|cell| cell.trim().to_string()).collect());
+    }
+    Ok(rows)
+}
+
+fn eod_observations(
+    rows: Vec<Vec<String>>,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let Some(header) = rows.first() else {
+        return Err(AdapterError::FormatDrift("ASX EOD CSV is empty".into()));
+    };
+    let header = header
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (normalized_label(name), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut observations = Vec::new();
+    for row in rows.into_iter().skip(1) {
+        if row.iter().all(|cell| cell.is_empty()) {
+            continue;
+        }
+        let date = eod_field(&row, &header, "date")?;
+        let symbol = eod_field(&row, &header, "symbol")?.to_ascii_uppercase();
+        let time = parse_eod_date(date)?;
+        for metric in EOD_METRICS {
+            push_eod_observation(
+                &symbol,
+                time,
+                metric,
+                eod_field(&row, &header, metric.header)?,
+                artifact,
+                ingested_at,
+                &mut observations,
+            )?;
+        }
+    }
+    if observations.is_empty() {
+        return Err(AdapterError::FormatDrift(
+            "ASX EOD CSV yielded no observations".into(),
+        ));
+    }
+    Ok(observations)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EodMetric {
+    id: &'static str,
+    header: &'static str,
+    unit: &'static str,
+}
+
+const EOD_METRICS: [EodMetric; 5] = [
+    EodMetric {
+        id: "open",
+        header: "open",
+        unit: "AUD",
+    },
+    EodMetric {
+        id: "high",
+        header: "high",
+        unit: "AUD",
+    },
+    EodMetric {
+        id: "low",
+        header: "low",
+        unit: "AUD",
+    },
+    EodMetric {
+        id: "close",
+        header: "close",
+        unit: "AUD",
+    },
+    EodMetric {
+        id: "volume",
+        header: "volume",
+        unit: "shares",
+    },
+];
+
+fn push_eod_observation(
+    symbol: &str,
+    time: DateTime<Utc>,
+    metric: EodMetric,
+    raw_value: &str,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+    observations: &mut Vec<(SeriesDescriptor, Observation)>,
+) -> Result<(), AdapterError> {
+    let value = parse_number(raw_value)?;
+    let dataflow_id = eod_dataflow_id();
+    let dimensions = BTreeMap::from([
+        (
+            DimensionId::new("symbol").expect("static dimension id is valid"),
+            asx_code_id("symbol", symbol)?,
+        ),
+        (
+            DimensionId::new("metric").expect("static dimension id is valid"),
+            CodeId::new(metric.id).expect("static code id is valid"),
+        ),
+    ]);
+    let series_key = SeriesKey::derive(
+        &dataflow_id,
+        dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    let descriptor = SeriesDescriptor {
+        series_key,
+        dataflow_id,
+        measure_id: MeasureId::new("value").expect("static measure id is valid"),
+        dimensions,
+        unit: metric.unit.into(),
+    };
+    let observation = Observation {
+        series_key,
+        time,
+        time_precision: TimePrecision::Day,
+        value: Some(value),
+        status: ObservationStatus::Normal,
+        revision_no: 0,
+        attributes: BTreeMap::from([
+            ("source".into(), SOURCE_NAME.into()),
+            ("source_url".into(), artifact.source_url.clone()),
+            ("license".into(), LICENSE_NAME.into()),
+            ("license_url".into(), LICENSE_URL.into()),
+            ("asx_section".into(), "eod".into()),
+        ]),
+        ingested_at,
+        source_artifact_id: artifact.id,
+    };
+    observations.push((descriptor, observation));
+    Ok(())
 }
 
 fn parse_section_tables(
@@ -506,7 +1077,7 @@ fn push_observation(
         DimensionId::new("metric").expect("static dimension id is valid"),
         asx_code_id("metric", input.metric)?,
     )]);
-    let dataflow_id = dataflow_id();
+    let dataflow_id = market_statistics_dataflow_id();
     let series_key = SeriesKey::derive(
         &dataflow_id,
         dimensions
@@ -760,20 +1331,52 @@ fn parse_number(value: &str) -> Result<f64, AdapterError> {
         .map_err(|_| AdapterError::FormatDrift(format!("invalid ASX numeric value `{value}`")))
 }
 
-fn validate_parse_artifact(artifact: &ArtifactRef) -> Result<(), AdapterError> {
+fn parse_announcement_time(value: &str) -> Result<DateTime<Utc>, AdapterError> {
+    DateTime::parse_from_rfc2822(value)
+        .or_else(|_| DateTime::parse_from_rfc3339(value))
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| AdapterError::FormatDrift(format!("invalid ASX announcement time `{value}`")))
+}
+
+fn parse_eod_date(value: &str) -> Result<DateTime<Utc>, AdapterError> {
+    let date = NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map_err(|_| AdapterError::FormatDrift(format!("invalid ASX EOD date `{value}`")))?;
+    Ok(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight is valid")))
+}
+
+fn eod_field<'a>(
+    row: &'a [String],
+    header: &BTreeMap<String, usize>,
+    name: &str,
+) -> Result<&'a str, AdapterError> {
+    let index = header
+        .get(name)
+        .ok_or_else(|| AdapterError::FormatDrift(format!("ASX EOD CSV missing `{name}`")))?;
+    row.get(*index)
+        .map(String::as_str)
+        .ok_or_else(|| AdapterError::FormatDrift(format!("ASX EOD CSV missing `{name}`")))
+}
+
+fn xml_text(bytes: &[u8]) -> String {
+    decode_html_entities(&String::from_utf8_lossy(bytes))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn validate_parse_artifact(artifact: &ArtifactRef) -> Result<AsxArtifactKind, AdapterError> {
     if artifact.source_id.as_str() != "asx" {
         return Err(AdapterError::Validation(format!(
             "ASX parse received artifact for source `{}`",
             artifact.source_id.as_str()
         )));
     }
-    market_statistics_provenance(&artifact.source_url).ok_or_else(|| {
+    asx_artifact_kind(&artifact.source_url).ok_or_else(|| {
         AdapterError::Validation(format!(
-            "ASX parse artifact `{}` is missing market-statistics provenance",
+            "ASX parse artifact `{}` is missing ASX dataflow provenance",
             artifact.source_url
         ))
-    })?;
-    Ok(())
+    })
 }
 
 async fn verify_parse_artifact_identity(
@@ -803,23 +1406,24 @@ async fn verify_parse_artifact_identity(
     }
 }
 
-fn market_statistics_job(
-    market_statistics_url: &str,
+fn asx_job(
+    kind: AsxArtifactKind,
+    source_url: &str,
     started_at: DateTime<Utc>,
     trace_parent: Option<&str>,
 ) -> DiscoveredJob {
-    let revision_version = format!("{}-{:02}", started_at.year(), started_at.month());
+    let revision_version = kind.revision_version(started_at);
     DiscoveredJob {
-        id: format!("asx:market-statistics:{revision_version}"),
+        id: format!("asx:{}:{revision_version}", kind.job_slug()),
         source_id: source_id(),
-        dataflow_id: dataflow_id(),
-        source_url: market_statistics_url.into(),
+        dataflow_id: kind.dataflow_id(),
+        source_url: source_url.into(),
         trace_parent: trace_parent.map(str::to_owned),
         metadata: BTreeMap::from([
-            ("artifact_format".into(), "html".into()),
-            ("revision_key".into(), "ASX:market-statistics".into()),
+            ("artifact_format".into(), kind.artifact_format().into()),
+            ("revision_key".into(), kind.revision_key().into()),
             ("revision_version".into(), revision_version),
-            ("cadence".into(), "monthly".into()),
+            ("cadence".into(), kind.cadence().into()),
             ("attribution".into(), ATTRIBUTION.into()),
             ("license".into(), LICENSE_NAME.into()),
             ("license_url".into(), LICENSE_URL.into()),
@@ -827,16 +1431,33 @@ fn market_statistics_job(
     }
 }
 
-fn market_statistics_provenance(source_url: &str) -> Option<()> {
-    source_url
-        .contains("/about/market-statistics/historical-market-statistics")
-        .then_some(())
-}
-
 fn asx_code_id(field: &str, value: &str) -> Result<CodeId, AdapterError> {
     CodeId::new(value.to_string()).map_err(|err| {
         AdapterError::FormatDrift(format!("invalid ASX {field} code `{value}`: {err}"))
     })
+}
+
+fn code_id_from_label(field: &str, value: &str) -> Result<CodeId, AdapterError> {
+    let code = normalized_label(value)
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    let code = if code.is_empty() {
+        "unknown".to_string()
+    } else {
+        code
+    };
+    asx_code_id(field, &code)
 }
 
 fn cancelled_parse_error() -> AdapterError {
@@ -847,6 +1468,14 @@ fn source_id() -> SourceId {
     SourceId::new("asx").expect("static source id is valid")
 }
 
-fn dataflow_id() -> DataflowId {
-    DataflowId::new(DATAFLOW_ID).expect("static dataflow id is valid")
+fn market_statistics_dataflow_id() -> DataflowId {
+    DataflowId::new(MARKET_STATISTICS_DATAFLOW_ID).expect("static dataflow id is valid")
+}
+
+fn announcements_dataflow_id() -> DataflowId {
+    DataflowId::new(ANNOUNCEMENTS_DATAFLOW_ID).expect("static dataflow id is valid")
+}
+
+fn eod_dataflow_id() -> DataflowId {
+    DataflowId::new(EOD_DATAFLOW_ID).expect("static dataflow id is valid")
 }
