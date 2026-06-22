@@ -37,6 +37,12 @@ const stream: AsyncIterable<ObservationsRow> = client.observations.stream({
   dataflow: 'abs.cpi',
   limit: 1000,
 })
+const parquet: Promise<Response> = client.observations.parquet({
+  dataflow: 'abs.cpi',
+  dimensions: { region: 'AUS' },
+  limit: 50_000,
+  since: '2010-01-01',
+})
 const latest: Promise<SeriesLookupResponse> = client.observations.latest({
   dataflow: 'abs.cpi',
   seriesKey: 'a'.repeat(64),
@@ -64,6 +70,7 @@ void dataflow
 void codelist
 void observations
 void stream
+void parquet
 void latest
 void search
 void apsConfig

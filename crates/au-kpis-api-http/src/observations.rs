@@ -35,6 +35,7 @@ use crate::{AppState, error::ApiError};
 
 const DEFAULT_LIMIT: usize = 1_000;
 const MAX_LIMIT: usize = 10_000;
+const MAX_PARQUET_BULK_LIMIT: usize = 1_000_000;
 const CACHE_CONTROL_VALUE: &str = "public, max-age=60, stale-while-revalidate=300";
 const STREAMING_CACHE_CONTROL_VALUE: &str = "no-store";
 const JSON_RESPONSE_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -116,7 +117,7 @@ pub struct ObservationsResponse {
         ("frequency" = Option<String>, Query, min_length = 1, pattern = "^(annual|quarterly|monthly|weekly|daily|irregular)$", description = "Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain."),
         ("format" = Option<String>, Query, min_length = 3, max_length = 7, pattern = "^(json|csv|parquet)$", description = "Response format: json, csv, or parquet."),
         ("cursor" = Option<String>, Query, min_length = 1, description = "Opaque cursor from the previous page."),
-        ("limit" = Option<u32>, Query, maximum = 10000, description = "Page size, maximum 10000.")
+        ("limit" = Option<u32>, Query, maximum = 1000000, description = "Page size. JSON/CSV are capped at 10000 rows; Parquet bulk exports are capped at 1000000 rows.")
     ),
     responses(
         (
@@ -363,7 +364,7 @@ fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery
     let mut frequency = None;
     let mut format = ResponseFormat::Json;
     let mut cursor = None;
-    let mut limit = DEFAULT_LIMIT;
+    let mut limit = None;
 
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
         let key = key.into_owned();
@@ -380,7 +381,7 @@ fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery
             "frequency" => frequency = Some(parse_frequency(&value)?),
             "format" => format = parse_format(&value)?,
             "cursor" => cursor = Some(decode_cursor(&value)?),
-            "limit" => limit = parse_limit(&value)?,
+            "limit" => limit = Some(parse_limit(&value)?),
             "dimensions" | "dimensions[]" => {
                 let (dimension, code) = value
                     .split_once('=')
@@ -407,6 +408,8 @@ fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery
             ));
         }
     }
+
+    let limit = validate_limit_for_format(limit.unwrap_or(DEFAULT_LIMIT), format)?;
 
     Ok(ParsedObservationsQuery {
         dataflow,
@@ -474,12 +477,27 @@ fn parse_limit(value: &str) -> Result<usize, ApiError> {
     let limit = value
         .parse::<usize>()
         .map_err(|err| ApiError::Validation(format!("invalid limit: {err}")))?;
-    if limit == 0 || limit > MAX_LIMIT {
+    if limit == 0 {
+        return Err(ApiError::Validation("limit must be greater than 0".into()));
+    }
+    Ok(limit)
+}
+
+fn validate_limit_for_format(limit: usize, format: ResponseFormat) -> Result<usize, ApiError> {
+    let max = max_limit_for_format(format);
+    if limit > max {
         return Err(ApiError::Validation(format!(
-            "limit must be between 1 and {MAX_LIMIT}"
+            "{format} limit must be between 1 and {max}"
         )));
     }
     Ok(limit)
+}
+
+fn max_limit_for_format(format: ResponseFormat) -> usize {
+    match format {
+        ResponseFormat::Parquet => MAX_PARQUET_BULK_LIMIT,
+        ResponseFormat::Json | ResponseFormat::Csv => MAX_LIMIT,
+    }
 }
 
 fn encode_cursor(cursor: &ObservationCursor) -> Result<String, ApiError> {
@@ -1708,6 +1726,43 @@ mod tests {
     }
 
     #[test]
+    fn parquet_bulk_limits_can_exceed_json_page_cap() {
+        let parquet_before_limit =
+            parse_observations_query(Some("dataflow=abs.cpi&format=parquet&limit=10001"))
+                .expect("parquet bulk limit should exceed JSON page cap");
+        assert_eq!(parquet_before_limit.limit, MAX_LIMIT + 1);
+
+        let parquet_after_limit =
+            parse_observations_query(Some("dataflow=abs.cpi&limit=10001&format=parquet"))
+                .expect("format-aware limit validation should be order independent");
+        assert_eq!(parquet_after_limit.limit, MAX_LIMIT + 1);
+
+        let max_bulk = parse_observations_query(Some(&format!(
+            "dataflow=abs.cpi&format=parquet&limit={MAX_PARQUET_BULK_LIMIT}"
+        )))
+        .expect("configured parquet bulk cap should be accepted");
+        assert_eq!(max_bulk.limit, MAX_PARQUET_BULK_LIMIT);
+    }
+
+    #[test]
+    fn json_and_csv_limits_remain_capped_at_page_limit() {
+        let json = parse_observations_query(Some("dataflow=abs.cpi&limit=10001"))
+            .expect_err("JSON page limit must stay capped");
+        assert!(json.to_string().contains("json limit"));
+
+        let csv = parse_observations_query(Some("dataflow=abs.cpi&format=csv&limit=10001"))
+            .expect_err("CSV export limit must stay capped");
+        assert!(csv.to_string().contains("csv limit"));
+
+        let parquet = parse_observations_query(Some(&format!(
+            "dataflow=abs.cpi&format=parquet&limit={}",
+            MAX_PARQUET_BULK_LIMIT + 1
+        )))
+        .expect_err("parquet bulk cap should still be bounded");
+        assert!(parquet.to_string().contains("parquet limit"));
+    }
+
+    #[test]
     fn minute_time_precision_roundtrips_through_api_labels() {
         assert_eq!(
             parse_time_precision("minute").unwrap(),
@@ -1914,6 +1969,17 @@ mod tests {
             "writer should not await an abandoned stream"
         );
         assert!(result.unwrap().expect("writer task").is_ok());
+    }
+
+    #[tokio::test]
+    async fn parquet_writer_streams_more_than_json_page_cap() {
+        let stats = benchmark_support::drain_synthetic_parquet_stream(MAX_LIMIT + 1)
+            .await
+            .expect("drain synthetic parquet stream");
+
+        assert_eq!(stats.rows, MAX_LIMIT + 1);
+        assert!(stats.bytes > 0);
+        assert!(stats.chunks > 0);
     }
 
     #[test]
