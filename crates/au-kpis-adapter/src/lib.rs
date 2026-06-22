@@ -11,7 +11,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
-    io::{BufRead, BufReader, Cursor},
+    io::{BufRead, BufReader, Cursor, Read, Seek},
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
@@ -25,7 +25,11 @@ use au_kpis_error::{Classify, CoreError, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::stream::BoxStream;
-use quick_xml::{Reader as XmlReader, events::Event};
+use quick_xml::{
+    Reader as XmlReader,
+    encoding::Decoder,
+    events::{BytesStart, Event},
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::Mutex, time::sleep};
@@ -118,13 +122,19 @@ pub fn validate_xlsx_workbook_cell_refs(bytes: &[u8], source: &str) -> Result<()
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|err| {
         AdapterError::FormatDrift(format!("{source} XLSX ZIP is unreadable: {err}"))
     })?;
+    let shared_string_count = count_xlsx_shared_strings(&mut archive, source)?;
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(|err| {
             AdapterError::FormatDrift(format!("{source} XLSX ZIP entry is unreadable: {err}"))
         })?;
         let name = entry.name().to_string();
         if is_xlsx_worksheet_entry(&name) {
-            validate_xlsx_worksheet_cell_refs(source, &name, BufReader::new(entry))?;
+            validate_xlsx_worksheet_cell_refs(
+                source,
+                &name,
+                BufReader::new(entry),
+                shared_string_count,
+            )?;
         }
     }
     Ok(())
@@ -137,36 +147,113 @@ fn is_xlsx_worksheet_entry(name: &str) -> bool {
         && name[name.len() - 4..].eq_ignore_ascii_case(b".xml")
 }
 
+fn count_xlsx_shared_strings<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    source: &str,
+) -> Result<Option<usize>, AdapterError> {
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|err| {
+            AdapterError::FormatDrift(format!("{source} XLSX ZIP entry is unreadable: {err}"))
+        })?;
+        if entry.name() == "xl/sharedStrings.xml" {
+            return count_xlsx_shared_string_items(source, BufReader::new(entry)).map(Some);
+        }
+    }
+
+    Ok(None)
+}
+
+fn count_xlsx_shared_string_items<R: BufRead>(source: &str, xml: R) -> Result<usize, AdapterError> {
+    let mut reader = XmlReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut count = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element))
+                if element.local_name().as_ref() == b"si" =>
+            {
+                count = count.checked_add(1).ok_or_else(|| {
+                    AdapterError::FormatDrift(format!(
+                        "{source} XLSX shared string table is too large"
+                    ))
+                })?;
+            }
+            Ok(Event::Eof) => return Ok(count),
+            Ok(_) => {}
+            Err(err) => {
+                return Err(AdapterError::FormatDrift(format!(
+                    "{source} XLSX shared string table is malformed XML: {err}"
+                )));
+            }
+        }
+        buffer.clear();
+    }
+}
+
 fn validate_xlsx_worksheet_cell_refs<R: BufRead>(
     source: &str,
     sheet_name: &str,
     xml: R,
+    shared_string_count: Option<usize>,
 ) -> Result<(), AdapterError> {
     let mut reader = XmlReader::from_reader(xml);
     let mut buffer = Vec::new();
+    let mut shared_string_cell = None::<String>;
+    let mut in_shared_string_value = false;
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element) | Event::Empty(element))
-                if element.local_name().as_ref() == b"c" =>
-            {
-                for attribute in element.attributes().with_checks(false) {
-                    let attribute = attribute.map_err(|err| {
-                        AdapterError::FormatDrift(format!(
-                            "{source} XLSX worksheet `{sheet_name}` has invalid XML attributes: {err}"
-                        ))
-                    })?;
-                    if attribute.key.as_ref() == b"r" {
-                        let reference =
-                            attribute
-                                .decode_and_unescape_value(reader.decoder())
-                                .map_err(|err| {
-                                    AdapterError::FormatDrift(format!(
-                                        "{source} XLSX worksheet `{sheet_name}` has invalid cell reference: {err}"
-                                    ))
-                                })?;
-                        validate_xlsx_cell_reference(source, sheet_name, &reference)?;
+            Ok(Event::Start(element)) if element.local_name().as_ref() == b"c" => {
+                let (reference, is_shared_string) =
+                    validate_xlsx_cell_attributes(source, sheet_name, &element, reader.decoder())?;
+                if is_shared_string {
+                    if shared_string_count.is_none() {
+                        return Err(invalid_xlsx_shared_string_reference(
+                            source,
+                            sheet_name,
+                            reference.as_deref().unwrap_or("<unknown>"),
+                            "shared string table is missing",
+                        ));
                     }
+                    shared_string_cell = Some(reference.unwrap_or_else(|| "<unknown>".to_string()));
                 }
+            }
+            Ok(Event::Empty(element)) if element.local_name().as_ref() == b"c" => {
+                let (reference, is_shared_string) =
+                    validate_xlsx_cell_attributes(source, sheet_name, &element, reader.decoder())?;
+                if is_shared_string && shared_string_count.is_none() {
+                    return Err(invalid_xlsx_shared_string_reference(
+                        source,
+                        sheet_name,
+                        reference.as_deref().unwrap_or("<unknown>"),
+                        "shared string table is missing",
+                    ));
+                }
+            }
+            Ok(Event::Start(element)) if element.local_name().as_ref() == b"v" => {
+                if shared_string_cell.is_some() {
+                    in_shared_string_value = true;
+                }
+            }
+            Ok(Event::Text(text)) if in_shared_string_value => {
+                let value = text.decode().map_err(|err| {
+                    AdapterError::FormatDrift(format!(
+                        "{source} XLSX worksheet `{sheet_name}` has invalid shared string index: {err}"
+                    ))
+                })?;
+                validate_xlsx_shared_string_index(
+                    source,
+                    sheet_name,
+                    shared_string_cell.as_deref().unwrap_or("<unknown>"),
+                    value.trim(),
+                    shared_string_count.unwrap_or(0),
+                )?;
+            }
+            Ok(Event::End(element)) if element.local_name().as_ref() == b"v" => {
+                in_shared_string_value = false;
+            }
+            Ok(Event::End(element)) if element.local_name().as_ref() == b"c" => {
+                shared_string_cell = None;
+                in_shared_string_value = false;
             }
             Ok(Event::Eof) => return Ok(()),
             Ok(_) => {}
@@ -178,6 +265,77 @@ fn validate_xlsx_worksheet_cell_refs<R: BufRead>(
         }
         buffer.clear();
     }
+}
+
+fn validate_xlsx_cell_attributes(
+    source: &str,
+    sheet_name: &str,
+    element: &BytesStart<'_>,
+    decoder: Decoder,
+) -> Result<(Option<String>, bool), AdapterError> {
+    let mut reference = None::<String>;
+    let mut is_shared_string = false;
+    for attribute in element.attributes().with_checks(false) {
+        let attribute = attribute.map_err(|err| {
+            AdapterError::FormatDrift(format!(
+                "{source} XLSX worksheet `{sheet_name}` has invalid XML attributes: {err}"
+            ))
+        })?;
+        if attribute.key.as_ref() == b"r" {
+            let cell_reference = attribute
+                .decode_and_unescape_value(decoder)
+                .map_err(|err| {
+                    AdapterError::FormatDrift(format!(
+                        "{source} XLSX worksheet `{sheet_name}` has invalid cell reference: {err}"
+                    ))
+                })?;
+            validate_xlsx_cell_reference(source, sheet_name, &cell_reference)?;
+            reference = Some(cell_reference.into_owned());
+        } else if attribute.key.as_ref() == b"t" {
+            let cell_type = attribute
+                .decode_and_unescape_value(decoder)
+                .map_err(|err| {
+                    AdapterError::FormatDrift(format!(
+                        "{source} XLSX worksheet `{sheet_name}` has invalid cell type: {err}"
+                    ))
+                })?;
+            is_shared_string = cell_type.as_ref() == "s";
+        }
+    }
+
+    Ok((reference, is_shared_string))
+}
+
+fn validate_xlsx_shared_string_index(
+    source: &str,
+    sheet_name: &str,
+    reference: &str,
+    value: &str,
+    shared_string_count: usize,
+) -> Result<(), AdapterError> {
+    let index = value.parse::<usize>().map_err(|_| {
+        invalid_xlsx_shared_string_reference(source, sheet_name, reference, "index is not numeric")
+    })?;
+    if index >= shared_string_count {
+        return Err(invalid_xlsx_shared_string_reference(
+            source,
+            sheet_name,
+            reference,
+            "index is outside the shared string table",
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_xlsx_shared_string_reference(
+    source: &str,
+    sheet_name: &str,
+    reference: &str,
+    reason: &str,
+) -> AdapterError {
+    AdapterError::FormatDrift(format!(
+        "invalid {source} XLSX shared string reference in `{sheet_name}` cell `{reference}`: {reason}"
+    ))
 }
 
 fn validate_xlsx_cell_reference(
@@ -1446,6 +1604,104 @@ mod duration_millis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    #[test]
+    fn xlsx_shared_string_cells_require_shared_string_table() {
+        let bytes = xlsx_fixture([
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+  </sheetData>
+</worksheet>"#,
+            ),
+        ]);
+
+        let err = validate_xlsx_workbook_cell_refs(&bytes, "TEST")
+            .expect_err("missing shared string table should be rejected");
+
+        assert!(err.to_string().contains("shared string"), "{err}");
+    }
+
+    #[test]
+    fn xlsx_shared_string_indexes_must_exist_in_shared_string_table() {
+        let bytes = xlsx_fixture([
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#,
+            ),
+            (
+                "xl/sharedStrings.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>one</t></si>
+</sst>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#,
+            ),
+        ]);
+
+        let err = validate_xlsx_workbook_cell_refs(&bytes, "TEST")
+            .expect_err("out-of-range shared string index should be rejected");
+
+        assert!(
+            err.to_string().contains("outside the shared string table"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn xlsx_shared_string_indexes_accept_existing_entries() {
+        let bytes = xlsx_fixture([
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#,
+            ),
+            (
+                "xl/sharedStrings.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>one</t></si>
+</sst>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+  </sheetData>
+</worksheet>"#,
+            ),
+        ]);
+
+        validate_xlsx_workbook_cell_refs(&bytes, "TEST")
+            .expect("existing shared string index should be accepted");
+    }
 
     #[tokio::test]
     async fn circuit_breaker_opens_after_failure_ratio_exceeds_window_threshold() {
@@ -1502,5 +1758,19 @@ mod tests {
             .before_request()
             .await
             .expect("successful half-open probe should close the circuit");
+    }
+
+    fn xlsx_fixture<const N: usize>(entries: [(&str, &str); N]) -> Vec<u8> {
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut archive = ZipWriter::new(&mut buffer);
+            let options = SimpleFileOptions::default();
+            for (name, body) in entries {
+                archive.start_file(name, options).expect("start zip entry");
+                archive.write_all(body.as_bytes()).expect("write zip entry");
+            }
+            archive.finish().expect("finish zip");
+        }
+        buffer.into_inner()
     }
 }
