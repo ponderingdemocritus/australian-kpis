@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
@@ -226,21 +226,33 @@ async fn resolve_scorecard_inputs(
     config: &ScorecardConfig,
     as_of: Option<DateTime<Utc>>,
 ) -> Result<ResolvedScorecardInputs, ApiError> {
-    let mut observations = Vec::with_capacity(config.indicators.len());
+    let mut rows = Vec::with_capacity(config.indicators.len());
     let mut latest_time = None;
 
     for indicator in &config.indicators {
         let row = load_indicator_observation(pool, indicator, as_of).await?;
         if let Some(row) = row {
             latest_time = latest_time.max(Some(row.latest_time));
-            observations.push(resolved_indicator_observation(indicator, row));
+            rows.push((indicator, Some(row)));
         } else {
-            observations.push(IndicatorObservation::missing(
-                indicator.indicator_id.clone(),
-                indicator.coverage_status,
-            ));
+            rows.push((indicator, None));
         }
     }
+    let snapshot_time = as_of.or(latest_time).unwrap_or_else(Utc::now);
+    let observations = rows
+        .into_iter()
+        .map(|(indicator, row)| {
+            row.map_or_else(
+                || {
+                    IndicatorObservation::missing(
+                        indicator.indicator_id.clone(),
+                        indicator.coverage_status,
+                    )
+                },
+                |row| resolved_indicator_observation(indicator, row, snapshot_time),
+            )
+        })
+        .collect();
 
     Ok(ResolvedScorecardInputs {
         observations,
@@ -251,14 +263,9 @@ async fn resolve_scorecard_inputs(
 fn resolved_indicator_observation(
     indicator: &IndicatorConfig,
     row: ResolvedIndicatorRow,
+    snapshot_time: DateTime<Utc>,
 ) -> IndicatorObservation {
-    let status = if indicator.coverage_status == CoverageStatus::VisibleUnscored {
-        CoverageStatus::VisibleUnscored
-    } else if row.raw_value.is_some() {
-        CoverageStatus::Resolved
-    } else {
-        indicator.coverage_status
-    };
+    let status = resolved_indicator_status(indicator, &row, snapshot_time);
 
     IndicatorObservation {
         indicator_id: indicator.indicator_id.clone(),
@@ -268,6 +275,46 @@ fn resolved_indicator_observation(
         series_key: Some(row.series_key.to_string()),
         source_artifact_id: Some(row.source_artifact_id.to_string()),
         notes: None,
+    }
+}
+
+fn resolved_indicator_status(
+    indicator: &IndicatorConfig,
+    row: &ResolvedIndicatorRow,
+    snapshot_time: DateTime<Utc>,
+) -> CoverageStatus {
+    if indicator.coverage_status == CoverageStatus::VisibleUnscored {
+        return CoverageStatus::VisibleUnscored;
+    }
+    if row.raw_value.is_none() {
+        return indicator.coverage_status;
+    }
+    if is_stale_for_cadence(&indicator.cadence, row.latest_time, snapshot_time) {
+        CoverageStatus::Stale
+    } else {
+        CoverageStatus::Resolved
+    }
+}
+
+fn is_stale_for_cadence(
+    cadence: &str,
+    latest_time: DateTime<Utc>,
+    snapshot_time: DateTime<Utc>,
+) -> bool {
+    let Some(max_lag) = max_lag_for_cadence(cadence) else {
+        return false;
+    };
+    snapshot_time.signed_duration_since(latest_time) > max_lag
+}
+
+fn max_lag_for_cadence(cadence: &str) -> Option<Duration> {
+    match cadence {
+        "daily" => Some(Duration::days(2)),
+        "weekly" => Some(Duration::days(14)),
+        "monthly" => Some(Duration::days(45)),
+        "quarterly" => Some(Duration::days(120)),
+        "annual" => Some(Duration::days(400)),
+        _ => None,
     }
 }
 

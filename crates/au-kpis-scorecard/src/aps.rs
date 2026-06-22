@@ -530,9 +530,9 @@ mod tests {
                 source_url: "https://example.test/source".into(),
                 license: "CC-BY-4.0".into(),
                 attribution: "example".into(),
-                retrieved_at: None,
-                reviewed_by: None,
-                reviewed_at: None,
+                retrieved_at: Some("2026-06-22".into()),
+                reviewed_by: Some("aps-test".into()),
+                reviewed_at: Some("2026-06-22".into()),
                 notes: None,
             },
         }
@@ -588,6 +588,24 @@ mod tests {
                     .get("measure")
                     .map(String::as_str)
                     == Some("average_completion_months")
+        }));
+        let oversight = config
+            .indicators
+            .iter()
+            .find(|indicator| indicator.indicator_id == "oversight.reviewed-strength")
+            .expect("oversight curated input");
+        assert_eq!(oversight.coverage_status, CoverageStatus::ManualPending);
+        assert!(oversight.provenance.retrieved_at.is_some());
+        assert!(oversight.provenance.reviewed_by.is_some());
+        assert!(oversight.provenance.reviewed_at.is_some());
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "compute.datacentre-capacity"
+                && indicator.source_dataflow_id == "compute.au_datacentre_capacity_mw"
+                && indicator.confidence == Confidence::Low
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "surveillance.intensity"
+                && indicator.coverage_status == CoverageStatus::VisibleUnscored
         }));
     }
 
@@ -751,6 +769,16 @@ mod tests {
         missing_url.indicators[0].provenance.source_url.clear();
         let err = validate_config(&missing_url).expect_err("missing URL should fail");
         assert!(err.to_string().contains("provenance.source_url"));
+
+        let mut missing_review = test_config();
+        missing_review.indicators[0].source_dataflow_id = "curated.oversight_strength".into();
+        missing_review.indicators[0].coverage_status = CoverageStatus::ManualPending;
+        missing_review.indicators[0].provenance.retrieved_at = None;
+        missing_review.indicators[0].provenance.reviewed_by = None;
+        missing_review.indicators[0].provenance.reviewed_at = None;
+        let err = validate_config(&missing_review)
+            .expect_err("curated input without review metadata should fail");
+        assert!(err.to_string().contains("review metadata"), "{err}");
     }
 
     proptest! {

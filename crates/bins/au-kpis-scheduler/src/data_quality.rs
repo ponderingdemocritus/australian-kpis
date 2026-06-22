@@ -181,7 +181,7 @@ pub fn default_data_quality_rules() -> &'static [DataQualityRule] {
     &DEFAULT_RULES
 }
 
-const DEFAULT_RULES: [DataQualityRule; 7] = [
+const DEFAULT_RULES: [DataQualityRule; 11] = [
     DataQualityRule {
         dataflow_id: "abs.cpi",
         min_value: 0.0,
@@ -250,6 +250,46 @@ const DEFAULT_RULES: [DataQualityRule; 7] = [
         latest_period_cardinality_floor: 0.50,
         max_recency_lag_days: 450,
         max_daily_revisions: 1_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "curated.oversight_strength",
+        min_value: 0.0,
+        max_value: 100.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 1.0,
+        max_recency_lag_days: 450,
+        max_daily_revisions: 50,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "curated.control_enable_spend",
+        min_value: 0.0,
+        max_value: 10.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 1.0,
+        max_recency_lag_days: 450,
+        max_daily_revisions: 50,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "curated.surveillance_intensity",
+        min_value: 0.0,
+        max_value: 100.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 1.0,
+        max_recency_lag_days: 800,
+        max_daily_revisions: 50,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "compute.au_datacentre_capacity_mw",
+        min_value: 0.0,
+        max_value: 1_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 1.0,
+        max_recency_lag_days: 450,
+        max_daily_revisions: 50,
         z_score_sigma: 5.0,
     },
 ];
@@ -721,6 +761,16 @@ mod tests {
             rules
                 .iter()
                 .any(|rule| rule.dataflow_id == "rba.statistical_tables")
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule.dataflow_id == "curated.oversight_strength")
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|rule| { rule.dataflow_id == "compute.au_datacentre_capacity_mw" })
         );
         assert!(
             rules

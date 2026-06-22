@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::{Axis, Direction, IndicatorConfig, ScorecardConfig, ScorecardError};
+use crate::model::{
+    Axis, CoverageStatus, Direction, IndicatorConfig, ScorecardConfig, ScorecardError,
+};
 
 /// Checked-in APS v1 config.
 pub const APS_V1_CONFIG_TOML: &str = include_str!("../config/aps.v1.toml");
@@ -70,6 +72,7 @@ fn validate_indicator(
     require_text("provenance.source_url", &indicator.provenance.source_url)?;
     require_text("provenance.license", &indicator.provenance.license)?;
     require_text("provenance.attribution", &indicator.provenance.attribution)?;
+    validate_curated_review_metadata(indicator)?;
     validate_normalization(indicator)?;
 
     if indicator.coverage_status.is_visible_unscored() {
@@ -90,6 +93,37 @@ fn validate_indicator(
     }
 
     Ok(())
+}
+
+fn validate_curated_review_metadata(indicator: &IndicatorConfig) -> Result<(), ScorecardError> {
+    if !requires_curated_review_metadata(indicator) {
+        return Ok(());
+    }
+    require_optional_text(
+        "provenance.retrieved_at",
+        indicator.provenance.retrieved_at.as_deref(),
+        &indicator.indicator_id,
+    )?;
+    require_optional_text(
+        "provenance.reviewed_by",
+        indicator.provenance.reviewed_by.as_deref(),
+        &indicator.indicator_id,
+    )?;
+    require_optional_text(
+        "provenance.reviewed_at",
+        indicator.provenance.reviewed_at.as_deref(),
+        &indicator.indicator_id,
+    )?;
+    Ok(())
+}
+
+fn requires_curated_review_metadata(indicator: &IndicatorConfig) -> bool {
+    indicator.source_dataflow_id.starts_with("curated.")
+        || indicator.source_dataflow_id.starts_with("compute.")
+        || matches!(
+            indicator.coverage_status,
+            CoverageStatus::ManualPending | CoverageStatus::VisibleUnscored
+        )
 }
 
 fn validate_normalization(indicator: &IndicatorConfig) -> Result<(), ScorecardError> {
@@ -123,5 +157,19 @@ fn require_text(field: &str, value: &str) -> Result<(), ScorecardError> {
         )))
     } else {
         Ok(())
+    }
+}
+
+fn require_optional_text(
+    field: &str,
+    value: Option<&str>,
+    indicator_id: &str,
+) -> Result<(), ScorecardError> {
+    if value.is_some_and(|value| !value.trim().is_empty()) {
+        Ok(())
+    } else {
+        Err(ScorecardError::InvalidConfig(format!(
+            "curated/manual indicator `{indicator_id}` requires review metadata `{field}`"
+        )))
     }
 }
