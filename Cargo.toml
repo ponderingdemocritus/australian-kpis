@@ -17,6 +17,7 @@ members = [
     "crates/au-kpis-adapter",
     "crates/au-kpis-loader",
     "crates/au-kpis-ingestion-core",
+    "crates/au-kpis-scorecard",
     "crates/au-kpis-api-http",
     "crates/au-kpis-openapi",
     "crates/adapters/abs",
@@ -54,6 +55,7 @@ au-kpis-pdf-client = { path = "crates/au-kpis-pdf-client" }
 au-kpis-adapter = { path = "crates/au-kpis-adapter" }
 au-kpis-loader = { path = "crates/au-kpis-loader" }
 au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
+au-kpis-scorecard = { path = "crates/au-kpis-scorecard" }
 au-kpis-api-http = { path = "crates/au-kpis-api-http" }
 au-kpis-openapi = { path = "crates/au-kpis-openapi" }
 criterion = { version = "0.5", features = ["html_reports"] }

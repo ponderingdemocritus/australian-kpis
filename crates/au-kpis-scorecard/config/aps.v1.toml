@@ -1,0 +1,199 @@
+id = "aps"
+version = "aps.v1"
+label = "Abundance Position Score"
+description = "National Australia scorecard combining delivery throughput and policy orientation."
+formula = "APS = 100 * T * (0.5 + 0.5 * O)"
+license = "Apache-2.0"
+attribution = "Derived scorecard configuration maintained by australian-kpis."
+
+[[indicators]]
+indicator_id = "housing.approvals"
+source_dataflow_id = "abs.building_approvals"
+measure_id = "dwellings_approved"
+axis = "throughput"
+component = "housing"
+weight = 0.35
+direction = "higher_is_better"
+display_label = "Housing approvals"
+description = "Monthly dwelling approvals against the APS v1 reference range."
+unit = "dwellings"
+confidence = "high"
+coverage_status = "missing_expected"
+cadence = "monthly"
+
+[indicators.dimension_selector]
+region = "AUS"
+
+[indicators.normalization]
+worst = 10000.0
+best = 25000.0
+
+[indicators.provenance]
+source_url = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+
+[[indicators]]
+indicator_id = "construction.completion-time"
+source_dataflow_id = "abs.dwelling_completion_times"
+measure_id = "median_months"
+axis = "throughput"
+component = "housing"
+weight = 0.25
+direction = "lower_is_better"
+display_label = "Dwelling completion time"
+description = "Median completion time for dwellings; lower values improve throughput."
+unit = "months"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+region = "AUS"
+
+[indicators.normalization]
+worst = 30.0
+best = 12.0
+
+[indicators.provenance]
+source_url = "https://www.abs.gov.au/statistics/industry/building-and-construction"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+
+[[indicators]]
+indicator_id = "productivity.market-sector"
+source_dataflow_id = "pc.productivity_bulletin"
+measure_id = "market_sector_growth"
+axis = "throughput"
+component = "productivity"
+weight = 0.40
+direction = "higher_is_better"
+display_label = "Market-sector productivity"
+description = "Productivity growth proxy from the Productivity Commission roadmap input."
+unit = "percent"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "annual"
+
+[indicators.dimension_selector]
+region = "AUS"
+
+[indicators.normalization]
+worst = -2.0
+best = 3.0
+
+[indicators.provenance]
+source_url = "https://www.pc.gov.au/ongoing/productivity-insights"
+license = "CC-BY-4.0"
+attribution = "Source: Productivity Commission"
+
+[[indicators]]
+indicator_id = "permitting.bready"
+source_dataflow_id = "worldbank.bready"
+measure_id = "business_entry_score"
+axis = "orientation"
+component = "permitting"
+weight = 0.45
+direction = "higher_is_better"
+display_label = "Business entry readiness"
+description = "National permitting and business-entry proxy."
+unit = "index"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+
+[indicators.normalization]
+worst = 50.0
+best = 100.0
+
+[indicators.provenance]
+source_url = "https://www.worldbank.org/en/businessready"
+license = "World Bank terms"
+attribution = "Source: World Bank B-READY"
+
+[[indicators]]
+indicator_id = "ai.readiness"
+source_dataflow_id = "oxford.gari"
+measure_id = "ai_readiness_score"
+axis = "orientation"
+component = "ai"
+weight = 0.35
+direction = "higher_is_better"
+display_label = "AI readiness"
+description = "AI readiness and adoption proxy."
+unit = "index"
+confidence = "low"
+coverage_status = "missing_expected"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+
+[indicators.normalization]
+worst = 30.0
+best = 90.0
+
+[indicators.provenance]
+source_url = "https://oxfordinsights.com/ai-readiness/ai-readiness-index/"
+license = "Oxford Insights terms"
+attribution = "Source: Oxford Insights Government AI Readiness Index"
+notes = "Low-confidence proxy until a reviewed APS data contract is available."
+
+[[indicators]]
+indicator_id = "oversight.reviewed-strength"
+source_dataflow_id = "curated.oversight_strength"
+measure_id = "reviewed_strength"
+axis = "orientation"
+component = "governance"
+weight = 0.20
+direction = "higher_is_better"
+display_label = "Oversight strength"
+description = "Reviewed governance and oversight input."
+unit = "index"
+confidence = "medium"
+coverage_status = "manual_pending"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+
+[indicators.normalization]
+worst = 0.0
+best = 100.0
+
+[indicators.provenance]
+source_url = "https://www.oaic.gov.au/"
+license = "Manual review required"
+attribution = "Curated from OAIC, ANAO, FOI, and audit-office inputs"
+notes = "Manual input remains missing until reviewed with durable provenance."
+
+[[indicators]]
+indicator_id = "control.enable-spend-ratio"
+source_dataflow_id = "curated.control_enable_spend"
+measure_id = "ratio"
+axis = "orientation"
+component = "governance"
+weight = 0.0
+direction = "lower_is_better"
+display_label = "Control-vs-enable spend ratio"
+description = "Visible context only until a reviewed taxonomy exists."
+unit = "ratio"
+confidence = "low"
+coverage_status = "visible_unscored"
+cadence = "annual"
+
+[indicators.dimension_selector]
+country = "AUS"
+
+[indicators.normalization]
+worst = 2.0
+best = 0.5
+
+[indicators.provenance]
+source_url = "https://budget.gov.au/"
+license = "Manual taxonomy required"
+attribution = "Future Treasury/state budget taxonomy"
+notes = "Visible-unscored input; excluded from APS point estimate and confidence band."
