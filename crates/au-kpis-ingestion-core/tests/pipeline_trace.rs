@@ -133,6 +133,7 @@ impl SourceAdapter for TraceParentAdapter {
     ) -> Result<ArtifactRef, AdapterError> {
         Ok(ArtifactRef {
             id: ArtifactId::of_content(job.id.as_bytes()),
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type: "application/json".into(),

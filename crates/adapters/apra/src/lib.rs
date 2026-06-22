@@ -234,6 +234,7 @@ impl SourceAdapter for ApraAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -408,6 +409,7 @@ pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
     let source_url = "https://www.apra.gov.au/sites/default/files/centralised.xlsx";
     let artifact = ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("apra").expect("static source id is valid"),
         source_url: source_url.into(),
         content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
@@ -1481,6 +1483,7 @@ mod tests {
         let fetched_at = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
         let artifact = ArtifactRef {
             id,
+            fetch_id: None,
             source_id: source_id(),
             source_url: source_url.into(),
             content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

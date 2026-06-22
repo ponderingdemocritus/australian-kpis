@@ -47,6 +47,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("apra").unwrap(),
         source_url: source_url.into(),
         content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
@@ -190,6 +191,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("apra").unwrap(),
         source_url: "https://www.apra.gov.au/sites/default/files/2026-03/Quarterly%20authorised%20deposit-taking%20institution%20performance-September%202004%20to%20December%202025.xlsx".into(),
         content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),

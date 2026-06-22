@@ -18,12 +18,16 @@ pub type ContentType = String;
 /// order per name so repeated fields are retained for audit/re-ingest.
 pub type ResponseHeaders = BTreeMap<String, Vec<String>>;
 
-/// A raw upstream artifact persisted in R2 under `artifacts/<hex>`. Records
-/// where it came from, when it was fetched, and its on-wire size so loaders
-/// can audit re-ingestion without re-downloading.
+/// A raw upstream artifact persisted in R2 under `artifacts/<hex>`.
+///
+/// `id` is the content hash and `fetch_id`, when present, identifies the
+/// concrete upstream retrieval that produced this reference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Artifact {
     pub id: ArtifactId,
+    /// Durable fetch provenance row for this artifact reference, when it has
+    /// been persisted by the database recorder.
+    pub fetch_id: Option<i64>,
     pub source_id: SourceId,
     /// Canonical URL the artifact was fetched from.
     pub source_url: String,
@@ -48,6 +52,7 @@ mod tests {
         let id = ArtifactId::of_content(b"sdmx-payload");
         let a = Artifact {
             id,
+            fetch_id: Some(42),
             source_id: SourceId::new("abs").unwrap(),
             source_url: "https://data.api.abs.gov.au/rest/data/CPI".into(),
             content_type: "application/vnd.sdmx.data+json".into(),

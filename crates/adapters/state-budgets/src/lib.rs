@@ -348,6 +348,7 @@ impl SourceAdapter for NswBudgetAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -513,6 +514,7 @@ impl SourceAdapter for VicBudgetAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -678,6 +680,7 @@ impl SourceAdapter for QldBudgetAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,

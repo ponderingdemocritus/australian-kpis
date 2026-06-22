@@ -86,6 +86,7 @@ async fn artifact_for(blob_store: &BlobStore, bytes: &'static [u8]) -> ArtifactR
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("asx").unwrap(),
         source_url: "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
             .into(),
@@ -179,6 +180,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("asx").unwrap(),
         source_url: "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
             .into(),

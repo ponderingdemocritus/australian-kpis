@@ -102,19 +102,19 @@ impl Classify for DbError {
 /// Insert a raw source artifact row.
 ///
 /// The artifact id is the SHA-256 digest of the stored bytes; using it as
-/// the primary key makes repeated fetches of identical upstream content
-/// idempotent. On duplicate content the original provenance row is preserved
-/// unchanged.
+/// the primary key makes repeated storage of identical upstream content
+/// idempotent. Each call still records one fetch provenance row so mirrors,
+/// source ids, response headers, and fetch timestamps are auditable.
 #[instrument(skip(pool, artifact))]
 pub async fn upsert_artifact(pool: &PgPool, artifact: &Artifact) -> Result<(), DbError> {
     upsert_artifact_record(pool, artifact).await?;
     Ok(())
 }
 
-/// Insert a raw source artifact row and return the durable row.
+/// Insert a raw source artifact row and return the durable fetch reference.
 ///
-/// Duplicate content is a no-op at the database layer, so callers receive the
-/// already-persisted provenance instead of their candidate metadata.
+/// Duplicate content keeps the content-addressed blob row idempotent while a
+/// new `artifact_fetches` row captures the concrete upstream retrieval.
 #[instrument(skip(pool, artifact))]
 pub async fn upsert_artifact_record(
     pool: &PgPool,
@@ -129,7 +129,9 @@ pub async fn upsert_artifact_record(
     let response_headers =
         serde_json::to_value(&artifact.response_headers).map_err(CoreError::from)?;
 
-    sqlx::query!(
+    let mut tx = pool.begin().await.map_err(DbError::Query)?;
+
+    sqlx::query(
         r#"INSERT INTO artifacts (
              id, source_id, source_url, content_type, response_headers,
              size_bytes, storage_key, fetched_at
@@ -139,22 +141,45 @@ pub async fn upsert_artifact_record(
         SET response_headers = EXCLUDED.response_headers
         WHERE artifacts.response_headers = '{}'::jsonb
           AND EXCLUDED.response_headers <> '{}'::jsonb"#,
-        artifact.id.digest().as_bytes().as_slice(),
-        artifact.source_id.as_str(),
-        &artifact.source_url,
-        &artifact.content_type,
-        response_headers,
-        size_bytes,
-        &artifact.storage_key,
-        artifact.fetched_at,
     )
-    .execute(pool)
+    .bind(artifact.id.digest().as_bytes().as_slice())
+    .bind(artifact.source_id.as_str())
+    .bind(&artifact.source_url)
+    .bind(&artifact.content_type)
+    .bind(response_headers.clone())
+    .bind(size_bytes)
+    .bind(&artifact.storage_key)
+    .bind(artifact.fetched_at)
+    .execute(&mut *tx)
     .await
     .map_err(classify_artifact_write_error)?;
 
-    get_artifact(pool, artifact.id)
-        .await?
-        .ok_or_else(|| DbError::Core(CoreError::NotFound(format!("artifact `{}`", artifact.id))))
+    let (fetch_id,) = sqlx::query_as::<_, (i64,)>(
+        r#"INSERT INTO artifact_fetches (
+             artifact_id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id"#,
+    )
+    .bind(artifact.id.digest().as_bytes().as_slice())
+    .bind(artifact.source_id.as_str())
+    .bind(&artifact.source_url)
+    .bind(&artifact.content_type)
+    .bind(response_headers)
+    .bind(size_bytes)
+    .bind(&artifact.storage_key)
+    .bind(artifact.fetched_at)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(classify_artifact_write_error)?;
+
+    tx.commit().await.map_err(DbError::Query)?;
+
+    Ok(Artifact {
+        fetch_id: Some(fetch_id),
+        ..artifact.clone()
+    })
 }
 
 fn classify_artifact_write_error(err: sqlx::Error) -> DbError {
@@ -242,6 +267,7 @@ pub async fn get_artifact(pool: &PgPool, id: ArtifactId) -> Result<Option<Artifa
 
         Ok(Artifact {
             id: ArtifactId::from_digest(au_kpis_domain::ids::Sha256Digest::from_bytes(id_array)),
+            fetch_id: None,
             source_id,
             source_url: row.source_url,
             content_type: row.content_type,
@@ -254,7 +280,7 @@ pub async fn get_artifact(pool: &PgPool, id: ArtifactId) -> Result<Option<Artifa
     .transpose()
 }
 
-/// Return whether an artifact/dataflow pair has already completed a clean load.
+/// Return whether an artifact/source/dataflow tuple has already completed a clean load.
 #[instrument(skip(pool))]
 pub async fn artifact_load_completed(
     pool: &PgPool,
@@ -279,11 +305,13 @@ pub async fn artifact_load_completed(
     .map_err(DbError::Query)
 }
 
-/// Fields persisted when an artifact/dataflow pair completes ingestion.
+/// Fields persisted when an artifact/source/dataflow tuple completes ingestion.
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactLoadCompletion<'a> {
     /// Content-addressed artifact id that was parsed.
     pub artifact_id: ArtifactId,
+    /// Durable fetch provenance row used for this load, when available.
+    pub artifact_fetch_id: Option<i64>,
     /// Source that produced the artifact.
     pub source_id: &'a SourceId,
     /// Dataflow parsed from the artifact.
@@ -298,7 +326,7 @@ pub struct ArtifactLoadCompletion<'a> {
     pub trace_parent: Option<&'a str>,
 }
 
-/// Record a completed artifact/dataflow load for future idempotent reruns.
+/// Record a completed artifact/source/dataflow load for future idempotent reruns.
 #[instrument(skip(pool))]
 pub async fn record_artifact_load_completion(
     pool: &PgPool,
@@ -309,12 +337,13 @@ pub async fn record_artifact_load_completion(
 
     sqlx::query(
         "INSERT INTO artifact_loads (
-             artifact_id, source_id, dataflow_id, observations_parsed,
+             artifact_id, artifact_fetch_id, source_id, dataflow_id, observations_parsed,
              observations_loaded, job_id, trace_parent
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (artifact_id, dataflow_id) DO UPDATE
-         SET source_id = EXCLUDED.source_id,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (artifact_id, source_id, dataflow_id) DO UPDATE
+         SET artifact_fetch_id = EXCLUDED.artifact_fetch_id,
+             source_id = EXCLUDED.source_id,
              observations_parsed = EXCLUDED.observations_parsed,
              observations_loaded = EXCLUDED.observations_loaded,
              job_id = EXCLUDED.job_id,
@@ -322,6 +351,7 @@ pub async fn record_artifact_load_completion(
              completed_at = now()",
     )
     .bind(completion.artifact_id.digest().as_bytes().as_slice())
+    .bind(completion.artifact_fetch_id)
     .bind(completion.source_id.as_str())
     .bind(completion.dataflow_id.as_str())
     .bind(observations_parsed)

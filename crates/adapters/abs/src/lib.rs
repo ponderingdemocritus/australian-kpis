@@ -225,6 +225,7 @@ impl SourceAdapter for AbsAdapter {
         let fetched_at = Utc::now();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: fetch_url,
             content_type,
@@ -559,6 +560,7 @@ pub fn parse_sdmx_json_observation_count_for_benchmark<R: Read>(
     let artifact_id = ArtifactId::of_content(b"abs sdmx parser benchmark");
     let artifact = ArtifactRef {
         id: artifact_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url:
             "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"

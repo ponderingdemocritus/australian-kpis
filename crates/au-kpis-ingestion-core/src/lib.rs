@@ -487,6 +487,7 @@ struct JobCorrelation {
 #[derive(Debug, Clone)]
 struct ParseJobAuditOwned {
     artifact_id: ArtifactId,
+    artifact_fetch_id: Option<i64>,
     dataflow_id: DataflowId,
     source_id: SourceId,
     correlation: JobCorrelation,
@@ -521,6 +522,7 @@ impl ParseJobAuditOwned {
     fn new(source_id: &SourceId, fetched: &FetchedArtifact) -> Self {
         Self {
             artifact_id: fetched.artifact.id,
+            artifact_fetch_id: fetched.artifact.fetch_id,
             dataflow_id: fetched.dataflow_id.clone(),
             source_id: source_id.clone(),
             correlation: fetched.correlation.clone(),
@@ -588,6 +590,7 @@ enum LoadStageItem {
     },
     AcceptArtifact {
         artifact_id: ArtifactId,
+        artifact_fetch_id: Option<i64>,
         source_id: SourceId,
         dataflow_id: DataflowId,
         observations_parsed: u64,
@@ -936,6 +939,7 @@ async fn parse_one_artifact(
     shutdown_grace: Duration,
 ) -> Result<u64, IngestionError> {
     let artifact_id = fetched.artifact.id;
+    let artifact_fetch_id = fetched.artifact.fetch_id;
     let trace_parent = fetched.correlation.trace_parent.clone();
     let span = info_span!(
         "ingestion_parse_job",
@@ -955,6 +959,7 @@ async fn parse_one_artifact(
         let mut early_adapter_errors = Vec::new();
         let audit = ParseErrorAudit {
             artifact_id,
+            artifact_fetch_id,
             dataflow_id: &fetched.dataflow_id,
             source_id: &source_id,
             correlation: &fetched.correlation,
@@ -1036,6 +1041,7 @@ async fn parse_one_artifact(
                             &tx,
                             LoadStageItem::ParseError(parse_error_record(
                                 artifact_id,
+                                artifact_fetch_id,
                                 &fetched.dataflow_id,
                                 &source_id,
                                 &fetched.correlation,
@@ -1072,6 +1078,7 @@ async fn parse_one_artifact(
                     &tx,
                     LoadStageItem::ParseError(provenance_error_record(
                         artifact_id,
+                        artifact_fetch_id,
                         &fetched.dataflow_id,
                         &source_id,
                         &fetched.correlation,
@@ -1100,6 +1107,7 @@ async fn parse_one_artifact(
                     &tx,
                     LoadStageItem::ParseError(provenance_error_record(
                         artifact_id,
+                        artifact_fetch_id,
                         &fetched.dataflow_id,
                         &source_id,
                         &fetched.correlation,
@@ -1137,6 +1145,7 @@ async fn parse_one_artifact(
                 &tx,
                 LoadStageItem::ParseError(parse_error_record(
                     artifact_id,
+                    artifact_fetch_id,
                     &fetched.dataflow_id,
                     &source_id,
                     &fetched.correlation,
@@ -1154,6 +1163,7 @@ async fn parse_one_artifact(
             &tx,
             LoadStageItem::AcceptArtifact {
                 artifact_id,
+                artifact_fetch_id,
                 source_id: source_id.clone(),
                 dataflow_id: fetched.dataflow_id.clone(),
                 observations_parsed: parsed,
@@ -1191,6 +1201,7 @@ async fn finish_schema_hash_drift_parse(
         tx,
         LoadStageItem::ParseError(parse_error_record(
             audit.artifact_id,
+            audit.artifact_fetch_id,
             audit.dataflow_id,
             audit.source_id,
             audit.correlation,
@@ -1214,6 +1225,7 @@ async fn next_after_cancellation(
 
 struct ParseErrorAudit<'a> {
     artifact_id: ArtifactId,
+    artifact_fetch_id: Option<i64>,
     dataflow_id: &'a DataflowId,
     source_id: &'a SourceId,
     correlation: &'a JobCorrelation,
@@ -1231,6 +1243,7 @@ async fn send_adapter_parse_errors(
             tx,
             LoadStageItem::ParseError(parse_error_record(
                 audit.artifact_id,
+                audit.artifact_fetch_id,
                 audit.dataflow_id,
                 audit.source_id,
                 audit.correlation,
@@ -1302,6 +1315,7 @@ async fn finish_panicked_parse(
 
 fn parse_error_record(
     artifact_id: ArtifactId,
+    artifact_fetch_id: Option<i64>,
     dataflow_id: &DataflowId,
     source_id: &SourceId,
     correlation: &JobCorrelation,
@@ -1316,6 +1330,7 @@ fn parse_error_record(
             "dataflow_id": dataflow_id,
             "source_id": source_id,
             "artifact_id": artifact_id,
+            "artifact_fetch_id": artifact_fetch_id,
             "job_id": correlation.job_id.as_str(),
             "trace_parent": correlation.trace_parent.as_deref(),
             "error_class": format!("{:?}", err.class()),
@@ -1336,6 +1351,7 @@ fn parse_panic_error_record(
             "dataflow_id": audit.dataflow_id,
             "source_id": audit.source_id,
             "artifact_id": audit.artifact_id,
+            "artifact_fetch_id": audit.artifact_fetch_id,
             "job_id": audit.correlation.job_id.as_str(),
             "trace_parent": audit.correlation.trace_parent.as_deref(),
             "fatal": true,
@@ -1352,6 +1368,7 @@ fn parse_cancelled_error_record(audit: &ParseErrorAudit<'_>, parsed: u64) -> Par
             "dataflow_id": audit.dataflow_id,
             "source_id": audit.source_id,
             "artifact_id": audit.artifact_id,
+            "artifact_fetch_id": audit.artifact_fetch_id,
             "job_id": audit.correlation.job_id.as_str(),
             "trace_parent": audit.correlation.trace_parent.as_deref(),
             "rows_parsed": parsed,
@@ -1362,6 +1379,7 @@ fn parse_cancelled_error_record(audit: &ParseErrorAudit<'_>, parsed: u64) -> Par
 
 fn provenance_error_record(
     artifact_id: ArtifactId,
+    artifact_fetch_id: Option<i64>,
     dataflow_id: &DataflowId,
     source_id: &SourceId,
     correlation: &JobCorrelation,
@@ -1376,6 +1394,7 @@ fn provenance_error_record(
             "dataflow_id": dataflow_id,
             "source_id": source_id,
             "artifact_id": artifact_id,
+            "artifact_fetch_id": artifact_fetch_id,
             "job_id": correlation.job_id.as_str(),
             "trace_parent": correlation.trace_parent.as_deref(),
             "fatal": true,
@@ -1426,6 +1445,7 @@ async fn load_stage(
             }
             LoadStageItem::AcceptArtifact {
                 artifact_id,
+                artifact_fetch_id,
                 source_id,
                 dataflow_id,
                 observations_parsed,
@@ -1448,6 +1468,7 @@ async fn load_stage(
                         &pool,
                         au_kpis_db::ArtifactLoadCompletion {
                             artifact_id,
+                            artifact_fetch_id,
                             source_id: &source_id,
                             dataflow_id: &dataflow_id,
                             observations_parsed,

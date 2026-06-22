@@ -60,6 +60,7 @@ async fn artifact_for(blob_store: &BlobStore, bytes: Vec<u8>) -> ArtifactRef {
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("aemo").unwrap(),
         source_url: "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip".into(),
         content_type: "application/zip".into(),
@@ -153,6 +154,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("aemo").unwrap(),
         source_url: "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip".into(),
         content_type: "application/zip".into(),

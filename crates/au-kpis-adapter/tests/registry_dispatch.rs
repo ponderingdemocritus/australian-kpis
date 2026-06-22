@@ -96,6 +96,7 @@ impl SourceAdapter for StubAdapter {
         let id = ctx.blob_store.put_artifact(bytes.clone()).await?;
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type: "application/json".into(),
@@ -266,6 +267,7 @@ async fn parse_ctx_propagates_cancellation_token_to_adapter_stream() {
 
     let artifact = ArtifactRef {
         id: ArtifactId::of_content(b"fixture"),
+        fetch_id: None,
         source_id,
         source_url: "https://example.test".into(),
         content_type: "application/json".into(),
@@ -437,6 +439,7 @@ fn artifact_ref_roundtrips_domain_artifact() {
     let fetched_at = Utc.with_ymd_and_hms(2026, 4, 28, 1, 2, 3).unwrap();
     let artifact = Artifact {
         id: ArtifactId::of_content(b"fixture"),
+        fetch_id: Some(42),
         source_id: SourceId::new("stub").unwrap(),
         source_url: "https://example.test/fixture.json".into(),
         content_type: "application/json".into(),
@@ -461,6 +464,7 @@ fn empty_registry_reports_empty_and_parse_unknown_adapter() {
     let blob_store = BlobStore::new(InMemory::new());
     let artifact = ArtifactRef {
         id: ArtifactId::of_content(b"fixture"),
+        fetch_id: None,
         source_id: SourceId::new("stub").unwrap(),
         source_url: "https://example.test/fixture.json".into(),
         content_type: "application/json".into(),

@@ -540,6 +540,7 @@ async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
     let blob_store = BlobStore::from_arc(backend.clone());
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -589,6 +590,7 @@ async fn fetch_backfills_headers_for_duplicate_durable_artifact() {
     let blob_store = BlobStore::from_arc(Arc::clone(&backend));
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -642,6 +644,7 @@ async fn fetch_keeps_canonical_duplicate_as_storage_noop() {
     let blob_store = BlobStore::from_arc(backend.clone());
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -693,6 +696,7 @@ async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -741,6 +745,7 @@ async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -789,6 +794,7 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
     let missing_key = format!("cold/{}", expected_id.to_hex());
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -843,6 +849,7 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches()
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
