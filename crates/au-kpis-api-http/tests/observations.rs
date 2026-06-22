@@ -154,6 +154,11 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
         csv.headers().get(header::CONTENT_TYPE).unwrap(),
         "text/csv; charset=utf-8"
     );
+    assert_eq!(
+        csv.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    assert!(!csv.headers().contains_key(header::ETAG));
     let body = String::from_utf8(
         to_bytes(csv.into_body(), usize::MAX)
             .await
@@ -192,9 +197,9 @@ async fn observations_endpoint_streams_decodable_parquet_with_headers() {
     );
     assert_eq!(
         response.headers().get(header::CACHE_CONTROL).unwrap(),
-        "public, max-age=60, stale-while-revalidate=300"
+        "no-store"
     );
-    assert!(response.headers().contains_key(header::ETAG));
+    assert!(!response.headers().contains_key(header::ETAG));
 
     let body = to_bytes(response.into_body(), usize::MAX)
         .await

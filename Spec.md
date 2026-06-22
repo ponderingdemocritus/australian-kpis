@@ -724,7 +724,12 @@ GET  /v1/openapi.json
 
 - **Auth**: `X-API-Key` header. Keys stored **argon2id-hashed** in DB; lookup cached in Redis with short TTL; constant-time compare. JWT for client app.
 - **Rate limits** (free tier defaults): 60 rps / 1000 requests per hour per key. Burst allowance of 2x. Token bucket in Redis via `fred`. Returns `429` with `Retry-After` header and `X-RateLimit-*` headers on every response. Anonymous (no key) tier: 10 rps / 100 per hour per IP.
-- **Caching**: Dataflow metadata long TTL. Observation responses ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Cloudflare CDN in front.
+- **Caching**: Dataflow metadata long TTL. Cacheable first-page JSON
+  observation responses use ETag + `Cache-Control: public, max-age=60,
+  stale-while-revalidate=300`. Cursor pages, large JSON pages, CSV, and Parquet
+  are streaming responses; they omit ETag, use `Cache-Control: no-store`, and
+  must not run the full ETag fingerprint aggregate before streaming. Cloudflare
+  CDN in front.
 - **Pagination**: cursor-based (opaque base64 of `(time, series_key)` pair). Max 10k rows per page.
 - **High-cardinality latest reads**: `/v1/observations` latest-revision requests
   must be dimension-filtered enough to match fewer than 512 series. Broader
@@ -1726,7 +1731,7 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
-- **v0.1.4 (2026-06-22)** — Added the Derived scorecards section defining APS v1 endpoints, response contracts, scoring semantics, source coverage, cache behavior, and required tests. Clarified loader-owned revision assignment: exact replays are idempotent and changed observations append `max(revision_no)+1`. Clarified that `SeriesKey` derivation includes `measure_id` between `dataflow_id` and sorted dimensions so multi-measure dataflows cannot collide.
+- **v0.1.4 (2026-06-22)** — Added the Derived scorecards section defining APS v1 endpoints, response contracts, scoring semantics, source coverage, cache behavior, and required tests. Clarified loader-owned revision assignment: exact replays are idempotent and changed observations append `max(revision_no)+1`. Clarified that `SeriesKey` derivation includes `measure_id` between `dataflow_id` and sorted dimensions so multi-measure dataflows cannot collide. Clarified observation response caching: bounded first-page JSON keeps ETags, while CSV/Parquet and other streaming responses skip fingerprint pre-scans and use `Cache-Control: no-store`.
 - **v0.1.3 (2026-05-01)** — Clarified repeated artifact response-header retention and source-specific streaming memory guardrails in PR CI.
 - **v0.1.2 (2026-04-30)** — Clarified that artifact records retain upstream fetch response headers alongside the content-addressed storage key.
 - **v0.1.1 (2026-04-28)** — Clarified PDF extraction architecture: deterministic `pdfplumber`/`camelot` remains the baseline, with optional pinned local document-model backends for fallback/comparison. Added validation, provenance, testing, and model-governance requirements.
