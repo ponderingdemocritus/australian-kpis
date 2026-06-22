@@ -285,8 +285,9 @@ async fn migration_creates_hypertable_and_compression_policy() {
     for expected in [
         "api_key_audit_log",
         "api_keys",
-        "artifacts",
+        "artifact_fetches",
         "artifact_loads",
+        "artifacts",
         "codelists",
         "codes",
         "dataflows",
@@ -318,6 +319,10 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "measures_name_trgm_gin",
         "measures_description_trgm_gin",
         "series_dataflow_first_observed_series_key_idx",
+        "artifact_fetches_artifact_idx",
+        "artifact_fetches_source_idx",
+        "artifact_fetches_source_url_idx",
+        "artifact_loads_artifact_fetch_idx",
         "artifact_loads_source_dataflow_idx",
     ] {
         assert!(

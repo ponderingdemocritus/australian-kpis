@@ -62,6 +62,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("state-budgets").unwrap(),
         source_url: source_url.into(),
         content_type: "application/pdf".into(),
@@ -1038,6 +1039,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("state-budgets").unwrap(),
         source_url: "https://www.budget.nsw.gov.au/sites/default/files/2025-06/bp1-budget-statement-nsw-budget-2025-26.pdf".into(),
         content_type: "application/pdf".into(),
