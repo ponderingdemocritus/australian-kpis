@@ -582,8 +582,8 @@ async fn load_observation_batch(
     create_series_staging_table(&mut tx).await?;
     create_observation_staging_table(&mut tx).await?;
     copy_series(&mut tx, batch).await?;
-    copy_direct_observations(&mut tx, batch).await?;
-    let observations_loaded = upsert_observations(&mut tx).await?;
+    let staged_rows = copy_direct_observations(&mut tx, batch).await?;
+    let observations_loaded = upsert_observations(&mut tx, staged_rows).await?;
     tx.commit().await?;
 
     stats.observations_loaded += observations_loaded;
@@ -625,7 +625,7 @@ async fn create_series_staging_table_with_on_commit(
 async fn create_observation_staging_table(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), LoadError> {
-    create_observation_staging_table_with_on_commit(tx, "DROP", true).await
+    create_observation_staging_table_with_on_commit(tx, "DROP", false).await
 }
 
 async fn create_observation_staging_table_with_on_commit(
@@ -744,42 +744,54 @@ async fn copy_observations(
 async fn copy_observations_deduped(
     tx: &mut Transaction<'_, Postgres>,
     batch: &[LoadItem],
-) -> Result<(), LoadError> {
-    let mut rows = BTreeMap::new();
-    for item in batch {
-        rows.insert(
-            (
-                item.observation.series_key,
-                item.observation.time,
-                item.observation.revision_no,
-            ),
-            item,
-        );
-    }
-    let payload = observation_copy_payload(rows.into_values())?;
-    copy_observation_payload(tx, payload).await
+) -> Result<usize, LoadError> {
+    let rows = dedupe_observations_by_series_time(batch);
+    let row_count = rows.len();
+    let payload = observation_copy_payload(rows.into_iter())?;
+    copy_observation_payload(tx, payload).await?;
+    Ok(row_count)
 }
 
 async fn copy_direct_observations(
     tx: &mut Transaction<'_, Postgres>,
     batch: &[LoadItem],
-) -> Result<(), LoadError> {
-    if has_duplicate_observation_keys(batch) {
+) -> Result<usize, LoadError> {
+    if has_duplicate_observation_times(batch) {
         copy_observations_deduped(tx, batch).await
     } else {
-        copy_observations(tx, batch).await
+        copy_observations(tx, batch).await?;
+        Ok(batch.len())
     }
 }
 
-fn has_duplicate_observation_keys(batch: &[LoadItem]) -> bool {
+fn has_duplicate_observation_times(batch: &[LoadItem]) -> bool {
     let mut seen = HashSet::with_capacity(batch.len());
-    batch.iter().any(|item| {
-        !seen.insert((
-            item.observation.series_key,
-            item.observation.time,
-            item.observation.revision_no,
-        ))
-    })
+    batch
+        .iter()
+        .any(|item| !seen.insert((item.observation.series_key, item.observation.time)))
+}
+
+fn dedupe_observations_by_series_time(batch: &[LoadItem]) -> Vec<&LoadItem> {
+    let mut rows: BTreeMap<(SeriesKey, chrono::DateTime<chrono::Utc>), (usize, &LoadItem)> =
+        BTreeMap::new();
+    for (index, item) in batch.iter().enumerate() {
+        let key = (item.observation.series_key, item.observation.time);
+        match rows.entry(key) {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (previous_index, previous) = entry.get();
+                if item.observation.revision_no > previous.observation.revision_no
+                    || (item.observation.revision_no == previous.observation.revision_no
+                        && index > *previous_index)
+                {
+                    entry.insert((index, item));
+                }
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((index, item));
+            }
+        }
+    }
+    rows.into_values().map(|(_, item)| item).collect()
 }
 
 fn observation_copy_payload<'a>(
@@ -826,13 +838,48 @@ async fn copy_observation_payload(
     Ok(())
 }
 
-async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
+async fn upsert_observations(
+    tx: &mut Transaction<'_, Postgres>,
+    staged_row_count: usize,
+) -> Result<u64, LoadError> {
+    let staged_row_count = u64::try_from(staged_row_count)
+        .map_err(|_| LoadError::Validation("staged observation count exceeded u64 range".into()))?;
+    let inserted = insert_new_observations(tx).await?;
+    let observations_loaded = if inserted == staged_row_count {
+        inserted
+    } else {
+        inserted + upsert_observation_revisions(tx).await?
+    };
+    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
+    Ok(observations_loaded)
+}
+
+async fn insert_new_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
+    let result = sqlx::query(
+        "INSERT INTO observations (
+             series_key, time, revision_no, time_precision, value, status,
+             attributes, ingested_at, source_artifact_id
+         )
+         SELECT decode(series_key_hex, 'hex'), time, 0, time_precision,
+                value, status, attributes, ingested_at,
+                decode(source_artifact_hex, 'hex')
+         FROM staging_observations
+         ON CONFLICT (series_key, time, revision_no) DO NOTHING",
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+async fn upsert_observation_revisions(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<u64, LoadError> {
     // Adapter revision numbers are provisional. Persist only changed staged rows
     // and derive the effective revision from the existing chain.
     let result = sqlx::query(
-        "WITH deduped_rows AS MATERIALIZED (
-             SELECT DISTINCT ON (series_key_hex, time)
-                    decode(series_key_hex, 'hex') AS series_key,
+        "WITH staged_rows AS MATERIALIZED (
+             SELECT decode(series_key_hex, 'hex') AS series_key,
                     time,
                     time_precision,
                     value,
@@ -841,11 +888,10 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
                     ingested_at,
                     decode(source_artifact_hex, 'hex') AS source_artifact_id
              FROM staging_observations
-             ORDER BY series_key_hex, time, revision_no DESC, stage_row_id DESC
          ),
          changed_rows AS MATERIALIZED (
              SELECT staged.*
-             FROM deduped_rows staged
+             FROM staged_rows staged
              WHERE NOT EXISTS (
                  SELECT 1
                  FROM observations existing
@@ -888,9 +934,7 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
     .execute(&mut **tx)
     .await?;
 
-    let observations_loaded = result.rows_affected();
-    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
-    Ok(observations_loaded)
+    Ok(result.rows_affected())
 }
 
 async fn upsert_observations_in_chunk_transactions(
@@ -1325,6 +1369,79 @@ mod tests {
 
         let err = validate_item(&item).expect_err("legacy series key should be rejected");
         assert!(err.contains("does not match computed key"), "{err}");
+    }
+
+    #[test]
+    fn direct_batch_dedup_keeps_highest_revision_then_latest_tie() {
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"direct dedupe fixture");
+        let time = chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+
+        let revisions = vec![
+            test_item(&descriptor, artifact_id, time, 0, 100.0),
+            test_item(&descriptor, artifact_id, time, 2, 102.0),
+            test_item(&descriptor, artifact_id, time, 1, 101.0),
+        ];
+        let deduped = dedupe_observations_by_series_time(&revisions);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].observation.revision_no, 2);
+        assert_eq!(deduped[0].observation.value, Some(102.0));
+
+        let ties = vec![
+            test_item(&descriptor, artifact_id, time, 0, 104.0),
+            test_item(&descriptor, artifact_id, time, 0, 105.0),
+        ];
+        let deduped = dedupe_observations_by_series_time(&ties);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].observation.value, Some(105.0));
+    }
+
+    fn test_descriptor() -> SeriesDescriptor {
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let measure_id = MeasureId::new("index").unwrap();
+        let dimensions: BTreeMap<DimensionId, CodeId> = [(
+            DimensionId::new("region").unwrap(),
+            CodeId::new("AUS").unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let series_key = SeriesKey::derive(
+            &dataflow_id,
+            &measure_id,
+            dimensions
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+        SeriesDescriptor {
+            series_key,
+            dataflow_id,
+            measure_id,
+            dimensions,
+            unit: "index".into(),
+        }
+    }
+
+    fn test_item(
+        descriptor: &SeriesDescriptor,
+        artifact_id: ArtifactId,
+        time: chrono::DateTime<chrono::Utc>,
+        revision_no: u32,
+        value: f64,
+    ) -> LoadItem {
+        LoadItem {
+            series: descriptor.clone(),
+            observation: Observation {
+                series_key: descriptor.series_key,
+                time,
+                time_precision: TimePrecision::Quarter,
+                value: Some(value),
+                status: ObservationStatus::Normal,
+                revision_no,
+                attributes: BTreeMap::new(),
+                ingested_at: chrono::Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap(),
+                source_artifact_id: artifact_id,
+            },
+        }
     }
 
     fn legacy_series_key_without_measure(
