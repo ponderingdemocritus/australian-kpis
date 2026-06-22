@@ -85,6 +85,23 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
             .iter()
             .any(|indicator| indicator["coverage_status"] == "visible_unscored")
     );
+    let indicators = config["indicators"].as_array().expect("indicators");
+    let state_capital = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "infrastructure.major-project-performance")
+        .expect("state capital pilot indicator");
+    assert_eq!(
+        state_capital["source_dataflow_id"],
+        "state_capital.vic_major_projects"
+    );
+    assert_eq!(state_capital["coverage_status"], "coverage_gap");
+    assert_eq!(state_capital["confidence"], "low");
+    assert!(
+        state_capital["provenance"]["notes"]
+            .as_str()
+            .unwrap()
+            .contains("pilot")
+    );
 
     let cached = app
         .clone()
@@ -145,12 +162,12 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 79.24528301886792).abs() < 1e-9);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 75.0).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 10);
+    assert_eq!(contributions.len(), 11);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -236,6 +253,12 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
         productivity["source_url"],
         "https://www.pc.gov.au/ongoing/productivity-insights"
     );
+
+    let infrastructure = contribution(contributions, "infrastructure.major-project-performance");
+    assert_eq!(infrastructure["coverage_status"], "coverage_gap");
+    assert!(infrastructure["raw_value"].is_null());
+    assert!(infrastructure["normalized_value"].is_null());
+    assert_eq!(infrastructure["confidence"], "low");
 
     let productive_infrastructure =
         contribution(contributions, "capital.super-productive-infrastructure");

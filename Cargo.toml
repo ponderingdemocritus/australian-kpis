@@ -30,6 +30,7 @@ members = [
     "crates/adapters/treasury",
     "crates/adapters/aemo",
     "crates/adapters/state-budgets",
+    "crates/adapters/state-capital",
     "crates/bins/au-kpis-api",
     "crates/bins/au-kpis-ingestion",
     "crates/bins/au-kpis-scheduler",
@@ -59,6 +60,7 @@ au-kpis-adapter = { path = "crates/au-kpis-adapter" }
 au-kpis-adapter-pc = { path = "crates/adapters/pc" }
 au-kpis-adapter-nhsac = { path = "crates/adapters/nhsac" }
 au-kpis-adapter-worldbank = { path = "crates/adapters/worldbank" }
+au-kpis-adapter-state-capital = { path = "crates/adapters/state-capital" }
 au-kpis-loader = { path = "crates/au-kpis-loader" }
 au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
 au-kpis-scorecard = { path = "crates/au-kpis-scorecard" }
