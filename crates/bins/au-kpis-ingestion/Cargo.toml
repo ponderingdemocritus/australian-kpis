@@ -19,6 +19,7 @@ au-kpis-adapter-pc = { workspace = true }
 au-kpis-adapter-rba = { path = "../../adapters/rba" }
 au-kpis-adapter-state-budgets = { path = "../../adapters/state-budgets" }
 au-kpis-adapter-treasury = { path = "../../adapters/treasury" }
+au-kpis-adapter-worldbank = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-db = { workspace = true }
 au-kpis-domain = { workspace = true }

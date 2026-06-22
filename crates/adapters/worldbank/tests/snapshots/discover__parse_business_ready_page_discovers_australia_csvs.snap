@@ -1,0 +1,18 @@
+---
+source: crates/adapters/worldbank/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "last_updated": "2025-05-01",
+    "release_id": "bready-australia-2025",
+    "source_url": "https://www.worldbank.org/en/businessready/bready-australia-2025.csv",
+    "title": "B-READY Australia 2025"
+  },
+  {
+    "last_updated": "2026-05-01",
+    "release_id": "bready-australia-2026",
+    "source_url": "https://www.worldbank.org/en/businessready/bready-australia-2026.csv",
+    "title": "B-READY Australia 2026"
+  }
+]
