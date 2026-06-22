@@ -6,10 +6,10 @@ import type {
   ListDataflowsParams,
   ObservationsResponse,
   ObservationsRow,
-  SearchCatalogParams,
-  SearchResponse,
   ScorecardConfig,
   ScorecardSnapshot,
+  SearchCatalogParams,
+  SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 

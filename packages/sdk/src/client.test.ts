@@ -4,9 +4,9 @@ import type {
   DataflowsResponse,
   ObservationsResponse,
   ObservationsRow,
-  SearchResponse,
   ScorecardConfig,
   ScorecardSnapshot,
+  SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
 import { createClient } from './index'

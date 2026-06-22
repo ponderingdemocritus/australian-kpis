@@ -1592,7 +1592,16 @@
       "ObservationStatus": {
         "type": "string",
         "description": "Observation status flags sourced from SDMX. Subset in use across Australian\npublishers; extend as new codes appear in upstream feeds.",
-        "enum": ["normal", "estimated", "forecast", "imputed", "missing", "provisional", "revised", "break"]
+        "enum": [
+          "normal",
+          "estimated",
+          "forecast",
+          "imputed",
+          "missing",
+          "provisional",
+          "revised",
+          "break"
+        ]
       },
       "ObservationsMetadata": {
         "type": "object",
@@ -1805,7 +1814,16 @@
       "ScorecardConfig": {
         "type": "object",
         "description": "APS config metadata and indicator list.",
-        "required": ["id", "version", "label", "description", "formula", "indicators", "license", "attribution"],
+        "required": [
+          "id",
+          "version",
+          "label",
+          "description",
+          "formula",
+          "indicators",
+          "license",
+          "attribution"
+        ],
         "properties": {
           "attribution": {
             "type": "string",
