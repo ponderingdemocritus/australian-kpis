@@ -569,6 +569,26 @@ mod tests {
                     .map(String::as_str)
                     == Some("dwellings_commenced")
         }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "construction.completion-time"
+                && indicator.source_dataflow_id == "abs.dwelling_completion_times"
+                && indicator.measure_id == "average_completion_months"
+                && indicator
+                    .dimension_selector
+                    .get("region")
+                    .map(String::as_str)
+                    == Some("AUS")
+                && indicator
+                    .dimension_selector
+                    .get("dwelling_type")
+                    .map(String::as_str)
+                    == Some("apartments")
+                && indicator
+                    .dimension_selector
+                    .get("measure")
+                    .map(String::as_str)
+                    == Some("average_completion_months")
+        }));
     }
 
     #[test]

@@ -36,6 +36,14 @@ const BUILDING_ACTIVITY_HTML: &[u8] = br#"<!doctype html>
   </dl>
   <h2>Dwellings commenced</h2>
 </main>"#;
+const DWELLING_COMPLETION_TIMES_HTML: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Average dwelling completion times</h1>
+  <dl>
+    <dt>Released</dt><dd>9/10/2019</dd>
+    <dt>Source</dt><dd>Building Activity, Australia, June 2019</dd>
+  </dl>
+</main>"#;
 const GZIP_SDMX_FIXTURE: &[u8] = &[
     0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xab, 0x56, 0x4a, 0x49, 0x2c, 0x49,
     0x54, 0xb2, 0xaa, 0x06, 0xd3, 0xc1, 0xa9, 0x25, 0xc5, 0x4a, 0x56, 0xd1, 0xd5, 0x4a, 0xf9, 0x49,
@@ -276,6 +284,25 @@ fn building_activity_job(source_url: String) -> DiscoveredJob {
     }
 }
 
+fn dwelling_completion_times_job(source_url: String) -> DiscoveredJob {
+    DiscoveredJob {
+        id: "abs:dwelling-completion-times:2019".into(),
+        source_id: SourceId::new("abs").unwrap(),
+        dataflow_id: DataflowId::new("abs.dwelling_completion_times").unwrap(),
+        source_url,
+        trace_parent: None,
+        metadata: BTreeMap::from([
+            ("adapter".into(), "abs".into()),
+            ("artifact_format".into(), "html".into()),
+            (
+                "revision_key".into(),
+                "ABS:dwelling-completion-times".into(),
+            ),
+            ("revision_version".into(), "9/10/2019".into()),
+        ]),
+    }
+}
+
 async fn serve_artifact_once() -> Option<(String, String)> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -409,6 +436,50 @@ async fn serve_building_activity_once() -> Option<(String, String)> {
 
     let base_url = format!("http://{addr}");
     let source_url = format!("{base_url}/building-activity/latest-release");
+    Some((base_url, source_url))
+}
+
+async fn serve_dwelling_completion_times_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+
+        assert!(request.starts_with("GET /articles/average-dwelling-completion-times HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+        assert!(request.to_ascii_lowercase().contains("accept: text/html"));
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nx-abs-fixture: completion-times\r\ncontent-length: {}\r\n\r\n",
+            DWELLING_COMPLETION_TIMES_HTML.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        stream
+            .write_all(DWELLING_COMPLETION_TIMES_HTML)
+            .await
+            .expect("write body");
+    });
+
+    let base_url = format!("http://{addr}");
+    let source_url = format!("{base_url}/articles/average-dwelling-completion-times");
     Some((base_url, source_url))
 }
 
@@ -690,6 +761,57 @@ async fn fetch_streams_building_activity_release_html_to_storage() {
         bytes.extend_from_slice(&chunk.expect("stored chunk"));
     }
     assert_eq!(bytes, BUILDING_ACTIVITY_HTML);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_streams_dwelling_completion_times_article_to_storage() {
+    let Some((_base_url, source_url)) = serve_dwelling_completion_times_once().await else {
+        return;
+    };
+    let adapter = AbsAdapter::default();
+    let job = dwelling_completion_times_job(source_url);
+    let started_at = Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let blob_store = BlobStore::new(InMemory::new());
+    let recorder = Arc::new(RecordingArtifactRecorder::default());
+
+    let artifact = adapter
+        .fetch(
+            job.clone(),
+            &FetchCtx::new(http, blob_store.clone(), started_at, recorder.clone()),
+        )
+        .await
+        .expect("fetch dwelling completion times article");
+
+    let expected_id = ArtifactId::of_content(DWELLING_COMPLETION_TIMES_HTML);
+    assert_eq!(artifact.id, expected_id);
+    assert_eq!(artifact.source_id.as_str(), "abs");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "text/html");
+    assert_eq!(
+        artifact.response_headers["x-abs-fixture"],
+        ["completion-times"]
+    );
+    assert_eq!(
+        artifact.size_bytes,
+        DWELLING_COMPLETION_TIMES_HTML.len() as u64
+    );
+    assert!(artifact.fetched_at > started_at);
+
+    let recorded = recorder.artifacts.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0], Artifact::from(artifact.clone()));
+    drop(recorded);
+
+    let mut stored = blob_store
+        .get(&StorageKey::from_persisted(&artifact.storage_key))
+        .await
+        .expect("read stored artifact");
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stored.next().await {
+        bytes.extend_from_slice(&chunk.expect("stored chunk"));
+    }
+    assert_eq!(bytes, DWELLING_COMPLETION_TIMES_HTML);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
