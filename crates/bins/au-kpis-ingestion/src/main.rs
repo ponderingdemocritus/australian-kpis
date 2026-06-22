@@ -20,6 +20,7 @@ use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_adapter_aemo::AemoAdapter;
+use au_kpis_adapter_ai_readiness::AiReadinessAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
 use au_kpis_adapter_asx::AsxAdapter;
 use au_kpis_adapter_nhsac::NhsacAdapter;
@@ -66,6 +67,15 @@ const AEMO_GENERATION_MIX_DATAFLOW_SLUG: &str = "generation-mix";
 const AEMO_GENERATION_MIX_DATAFLOW_ID: &str = "aemo.generation_mix";
 const AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG: &str = "dispatchability-capacity";
 const AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID: &str = "aemo.dispatchability_capacity";
+const AI_READINESS_OXFORD_GARI_DATAFLOW_SLUG: &str = "oxford-gari";
+const AI_READINESS_OXFORD_GARI_DATAFLOW_ID: &str = "oxford.gari";
+const AI_READINESS_NAIC_ADOPTION_DATAFLOW_SLUG: &str = "naic-ai-adoption-tracker";
+const AI_READINESS_NAIC_ADOPTION_DATAFLOW_ID: &str = "naic.ai_adoption_tracker";
+const AI_READINESS_ABS_AI_RD_DATAFLOW_SLUG: &str = "abs-ai-rd";
+const AI_READINESS_ABS_AI_RD_DATAFLOW_ID: &str = "abs.ai_rd";
+const AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_SLUG: &str =
+    "home-affairs-skillselect-talent-proxy";
+const AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_ID: &str = "home_affairs.skillselect_talent_proxy";
 const ASX_MARKET_STATISTICS_DATAFLOW_SLUG: &str = "market-statistics";
 const ASX_MARKET_STATISTICS_DATAFLOW_ID: &str = "asx.market_statistics";
 const ASX_ANNOUNCEMENTS_DATAFLOW_SLUG: &str = "announcements";
@@ -847,6 +857,13 @@ fn build_adapters() -> anyhow::Result<Adapters> {
     }
     let aemo = aemo.build();
     builder.register(aemo).context("register AEMO adapter")?;
+    let ai_readiness = match env::var("AU_KPIS_AI_READINESS_INDEX_URL") {
+        Ok(index_url) => AiReadinessAdapter::builder().index_url(index_url).build(),
+        Err(_) => AiReadinessAdapter::default(),
+    };
+    builder
+        .register(ai_readiness)
+        .context("register AI readiness adapter")?;
     let mut asx = AsxAdapter::builder();
     if let Ok(market_statistics_url) = env::var("AU_KPIS_ASX_MARKET_STATISTICS_URL") {
         asx = asx.market_statistics_url(market_statistics_url);
@@ -1108,6 +1125,17 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         {
             Ok(())
         }
+        "ai-readiness"
+            if matches!(
+                dataflow,
+                AI_READINESS_OXFORD_GARI_DATAFLOW_SLUG
+                    | AI_READINESS_NAIC_ADOPTION_DATAFLOW_SLUG
+                    | AI_READINESS_ABS_AI_RD_DATAFLOW_SLUG
+                    | AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "asx"
             if matches!(
                 dataflow,
@@ -1159,6 +1187,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         ),
         "aemo" => bail!(
             "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflows: {AEMO_DISPATCH_DATAFLOW_SLUG}, {AEMO_GENERATION_MIX_DATAFLOW_SLUG}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG}"
+        ),
+        "ai-readiness" => bail!(
+            "unsupported dataflow `{dataflow}` for source `ai-readiness`; supported dataflows: {AI_READINESS_OXFORD_GARI_DATAFLOW_SLUG}, {AI_READINESS_NAIC_ADOPTION_DATAFLOW_SLUG}, {AI_READINESS_ABS_AI_RD_DATAFLOW_SLUG}, {AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_SLUG}"
         ),
         "asx" => bail!(
             "unsupported dataflow `{dataflow}` for source `asx`; supported dataflows: {ASX_MARKET_STATISTICS_DATAFLOW_SLUG}, {ASX_ANNOUNCEMENTS_DATAFLOW_SLUG}, {ASX_EOD_DATAFLOW_SLUG}"
@@ -1212,6 +1243,18 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         "aemo" if dataflow == AEMO_GENERATION_MIX_DATAFLOW_SLUG => AEMO_GENERATION_MIX_DATAFLOW_ID,
         "aemo" if dataflow == AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG => {
             AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID
+        }
+        "ai-readiness" if dataflow == AI_READINESS_OXFORD_GARI_DATAFLOW_SLUG => {
+            AI_READINESS_OXFORD_GARI_DATAFLOW_ID
+        }
+        "ai-readiness" if dataflow == AI_READINESS_NAIC_ADOPTION_DATAFLOW_SLUG => {
+            AI_READINESS_NAIC_ADOPTION_DATAFLOW_ID
+        }
+        "ai-readiness" if dataflow == AI_READINESS_ABS_AI_RD_DATAFLOW_SLUG => {
+            AI_READINESS_ABS_AI_RD_DATAFLOW_ID
+        }
+        "ai-readiness" if dataflow == AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_SLUG => {
+            AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_ID
         }
         "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => {
             ASX_MARKET_STATISTICS_DATAFLOW_ID
@@ -1290,6 +1333,7 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
         source,
         "abs"
             | "aemo"
+            | "ai-readiness"
             | "apra"
             | "asx"
             | "nhsac"
@@ -1302,7 +1346,7 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
             | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, state-planning, treasury"
+            "unsupported source `{source}`; supported sources: abs, aemo, ai-readiness, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, state-planning, treasury"
         );
     }
     Ok(())
@@ -1334,6 +1378,18 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     if source == "aemo" && dataflow_id == AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "ai-readiness" && dataflow_id == AI_READINESS_OXFORD_GARI_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "ai-readiness" && dataflow_id == AI_READINESS_NAIC_ADOPTION_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "ai-readiness" && dataflow_id == AI_READINESS_ABS_AI_RD_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "ai-readiness" && dataflow_id == AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_ID {
         return Ok(());
     }
     if source == "asx" && dataflow_id == ASX_MARKET_STATISTICS_DATAFLOW_ID {
@@ -1382,7 +1438,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {AEMO_GENERATION_MIX_DATAFLOW_ID}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID}, {STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {AEMO_GENERATION_MIX_DATAFLOW_ID}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID}, {AI_READINESS_OXFORD_GARI_DATAFLOW_ID}, {AI_READINESS_NAIC_ADOPTION_DATAFLOW_ID}, {AI_READINESS_ABS_AI_RD_DATAFLOW_ID}, {AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID}, {STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1599,7 +1655,7 @@ mod tests {
         assert!(err.contains("unsupported source"));
         assert!(
             err.contains(
-                "abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, state-planning, treasury"
+                "abs, aemo, ai-readiness, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, state-planning, treasury"
             )
         );
     }
@@ -1851,6 +1907,54 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("state_planning.vic_permit_activity").unwrap())
+        );
+    }
+
+    #[test]
+    fn ai_readiness_once_mode_resolves_oxford_gari_dataflow() {
+        let request =
+            once_run_request("ai-readiness", "oxford-gari").expect("Oxford GARI is supported");
+
+        assert_eq!(request.source_id.as_str(), "ai-readiness");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("oxford.gari").unwrap())
+        );
+    }
+
+    #[test]
+    fn ai_readiness_once_mode_resolves_naic_adoption_dataflow() {
+        let request = once_run_request("ai-readiness", "naic-ai-adoption-tracker")
+            .expect("NAIC adoption tracker is supported");
+
+        assert_eq!(request.source_id.as_str(), "ai-readiness");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("naic.ai_adoption_tracker").unwrap())
+        );
+    }
+
+    #[test]
+    fn ai_readiness_once_mode_resolves_abs_ai_rd_dataflow() {
+        let request =
+            once_run_request("ai-readiness", "abs-ai-rd").expect("ABS AI R&D is supported");
+
+        assert_eq!(request.source_id.as_str(), "ai-readiness");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("abs.ai_rd").unwrap())
+        );
+    }
+
+    #[test]
+    fn ai_readiness_once_mode_resolves_home_affairs_talent_dataflow() {
+        let request = once_run_request("ai-readiness", "home-affairs-skillselect-talent-proxy")
+            .expect("Home Affairs talent proxy is supported");
+
+        assert_eq!(request.source_id.as_str(), "ai-readiness");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("home_affairs.skillselect_talent_proxy").unwrap())
         );
     }
 

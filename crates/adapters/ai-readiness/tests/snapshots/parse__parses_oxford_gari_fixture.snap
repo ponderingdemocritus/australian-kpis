@@ -1,0 +1,46 @@
+---
+source: crates/adapters/ai-readiness/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "oxford.gari",
+    "measure_id": "ai_readiness_score",
+    "dimensions": {
+      "country": "AUS"
+    },
+    "unit": "index",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 73.5,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "gari-australia-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://oxfordinsights.com/ai-readiness/gari-australia-2026.csv"
+    },
+    "source_artifact_id": "f4925e737f5e3f158c0169b425156b114e2deb6cc3dd3dc879806468e0af3753"
+  },
+  {
+    "dataflow_id": "oxford.gari",
+    "measure_id": "ai_readiness_score",
+    "dimensions": {
+      "country": "NZL"
+    },
+    "unit": "index",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 70.1,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "AI readiness sources: Oxford Insights, National AI Centre, ABS, and Home Affairs",
+      "license": "Source publication terms",
+      "publication_id": "gari-australia-2026",
+      "source": "AI readiness sources",
+      "source_url": "https://oxfordinsights.com/ai-readiness/gari-australia-2026.csv"
+    },
+    "source_artifact_id": "f4925e737f5e3f158c0169b425156b114e2deb6cc3dd3dc879806468e0af3753"
+  }
+]

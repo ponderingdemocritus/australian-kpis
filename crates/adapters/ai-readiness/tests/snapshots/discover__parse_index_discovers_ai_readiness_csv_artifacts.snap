@@ -1,0 +1,34 @@
+---
+source: crates/adapters/ai-readiness/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "abs.ai_rd",
+    "last_updated": "2026-06-08",
+    "publication_id": "abs-ai-rd-2026",
+    "source_url": "https://www.abs.gov.au/statistics/research-and-development/abs-ai-rd-2026.csv",
+    "title": "ABS AI research and development 2026"
+  },
+  {
+    "dataflow_id": "home_affairs.skillselect_talent_proxy",
+    "last_updated": "2026-06-06",
+    "publication_id": "home-affairs-skillselect-talent-proxy-2026",
+    "source_url": "https://immi.homeaffairs.gov.au/reports/home-affairs-skillselect-talent-proxy-2026.csv",
+    "title": "SkillSelect AI talent proxy 2026"
+  },
+  {
+    "dataflow_id": "naic.ai_adoption_tracker",
+    "last_updated": "2026-06-10",
+    "publication_id": "naic-ai-adoption-tracker-2026",
+    "source_url": "https://www.industry.gov.au/data/naic-ai-adoption-tracker-2026.csv",
+    "title": "National AI Centre adoption tracker 2026"
+  },
+  {
+    "dataflow_id": "oxford.gari",
+    "last_updated": "2026-06-12",
+    "publication_id": "gari-australia-2026",
+    "source_url": "https://oxfordinsights.com/ai-readiness/gari-australia-2026.csv",
+    "title": "Oxford Government AI Readiness Australia 2026"
+  }
+]
