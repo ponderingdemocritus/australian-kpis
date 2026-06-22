@@ -23,6 +23,17 @@ D,DISPATCH,REGIONSUM,9,"2026/06/19 17:05:00",1,NSW1,20260619157,0,9576.41,14826.
 D,DISPATCH,REGIONSUM,9,"2026/06/19 17:05:00",1,QLD1,20260619157,0,7372.54,11696.77762,"2026/06/19 17:00:06"
 "#;
 
+const GENERATION_MIX_CSV: &str = r#"C,NEMWEB,FUELMIX,AEMO,PUBLIC,2026/06/19,17:05:11,0000000523261987,FUELMIX,0000000523261986
+I,FUELMIX,FUELREGION,1,SETTLEMENTDATE,REGIONID,FUELTYPE,GENERATIONMW,LASTCHANGED
+D,FUELMIX,FUELREGION,1,"2026/06/19 17:05:00",NSW1,black_coal,4312.5,"2026/06/19 17:05:06"
+D,FUELMIX,FUELREGION,1,"2026/06/19 17:05:00",NSW1,wind,1234.25,"2026/06/19 17:05:06"
+"#;
+
+const DISPATCHABILITY_CAPACITY_CSV: &str = r#"C,NEMWEB,DISPATCHCAPACITY,AEMO,PUBLIC,2026/06/19,17:05:11,0000000523261987,DISPATCHCAPACITY,0000000523261986
+I,DISPATCH,CAPACITY,1,SETTLEMENTDATE,REGIONID,AVAILABLEGENERATION,DISPATCHABLECAPACITY,NETINTERCHANGE,LASTCHANGED
+D,DISPATCH,CAPACITY,1,"2026/06/19 17:05:00",NSW1,14826.69812,13100.5,500.0,"2026/06/19 17:05:06"
+"#;
+
 #[derive(Debug, Serialize)]
 struct SnapshotRow {
     dataflow_id: String,
@@ -38,22 +49,51 @@ struct SnapshotRow {
 }
 
 fn zip_fixture() -> Vec<u8> {
+    zip_fixture_for(
+        "PUBLIC_DISPATCHIS_202606191705_0000000523261987.CSV",
+        DISPATCH_CSV,
+    )
+}
+
+fn generation_mix_zip_fixture() -> Vec<u8> {
+    zip_fixture_for(
+        "PUBLIC_FUEL_MIX_202606191705_0000000523261987.CSV",
+        GENERATION_MIX_CSV,
+    )
+}
+
+fn dispatchability_capacity_zip_fixture() -> Vec<u8> {
+    zip_fixture_for(
+        "PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.CSV",
+        DISPATCHABILITY_CAPACITY_CSV,
+    )
+}
+
+fn zip_fixture_for(file_name: &str, csv: &str) -> Vec<u8> {
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut cursor);
         zip.start_file(
-            "PUBLIC_DISPATCHIS_202606191705_0000000523261987.CSV",
+            file_name,
             SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
         )
         .expect("start zip member");
-        zip.write_all(DISPATCH_CSV.as_bytes())
-            .expect("write zip member");
+        zip.write_all(csv.as_bytes()).expect("write zip member");
         zip.finish().expect("finish zip");
     }
     cursor.into_inner()
 }
 
 async fn artifact_for(blob_store: &BlobStore, bytes: Vec<u8>) -> ArtifactRef {
+    artifact_for_url(
+        blob_store,
+        bytes,
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+    )
+    .await
+}
+
+async fn artifact_for_url(blob_store: &BlobStore, bytes: Vec<u8>, source_url: &str) -> ArtifactRef {
     let id = blob_store
         .put_artifact(Bytes::from(bytes.clone()))
         .await
@@ -61,7 +101,7 @@ async fn artifact_for(blob_store: &BlobStore, bytes: Vec<u8>) -> ArtifactRef {
     ArtifactRef {
         id,
         source_id: SourceId::new("aemo").unwrap(),
-        source_url: "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip".into(),
+        source_url: source_url.into(),
         content_type: "application/zip".into(),
         response_headers: BTreeMap::new(),
         storage_key: StorageKey::canonical_for(&id).to_string(),
@@ -89,6 +129,102 @@ async fn parses_aemo_dispatch_zip_fixture() {
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .expect("parse AEMO fixture");
+
+    let snapshot = rows
+        .into_iter()
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect::<Vec<_>>();
+
+    insta::assert_json_snapshot!(snapshot);
+}
+
+#[tokio::test]
+async fn parses_aemo_generation_mix_zip_fixture() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for_url(
+        &blob_store,
+        generation_mix_zip_fixture(),
+        "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse AEMO generation mix fixture");
+
+    let snapshot = rows
+        .into_iter()
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect::<Vec<_>>();
+
+    insta::assert_json_snapshot!(snapshot);
+}
+
+#[tokio::test]
+async fn parses_aemo_dispatchability_capacity_zip_fixture() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for_url(
+        &blob_store,
+        dispatchability_capacity_zip_fixture(),
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse AEMO dispatchability capacity fixture");
 
     let snapshot = rows
         .into_iter()

@@ -148,6 +148,90 @@ license = "CC-BY-4.0"
 attribution = "Source: Productivity Commission"
 
 [[indicators]]
+indicator_id = "energy.price"
+source_dataflow_id = "aemo.dispatch"
+measure_id = "value"
+axis = "throughput"
+component = "energy"
+weight = 0.15
+direction = "lower_is_better"
+display_label = "Wholesale electricity price"
+description = "Five-minute regional reference price proxy for APS energy throughput."
+unit = "AUD/MWh"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "5-minute"
+
+[indicators.dimension_selector]
+region = "NSW1"
+metric = "regional_reference_price"
+
+[indicators.normalization]
+worst = 300.0
+best = 0.0
+
+[indicators.provenance]
+source_url = "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/"
+license = "AEMO Copyright and Disclaimer Notice"
+attribution = "Source: Australian Energy Market Operator"
+
+[[indicators]]
+indicator_id = "energy.renewable-generation"
+source_dataflow_id = "aemo.generation_mix"
+measure_id = "generation_mw"
+axis = "throughput"
+component = "energy"
+weight = 0.10
+direction = "higher_is_better"
+display_label = "Wind generation"
+description = "Five-minute wind generation signal from AEMO generation-mix reports."
+unit = "MW"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "5-minute"
+
+[indicators.dimension_selector]
+region = "NSW1"
+fuel_type = "wind"
+
+[indicators.normalization]
+worst = 0.0
+best = 5000.0
+
+[indicators.provenance]
+source_url = "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/"
+license = "AEMO Copyright and Disclaimer Notice"
+attribution = "Source: Australian Energy Market Operator"
+
+[[indicators]]
+indicator_id = "energy.dispatchable-capacity"
+source_dataflow_id = "aemo.dispatchability_capacity"
+measure_id = "value"
+axis = "throughput"
+component = "energy"
+weight = 0.15
+direction = "higher_is_better"
+display_label = "Dispatchable capacity"
+description = "Five-minute regional dispatchable-capacity signal from AEMO capacity reports."
+unit = "MW"
+confidence = "medium"
+coverage_status = "missing_expected"
+cadence = "5-minute"
+
+[indicators.dimension_selector]
+region = "NSW1"
+metric = "dispatchable_capacity"
+
+[indicators.normalization]
+worst = 0.0
+best = 15000.0
+
+[indicators.provenance]
+source_url = "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/"
+license = "AEMO Copyright and Disclaimer Notice"
+attribution = "Source: Australian Energy Market Operator"
+
+[[indicators]]
 indicator_id = "infrastructure.major-project-performance"
 source_dataflow_id = "state_capital.vic_major_projects"
 measure_id = "value"

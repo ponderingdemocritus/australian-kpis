@@ -589,6 +589,41 @@ mod tests {
                     .map(String::as_str)
                     == Some("average_completion_months")
         }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "energy.price"
+                && indicator.source_dataflow_id == "aemo.dispatch"
+                && indicator.measure_id == "value"
+                && indicator
+                    .dimension_selector
+                    .get("region")
+                    .map(String::as_str)
+                    == Some("NSW1")
+                && indicator
+                    .dimension_selector
+                    .get("metric")
+                    .map(String::as_str)
+                    == Some("regional_reference_price")
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "energy.renewable-generation"
+                && indicator.source_dataflow_id == "aemo.generation_mix"
+                && indicator.measure_id == "generation_mw"
+                && indicator
+                    .dimension_selector
+                    .get("fuel_type")
+                    .map(String::as_str)
+                    == Some("wind")
+        }));
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "energy.dispatchable-capacity"
+                && indicator.source_dataflow_id == "aemo.dispatchability_capacity"
+                && indicator.measure_id == "value"
+                && indicator
+                    .dimension_selector
+                    .get("metric")
+                    .map(String::as_str)
+                    == Some("dispatchable_capacity")
+        }));
         let oversight = config
             .indicators
             .iter()
