@@ -48,6 +48,8 @@ use tokio_util::sync::CancellationToken;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
+const ABS_BUILDING_APPROVALS_DATAFLOW_SLUG: &str = "building-approvals";
+const ABS_BUILDING_APPROVALS_DATAFLOW_ID: &str = "abs.building_approvals";
 const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
 const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
 const AEMO_DISPATCH_DATAFLOW_SLUG: &str = "dispatch";
@@ -782,10 +784,14 @@ async fn serve_metrics(
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn build_adapters() -> anyhow::Result<Adapters> {
     let mut builder = Adapters::builder();
-    let abs = match env::var("AU_KPIS_ABS_BASE_URL") {
-        Ok(base_url) => AbsAdapter::builder().base_url(base_url).build(),
-        Err(_) => AbsAdapter::default(),
-    };
+    let mut abs = AbsAdapter::builder();
+    if let Ok(base_url) = env::var("AU_KPIS_ABS_BASE_URL") {
+        abs = abs.base_url(base_url);
+    }
+    if let Ok(release_url) = env::var("AU_KPIS_ABS_BUILDING_APPROVALS_RELEASE_URL") {
+        abs = abs.building_approvals_release_url(release_url);
+    }
+    let abs = abs.build();
     builder.register(abs).context("register ABS adapter")?;
     let apra = match env::var("AU_KPIS_APRA_RELEASE_URL") {
         Ok(release_url) => ApraAdapter::builder().release_url(release_url).build(),
@@ -1017,7 +1023,14 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
 fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
     validate_supported_source(source)?;
     match source {
-        "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
+        "abs"
+            if matches!(
+                dataflow,
+                ABS_CPI_DATAFLOW_SLUG | ABS_BUILDING_APPROVALS_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
         "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => Ok(()),
         "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => Ok(()),
@@ -1037,7 +1050,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         }
         "treasury" if dataflow == TREASURY_BUDGET_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
-            "unsupported dataflow `{dataflow}` for source `abs`; supported dataflow: {ABS_CPI_DATAFLOW_SLUG}"
+            "unsupported dataflow `{dataflow}` for source `abs`; supported dataflows: {ABS_CPI_DATAFLOW_SLUG}, {ABS_BUILDING_APPROVALS_DATAFLOW_SLUG}"
         ),
         "apra" => bail!(
             "unsupported dataflow `{dataflow}` for source `apra`; supported dataflow: {APRA_QUARTERLY_DATAFLOW_SLUG}"
@@ -1073,7 +1086,10 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
 fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> {
     validate_once_target(source, dataflow)?;
     let dataflow_id = match source {
-        "abs" => ABS_CPI_DATAFLOW_ID,
+        "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => ABS_CPI_DATAFLOW_ID,
+        "abs" if dataflow == ABS_BUILDING_APPROVALS_DATAFLOW_SLUG => {
+            ABS_BUILDING_APPROVALS_DATAFLOW_ID
+        }
         "apra" => APRA_QUARTERLY_DATAFLOW_ID,
         "aemo" => AEMO_DISPATCH_DATAFLOW_ID,
         "asx" => ASX_MARKET_STATISTICS_DATAFLOW_ID,
@@ -1157,6 +1173,9 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "abs" && dataflow_id == ABS_BUILDING_APPROVALS_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "apra" && dataflow_id == APRA_QUARTERLY_DATAFLOW_ID {
         return Ok(());
     }
@@ -1191,7 +1210,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1395,6 +1414,7 @@ mod tests {
             .to_string();
         assert!(err.contains("unsupported dataflow"));
         assert!(err.contains("cpi"));
+        assert!(err.contains("building-approvals"));
     }
 
     #[test]
@@ -1418,6 +1438,18 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("aemo.dispatch").unwrap())
+        );
+    }
+
+    #[test]
+    fn abs_once_mode_resolves_building_approvals_dataflow() {
+        let request = once_run_request("abs", "building-approvals")
+            .expect("ABS building approvals are supported");
+
+        assert_eq!(request.source_id.as_str(), "abs");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("abs.building_approvals").unwrap())
         );
     }
 
@@ -1559,6 +1591,24 @@ mod tests {
             Some(&DataflowId::new("abs.cpi").unwrap())
         );
         assert_eq!(request.trace_parent.as_deref(), Some(trace_parent.as_str()));
+    }
+
+    #[test]
+    fn backfill_jobs_accept_abs_building_approvals_scope() {
+        let request = job_run_request(
+            &JobKind::Backfill {
+                source_id: SourceId::new("abs").unwrap(),
+                dataflow_id: Some(DataflowId::new("abs.building_approvals").unwrap()),
+            },
+            None,
+        )
+        .expect("build ABS building approvals backfill request");
+
+        assert_eq!(request.source_id.as_str(), "abs");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("abs.building_approvals").unwrap())
+        );
     }
 
     #[test]
