@@ -5,7 +5,7 @@ use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, To
 use au_kpis_config::{
     AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
 };
-use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
@@ -96,6 +96,7 @@ async fn series_endpoint_returns_metadata_latest_observation_and_revision_metada
 
     let missing_key = SeriesKey::derive(
         &DataflowId::new("abs.cpi").unwrap(),
+        &MeasureId::new("index").unwrap(),
         [("region", "MISSING")],
     );
     let missing = app
@@ -223,11 +224,13 @@ async fn seed_series(pool: &PgPool) -> SeriesKey {
     .expect("insert dataflows");
 
     let dataflow = DataflowId::new("abs.cpi").unwrap();
+    let measure = MeasureId::new("index").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), "AUS".to_string())]
         .into_iter()
         .collect();
     let series_key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),

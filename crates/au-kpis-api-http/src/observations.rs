@@ -6,7 +6,7 @@ use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array}
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use au_kpis_domain::{
     ObservationStatus, TimePrecision,
-    ids::{ArtifactId, DataflowId, SeriesKey, Sha256Digest},
+    ids::{ArtifactId, DataflowId, MeasureId, SeriesKey, Sha256Digest},
 };
 use axum::{
     body::{Body, Bytes},
@@ -1100,6 +1100,7 @@ pub mod benchmark_support {
     ) -> impl Stream<Item = Result<ObservationsRow, ApiError>> + Send + 'static {
         async_stream::try_stream! {
             let dataflow = DataflowId::new("abs.cpi").expect("benchmark dataflow id is valid");
+            let measure = MeasureId::new("index").expect("benchmark measure id is valid");
             let artifact = ArtifactId::of_content(b"parquet 1m benchmark artifact");
             let ingested_at = DateTime::from_timestamp(1_714_000_000, 0)
                 .expect("benchmark ingested timestamp is valid");
@@ -1111,7 +1112,7 @@ pub mod benchmark_support {
                 let region = regions[idx % regions.len()];
                 let dimensions: BTreeMap<String, String> =
                     [("region".to_string(), region.to_string())].into_iter().collect();
-                let series_key = SeriesKey::derive(&dataflow, [("region", region)]);
+                let series_key = SeriesKey::derive(&dataflow, &measure, [("region", region)]);
                 yield ObservationsRow {
                     series_key,
                     time: observed_at + chrono::Duration::seconds(idx as i64),
@@ -1619,14 +1620,15 @@ fn observation_status_label(value: ObservationStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+    use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
     use chrono::{TimeZone, Utc};
     use sqlx::Execute;
 
     #[test]
     fn parses_dimensions_dates_cursor_and_limit_from_query_string() {
         let dataflow = DataflowId::new("abs.cpi").unwrap();
-        let series_key = SeriesKey::derive(&dataflow, [("region", "AUS")]);
+        let measure = MeasureId::new("index").unwrap();
+        let series_key = SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]);
         let cursor = encode_cursor(&ObservationCursor {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             series_key,
@@ -1731,6 +1733,7 @@ mod tests {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             series_key: SeriesKey::derive(
                 &DataflowId::new("abs.cpi").unwrap(),
+                &MeasureId::new("index").unwrap(),
                 [("region", "AUS")],
             ),
         })
@@ -1787,12 +1790,13 @@ mod tests {
     #[test]
     fn latest_queries_use_one_bounded_candidate_key_scan() {
         let dataflow = DataflowId::new("state_budgets.vic_budget").unwrap();
+        let measure = MeasureId::new("value").unwrap();
         let query = parse_observations_query(Some(
             "dataflow=state_budgets.vic_budget&since=2026-07-01&until=2029-07-01&limit=10",
         ))
         .unwrap();
         let series = [CandidateSeries {
-            series_key: SeriesKey::derive(&dataflow, [("metric", "operating_revenue")]),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("metric", "operating_revenue")]),
         }];
 
         let mut query_builder = build_latest_observation_rows_query(&series, &query, None, 22);
@@ -1859,9 +1863,10 @@ mod tests {
     #[test]
     fn cursor_roundtrips_as_opaque_base64_payload() {
         let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("index").unwrap();
         let cursor = ObservationCursor {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
-            series_key: SeriesKey::derive(&dataflow, [("region", "AUS")]),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
         };
 
         let encoded = encode_cursor(&cursor).unwrap();
@@ -1945,8 +1950,9 @@ mod tests {
 
     fn test_observation_row() -> ObservationsRow {
         let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("cpi").unwrap();
         ObservationsRow {
-            series_key: SeriesKey::derive(&dataflow, [("region", "AUS")]),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             time_precision: TimePrecision::Quarter,
             value: Some(135.0),

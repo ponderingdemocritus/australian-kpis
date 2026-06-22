@@ -10,7 +10,7 @@ use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, To
 use au_kpis_config::{
     AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
 };
-use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
@@ -590,7 +590,11 @@ async fn seed_extra_pagination_observations(pool: &PgPool, artifact: ArtifactId)
         }
     }
 
-    let aus = SeriesKey::derive(&DataflowId::new("abs.cpi").unwrap(), [("region", "AUS")]);
+    let aus = SeriesKey::derive(
+        &DataflowId::new("abs.cpi").unwrap(),
+        &MeasureId::new("index").unwrap(),
+        [("region", "AUS")],
+    );
     for (offset, date) in [(0.0, (2024, 9, 1)), (1.0, (2024, 12, 1))] {
         insert_observation(
             pool,
@@ -634,11 +638,13 @@ async fn seed_daily_rollup_observations(pool: &PgPool) {
     .expect("insert daily artifact");
 
     let dataflow = DataflowId::new("abs.daily").unwrap();
+    let measure = MeasureId::new("index").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), "AUS".to_string())]
         .into_iter()
         .collect();
     let key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -694,11 +700,13 @@ async fn disable_monthly_rollup_policy(pool: &PgPool) {
 
 async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
     let dataflow = DataflowId::new("abs.cpi").unwrap();
+    let measure = MeasureId::new("index").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), region.to_string())]
         .into_iter()
         .collect();
     let key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),

@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_domain::{
-    ArtifactId, DataflowId, DimensionId, Observation, ObservationStatus, SeriesDescriptor,
-    SeriesKey, SourceId, TimePrecision,
+    ArtifactId, DataflowId, DimensionId, MeasureId, Observation, ObservationStatus,
+    SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
 };
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageKey};
@@ -332,6 +332,7 @@ async fn parse_emits_canonical_series_key_boundary_ids() {
     let rows = parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture");
     let (series, observation) = rows.first().expect("fixture has observations");
     let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
+    let measure = MeasureId::new("index").expect("static measure id is valid");
 
     assert_eq!(series.measure_id.as_str(), "index");
     assert_eq!(series.unit, "index");
@@ -345,7 +346,11 @@ async fn parse_emits_canonical_series_key_boundary_ids() {
     );
     assert_eq!(
         series.series_key,
-        SeriesKey::derive(&dataflow, [("measure", "index"), ("region", "AUS")])
+        SeriesKey::derive(
+            &dataflow,
+            &measure,
+            [("measure", "index"), ("region", "AUS")]
+        )
     );
     assert_eq!(observation.series_key, series.series_key);
 }
@@ -717,8 +722,9 @@ proptest! {
     ) {
         let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
         let measure = measure.to_ascii_lowercase();
-        let forward = SeriesKey::derive(&dataflow, [("region", region.as_str()), ("measure", measure.as_str())]);
-        let reverse = SeriesKey::derive(&dataflow, [("measure", measure.as_str()), ("region", region.as_str())]);
+        let measure_id = MeasureId::new(measure.clone()).expect("generated measure id is valid");
+        let forward = SeriesKey::derive(&dataflow, &measure_id, [("region", region.as_str()), ("measure", measure.as_str())]);
+        let reverse = SeriesKey::derive(&dataflow, &measure_id, [("measure", measure.as_str()), ("region", region.as_str())]);
 
         prop_assert_eq!(forward, reverse);
     }
@@ -729,7 +735,8 @@ proptest! {
         revision_no in 0_u32..32,
     ) {
         let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
-        let series_key = SeriesKey::derive(&dataflow, [("region", "AUS"), ("measure", "index")]);
+        let measure = MeasureId::new("index").expect("static measure id is valid");
+        let series_key = SeriesKey::derive(&dataflow, &measure, [("region", "AUS"), ("measure", "index")]);
         let observation = Observation {
             series_key,
             time: DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")

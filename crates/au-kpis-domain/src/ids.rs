@@ -239,9 +239,11 @@ impl utoipa::ToSchema for Sha256Digest {
     }
 }
 
-/// Deterministic series key: `sha256(dataflow_id || '\0' || k1=v1 || '\0' || ...)`
-/// over the dataflow id followed by dimensions sorted by key. Newtype guarantees
-/// callers cannot silently feed a raw hash where a series key is expected.
+/// Deterministic series key:
+/// `sha256(dataflow_id || '\0' || measure_id || '\0' || k1=v1 || '\0' || ...)`
+/// over the dataflow id, measure id, and dimensions sorted by key. Newtype
+/// guarantees callers cannot silently feed a raw hash where a series key is
+/// expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SeriesKey(Sha256Digest);
@@ -255,10 +257,10 @@ impl SeriesKey {
         &self.0
     }
 
-    /// Canonical derivation: `dataflow_id` then each `(key, value)` sorted by
-    /// key, null-separated. Used by adapters and the loader; both must agree
-    /// byte-for-byte or the series table fragments.
-    pub fn derive<'a, I>(dataflow: &DataflowId, dimensions: I) -> Self
+    /// Canonical derivation: `dataflow_id`, `measure_id`, then each
+    /// `(key, value)` sorted by key, null-separated. Used by adapters and the
+    /// loader; both must agree byte-for-byte or the series table fragments.
+    pub fn derive<'a, I>(dataflow: &DataflowId, measure: &MeasureId, dimensions: I) -> Self
     where
         I: IntoIterator<Item = (&'a str, &'a str)>,
     {
@@ -267,6 +269,8 @@ impl SeriesKey {
 
         let mut hasher = Sha256::new();
         hasher.update(dataflow.as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(measure.as_str().as_bytes());
         for (k, v) in pairs {
             hasher.update(b"\0");
             hasher.update(k.as_bytes());
@@ -430,12 +434,25 @@ mod tests {
     #[test]
     fn series_key_is_deterministic_and_order_independent() {
         let df = DataflowId::new("abs.cpi").unwrap();
-        let a = SeriesKey::derive(&df, [("region", "AUS"), ("measure", "index")]);
-        let b = SeriesKey::derive(&df, [("measure", "index"), ("region", "AUS")]);
+        let measure = MeasureId::new("index").unwrap();
+        let a = SeriesKey::derive(&df, &measure, [("region", "AUS"), ("measure", "index")]);
+        let b = SeriesKey::derive(&df, &measure, [("measure", "index"), ("region", "AUS")]);
         assert_eq!(a, b);
 
-        let different = SeriesKey::derive(&df, [("region", "VIC"), ("measure", "index")]);
+        let different = SeriesKey::derive(&df, &measure, [("region", "VIC"), ("measure", "index")]);
         assert_ne!(a, different);
+    }
+
+    #[test]
+    fn series_key_distinguishes_measure_id_from_dimensions() {
+        let dataflow = DataflowId::new("abs.multi").unwrap();
+        let count = MeasureId::new("count").unwrap();
+        let value = MeasureId::new("value").unwrap();
+
+        let count_key = SeriesKey::derive(&dataflow, &count, [("region", "AUS")]);
+        let value_key = SeriesKey::derive(&dataflow, &value, [("region", "AUS")]);
+
+        assert_ne!(count_key, value_key);
     }
 
     #[test]
@@ -450,6 +467,8 @@ mod tests {
                 DataflowId::new(format!("df.{:04}", next_u64(&mut seed) % 10_000)).unwrap();
             let case_code = format!("C{case:06}");
             let region = format!("R{:05}", next_u64(&mut seed) % 100_000);
+            let measure_id =
+                MeasureId::new(format!("value.{:05}", next_u64(&mut seed) % 100_000)).unwrap();
             let measure = format!("M{:05}", next_u64(&mut seed) % 100_000);
             let dimensions = [
                 ("case", case_code.as_str()),
@@ -457,8 +476,8 @@ mod tests {
                 ("measure", measure.as_str()),
             ];
 
-            let forward = SeriesKey::derive(&dataflow, dimensions);
-            let reverse = SeriesKey::derive(&dataflow, dimensions.into_iter().rev());
+            let forward = SeriesKey::derive(&dataflow, &measure_id, dimensions);
+            let reverse = SeriesKey::derive(&dataflow, &measure_id, dimensions.into_iter().rev());
 
             assert_eq!(forward, reverse, "series key changed with dimension order");
             assert!(
@@ -471,7 +490,8 @@ mod tests {
     #[test]
     fn series_key_serialises_as_transparent_hex() {
         let df = DataflowId::new("abs.cpi").unwrap();
-        let key = SeriesKey::derive(&df, [("region", "AUS")]);
+        let measure = MeasureId::new("index").unwrap();
+        let key = SeriesKey::derive(&df, &measure, [("region", "AUS")]);
         let json = serde_json::to_string(&key).unwrap();
         assert_eq!(json, format!("\"{}\"", key.to_hex()));
         let back: SeriesKey = serde_json::from_str(&json).unwrap();
@@ -503,8 +523,9 @@ mod tests {
     #[test]
     fn observation_id_roundtrips() {
         let df = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("index").unwrap();
         let oid = ObservationId::new(
-            SeriesKey::derive(&df, [("region", "AUS")]),
+            SeriesKey::derive(&df, &measure, [("region", "AUS")]),
             DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
@@ -568,19 +589,23 @@ mod tests {
         fn series_key_derivation_is_order_independent(
             dataflow in "[a-z0-9.]{1,16}",
             region in "[A-Z]{3}",
-            measure in "[a-z]{1,12}",
+            measure_id in "[a-z]{1,12}",
+            measure_code in "[a-z]{1,12}",
         ) {
             let dataflow = DataflowId::new(dataflow).unwrap();
+            let measure_id = MeasureId::new(measure_id).unwrap();
             let mut reversed = BTreeMap::new();
-            reversed.insert("measure", measure.as_str());
+            reversed.insert("measure", measure_code.as_str());
             reversed.insert("region", region.as_str());
 
             let forward = SeriesKey::derive(
                 &dataflow,
-                [("region", region.as_str()), ("measure", measure.as_str())],
+                &measure_id,
+                [("region", region.as_str()), ("measure", measure_code.as_str())],
             );
             let backward = SeriesKey::derive(
                 &dataflow,
+                &measure_id,
                 reversed.iter().map(|(key, value)| (*key, *value)),
             );
 

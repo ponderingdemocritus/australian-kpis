@@ -581,8 +581,10 @@ fn load_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
         DimensionId::new("region").unwrap(),
         CodeId::new("AUS").unwrap(),
     )]);
+    let measure_id = MeasureId::new("index").unwrap();
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -590,7 +592,7 @@ fn load_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("index").unwrap(),
+        measure_id,
         dimensions,
         unit: "index".into(),
     };
@@ -610,8 +612,11 @@ fn load_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
 
 fn loader_validation_error_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
     let (mut descriptor, mut observation) = load_row(artifact_id);
-    descriptor.series_key =
-        SeriesKey::derive(&descriptor.dataflow_id, std::iter::once(("region", "NZ")));
+    descriptor.series_key = SeriesKey::derive(
+        &descriptor.dataflow_id,
+        &descriptor.measure_id,
+        [("region", "NZ")],
+    );
     observation.series_key = descriptor.series_key;
     (descriptor, observation)
 }
@@ -622,14 +627,15 @@ fn missing_measure_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observatio
         DimensionId::new("region").unwrap(),
         CodeId::new("NSW").unwrap(),
     )]);
+    descriptor.measure_id = MeasureId::new("missing").unwrap();
     descriptor.series_key = SeriesKey::derive(
         &descriptor.dataflow_id,
+        &descriptor.measure_id,
         descriptor
             .dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
     );
-    descriptor.measure_id = MeasureId::new("missing").unwrap();
     observation.series_key = descriptor.series_key;
     (descriptor, observation)
 }

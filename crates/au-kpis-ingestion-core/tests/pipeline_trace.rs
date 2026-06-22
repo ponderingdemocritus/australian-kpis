@@ -520,8 +520,10 @@ fn load_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
         DimensionId::new("region").unwrap(),
         CodeId::new("AUS").unwrap(),
     )]);
+    let measure_id = MeasureId::new("index").unwrap();
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -529,7 +531,7 @@ fn load_row(artifact_id: ArtifactId) -> (SeriesDescriptor, Observation) {
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("index").unwrap(),
+        measure_id,
         dimensions,
         unit: "index".into(),
     };

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.3` |
+| **Version** | `v0.1.4` |
 | **Status** | Approved |
-| **Last updated** | 2026-05-01 |
+| **Last updated** | 2026-06-22 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -444,7 +444,7 @@ Defined in `au-kpis-domain`. Core decomposition: **`Series` (metadata + dimensio
 // crates/au-kpis-domain/src/series.rs
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Series {
-    pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || sorted dimensions)
+    pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || measure_id || sorted dimensions)
     pub dataflow_id: DataflowId,
     pub measure_id: MeasureId,
     pub dimensions: BTreeMap<DimensionId, CodeId>,  // JSONB in DB, GIN-indexed
@@ -485,7 +485,7 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 
 Typical latest-observation query plan:
 ```
-1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
+1. Resolve Dataflow + Measure + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
 2. If a latest-observation request still matches a high-cardinality series set,
    reject it with `400` and ask the client to add more dimension filters.
 3. Query `observations` by the accepted concrete `series_key` values, ordered by
@@ -874,7 +874,7 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 
 **Property-based** (`proptest`)
 - Parse/serialize round-trip: `parse(serialize(obs)) == obs`
-- `SeriesKey` determinism: same dimensions → same hash; different dimensions → different hash (no collisions over 1M samples)
+- `SeriesKey` determinism: same dataflow, measure, and dimensions → same hash; different measure or dimensions → different hash (no collisions over 1M samples)
 - Pagination invariants: `concat(pages) == full_result`
 - Revision chain: latest revision always wins regardless of insertion order
 - Chunk exclusion: queries with narrow time windows never scan chunks outside range
@@ -1397,8 +1397,8 @@ All confirmed 2026-04-23:
 | **Codelist** | A reusable vocabulary of codes for a dimension (e.g. Australian states). |
 | **Measure** | What is being counted (unemployment rate, CPI index, GDP $). |
 | **Observation** | A single data point — one row in the `observations` hypertable. |
-| **Series** | A conceptual time-series identified by `(dataflow, dimension values)`. Stored in `series` table. |
-| **Series key** | Deterministic hash of `dataflow_id + sorted dimensions` — primary identifier for a series. |
+| **Series** | A conceptual time-series identified by `(dataflow, measure, dimension values)`. Stored in `series` table. |
+| **Series key** | Deterministic hash of `dataflow_id + measure_id + sorted dimensions` — primary identifier for a series. |
 | **Revision** | A later-published correction to a previously-observed value. Tracked via `revision_no`; `observations_latest` view shows latest per `(series_key, time)`. |
 | **Hypertable** | TimescaleDB-partitioned table. `observations` is partitioned by `time` (monthly chunks) + space-partitioned by `series_key` hash. |
 | **Continuous aggregate** | TimescaleDB materialized view that incrementally maintains aggregates (e.g. monthly averages) as new data arrives. |
@@ -1447,6 +1447,7 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v0.1.4 (2026-06-22)** — Clarified that `SeriesKey` derivation includes `measure_id` between `dataflow_id` and sorted dimensions so multi-measure dataflows cannot collide.
 - **v0.1.3 (2026-05-01)** — Clarified repeated artifact response-header retention and source-specific streaming memory guardrails in PR CI.
 - **v0.1.2 (2026-04-30)** — Clarified that artifact records retain upstream fetch response headers alongside the content-addressed storage key.
 - **v0.1.1 (2026-04-28)** — Clarified PDF extraction architecture: deterministic `pdfplumber`/`camelot` remains the baseline, with optional pinned local document-model backends for fallback/comparison. Added validation, provenance, testing, and model-governance requirements.
