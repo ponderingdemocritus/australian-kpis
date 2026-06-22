@@ -61,6 +61,10 @@ const APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG: &str = "super-asset-allocation"
 const APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID: &str = "apra.super_asset_allocation";
 const AEMO_DISPATCH_DATAFLOW_SLUG: &str = "dispatch";
 const AEMO_DISPATCH_DATAFLOW_ID: &str = "aemo.dispatch";
+const AEMO_GENERATION_MIX_DATAFLOW_SLUG: &str = "generation-mix";
+const AEMO_GENERATION_MIX_DATAFLOW_ID: &str = "aemo.generation_mix";
+const AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG: &str = "dispatchability-capacity";
+const AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID: &str = "aemo.dispatchability_capacity";
 const ASX_MARKET_STATISTICS_DATAFLOW_SLUG: &str = "market-statistics";
 const ASX_MARKET_STATISTICS_DATAFLOW_ID: &str = "asx.market_statistics";
 const ASX_ANNOUNCEMENTS_DATAFLOW_SLUG: &str = "announcements";
@@ -824,12 +828,19 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => RbaAdapter::default(),
     };
     builder.register(rba).context("register RBA adapter")?;
-    let aemo = match env::var("AU_KPIS_AEMO_DISPATCH_LISTING_URL") {
-        Ok(dispatch_listing_url) => AemoAdapter::builder()
-            .dispatch_listing_url(dispatch_listing_url)
-            .build(),
-        Err(_) => AemoAdapter::default(),
-    };
+    let mut aemo = AemoAdapter::builder();
+    if let Ok(dispatch_listing_url) = env::var("AU_KPIS_AEMO_DISPATCH_LISTING_URL") {
+        aemo = aemo.dispatch_listing_url(dispatch_listing_url);
+    }
+    if let Ok(generation_mix_listing_url) = env::var("AU_KPIS_AEMO_GENERATION_MIX_LISTING_URL") {
+        aemo = aemo.generation_mix_listing_url(generation_mix_listing_url);
+    }
+    if let Ok(dispatchability_capacity_listing_url) =
+        env::var("AU_KPIS_AEMO_DISPATCHABILITY_CAPACITY_LISTING_URL")
+    {
+        aemo = aemo.dispatchability_capacity_listing_url(dispatchability_capacity_listing_url);
+    }
+    let aemo = aemo.build();
     builder.register(aemo).context("register AEMO adapter")?;
     let mut asx = AsxAdapter::builder();
     if let Ok(market_statistics_url) = env::var("AU_KPIS_ASX_MARKET_STATISTICS_URL") {
@@ -1075,7 +1086,16 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         {
             Ok(())
         }
-        "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => Ok(()),
+        "aemo"
+            if matches!(
+                dataflow,
+                AEMO_DISPATCH_DATAFLOW_SLUG
+                    | AEMO_GENERATION_MIX_DATAFLOW_SLUG
+                    | AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "asx"
             if matches!(
                 dataflow,
@@ -1117,7 +1137,7 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
             "unsupported dataflow `{dataflow}` for source `apra`; supported dataflows: {APRA_QUARTERLY_DATAFLOW_SLUG}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG}"
         ),
         "aemo" => bail!(
-            "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflow: {AEMO_DISPATCH_DATAFLOW_SLUG}"
+            "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflows: {AEMO_DISPATCH_DATAFLOW_SLUG}, {AEMO_GENERATION_MIX_DATAFLOW_SLUG}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG}"
         ),
         "asx" => bail!(
             "unsupported dataflow `{dataflow}` for source `asx`; supported dataflows: {ASX_MARKET_STATISTICS_DATAFLOW_SLUG}, {ASX_ANNOUNCEMENTS_DATAFLOW_SLUG}, {ASX_EOD_DATAFLOW_SLUG}"
@@ -1164,7 +1184,11 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         "apra" if dataflow == APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_SLUG => {
             APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID
         }
-        "aemo" => AEMO_DISPATCH_DATAFLOW_ID,
+        "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => AEMO_DISPATCH_DATAFLOW_ID,
+        "aemo" if dataflow == AEMO_GENERATION_MIX_DATAFLOW_SLUG => AEMO_GENERATION_MIX_DATAFLOW_ID,
+        "aemo" if dataflow == AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_SLUG => {
+            AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID
+        }
         "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => {
             ASX_MARKET_STATISTICS_DATAFLOW_ID
         }
@@ -1275,6 +1299,12 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "aemo" && dataflow_id == AEMO_DISPATCH_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "aemo" && dataflow_id == AEMO_GENERATION_MIX_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "aemo" && dataflow_id == AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "asx" && dataflow_id == ASX_MARKET_STATISTICS_DATAFLOW_ID {
         return Ok(());
     }
@@ -1315,7 +1345,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {AEMO_GENERATION_MIX_DATAFLOW_ID}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1545,6 +1575,30 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("aemo.dispatch").unwrap())
+        );
+    }
+
+    #[test]
+    fn aemo_once_mode_resolves_generation_mix_dataflow() {
+        let request =
+            once_run_request("aemo", "generation-mix").expect("AEMO generation mix is supported");
+
+        assert_eq!(request.source_id.as_str(), "aemo");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("aemo.generation_mix").unwrap())
+        );
+    }
+
+    #[test]
+    fn aemo_once_mode_resolves_dispatchability_capacity_dataflow() {
+        let request = once_run_request("aemo", "dispatchability-capacity")
+            .expect("AEMO dispatchability capacity is supported");
+
+        assert_eq!(request.source_id.as_str(), "aemo");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("aemo.dispatchability_capacity").unwrap())
         );
     }
 

@@ -102,6 +102,18 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
             .unwrap()
             .contains("pilot")
     );
+    let dispatchable_capacity = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "energy.dispatchable-capacity")
+        .expect("AEMO dispatchability capacity indicator");
+    assert_eq!(
+        dispatchable_capacity["source_dataflow_id"],
+        "aemo.dispatchability_capacity"
+    );
+    assert_eq!(
+        dispatchable_capacity["dimension_selector"]["metric"],
+        "dispatchable_capacity"
+    );
     let oversight = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "oversight.reviewed-strength")
@@ -176,7 +188,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["confidence"], "low");
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 13);
+    assert_eq!(contributions.len(), 16);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -288,6 +300,39 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
             .as_str()
             .unwrap()
             .contains("apra")
+    );
+
+    let energy_price = contribution(contributions, "energy.price");
+    assert_eq!(energy_price["raw_value"], 0.0);
+    assert_eq!(energy_price["normalized_value"], 1.0);
+    assert_eq!(energy_price["coverage_status"], "resolved");
+    assert_eq!(energy_price["source_dataflow_id"], "aemo.dispatch");
+    assert_eq!(
+        energy_price["dimensions"]["metric"],
+        "regional_reference_price"
+    );
+
+    let renewable_generation = contribution(contributions, "energy.renewable-generation");
+    assert_eq!(renewable_generation["raw_value"], 5000.0);
+    assert_eq!(renewable_generation["normalized_value"], 1.0);
+    assert_eq!(renewable_generation["coverage_status"], "resolved");
+    assert_eq!(
+        renewable_generation["source_dataflow_id"],
+        "aemo.generation_mix"
+    );
+    assert_eq!(renewable_generation["dimensions"]["fuel_type"], "wind");
+
+    let dispatchable_capacity = contribution(contributions, "energy.dispatchable-capacity");
+    assert_eq!(dispatchable_capacity["raw_value"], 15000.0);
+    assert_eq!(dispatchable_capacity["normalized_value"], 1.0);
+    assert_eq!(dispatchable_capacity["coverage_status"], "resolved");
+    assert_eq!(
+        dispatchable_capacity["source_dataflow_id"],
+        "aemo.dispatchability_capacity"
+    );
+    assert_eq!(
+        dispatchable_capacity["dimensions"]["metric"],
+        "dispatchable_capacity"
     );
 
     let visible = contribution(contributions, "control.enable-spend-ratio");
@@ -423,6 +468,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "INSERT INTO sources (id, name, homepage, description)
          VALUES
             ('abs', 'Australian Bureau of Statistics', 'https://www.abs.gov.au', NULL),
+            ('aemo', 'Australian Energy Market Operator', 'https://aemo.com.au', NULL),
             ('apra', 'Australian Prudential Regulation Authority', 'https://www.apra.gov.au', NULL),
             ('compute', 'Curated compute capacity register', 'https://example.test/compute', NULL),
             ('curated', 'Curated APS inputs', 'https://example.test/curated', NULL),
@@ -443,6 +489,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ('progress_to_target_pct', 'Housing Accord progress to target', NULL, 'percent', NULL),
             ('market_sector_growth', 'Market-sector productivity growth', NULL, 'percent', NULL),
             ('business_entry_score', 'Business entry readiness', NULL, 'index', NULL),
+            ('generation_mw', 'Generation', NULL, 'MW', NULL),
             ('capacity_mw', 'Datacentre capacity', NULL, 'MW', NULL),
             ('intensity_index', 'Surveillance intensity', NULL, 'index', NULL),
             ('ratio', 'Ratio', NULL, 'ratio', NULL),
@@ -503,6 +550,24 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics'
          ),
          (
+             'aemo.dispatch', 'aemo', 'NEM dispatch', NULL,
+             ARRAY['region', 'metric'], ARRAY['value'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
+             'Source: Australian Energy Market Operator',
+             'https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/'
+         ),
+         (
+             'aemo.generation_mix', 'aemo', 'NEM generation mix', NULL,
+             ARRAY['region', 'fuel_type'], ARRAY['generation_mw'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
+             'Source: Australian Energy Market Operator',
+             'https://www.nemweb.com.au/Reports/CURRENT/FuelMix/'
+         ),
+         (
+             'aemo.dispatchability_capacity', 'aemo', 'NEM dispatchability capacity', NULL,
+             ARRAY['region', 'metric'], ARRAY['value'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
+             'Source: Australian Energy Market Operator',
+             'https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/'
+         ),
+         (
              'curated.oversight_strength', 'curated', 'Reviewed oversight strength', NULL,
              ARRAY['country'], ARRAY['reviewed_strength'], 'annual', 'Manual review required',
              'Curated from OAIC, ANAO, FOI, and audit-office inputs',
@@ -539,6 +604,9 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     let bready_artifact = insert_artifact(pool, "worldbank", b"bready").await;
     let productive_infrastructure_artifact =
         insert_artifact(pool, "apra", b"super asset allocation").await;
+    let energy_dispatch_artifact = insert_artifact(pool, "aemo", b"aemo dispatch").await;
+    let energy_generation_artifact = insert_artifact(pool, "aemo", b"aemo generation mix").await;
+    let energy_capacity_artifact = insert_artifact(pool, "aemo", b"aemo capacity").await;
     let oversight_artifact = insert_artifact(pool, "curated", b"oversight strength").await;
     let control_spend_artifact = insert_artifact(pool, "curated", b"control spend").await;
     let surveillance_artifact = insert_artifact(pool, "curated", b"surveillance").await;
@@ -606,6 +674,30 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ("asset_category", "total"),
             ("mapping", "productive_infrastructure_onshore"),
         ],
+    )
+    .await;
+    let energy_price = insert_series(
+        pool,
+        "aemo.dispatch",
+        "value",
+        "AUD/MWh",
+        [("region", "NSW1"), ("metric", "regional_reference_price")],
+    )
+    .await;
+    let renewable_generation = insert_series(
+        pool,
+        "aemo.generation_mix",
+        "generation_mw",
+        "MW",
+        [("region", "NSW1"), ("fuel_type", "wind")],
+    )
+    .await;
+    let dispatchable_capacity = insert_series(
+        pool,
+        "aemo.dispatchability_capacity",
+        "value",
+        "MW",
+        [("region", "NSW1"), ("metric", "dispatchable_capacity")],
     )
     .await;
     let oversight = insert_series(
@@ -690,6 +782,33 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     .await;
     insert_observation(
         pool,
+        energy_price,
+        energy_dispatch_artifact,
+        (2024, 1, 1),
+        300.0,
+        "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
+        renewable_generation,
+        energy_generation_artifact,
+        (2024, 1, 1),
+        0.0,
+        "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
+        dispatchable_capacity,
+        energy_capacity_artifact,
+        (2024, 1, 1),
+        0.0,
+        "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
         housing,
         housing_artifact,
         (2024, 2, 1),
@@ -733,6 +852,33 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         (2024, 2, 1),
         30000.0,
         "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
+        energy_price,
+        energy_dispatch_artifact,
+        (2024, 2, 1),
+        0.0,
+        "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
+        renewable_generation,
+        energy_generation_artifact,
+        (2024, 2, 1),
+        5000.0,
+        "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
+        dispatchable_capacity,
+        energy_capacity_artifact,
+        (2024, 2, 1),
+        15000.0,
+        "minute",
     )
     .await;
     insert_observation(

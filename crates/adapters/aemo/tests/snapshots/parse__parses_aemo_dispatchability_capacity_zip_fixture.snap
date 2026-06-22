@@ -1,0 +1,72 @@
+---
+source: crates/adapters/aemo/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "aemo.dispatchability_capacity",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "available_generation",
+      "region": "NSW1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 14826.69812,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "AVAILABLEGENERATION",
+      "aemo_table": "CAPACITY",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "39dedd0334b8a2316e238f31c24b88e8d7f75d405387522d43dcbcfe65637c3f"
+  },
+  {
+    "dataflow_id": "aemo.dispatchability_capacity",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "dispatchable_capacity",
+      "region": "NSW1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 13100.5,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "DISPATCHABLECAPACITY",
+      "aemo_table": "CAPACITY",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "39dedd0334b8a2316e238f31c24b88e8d7f75d405387522d43dcbcfe65637c3f"
+  },
+  {
+    "dataflow_id": "aemo.dispatchability_capacity",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "net_interchange",
+      "region": "NSW1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 500.0,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "NETINTERCHANGE",
+      "aemo_table": "CAPACITY",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "39dedd0334b8a2316e238f31c24b88e8d7f75d405387522d43dcbcfe65637c3f"
+  }
+]

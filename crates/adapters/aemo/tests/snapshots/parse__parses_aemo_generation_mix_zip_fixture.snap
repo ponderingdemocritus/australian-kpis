@@ -1,0 +1,50 @@
+---
+source: crates/adapters/aemo/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "aemo.generation_mix",
+    "measure_id": "generation_mw",
+    "dimensions": {
+      "fuel_type": "black_coal",
+      "region": "NSW1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 4312.5,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "GENERATIONMW",
+      "aemo_table": "FUELREGION",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "aa4562f9d9f964d74d95849fe8c766b750357e2084d094d203d605f61747c039"
+  },
+  {
+    "dataflow_id": "aemo.generation_mix",
+    "measure_id": "generation_mw",
+    "dimensions": {
+      "fuel_type": "wind",
+      "region": "NSW1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 1234.25,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "GENERATIONMW",
+      "aemo_table": "FUELREGION",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "aa4562f9d9f964d74d95849fe8c766b750357e2084d094d203d605f61747c039"
+  }
+]

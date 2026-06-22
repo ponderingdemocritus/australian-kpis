@@ -20,6 +20,26 @@ const LISTING_FIXTURE: &str = r#"
 </html>
 "#;
 
+const GENERATION_MIX_LISTING_FIXTURE: &str = r#"
+<html>
+  <body>
+    Friday, June 19, 2026 05:06 PM 2048
+    <A HREF="/Reports/CURRENT/FuelMix/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip">PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip</A>
+    <A HREF="/Reports/CURRENT/FuelMix/README.txt">README.txt</A>
+  </body>
+</html>
+"#;
+
+const DISPATCHABILITY_CAPACITY_LISTING_FIXTURE: &str = r#"
+<html>
+  <body>
+    Friday, June 19, 2026 05:06 PM 4096
+    <A HREF="/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip">PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip</A>
+    <A HREF="/Reports/CURRENT/DispatchCapacity/README.txt">README.txt</A>
+  </body>
+</html>
+"#;
+
 #[test]
 fn parse_dispatch_listing_discovers_zip_artifacts() {
     let artifacts =
@@ -31,6 +51,46 @@ fn parse_dispatch_listing_discovers_zip_artifacts() {
             json!({
                 "file_name": artifact.file_name,
                 "dispatch_interval": artifact.dispatch_interval,
+                "source_url": artifact.source_url,
+                "revision_key": artifact.revision_key(),
+            })
+        })
+        .collect::<Vec<_>>();
+    insta::assert_json_snapshot!(snapshot);
+}
+
+#[test]
+fn parse_generation_mix_listing_discovers_zip_artifacts() {
+    let artifacts = AemoAdapter::parse_generation_mix_listing(GENERATION_MIX_LISTING_FIXTURE)
+        .expect("parse AEMO generation mix listing");
+
+    let snapshot = artifacts
+        .iter()
+        .map(|artifact| {
+            json!({
+                "file_name": artifact.file_name,
+                "interval": artifact.interval,
+                "source_url": artifact.source_url,
+                "revision_key": artifact.revision_key(),
+            })
+        })
+        .collect::<Vec<_>>();
+    insta::assert_json_snapshot!(snapshot);
+}
+
+#[test]
+fn parse_dispatchability_capacity_listing_discovers_zip_artifacts() {
+    let artifacts = AemoAdapter::parse_dispatchability_capacity_listing(
+        DISPATCHABILITY_CAPACITY_LISTING_FIXTURE,
+    )
+    .expect("parse AEMO dispatchability capacity listing");
+
+    let snapshot = artifacts
+        .iter()
+        .map(|artifact| {
+            json!({
+                "file_name": artifact.file_name,
+                "interval": artifact.interval,
                 "source_url": artifact.source_url,
                 "revision_key": artifact.revision_key(),
             })
@@ -85,12 +145,20 @@ fn manifest_declares_aemo_dispatch_metadata() {
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
     assert_eq!(
         manifest.dataflows,
-        vec![au_kpis_domain::DataflowId::new("aemo.dispatch").unwrap()]
+        vec![
+            au_kpis_domain::DataflowId::new("aemo.dispatch").unwrap(),
+            au_kpis_domain::DataflowId::new("aemo.generation_mix").unwrap(),
+            au_kpis_domain::DataflowId::new("aemo.dispatchability_capacity").unwrap(),
+        ]
     );
 
     let dataflows = adapter.dataflow_metadata();
-    assert_eq!(dataflows.len(), 1);
+    assert_eq!(dataflows.len(), 3);
     assert_eq!(dataflows[0].id.as_str(), "aemo.dispatch");
+    assert_eq!(dataflows[1].id.as_str(), "aemo.generation_mix");
+    assert_eq!(dataflows[1].measures[0].as_str(), "generation_mw");
+    assert_eq!(dataflows[2].id.as_str(), "aemo.dispatchability_capacity");
+    assert_eq!(dataflows[2].measures[0].as_str(), "value");
     assert_eq!(
         dataflows[0].attribution,
         "Source: Australian Energy Market Operator"

@@ -36,18 +36,18 @@ impl ArtifactRecorder for RecordingArtifactRecorder {
     }
 }
 
-fn dispatch_job(source_url: String) -> DiscoveredJob {
+fn aemo_job(id: &str, dataflow_id: &str, source_url: String) -> DiscoveredJob {
     DiscoveredJob {
-        id: "aemo:dispatch:PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip".into(),
+        id: id.into(),
         source_id: SourceId::new("aemo").unwrap(),
-        dataflow_id: DataflowId::new("aemo.dispatch").unwrap(),
+        dataflow_id: DataflowId::new(dataflow_id).unwrap(),
         source_url,
         trace_parent: None,
         metadata: BTreeMap::new(),
     }
 }
 
-async fn serve_throttle_once() -> Option<String> {
+async fn serve_throttle_once(expected_path: &'static str) -> Option<String> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
@@ -64,9 +64,7 @@ async fn serve_throttle_once() -> Option<String> {
         let read = stream.read(&mut request).await.expect("read request");
         let request = String::from_utf8_lossy(&request[..read]);
         assert!(
-            request.starts_with(
-                "GET /Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip HTTP/1.1",
-            ),
+            request.starts_with(&format!("GET {expected_path} HTTP/1.1")),
             "{request}"
         );
         assert!(
@@ -84,20 +82,47 @@ async fn serve_throttle_once() -> Option<String> {
             .expect("write throttle response");
     });
 
-    Some(format!(
-        "http://{addr}/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
-    ))
+    Some(format!("http://{addr}{expected_path}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_preserves_retry_after_on_nemweb_throttle() {
-    let Some(source_url) = serve_throttle_once().await else {
+    assert_fetch_throttle_for(
+        "aemo:dispatch:PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+        "aemo.dispatch",
+        "/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_preserves_retry_after_on_generation_mix_throttle() {
+    assert_fetch_throttle_for(
+        "aemo:generation_mix:PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip",
+        "aemo.generation_mix",
+        "/Reports/CURRENT/FuelMix/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_preserves_retry_after_on_dispatchability_capacity_throttle() {
+    assert_fetch_throttle_for(
+        "aemo:dispatchability_capacity:PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip",
+        "aemo.dispatchability_capacity",
+        "/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip",
+    )
+    .await;
+}
+
+async fn assert_fetch_throttle_for(id: &str, dataflow_id: &str, expected_path: &'static str) {
+    let Some(source_url) = serve_throttle_once(expected_path).await else {
         return;
     };
     let adapter = AemoAdapter::default();
     let err = adapter
         .fetch(
-            dispatch_job(source_url),
+            aemo_job(id, dataflow_id, source_url),
             &FetchCtx::new(
                 AdapterHttpClient::new(adapter.manifest().rate_limit),
                 BlobStore::new(InMemory::new()),
