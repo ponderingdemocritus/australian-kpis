@@ -832,6 +832,17 @@ name = "au-kpis-schema"
 version = "0.1.0"
 
 [[package]]
+name = "au-kpis-scorecard"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "au-kpis-storage"
 version = "0.1.0"
 dependencies = [
