@@ -944,6 +944,7 @@ fn dispatch_observation(
         ),
     ]);
     let dataflow_id = dataflow_id(AemoArtifactKind::Dispatch);
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
         &measure_id,

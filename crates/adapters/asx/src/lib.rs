@@ -1083,6 +1083,7 @@ fn push_observation(
         asx_code_id("metric", input.metric)?,
     )]);
     let dataflow_id = market_statistics_dataflow_id();
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
         &measure_id,
