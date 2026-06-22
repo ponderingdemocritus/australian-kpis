@@ -1,0 +1,72 @@
+---
+source: crates/adapters/state-planning/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "state_planning.vic_permit_activity",
+    "measure_id": "value",
+    "dimensions": {
+      "jurisdiction": "VIC",
+      "metric": "median_decision_days",
+      "permit_type": "all"
+    },
+    "unit": "days",
+    "time": "2026-03-31T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 60.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "State planning dashboard sources: NSW Planning and Victoria Planning",
+      "license": "State publication terms",
+      "publication_id": "vic-permit-activity-2026",
+      "source": "State planning authorities",
+      "source_url": "https://www.planning.vic.gov.au/data/vic-permit-activity-2026.csv"
+    },
+    "source_artifact_id": "b248c12c921817dfe051bcc9e434b74a5641b3fe58f841b1f87c72d52cb97c0d"
+  },
+  {
+    "dataflow_id": "state_planning.vic_permit_activity",
+    "measure_id": "value",
+    "dimensions": {
+      "jurisdiction": "VIC",
+      "metric": "permits_issued_count",
+      "permit_type": "all"
+    },
+    "unit": "count",
+    "time": "2026-03-31T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 22222.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "State planning dashboard sources: NSW Planning and Victoria Planning",
+      "license": "State publication terms",
+      "publication_id": "vic-permit-activity-2026",
+      "source": "State planning authorities",
+      "source_url": "https://www.planning.vic.gov.au/data/vic-permit-activity-2026.csv"
+    },
+    "source_artifact_id": "b248c12c921817dfe051bcc9e434b74a5641b3fe58f841b1f87c72d52cb97c0d"
+  },
+  {
+    "dataflow_id": "state_planning.vic_permit_activity",
+    "measure_id": "value",
+    "dimensions": {
+      "jurisdiction": "VIC",
+      "metric": "median_decision_days",
+      "permit_type": "residential"
+    },
+    "unit": "days",
+    "time": "2026-03-31T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 52.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "State planning dashboard sources: NSW Planning and Victoria Planning",
+      "license": "State publication terms",
+      "publication_id": "vic-permit-activity-2026",
+      "source": "State planning authorities",
+      "source_url": "https://www.planning.vic.gov.au/data/vic-permit-activity-2026.csv"
+    },
+    "source_artifact_id": "b248c12c921817dfe051bcc9e434b74a5641b3fe58f841b1f87c72d52cb97c0d"
+  }
+]

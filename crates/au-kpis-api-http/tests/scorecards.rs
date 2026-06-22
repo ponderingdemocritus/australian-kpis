@@ -114,6 +114,30 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
         dispatchable_capacity["dimension_selector"]["metric"],
         "dispatchable_capacity"
     );
+    let nsw_planning = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "planning.nsw-da-processing")
+        .expect("NSW planning throughput indicator");
+    assert_eq!(
+        nsw_planning["source_dataflow_id"],
+        "state_planning.nsw_da_processing"
+    );
+    assert_eq!(
+        nsw_planning["dimension_selector"]["metric"],
+        "median_assessment_days"
+    );
+    let vic_planning = indicators
+        .iter()
+        .find(|indicator| indicator["indicator_id"] == "planning.vic-permit-activity")
+        .expect("VIC planning throughput indicator");
+    assert_eq!(
+        vic_planning["source_dataflow_id"],
+        "state_planning.vic_permit_activity"
+    );
+    assert_eq!(
+        vic_planning["dimension_selector"]["metric"],
+        "median_decision_days"
+    );
     let oversight = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "oversight.reviewed-strength")
@@ -182,13 +206,13 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 82.75862068965517).abs() < 1e-9);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 85.71428571428571).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
     assert_eq!(snapshot["confidence"], "low");
 
     let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 16);
+    assert_eq!(contributions.len(), 18);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -335,6 +359,31 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
         "dispatchable_capacity"
     );
 
+    let nsw_planning = contribution(contributions, "planning.nsw-da-processing");
+    assert_eq!(nsw_planning["raw_value"], 30.0);
+    assert_eq!(nsw_planning["normalized_value"], 1.0);
+    assert_eq!(nsw_planning["coverage_status"], "resolved");
+    assert_eq!(
+        nsw_planning["source_dataflow_id"],
+        "state_planning.nsw_da_processing"
+    );
+    assert_eq!(nsw_planning["dimensions"]["jurisdiction"], "NSW");
+    assert_eq!(
+        nsw_planning["dimensions"]["metric"],
+        "median_assessment_days"
+    );
+
+    let vic_planning = contribution(contributions, "planning.vic-permit-activity");
+    assert_eq!(vic_planning["raw_value"], 30.0);
+    assert_eq!(vic_planning["normalized_value"], 1.0);
+    assert_eq!(vic_planning["coverage_status"], "resolved");
+    assert_eq!(
+        vic_planning["source_dataflow_id"],
+        "state_planning.vic_permit_activity"
+    );
+    assert_eq!(vic_planning["dimensions"]["jurisdiction"], "VIC");
+    assert_eq!(vic_planning["dimensions"]["metric"], "median_decision_days");
+
     let visible = contribution(contributions, "control.enable-spend-ratio");
     assert_eq!(visible["coverage_status"], "visible_unscored");
     assert_eq!(visible["raw_value"], 0.8);
@@ -474,6 +523,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ('curated', 'Curated APS inputs', 'https://example.test/curated', NULL),
             ('nhsac', 'National Housing Supply and Affordability Council', 'https://nhsac.gov.au', NULL),
             ('pc', 'Productivity Commission', 'https://www.pc.gov.au', NULL),
+            ('state-planning', 'State planning authorities', 'https://www.planning.nsw.gov.au', NULL),
             ('worldbank', 'World Bank', 'https://www.worldbank.org', NULL)",
     )
     .execute(pool)
@@ -568,6 +618,20 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/'
          ),
          (
+             'state_planning.nsw_da_processing', 'state-planning', 'NSW development assessment processing', NULL,
+             ARRAY['jurisdiction', 'council', 'development_type', 'metric'], ARRAY['value'], 'quarterly',
+             'State publication terms',
+             'Source: NSW Planning',
+             'https://www.planning.nsw.gov.au/data-and-insights'
+         ),
+         (
+             'state_planning.vic_permit_activity', 'state-planning', 'VIC planning permit activity', NULL,
+             ARRAY['jurisdiction', 'permit_type', 'metric'], ARRAY['value'], 'quarterly',
+             'State publication terms',
+             'Source: Victoria Planning',
+             'https://www.planning.vic.gov.au/guides-and-resources/data-and-insights'
+         ),
+         (
              'curated.oversight_strength', 'curated', 'Reviewed oversight strength', NULL,
              ARRAY['country'], ARRAY['reviewed_strength'], 'annual', 'Manual review required',
              'Curated from OAIC, ANAO, FOI, and audit-office inputs',
@@ -607,6 +671,10 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     let energy_dispatch_artifact = insert_artifact(pool, "aemo", b"aemo dispatch").await;
     let energy_generation_artifact = insert_artifact(pool, "aemo", b"aemo generation mix").await;
     let energy_capacity_artifact = insert_artifact(pool, "aemo", b"aemo capacity").await;
+    let nsw_planning_artifact =
+        insert_artifact(pool, "state-planning", b"nsw planning throughput").await;
+    let vic_planning_artifact =
+        insert_artifact(pool, "state-planning", b"vic planning throughput").await;
     let oversight_artifact = insert_artifact(pool, "curated", b"oversight strength").await;
     let control_spend_artifact = insert_artifact(pool, "curated", b"control spend").await;
     let surveillance_artifact = insert_artifact(pool, "curated", b"surveillance").await;
@@ -698,6 +766,31 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "value",
         "MW",
         [("region", "NSW1"), ("metric", "dispatchable_capacity")],
+    )
+    .await;
+    let nsw_planning = insert_series(
+        pool,
+        "state_planning.nsw_da_processing",
+        "value",
+        "days",
+        [
+            ("jurisdiction", "NSW"),
+            ("council", "all"),
+            ("development_type", "all"),
+            ("metric", "median_assessment_days"),
+        ],
+    )
+    .await;
+    let vic_planning = insert_series(
+        pool,
+        "state_planning.vic_permit_activity",
+        "value",
+        "days",
+        [
+            ("jurisdiction", "VIC"),
+            ("permit_type", "all"),
+            ("metric", "median_decision_days"),
+        ],
     )
     .await;
     let oversight = insert_series(
@@ -809,6 +902,24 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
     .await;
     insert_observation(
         pool,
+        nsw_planning,
+        nsw_planning_artifact,
+        (2024, 1, 1),
+        120.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
+        vic_planning,
+        vic_planning_artifact,
+        (2024, 1, 1),
+        120.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
         housing,
         housing_artifact,
         (2024, 2, 1),
@@ -879,6 +990,24 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         (2024, 2, 1),
         15000.0,
         "minute",
+    )
+    .await;
+    insert_observation(
+        pool,
+        nsw_planning,
+        nsw_planning_artifact,
+        (2024, 2, 1),
+        30.0,
+        "quarter",
+    )
+    .await;
+    insert_observation(
+        pool,
+        vic_planning,
+        vic_planning_artifact,
+        (2024, 2, 1),
+        30.0,
+        "quarter",
     )
     .await;
     insert_observation(

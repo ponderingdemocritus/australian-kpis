@@ -1,0 +1,4 @@
+period,jurisdiction,permit_type,metric,value,unit
+2026-03-31,VIC,all,median_decision_days,60,days
+2026-03-31,VIC,all,permits_issued_count,22222,count
+2026-03-31,VIC,residential,median_decision_days,52,days

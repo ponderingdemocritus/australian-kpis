@@ -27,6 +27,7 @@ use au_kpis_adapter_pc::PcAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
 use au_kpis_adapter_state_capital::StateCapitalAdapter;
+use au_kpis_adapter_state_planning::StatePlanningAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_adapter_worldbank::WorldbankAdapter;
 use au_kpis_config::load_ingestion;
@@ -89,6 +90,10 @@ const STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_SLUG: &str = "vic-major-projects
 const STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID: &str = "state_capital.vic_major_projects";
 const STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG: &str = "budget-capital-papers";
 const STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID: &str = "state_capital.budget_capital_papers";
+const STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_SLUG: &str = "nsw-da-processing";
+const STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID: &str = "state_planning.nsw_da_processing";
+const STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_SLUG: &str = "vic-permit-activity";
+const STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID: &str = "state_planning.vic_permit_activity";
 const TREASURY_BUDGET_DATAFLOW_SLUG: &str = "budget-papers";
 const TREASURY_BUDGET_DATAFLOW_ID: &str = "treasury.budget_papers";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -916,6 +921,13 @@ fn build_adapters() -> anyhow::Result<Adapters> {
     builder
         .register(state_capital)
         .context("register state capital adapter")?;
+    let state_planning = match env::var("AU_KPIS_STATE_PLANNING_INDEX_URL") {
+        Ok(index_url) => StatePlanningAdapter::builder().index_url(index_url).build(),
+        Err(_) => StatePlanningAdapter::default(),
+    };
+    builder
+        .register(state_planning)
+        .context("register state planning adapter")?;
     Ok(builder.build())
 }
 
@@ -1129,6 +1141,15 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         {
             Ok(())
         }
+        "state-planning"
+            if matches!(
+                dataflow,
+                STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_SLUG
+                    | STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_SLUG
+            ) =>
+        {
+            Ok(())
+        }
         "treasury" if dataflow == TREASURY_BUDGET_DATAFLOW_SLUG => Ok(()),
         "abs" => bail!(
             "unsupported dataflow `{dataflow}` for source `abs`; supported dataflows: {ABS_CPI_DATAFLOW_SLUG}, {ABS_BUILDING_APPROVALS_DATAFLOW_SLUG}, {ABS_BUILDING_ACTIVITY_DATAFLOW_SLUG}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_SLUG}"
@@ -1159,6 +1180,9 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         ),
         "state_capital" => bail!(
             "unsupported dataflow `{dataflow}` for source `state_capital`; supported dataflows: {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_SLUG}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG}"
+        ),
+        "state-planning" => bail!(
+            "unsupported dataflow `{dataflow}` for source `state-planning`; supported dataflows: {STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_SLUG}, {STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_SLUG}"
         ),
         "treasury" => bail!(
             "unsupported dataflow `{dataflow}` for source `treasury`; supported dataflow: {TREASURY_BUDGET_DATAFLOW_SLUG}"
@@ -1212,6 +1236,12 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
         }
         "state_capital" if dataflow == STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_SLUG => {
             STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID
+        }
+        "state-planning" if dataflow == STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_SLUG => {
+            STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID
+        }
+        "state-planning" if dataflow == STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_SLUG => {
+            STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID
         }
         "treasury" => TREASURY_BUDGET_DATAFLOW_ID,
         _ => unreachable!("source was validated above"),
@@ -1268,10 +1298,11 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
             | "rba"
             | "state-budgets"
             | "state_capital"
+            | "state-planning"
             | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, treasury"
+            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, state-planning, treasury"
         );
     }
     Ok(())
@@ -1341,11 +1372,17 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
     if source == "state_capital" && dataflow_id == STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID {
         return Ok(());
     }
+    if source == "state-planning" && dataflow_id == STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "state-planning" && dataflow_id == STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID {
+        return Ok(());
+    }
     if source == "treasury" && dataflow_id == TREASURY_BUDGET_DATAFLOW_ID {
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {AEMO_GENERATION_MIX_DATAFLOW_ID}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {ABS_BUILDING_APPROVALS_DATAFLOW_ID}, {ABS_BUILDING_ACTIVITY_DATAFLOW_ID}, {ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {AEMO_GENERATION_MIX_DATAFLOW_ID}, {AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {ASX_ANNOUNCEMENTS_DATAFLOW_ID}, {ASX_EOD_DATAFLOW_ID}, {NHSAC_HOUSING_ACCORD_DATAFLOW_ID}, {PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID}, {WORLDBANK_BREADY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID}, {STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID}, {STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID}, {STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -1562,7 +1599,7 @@ mod tests {
         assert!(err.contains("unsupported source"));
         assert!(
             err.contains(
-                "abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, treasury"
+                "abs, aemo, apra, asx, nhsac, pc, worldbank, rba, state-budgets, state_capital, state-planning, treasury"
             )
         );
     }
@@ -1790,6 +1827,30 @@ mod tests {
         assert_eq!(
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("state_budgets.qld_budget").unwrap())
+        );
+    }
+
+    #[test]
+    fn state_planning_once_mode_resolves_nsw_da_processing_dataflow() {
+        let request = once_run_request("state-planning", "nsw-da-processing")
+            .expect("NSW planning throughput is supported");
+
+        assert_eq!(request.source_id.as_str(), "state-planning");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("state_planning.nsw_da_processing").unwrap())
+        );
+    }
+
+    #[test]
+    fn state_planning_once_mode_resolves_vic_permit_activity_dataflow() {
+        let request = once_run_request("state-planning", "vic-permit-activity")
+            .expect("VIC planning throughput is supported");
+
+        assert_eq!(request.source_id.as_str(), "state-planning");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("state_planning.vic_permit_activity").unwrap())
         );
     }
 
