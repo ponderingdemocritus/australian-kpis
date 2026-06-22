@@ -76,6 +76,7 @@ coverage_status = "missing_expected"
 cadence = "annual"
 
 [indicators.dimension_selector]
+measure = "market_sector_growth"
 region = "AUS"
 
 [indicators.normalization]

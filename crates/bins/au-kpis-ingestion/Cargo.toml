@@ -14,6 +14,7 @@ au-kpis-adapter-abs = { path = "../../adapters/abs" }
 au-kpis-adapter-aemo = { path = "../../adapters/aemo" }
 au-kpis-adapter-apra = { path = "../../adapters/apra" }
 au-kpis-adapter-asx = { path = "../../adapters/asx" }
+au-kpis-adapter-pc = { workspace = true }
 au-kpis-adapter-rba = { path = "../../adapters/rba" }
 au-kpis-adapter-state-budgets = { path = "../../adapters/state-budgets" }
 au-kpis-adapter-treasury = { path = "../../adapters/treasury" }
