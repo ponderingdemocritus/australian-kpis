@@ -19,15 +19,21 @@ use std::{
 use anyhow::{Context, bail};
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, Adapters, DiscoveryCtx, ParseCtx};
 use au_kpis_adapter_abs::AbsAdapter;
+use au_kpis_adapter_aemo::AemoAdapter;
 use au_kpis_adapter_apra::ApraAdapter;
+use au_kpis_adapter_asx::AsxAdapter;
 use au_kpis_adapter_rba::RbaAdapter;
 use au_kpis_adapter_state_budgets::StateBudgetsAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_config::load_ingestion;
 use au_kpis_db::{connect as connect_db, migrate};
-use au_kpis_domain::ids::{DataflowId, SourceId};
+use au_kpis_domain::{
+    Dataflow, Frequency, License, Source,
+    ids::{DataflowId, SourceId},
+};
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_ingestion_core::{IngestionPipeline, PipelineContexts, PipelineOptions, fetch_ctx};
+use au_kpis_pdf_client::PdfClient;
 use au_kpis_queue::{ApalisPgQueue, JobKind, LeasedJob, Nack, Queue, QueueStage, WorkerId};
 use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
@@ -41,6 +47,10 @@ const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
 const APRA_QUARTERLY_DATAFLOW_SLUG: &str = "quarterly-statistics";
 const APRA_QUARTERLY_DATAFLOW_ID: &str = "apra.quarterly_statistics";
+const AEMO_DISPATCH_DATAFLOW_SLUG: &str = "dispatch";
+const AEMO_DISPATCH_DATAFLOW_ID: &str = "aemo.dispatch";
+const ASX_MARKET_STATISTICS_DATAFLOW_SLUG: &str = "market-statistics";
+const ASX_MARKET_STATISTICS_DATAFLOW_ID: &str = "asx.market_statistics";
 const RBA_STAT_TABLES_DATAFLOW_SLUG: &str = "statistical-tables";
 const RBA_STAT_TABLES_DATAFLOW_ID: &str = "rba.statistical_tables";
 const STATE_BUDGETS_NSW_DATAFLOW_SLUG: &str = "nsw-budget";
@@ -220,16 +230,20 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect postgres database")?;
     migrate(&db).await.context("apply database migrations")?;
+    let adapters = build_adapters()?;
+    sync_adapter_catalog(&db, &adapters)
+        .await
+        .context("sync adapter catalog metadata")?;
 
     let drain_window = Duration::from_secs(config.http.shutdown_grace_period_secs);
     let shutdown = CancellationToken::new();
     let metrics = Arc::new(WorkerMetrics::default());
     let runtime = Runtime {
-        adapters: build_adapters()?,
+        adapters,
         db,
         blob_store: build_blob_store(&mode, ObjectStoreConfig::from_env())?,
         metrics,
-        pipeline_options: pipeline_options(drain_window),
+        pipeline_options: pipeline_options(drain_window)?,
         shutdown: shutdown.clone(),
         poll_interval: Duration::from_millis(cli.poll_interval_ms),
         worker_id: cli.worker_id.unwrap_or_else(default_worker_id),
@@ -354,6 +368,189 @@ async fn run_source_once(
         .with_options(runtime.pipeline_options)
         .run_source(request.source_id.clone(), contexts, cancellation)
         .await
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+async fn sync_adapter_catalog(
+    pool: &au_kpis_db::PgPool,
+    adapters: &Adapters,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await.context("begin adapter catalog sync")?;
+    for adapter in adapters.iter() {
+        if let Some(source) = adapter.source_metadata() {
+            upsert_source(&mut tx, &source).await?;
+        }
+        for dataflow in adapter.dataflow_metadata() {
+            upsert_dataflow(&mut tx, &dataflow).await?;
+        }
+    }
+    tx.commit().await.context("commit adapter catalog sync")
+}
+
+async fn upsert_source(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    source: &Source,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO sources (id, name, homepage, description)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO UPDATE
+         SET name = EXCLUDED.name,
+             homepage = EXCLUDED.homepage,
+             description = EXCLUDED.description",
+    )
+    .bind(source.id.as_str())
+    .bind(&source.name)
+    .bind(&source.homepage)
+    .bind(source.description.as_deref())
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("upsert source `{}`", source.id.as_str()))?;
+    Ok(())
+}
+
+async fn upsert_dataflow(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    dataflow: &Dataflow,
+) -> anyhow::Result<()> {
+    for measure in &dataflow.measures {
+        let measure_id = measure.as_str();
+        sqlx::query(
+            "INSERT INTO measures (id, name, description, unit, scale)
+             VALUES ($1, $2, NULL, $3, NULL)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(measure_id)
+        .bind(catalog_label(measure_id))
+        .bind(measure_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("upsert measure `{measure_id}`"))?;
+    }
+
+    let dimension_ids = dataflow
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.as_str().to_string())
+        .collect::<Vec<_>>();
+    let measure_ids = dataflow
+        .measures
+        .iter()
+        .map(|measure| measure.as_str().to_string())
+        .collect::<Vec<_>>();
+
+    sqlx::query(
+        "INSERT INTO dataflows (
+             id, source_id, name, description, dimensions, measures,
+             frequency, license, attribution, source_url
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (id) DO UPDATE
+         SET source_id = EXCLUDED.source_id,
+             name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             dimensions = EXCLUDED.dimensions,
+             measures = EXCLUDED.measures,
+             frequency = EXCLUDED.frequency,
+             license = EXCLUDED.license,
+             attribution = EXCLUDED.attribution,
+             source_url = EXCLUDED.source_url",
+    )
+    .bind(dataflow.id.as_str())
+    .bind(dataflow.source_id.as_str())
+    .bind(&dataflow.name)
+    .bind(dataflow.description.as_deref())
+    .bind(&dimension_ids)
+    .bind(&measure_ids)
+    .bind(frequency_label(dataflow.frequency))
+    .bind(license_label(&dataflow.license))
+    .bind(&dataflow.attribution)
+    .bind(&dataflow.source_url)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("upsert dataflow `{}`", dataflow.id.as_str()))?;
+
+    sqlx::query("DELETE FROM dimensions WHERE dataflow_id = $1")
+        .bind(dataflow.id.as_str())
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear dimensions for `{}`", dataflow.id.as_str()))?;
+
+    for (position, dimension) in dataflow.dimensions.iter().enumerate() {
+        let dimension_id = dimension.as_str();
+        let codelist_id = format!("{}.{}", dataflow.id.as_str(), dimension_id);
+        sqlx::query(
+            "INSERT INTO codelists (id, name, description)
+             VALUES ($1, $2, NULL)
+             ON CONFLICT (id) DO UPDATE
+             SET name = EXCLUDED.name,
+                 description = EXCLUDED.description",
+        )
+        .bind(&codelist_id)
+        .bind(format!("{} {}", dataflow.name, catalog_label(dimension_id)))
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("upsert codelist `{codelist_id}`"))?;
+
+        sqlx::query(
+            "INSERT INTO dimensions (dataflow_id, id, name, description, codelist_id, position)
+             VALUES ($1, $2, $3, NULL, $4, $5)",
+        )
+        .bind(dataflow.id.as_str())
+        .bind(dimension_id)
+        .bind(catalog_label(dimension_id))
+        .bind(&codelist_id)
+        .bind(i16::try_from(position).context("dimension position exceeds SMALLINT")?)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| {
+            format!(
+                "insert dimension `{}` for `{}`",
+                dimension_id,
+                dataflow.id.as_str()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn frequency_label(frequency: Frequency) -> &'static str {
+    match frequency {
+        Frequency::Daily => "daily",
+        Frequency::Weekly => "weekly",
+        Frequency::Monthly => "monthly",
+        Frequency::Quarterly => "quarterly",
+        Frequency::Annual => "annual",
+        Frequency::Irregular => "irregular",
+    }
+}
+
+fn license_label(license: &License) -> String {
+    match license {
+        License::CcBy40 => "CC-BY-4.0".into(),
+        License::CcByNd40 => "CC-BY-ND-4.0".into(),
+        License::CcBySa40 => "CC-BY-SA-4.0".into(),
+        License::PublicDomain => "public-domain".into(),
+        License::Other(value) => value.clone(),
+    }
+}
+
+fn catalog_label(id: &str) -> String {
+    let mut label = String::with_capacity(id.len());
+    let mut capitalize_next = true;
+    for ch in id.chars() {
+        if matches!(ch, '_' | '-' | '.') {
+            label.push(' ');
+            capitalize_next = true;
+        } else if capitalize_next {
+            label.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            label.push(ch);
+        }
+    }
+    label
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -526,6 +723,7 @@ fn invalid_job_nack(err: anyhow::Error) -> Nack {
 fn ingestion_error_class(err: &au_kpis_ingestion_core::IngestionError) -> ErrorClass {
     match err {
         au_kpis_ingestion_core::IngestionError::Adapter(err) => err.class(),
+        au_kpis_ingestion_core::IngestionError::Db(err) => err.class(),
         au_kpis_ingestion_core::IngestionError::Load(err) => load_error_class(err),
         au_kpis_ingestion_core::IngestionError::Config(_)
         | au_kpis_ingestion_core::IngestionError::SourceMismatch { .. }
@@ -590,18 +788,49 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         Err(_) => RbaAdapter::default(),
     };
     builder.register(rba).context("register RBA adapter")?;
+    let aemo = match env::var("AU_KPIS_AEMO_DISPATCH_LISTING_URL") {
+        Ok(dispatch_listing_url) => AemoAdapter::builder()
+            .dispatch_listing_url(dispatch_listing_url)
+            .build(),
+        Err(_) => AemoAdapter::default(),
+    };
+    builder.register(aemo).context("register AEMO adapter")?;
+    let asx = match env::var("AU_KPIS_ASX_MARKET_STATISTICS_URL") {
+        Ok(market_statistics_url) => AsxAdapter::builder()
+            .market_statistics_url(market_statistics_url)
+            .build(),
+        Err(_) => AsxAdapter::default(),
+    };
+    builder.register(asx).context("register ASX adapter")?;
+    let pdf_base_url = env::var("AU_KPIS_PDF_BASE_URL").ok();
+    let pdf_request_timeout = pdf_request_timeout_from_env()?;
+    let pdf_client = pdf_base_url
+        .as_deref()
+        .map(|base_url| {
+            let mut client = PdfClient::builder().base_url(base_url);
+            if let Some(timeout) = pdf_request_timeout {
+                client = client.timeout(timeout);
+            }
+            client.build()
+        })
+        .transpose()
+        .context("build PDF sidecar client")?;
     let mut treasury = TreasuryAdapter::builder();
     if let Ok(budget_url) = env::var("AU_KPIS_TREASURY_BUDGET_URL") {
         treasury = treasury.budget_url(budget_url);
     }
-    if let Ok(pdf_base_url) = env::var("AU_KPIS_PDF_BASE_URL") {
-        treasury = treasury.pdf_base_url(pdf_base_url);
+    if let Some(pdf_client) = pdf_client.clone() {
+        treasury = treasury.pdf_client(pdf_client);
+    } else if let Some(pdf_base_url) = &pdf_base_url {
+        treasury = treasury.pdf_base_url(pdf_base_url.clone());
     }
     builder
         .register(treasury.try_build().context("build Treasury adapter")?)
         .context("register Treasury adapter")?;
     let mut state_budgets = StateBudgetsAdapter::builder();
-    if let Ok(pdf_base_url) = env::var("AU_KPIS_PDF_BASE_URL") {
+    if let Some(pdf_client) = pdf_client {
+        state_budgets = state_budgets.pdf_client(pdf_client);
+    } else if let Some(pdf_base_url) = pdf_base_url {
         state_budgets = state_budgets.pdf_base_url(pdf_base_url);
     }
     builder
@@ -612,6 +841,25 @@ fn build_adapters() -> anyhow::Result<Adapters> {
         )
         .context("register state budgets adapter")?;
     Ok(builder.build())
+}
+
+fn pdf_request_timeout_from_env() -> anyhow::Result<Option<Duration>> {
+    let raw = match env::var("AU_KPIS_PDF_REQUEST_TIMEOUT_SECS") {
+        Ok(raw) => raw,
+        Err(env::VarError::NotPresent) => return Ok(None),
+        Err(err) => return Err(err).context("read AU_KPIS_PDF_REQUEST_TIMEOUT_SECS"),
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let seconds = trimmed
+        .parse::<u64>()
+        .context("AU_KPIS_PDF_REQUEST_TIMEOUT_SECS must be a positive integer")?;
+    if seconds == 0 {
+        bail!("AU_KPIS_PDF_REQUEST_TIMEOUT_SECS must be a positive integer");
+    }
+    Ok(Some(Duration::from_secs(seconds)))
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -652,11 +900,68 @@ fn durable_object_store_required(mode: &Mode) -> anyhow::Result<BlobStore> {
     )
 }
 
-fn pipeline_options(shutdown_grace: Duration) -> PipelineOptions {
-    PipelineOptions {
+fn pipeline_options(shutdown_grace: Duration) -> anyhow::Result<PipelineOptions> {
+    pipeline_options_with_env(shutdown_grace, |name| env::var(name).ok())
+}
+
+fn pipeline_options_with_env<F>(
+    shutdown_grace: Duration,
+    get_env: F,
+) -> anyhow::Result<PipelineOptions>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut options = PipelineOptions {
         shutdown_grace,
         ..PipelineOptions::default()
+    };
+    apply_positive_usize_override(
+        &mut options.load_max_rows,
+        "AU_KPIS_PIPELINE__LOAD_MAX_ROWS",
+        &get_env,
+    )?;
+    apply_positive_usize_override(
+        &mut options.load_max_bytes,
+        "AU_KPIS_PIPELINE__LOAD_MAX_BYTES",
+        &get_env,
+    )?;
+    apply_positive_usize_override(
+        &mut options.channel_capacity,
+        "AU_KPIS_PIPELINE__CHANNEL_CAPACITY",
+        &get_env,
+    )?;
+    apply_positive_usize_override(
+        &mut options.fetch_concurrency,
+        "AU_KPIS_PIPELINE__FETCH_CONCURRENCY",
+        &get_env,
+    )?;
+    apply_positive_usize_override(
+        &mut options.parse_concurrency,
+        "AU_KPIS_PIPELINE__PARSE_CONCURRENCY",
+        &get_env,
+    )?;
+    Ok(options)
+}
+
+fn apply_positive_usize_override<F>(
+    target: &mut usize,
+    name: &str,
+    get_env: &F,
+) -> anyhow::Result<()>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(raw) = get_env(name) else {
+        return Ok(());
+    };
+    let value = raw
+        .parse::<usize>()
+        .with_context(|| format!("{name} must be a positive integer"))?;
+    if value == 0 {
+        bail!("{name} must be a positive integer");
     }
+    *target = value;
+    Ok(())
 }
 
 fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
@@ -688,6 +993,8 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
     match source {
         "abs" if dataflow == ABS_CPI_DATAFLOW_SLUG => Ok(()),
         "apra" if dataflow == APRA_QUARTERLY_DATAFLOW_SLUG => Ok(()),
+        "aemo" if dataflow == AEMO_DISPATCH_DATAFLOW_SLUG => Ok(()),
+        "asx" if dataflow == ASX_MARKET_STATISTICS_DATAFLOW_SLUG => Ok(()),
         "rba" if dataflow == RBA_STAT_TABLES_DATAFLOW_SLUG => Ok(()),
         "state-budgets"
             if matches!(
@@ -705,6 +1012,12 @@ fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
         ),
         "apra" => bail!(
             "unsupported dataflow `{dataflow}` for source `apra`; supported dataflow: {APRA_QUARTERLY_DATAFLOW_SLUG}"
+        ),
+        "aemo" => bail!(
+            "unsupported dataflow `{dataflow}` for source `aemo`; supported dataflow: {AEMO_DISPATCH_DATAFLOW_SLUG}"
+        ),
+        "asx" => bail!(
+            "unsupported dataflow `{dataflow}` for source `asx`; supported dataflow: {ASX_MARKET_STATISTICS_DATAFLOW_SLUG}"
         ),
         "rba" => bail!(
             "unsupported dataflow `{dataflow}` for source `rba`; supported dataflow: {RBA_STAT_TABLES_DATAFLOW_SLUG}"
@@ -724,6 +1037,8 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
     let dataflow_id = match source {
         "abs" => ABS_CPI_DATAFLOW_ID,
         "apra" => APRA_QUARTERLY_DATAFLOW_ID,
+        "aemo" => AEMO_DISPATCH_DATAFLOW_ID,
+        "asx" => ASX_MARKET_STATISTICS_DATAFLOW_ID,
         "rba" => RBA_STAT_TABLES_DATAFLOW_ID,
         "state-budgets" if dataflow == STATE_BUDGETS_NSW_DATAFLOW_SLUG => {
             STATE_BUDGETS_NSW_DATAFLOW_ID
@@ -779,10 +1094,10 @@ fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result
 fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     if !matches!(
         source,
-        "abs" | "apra" | "rba" | "state-budgets" | "treasury"
+        "abs" | "aemo" | "apra" | "asx" | "rba" | "state-budgets" | "treasury"
     ) {
         bail!(
-            "unsupported source `{source}`; supported sources: abs, apra, rba, state-budgets, treasury"
+            "unsupported source `{source}`; supported sources: abs, aemo, apra, asx, rba, state-budgets, treasury"
         );
     }
     Ok(())
@@ -793,6 +1108,12 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     if source == "apra" && dataflow_id == APRA_QUARTERLY_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "aemo" && dataflow_id == AEMO_DISPATCH_DATAFLOW_ID {
+        return Ok(());
+    }
+    if source == "asx" && dataflow_id == ASX_MARKET_STATISTICS_DATAFLOW_ID {
         return Ok(());
     }
     if source == "rba" && dataflow_id == RBA_STAT_TABLES_DATAFLOW_ID {
@@ -811,7 +1132,7 @@ fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Re
         return Ok(());
     }
     bail!(
-        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
+        "unsupported dataflow `{dataflow_id}` for source `{source}`; supported dataflows: {ABS_CPI_DATAFLOW_ID}, {AEMO_DISPATCH_DATAFLOW_ID}, {APRA_QUARTERLY_DATAFLOW_ID}, {ASX_MARKET_STATISTICS_DATAFLOW_ID}, {RBA_STAT_TABLES_DATAFLOW_ID}, {STATE_BUDGETS_NSW_DATAFLOW_ID}, {STATE_BUDGETS_VIC_DATAFLOW_ID}, {STATE_BUDGETS_QLD_DATAFLOW_ID}, {TREASURY_BUDGET_DATAFLOW_ID}"
     );
 }
 
@@ -975,9 +1296,37 @@ mod tests {
 
     #[test]
     fn configured_shutdown_grace_propagates_to_pipeline_options() {
-        let options = pipeline_options(Duration::from_secs(7));
+        let options = pipeline_options_with_env(Duration::from_secs(7), |_| None)
+            .expect("default pipeline options");
 
         assert_eq!(options.shutdown_grace, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn pipeline_env_overrides_load_batch_limits() {
+        let options = pipeline_options_with_env(Duration::from_secs(7), |name| match name {
+            "AU_KPIS_PIPELINE__LOAD_MAX_ROWS" => Some("125".to_string()),
+            "AU_KPIS_PIPELINE__LOAD_MAX_BYTES" => Some("65536".to_string()),
+            _ => None,
+        })
+        .expect("pipeline options with load overrides");
+
+        assert_eq!(options.load_max_rows, 125);
+        assert_eq!(options.load_max_bytes, 65_536);
+        assert_eq!(options.shutdown_grace, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn pipeline_env_rejects_zero_load_batch_limit() {
+        let err = pipeline_options_with_env(Duration::from_secs(7), |name| match name {
+            "AU_KPIS_PIPELINE__LOAD_MAX_ROWS" => Some("0".to_string()),
+            _ => None,
+        })
+        .expect_err("zero load row limit should fail")
+        .to_string();
+
+        assert!(err.contains("AU_KPIS_PIPELINE__LOAD_MAX_ROWS"));
+        assert!(err.contains("positive integer"));
     }
 
     #[test]
@@ -991,11 +1340,34 @@ mod tests {
 
     #[test]
     fn unsupported_source_reports_specific_error() {
-        let err = validate_once_target("aemo", "cpi")
+        let err = validate_once_target("unknown", "cpi")
             .expect_err("unsupported source should fail")
             .to_string();
         assert!(err.contains("unsupported source"));
-        assert!(err.contains("abs, apra, rba, state-budgets, treasury"));
+        assert!(err.contains("abs, aemo, apra, asx, rba, state-budgets, treasury"));
+    }
+
+    #[test]
+    fn aemo_once_mode_resolves_dispatch_dataflow() {
+        let request = once_run_request("aemo", "dispatch").expect("AEMO dispatch is supported");
+
+        assert_eq!(request.source_id.as_str(), "aemo");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("aemo.dispatch").unwrap())
+        );
+    }
+
+    #[test]
+    fn asx_once_mode_resolves_market_statistics_dataflow() {
+        let request = once_run_request("asx", "market-statistics")
+            .expect("ASX market statistics are supported");
+
+        assert_eq!(request.source_id.as_str(), "asx");
+        assert_eq!(
+            request.dataflow_id.as_ref(),
+            Some(&DataflowId::new("asx.market_statistics").unwrap())
+        );
     }
 
     #[test]

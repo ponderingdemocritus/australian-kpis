@@ -1,0 +1,96 @@
+---
+source: crates/adapters/aemo/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "aemo.dispatch",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "regional_reference_price",
+      "region": "NSW1"
+    },
+    "unit": "AUD/MWh",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 80.56426,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "RRP",
+      "aemo_table": "PRICE",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "price_status": "FIRM",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "fccabd28d209b3b173115b703bb0e4baaaef1c594f0c8dcba925dc4ff34a7a5a"
+  },
+  {
+    "dataflow_id": "aemo.dispatch",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "regional_reference_price",
+      "region": "QLD1"
+    },
+    "unit": "AUD/MWh",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 76.72819,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "RRP",
+      "aemo_table": "PRICE",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "price_status": "FIRM",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "fccabd28d209b3b173115b703bb0e4baaaef1c594f0c8dcba925dc4ff34a7a5a"
+  },
+  {
+    "dataflow_id": "aemo.dispatch",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "total_demand",
+      "region": "NSW1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 9576.41,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "TOTALDEMAND",
+      "aemo_table": "REGIONSUM",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "fccabd28d209b3b173115b703bb0e4baaaef1c594f0c8dcba925dc4ff34a7a5a"
+  },
+  {
+    "dataflow_id": "aemo.dispatch",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "total_demand",
+      "region": "QLD1"
+    },
+    "unit": "MW",
+    "time": "2026-06-19T17:05:00+00:00",
+    "time_precision": "Minute",
+    "value": 7372.54,
+    "status": "Normal",
+    "attributes": {
+      "aemo_field": "TOTALDEMAND",
+      "aemo_table": "REGIONSUM",
+      "license": "AEMO Copyright and Disclaimer Notice",
+      "license_url": "https://aemo.com.au/privacy-and-legal-notices/copyright-permissions",
+      "source": "Australian Energy Market Operator",
+      "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+    },
+    "source_artifact_id": "fccabd28d209b3b173115b703bb0e4baaaef1c594f0c8dcba925dc4ff34a7a5a"
+  }
+]

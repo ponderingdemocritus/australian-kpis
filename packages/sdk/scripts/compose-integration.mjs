@@ -45,10 +45,23 @@ const latest = await client.observations.latest({
 assertEqual(latest.latest_observation?.value, 136.9)
 assertEqual(latest.revision?.revision_no, 1)
 
+const search = await client.search.catalog({ limit: 5, q: 'index' })
+assertEqual(search.query, 'index')
+assertIncludes(
+  search.results.map((result) => result.id),
+  'abs.cpi',
+)
+
 console.log('SDK compose integration passed')
 
 function assertEqual(actual, expected) {
   if (actual !== expected) {
     throw new Error(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
+}
+
+function assertIncludes(actual, expected) {
+  if (!actual.includes(expected)) {
+    throw new Error(`expected ${JSON.stringify(actual)} to include ${JSON.stringify(expected)}`)
   }
 }

@@ -11,7 +11,9 @@ description = "Ingestion worker binary."
 anyhow = "1"
 au-kpis-adapter = { workspace = true }
 au-kpis-adapter-abs = { path = "../../adapters/abs" }
+au-kpis-adapter-aemo = { path = "../../adapters/aemo" }
 au-kpis-adapter-apra = { path = "../../adapters/apra" }
+au-kpis-adapter-asx = { path = "../../adapters/asx" }
 au-kpis-adapter-rba = { path = "../../adapters/rba" }
 au-kpis-adapter-state-budgets = { path = "../../adapters/state-budgets" }
 au-kpis-adapter-treasury = { path = "../../adapters/treasury" }
@@ -21,6 +23,7 @@ au-kpis-domain = { workspace = true }
 au-kpis-error = { workspace = true }
 au-kpis-ingestion-core = { workspace = true }
 au-kpis-loader = { workspace = true }
+au-kpis-pdf-client = { workspace = true }
 au-kpis-queue = { workspace = true }
 au-kpis-storage = { workspace = true }
 au-kpis-telemetry = { workspace = true }
@@ -31,6 +34,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive", "env"] }
 # Needed to construct the production S3/R2 store from ingestion-process env config.
 object_store = { version = "0.11", features = ["aws"] }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = "0.7"
 tracing = "0.1"

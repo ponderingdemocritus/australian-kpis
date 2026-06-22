@@ -6,12 +6,19 @@
     "declaration": false,
     "declarationMap": false,
     "emitDeclarationOnly": false,
+    "incremental": true,
     "jsx": "react-jsx",
     "noEmit": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "paths": {
       "@/*": ["./src/*"]
     },
-    "types": ["vite/client"]
+    "types": ["node"]
   },
-  "include": ["src", "vite.config.ts", "playwright.config.ts", "e2e"]
+  "include": ["next-env.d.ts", ".next/types/**/*.ts", "src", "playwright.config.ts", "e2e"],
+  "exclude": ["node_modules"]
 }

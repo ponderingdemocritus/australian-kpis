@@ -765,6 +765,34 @@ async fn seed_stub_artifact(pool: &PgPool, artifact_id: ArtifactId, source_url: 
     .expect("insert artifact");
 }
 
+async fn seed_completed_artifact_load(pool: &PgPool, artifact_id: ArtifactId) {
+    sqlx::query(
+        "INSERT INTO artifact_loads (
+             artifact_id, source_id, dataflow_id, observations_parsed,
+             observations_loaded, job_id, trace_parent
+         )
+         VALUES ($1, 'stub', 'stub.cpi', 1, 1, 'job-1', $2)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(TRACE_PARENT)
+    .execute(pool)
+    .await
+    .expect("insert completed artifact load");
+}
+
+async fn artifact_load_counts(pool: &PgPool, artifact_id: ArtifactId) -> Option<(i64, i64)> {
+    sqlx::query_as(
+        "SELECT observations_parsed, observations_loaded
+         FROM artifact_loads
+         WHERE artifact_id = $1
+           AND dataflow_id = 'stub.cpi'",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .fetch_optional(pool)
+    .await
+    .expect("read completed artifact load")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancellation_bounds_busy_fetch_stage_by_shutdown_grace() {
     let cancellation = CancellationToken::new();
@@ -792,6 +820,93 @@ async fn cancellation_bounds_busy_fetch_stage_by_shutdown_grace() {
         ),
         "{result:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_artifact_load_skips_parse_and_load_rerun() {
+    let timescale = start_timescale("au_kpis_pipeline_completed_artifact_skip")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+    seed_completed_artifact_load(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::WrongArtifactId,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 1,
+            parse_concurrency: 1,
+            load_max_rows: 1,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("completed artifact rerun should skip parse");
+
+    assert_eq!(stats.discovered, 1);
+    assert_eq!(stats.fetched, 1);
+    assert_eq!(stats.parsed, 0);
+    assert_eq!(stats.loaded.observations_loaded, 0);
+    assert_eq!(stats.loaded.parse_errors, 0);
+
+    let observation_count: i64 = sqlx::query_scalar("SELECT count(*) FROM observations")
+        .fetch_one(&pool)
+        .await
+        .expect("count observations");
+    assert_eq!(observation_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successful_artifact_load_records_completion_marker() {
+    let timescale = start_timescale("au_kpis_pipeline_artifact_load_marker")
+        .await
+        .expect("start timescaledb container");
+    let cfg = DatabaseConfig {
+        url: timescale.url().to_string(),
+    };
+    let pool = connect_with_retry(&cfg).await;
+    migrate(&pool).await.expect("apply migrations");
+    let artifact_id = ArtifactId::of_content(b"job-1");
+    seed_stub_reference_data(&pool, artifact_id).await;
+
+    let stats = pipeline_with_pool(
+        StubMode::RevisionRows,
+        pool.clone(),
+        PipelineOptions {
+            channel_capacity: 2,
+            fetch_concurrency: 1,
+            parse_concurrency: 1,
+            load_max_rows: 64,
+            shutdown_grace: Duration::from_secs(5),
+            ..PipelineOptions::default()
+        },
+        None,
+    )
+    .run_source(
+        SourceId::new("stub").unwrap(),
+        contexts(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("run artifact load");
+
+    assert_eq!(stats.parsed, 2);
+    assert_eq!(stats.loaded.observations_loaded, 2);
+    assert_eq!(artifact_load_counts(&pool, artifact_id).await, Some((2, 2)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

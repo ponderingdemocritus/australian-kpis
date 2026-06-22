@@ -177,7 +177,7 @@ pub async fn enqueue_data_update_event(
              subscription_id, event_type, dataflow_id, artifact_id, payload,
              status, attempts, max_attempts, next_attempt_at
          )
-         SELECT id, $2, $1, $3, $4, 'pending', 0, $5, now()
+         SELECT id, $2, $1, $3, $4, 'pending', 0, $5, $6
          FROM webhook_subscriptions
          WHERE status = 'active'
            AND (cardinality(dataflow_ids) = 0 OR $1 = ANY(dataflow_ids))",
@@ -187,6 +187,7 @@ pub async fn enqueue_data_update_event(
     .bind(artifact_bytes)
     .bind(payload)
     .bind(DEFAULT_DELIVERY_MAX_ATTEMPTS)
+    .bind(event.occurred_at)
     .execute(pool)
     .await?;
 

@@ -31,7 +31,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, env, path::Path};
 
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use figment::{
@@ -250,6 +250,20 @@ struct Defaults {
     rate_limits: RateLimitConfig,
 }
 
+impl Defaults {
+    fn with_runtime_env() -> Self {
+        let mut defaults = Self::default();
+        if env::var_os("AU_KPIS_HTTP__BIND").is_none() {
+            if let Ok(port) = env::var("PORT") {
+                if port.parse::<u16>().is_ok() {
+                    defaults.http.bind = format!("0.0.0.0:{port}");
+                }
+            }
+        }
+        defaults
+    }
+}
+
 /// Load [`AppConfig`] using the standard **defaults → TOML → env** precedence.
 ///
 /// - Defaults come from each field's [`Default`] impl.
@@ -276,7 +290,7 @@ where
 }
 
 fn config_figment(toml_path: Option<&Path>) -> Figment {
-    let mut fig = Figment::from(Serialized::defaults(Defaults::default()));
+    let mut fig = Figment::from(Serialized::defaults(Defaults::with_runtime_env()));
 
     if let Some(path) = toml_path {
         fig = fig.merge(Toml::file_exact(path));
@@ -328,6 +342,7 @@ mod tests {
     #[test]
     fn env_alone_supplies_required_fields() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
             jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
             let cfg = load(None).expect("env supplies required fields");
@@ -344,8 +359,38 @@ mod tests {
     }
 
     #[test]
+    fn railway_port_supplies_default_bind_when_explicit_bind_is_absent() {
+        Jail::expect_with(|jail| {
+            jail.set_env("PORT", "9123");
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+
+            let cfg = load(None).expect("env supplies required fields");
+
+            assert_eq!(cfg.http.bind, "0.0.0.0:9123");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn explicit_bind_overrides_railway_port_default() {
+        Jail::expect_with(|jail| {
+            jail.set_env("PORT", "9123");
+            jail.set_env("AU_KPIS_HTTP__BIND", "0.0.0.0:8080");
+            jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
+            jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
+
+            let cfg = load(None).expect("env supplies required fields");
+
+            assert_eq!(cfg.http.bind, "0.0.0.0:8080");
+            Ok(())
+        });
+    }
+
+    #[test]
     fn env_parses_cors_allowed_origins_list() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
             jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
             jail.set_env(
@@ -369,6 +414,7 @@ mod tests {
     #[test]
     fn default_rate_limits_match_free_tier_spec() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
             jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
 
@@ -392,6 +438,7 @@ mod tests {
     #[test]
     fn env_can_override_rate_limit_tiers() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
             jail.set_env("AU_KPIS_CACHE__URL", "redis://env:6379");
             jail.set_env("AU_KPIS_RATE_LIMITS__DEFAULT_TIER", "internal");
@@ -440,6 +487,7 @@ mod tests {
     #[test]
     fn ingestion_env_allows_missing_cache_url() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.set_env("AU_KPIS_DATABASE__URL", "postgres://env/db");
             let cfg = load_ingestion(None).expect("ingestion config without cache url");
             assert_eq!(cfg.database.url, "postgres://env/db");
@@ -452,6 +500,7 @@ mod tests {
     #[test]
     fn toml_overrides_defaults() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.create_file(
                 "au-kpis.toml",
                 r#"
@@ -491,6 +540,7 @@ mod tests {
     #[test]
     fn env_overrides_toml() {
         Jail::expect_with(|jail| {
+            jail.set_env("PORT", "not-a-port");
             jail.create_file(
                 "au-kpis.toml",
                 r#"

@@ -35,6 +35,10 @@ services:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
+      GOMEMLIMIT: ${AU_KPIS_MINIO_GOMEMLIMIT:-64MiB}
+      GOGC: ${AU_KPIS_MINIO_GOGC:-50}
+      MINIO_BROWSER: "off"
+      MINIO_SCANNER_SPEED: slowest
       MINIO_ROOT_USER: au_kpis_minio
       MINIO_ROOT_PASSWORD: au_kpis_minio_dev_password
     ports:
@@ -58,7 +62,7 @@ services:
     init: true
     environment:
       AU_KPIS_OBJECT_STORE__ENDPOINT: http://minio:9000
-      AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-local
+      AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-artifacts
       AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID: au_kpis_minio
       AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY: au_kpis_minio_dev_password
       AU_KPIS_OBJECT_STORE__REGION: us-east-1
@@ -126,7 +130,7 @@ services:
       AU_KPIS_HTTP__BIND: 0.0.0.0:3000
       AU_KPIS_DATABASE__URL: postgres://au_kpis:au_kpis@postgres:5432/au_kpis
       AU_KPIS_OBJECT_STORE__ENDPOINT: http://minio:9000
-      AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-local
+      AU_KPIS_OBJECT_STORE__BUCKET: au-kpis-artifacts
       AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID: au_kpis_minio
       AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY: au_kpis_minio_dev_password
       AU_KPIS_OBJECT_STORE__REGION: us-east-1

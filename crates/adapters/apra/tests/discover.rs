@@ -28,6 +28,22 @@ const RELEASE_FIXTURE: &str = r#"
 </main>
 "#;
 
+const SYSTEM_FILES_RELEASE_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Quarterly authorised deposit-taking institution statistics</h1>
+  <a href="/system/files/2026-05/Quarterly%20authorised%20deposit-taking%20institution%20performance-September%202004%20to%20December%202025.xlsx">
+    Quarterly authorised deposit-taking institution performance - September 2004 to December 2025
+  </a>
+  <a href="/system/files/2026-05/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx">
+    Authorised deposit-taking institution centralised publication - March 2013 to December 2025
+  </a>
+  <a href="/system/files/2026-05/Quarterly%20authorised%20deposit-taking%20institution%20property%20exposures%20statistics%20December%202025.xlsx">
+    Quarterly authorised deposit-taking institution property exposures statistics December 2025
+  </a>
+</main>
+"#;
+
 async fn serve_release_calendar_once(body: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -78,6 +94,21 @@ fn parse_release_calendar_discovers_xls_artifacts() {
         })
         .collect::<Vec<_>>();
     insta::assert_json_snapshot!(snapshot);
+}
+
+#[test]
+fn parse_release_calendar_discovers_current_system_files_xls_artifacts() {
+    let releases = ApraAdapter::parse_release_calendar(SYSTEM_FILES_RELEASE_FIXTURE)
+        .expect("parse APRA release calendar with current system file paths");
+
+    assert_eq!(releases.len(), 3);
+    assert_eq!(releases[0].publication_slug, "adi-centralised");
+    assert_eq!(
+        releases[0].source_url,
+        "https://www.apra.gov.au/system/files/2026-05/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx"
+    );
+    assert_eq!(releases[1].publication_slug, "adi-performance");
+    assert_eq!(releases[2].publication_slug, "adi-property-exposures");
 }
 
 #[test]

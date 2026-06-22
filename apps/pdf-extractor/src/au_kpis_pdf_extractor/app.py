@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from os import getenv
 from pathlib import Path
 from typing import Protocol
@@ -20,7 +20,12 @@ class StorageClient(Protocol):
 
 
 class Extractor(Protocol):
-    def extract(self, pdf_path: Path, artifact_key: str) -> ExtractionResponse: ...
+    def extract(
+        self,
+        pdf_path: Path,
+        artifact_key: str,
+        pages: Sequence[int] | None = None,
+    ) -> ExtractionResponse: ...
 
 
 def create_app(
@@ -49,6 +54,7 @@ def create_app(
                     table_extractor.extract,
                     pdf_path,
                     request.s3_key,
+                    request.pages,
                 )
             except ObjectNotFound as err:
                 raise HTTPException(status_code=404, detail=str(err)) from err

@@ -825,7 +825,7 @@ expression: emitted_spec()
               },
               {
                 "$ref": "#/components/schemas/Observation",
-                "description": "Latest observation by timestamp, using `observations_latest` revision selection."
+                "description": "Latest observation by timestamp and highest revision for that timestamp."
               }
             ]
           },
@@ -931,6 +931,7 @@ expression: emitted_spec()
       "TimePrecision": {
         "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
         "enum": [
+          "minute",
           "day",
           "week",
           "month",

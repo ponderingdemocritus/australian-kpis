@@ -18,5 +18,5 @@
 [16.800000,"o","@au-kpis/sdk-generated:build: cache hit\r\n@au-kpis/sdk:build: cache hit\r\nTasks: 2 successful, 2 total\r\n"]
 [17.100000,"o","$ node --input-type=module <<'JS'\r\nimport { createClient } from '@au-kpis/sdk'\r\nconst client = createClient({ baseUrl: 'http://127.0.0.1:3000', validate: true })\r\nconst page = await client.observations.list({ dataflow: 'abs.cpi', dimensions: { region: 'AUS' }, limit: 5 })\r\nconsole.log({ count: page.observations.length, firstObservation: page.observations[0] })\r\nJS\r\n"]
 [17.600000,"o","{ count: 5, firstObservation: { dataflow: 'abs.cpi', dimensions: { region: 'AUS' } } }\r\n"]
-[17.900000,"o","$ VITE_AU_KPIS_API_BASE_URL=http://127.0.0.1:3000 pnpm --filter @au-kpis/web dev -- --port 4174\r\n"]
+[17.900000,"o","$ NEXT_PUBLIC_AU_KPIS_API_BASE_URL=http://127.0.0.1:3000 pnpm --filter @au-kpis/web dev -- --port 4174\r\n"]
 [18.800000,"o","VITE ready in 420 ms\r\nLocal: http://127.0.0.1:4174/\r\nExplorer renders national CPI and state comparison charts.\r\n"]

@@ -11,9 +11,11 @@
       "**/dist/**",
       "**/build/**",
       "**/.turbo/**",
+      "**/next-env.d.ts",
       "**/node_modules/**",
       "**/target/**",
       "**/coverage/**",
+      "**/next-env.d.ts",
       "**/packages/sdk-generated/**"
     ]
   },

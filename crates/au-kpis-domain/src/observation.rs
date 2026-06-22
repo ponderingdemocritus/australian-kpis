@@ -13,6 +13,7 @@ use crate::ids::{ArtifactId, SeriesKey};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TimePrecision {
+    Minute,
     Day,
     Week,
     Month,
@@ -116,6 +117,10 @@ mod tests {
             serde_json::to_string(&TimePrecision::Quarter).unwrap(),
             "\"quarter\""
         );
+        assert_eq!(
+            serde_json::to_string(&TimePrecision::Minute).unwrap(),
+            "\"minute\""
+        );
     }
 
     #[test]
@@ -133,6 +138,7 @@ mod tests {
 
     fn arb_time_precision() -> impl Strategy<Value = TimePrecision> {
         prop_oneof![
+            Just(TimePrecision::Minute),
             Just(TimePrecision::Day),
             Just(TimePrecision::Week),
             Just(TimePrecision::Month),

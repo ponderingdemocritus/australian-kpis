@@ -94,7 +94,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 | **Ingestion + workers** | **Rust (tokio, reqwest, calamine, polars)** | Flat memory at millions of rows; shared types with API; `polars`/`arrow-rs` advantage |
 | **PDF extractor** | **Python FastAPI sidecar** with strategy backends (`pdfplumber` + `camelot` baseline; optional pinned local Docling/VLM fallback) | Deterministic extraction first; model assistance only when validation/format-drift requires it |
 | **SDK** | **TypeScript**, generated from OpenAPI (`openapi-typescript` + orval + hand-written ergonomic wrapper) | Consumer language; typed; tree-shakeable; Bun/Node/browser/Deno compatible |
-| **Client** | **TypeScript (Vite + React + TanStack Query + shadcn/ui)** | Reference app demonstrating SDK |
+| **Client** | **TypeScript (Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui)** | Reference app demonstrating SDK |
 | **DB** | **Timescale Cloud (Postgres 16 + TimescaleDB)** | Hypertables, continuous aggregates, compression; managed ops |
 | **Queue** | **Postgres-backed `Queue` trait implementation** | One fewer infra piece; transactional dequeue; retries + cron registration built in; trait lets us swap to `apalis` later |
 | **Cache + rate limit** | **Redis (`fred`)** | Token bucket, ETags, hot-path caching |
@@ -154,7 +154,7 @@ australian-kpis/
 │       └── au-kpis-cli/                    # Admin CLI (migrations, backfills)
 ├── apps/                                   # TS apps
 │   ├── pdf-extractor/                      # Python FastAPI (in apps/ for proximity)
-│   └── web/                                # Vite + React reference client
+│   └── web/                                # Next.js + React reference client
 ├── packages/                               # TS packages
 │   ├── sdk/                                # @au-kpis/sdk (published to npm)
 │   ├── sdk-generated/                      # auto-generated from openapi.json
@@ -475,7 +475,7 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 
 - **`series`** — vanilla Postgres, GIN index on `dimensions` JSONB for dimensional queries like "all VIC observations". ~100K rows, small.
 - **`observations`** — **Timescale hypertable**, narrow table of `(series_key, time, revision_no, value, status, attributes, artifact_id)`. Primary key `(series_key, time, revision_no)`. Chunked on `time` (1-month), space-partitioned on `series_key` hash.
-- **`observations_latest`** — materialized view / continuous aggregate: most-recent revision per `(series_key, time)`. This is the default query target; full `observations` for audit/revision history.
+- **`observations_latest`** — materialized view / continuous aggregate: most-recent revision per `(series_key, time)`. Kept for validation and targeted maintenance paths; latency-sensitive API reads resolve bounded `series` rows first and then query `observations` by concrete `series_key` values so high-cardinality dataflows do not force global hypertable sorts. Full `observations` remains the audit/revision source of truth.
 - **Compression** on chunks >7 days old (90%+ savings on numeric data).
 - **Continuous aggregates** for weekly/monthly/quarterly rollups per series, refreshed by policy.
 - `sources`, `dataflows`, `dimensions`, `codelists`, `codes`, `measures` — vanilla relational tables.
@@ -483,12 +483,15 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 - `parse_errors` — rows that failed validation, keyed to artifact for re-processing.
 - `api_keys` — hashed (argon2id), scopes, rate-limit tier.
 
-Typical query plan:
+Typical latest-observation query plan:
 ```
-1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>
-2. SELECT * FROM observations_latest WHERE series_key IN (...) AND time BETWEEN ... ORDER BY time
-   (hypertable chunk exclusion makes this fast even over years of data)
-3. Stream results to client in JSON/CSV/Parquet
+1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
+2. If a latest-observation request still matches a high-cardinality series set,
+   reject it with `400` and ask the client to add more dimension filters.
+3. Query `observations` by the accepted concrete `series_key` values, ordered by
+   `(time, series_key, revision_no DESC)`, and collapse duplicate revisions in
+   the API stream so the latest revision wins.
+4. Stream results to client in JSON/CSV/Parquet.
 ```
 
 ---
@@ -604,8 +607,10 @@ validation.
   for born-digital PDFs.
 - Optional model backends: open-source document/table models such as Docling
   or Granite Docling, used only as a fallback or comparison path.
-- `POST /extract { s3_key, source_id, artifact_date?, strategy? }` fetches
-  directly from S3/R2 and streams structured table candidates back.
+- `POST /extract { s3_key, source_id, artifact_date?, strategy?, pages? }`
+  fetches directly from S3/R2 and streams structured table candidates back.
+  `pages` is an optional non-empty list of 1-indexed pages for source-specific
+  bounded extraction windows.
 - Dockerized with Ghostscript, OpenCV, Tk, and optional model dependencies in
   a separate image/profile so the deterministic sidecar remains lightweight.
 - Horizontally scalable; Rust adapter calls via `au-kpis-pdf-client` crate
@@ -706,6 +711,12 @@ GET  /v1/openapi.json
 - **Rate limits** (free tier defaults): 60 rps / 1000 requests per hour per key. Burst allowance of 2x. Token bucket in Redis via `fred`. Returns `429` with `Retry-After` header and `X-RateLimit-*` headers on every response. Anonymous (no key) tier: 10 rps / 100 per hour per IP.
 - **Caching**: Dataflow metadata long TTL. Observation responses ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Cloudflare CDN in front.
 - **Pagination**: cursor-based (opaque base64 of `(time, series_key)` pair). Max 10k rows per page.
+- **High-cardinality latest reads**: `/v1/observations` latest-revision requests
+  must be dimension-filtered enough to match fewer than 512 series. Broader
+  requests return `400` with a problem detail explaining that more
+  `dimensions[]` filters are required; clients should use codelist/catalog
+  endpoints to discover the needed dimension values first. Rollup requests use
+  their aggregate views and are exempt from this latest-read guard.
 - **Formats**: JSON default; CSV; **Parquet streamed via arrow-rs** — this is the killer feature for data-science consumers.
 - **Versioning**: additive changes same version; breaking changes → `/v2`. OpenAPI diff enforced in CI via `oasdiff`.
 - **Problem+JSON** error bodies (RFC 7807).
@@ -796,7 +807,7 @@ for await (const obs of client.observations.stream({
 
 // Catalog
 const dataflows = await client.dataflows.list({ source: 'abs' })
-const matches = await client.search('unemployment')
+const matches = await client.search.catalog({ q: 'unemployment' })
 ```
 
 - **Runtime validation** (optional, off by default): Zod schemas generated from OpenAPI via `openapi-zod-client`; consumers pass `{ validate: true }` to enable.
@@ -808,11 +819,11 @@ const matches = await client.search('unemployment')
 
 ## Reference client (apps/web)
 
-Vite + React 18 + TanStack Query + Tailwind + shadcn/ui + Observable Plot.
+Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui dashboard components + Recharts.
 
 Pages:
+- **Index** — overview of loaded sources, frequencies, featured indicators, and catalog/search coverage.
 - **Explorer** — browse dataflows, pick dimensions, chart.
-- **Search** — full-text across measures.
 - **Compare** — multiple series on one chart.
 - **Playground** — live query form → response viewer with curl / SDK snippet.
 
@@ -955,7 +966,7 @@ apps/web/e2e/               # Playwright
 | Compile | `cargo check --workspace` | clean |
 | Lint | `cargo clippy -- -D warnings`, `pnpm run lint` (`biome check` + `markdownlint-cli2`) | clean |
 | Format | `cargo fmt --check`, `biome format --check` | clean |
-| Tests | `cargo nextest run --workspace`, `vitest run`, Playwright | zero fail, zero flake |
+| Tests | `cargo nextest run --workspace`, `pnpm turbo run typecheck test`, SDK integration, Playwright | zero fail, zero flake |
 | Coverage | `cargo-llvm-cov` | ≥80% line, ≥70% branch |
 | Snapshot | `insta` | no unreviewed drift |
 | OpenAPI | `oasdiff breaking` | no breaking without `/v2` |
@@ -986,7 +997,7 @@ parallel:
   - typecheck       (cargo check + tsc)
   - lint            (clippy, `pnpm run lint` = biome + markdownlint, gitleaks, cargo-deny)
   - build           (sccache cargo + pnpm build)
-  - test            (nextest + vitest, testcontainers, source-specific streaming memory guardrails such as the ABS DHAT fetch/parse profiles)
+  - test            (nextest + `pnpm turbo run typecheck test`, SDK runtime + compose integration, testcontainers, Playwright, source-specific streaming memory guardrails such as the ABS DHAT fetch/parse profiles)
   - coverage        (clean cargo-llvm-cov profile data with pinned nightly coverage toolchain → LCOV line/branch coverage → Codecov PR comment)
   - snapshot        (insta check)
   - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
@@ -1282,7 +1293,7 @@ Each phase ends demo-able.
 15. `crates/bins/au-kpis-api/src/main.rs`
 16. `crates/bins/au-kpis-ingestion/src/main.rs`
 17. `packages/sdk/src/client.ts`
-18. `apps/web/src/{App,pages/Explorer}.tsx`
+18. `apps/web/src/{app,features,components}/`
 19. `infra/compose/docker-compose.yml`
 20. `.github/workflows/ci.yml`
 
@@ -1299,7 +1310,7 @@ Each phase ends demo-able.
 - `curl localhost:3000/v1/openapi.json` → valid OpenAPI 3.1 doc (validated via the OpenAPI 3.1 JSON schema)
 - `SELECT * FROM timescaledb_information.hypertables` shows `observations` hypertable
 - Migrations round-trip: up → down → up yields identical schema
-- TS: `pnpm -w build` succeeds; SDK regen pipeline runs; `vitest run` passes
+- TS: `pnpm -w build` succeeds; SDK regen pipeline runs; web Playwright suite passes
 - `gitleaks`, `cargo-deny`, `cargo-audit`, `trivy` all clean
 - PR CI flow executes <5 min on warm cache
 - Post-deploy smoke script runs green against `docker-compose` stack
@@ -1330,7 +1341,7 @@ Each phase ends demo-able.
 - Chaos: kill ingestion mid-load, restart, verify no duplicates / no missing rows
 
 ### Ongoing CI
-- Every PR: `cargo check/clippy/test`, `cargo deny`, `cargo audit`, `pnpm run lint`, TS typecheck/build, OpenAPI diff
+- Every PR: `cargo check/clippy/test`, `cargo deny`, `cargo audit`, `pnpm run lint`, `pnpm turbo run typecheck test`, SDK integration, OpenAPI diff
 - Staging deploy on merge to `main`
 - Prod deploy behind manual approval
 - Weekly dependency updates via Renovate

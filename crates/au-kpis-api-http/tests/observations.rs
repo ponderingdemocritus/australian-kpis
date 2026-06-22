@@ -116,13 +116,32 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
         .oneshot(
             Request::builder()
                 .uri("/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01&until=2024-12-31&limit=1")
-                .header(header::IF_NONE_MATCH, etag)
+                .header(header::IF_NONE_MATCH, etag.clone())
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("cached response");
     assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+
+    sqlx::query(
+        "UPDATE series SET updated_at = now() + interval '1 second' WHERE dataflow_id = 'abs.cpi'",
+    )
+    .execute(db.pool())
+    .await
+    .expect("touch series metadata");
+    let changed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01&until=2024-12-31&limit=1")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("changed etag response");
+    assert_eq!(changed.status(), StatusCode::OK);
 
     let csv = app
         .oneshot(request(
@@ -243,6 +262,42 @@ async fn observations_endpoint_streams_decodable_parquet_with_headers() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broad_high_cardinality_observations_return_validation_error() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_observations_high_cardinality").await;
+    seed_observations(db.pool()).await;
+    for idx in 0..510 {
+        let region = format!("R{idx:03}");
+        insert_series(db.pool(), &region).await;
+    }
+    let app = router(test_state(db.pool().clone())).expect("router");
+
+    let response = app
+        .oneshot(request("/v1/observations?dataflow=abs.cpi&limit=3"))
+        .await
+        .expect("high-cardinality broad response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("problem body");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body).expect("problem details response");
+    assert_eq!(parsed["status"], StatusCode::BAD_REQUEST.as_u16());
+    assert!(
+        parsed["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("add more dimensions[] filters"),
+        "unexpected validation body: {parsed}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn paginated_observations_concatenate_to_the_full_result() {
     if !docker_available() {
         eprintln!("skipping testcontainers integration test: Docker socket unavailable");
@@ -290,6 +345,7 @@ async fn observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain(
     }
 
     let db = TestDb::start("au_kpis_api_observations_rollup").await;
+    disable_monthly_rollup_policy(db.pool()).await;
     seed_observations(db.pool()).await;
     seed_daily_rollup_observations(db.pool()).await;
     refresh_monthly_rollup(db.pool()).await;
@@ -629,6 +685,13 @@ async fn refresh_monthly_rollup(pool: &PgPool) {
     .expect("refresh monthly continuous aggregate");
 }
 
+async fn disable_monthly_rollup_policy(pool: &PgPool) {
+    sqlx::query("SELECT remove_continuous_aggregate_policy('observations_rollup_monthly', if_exists => TRUE)")
+        .execute(pool)
+        .await
+        .expect("remove monthly rollup refresh policy");
+}
+
 async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
     let dataflow = DataflowId::new("abs.cpi").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), region.to_string())]
@@ -692,6 +755,9 @@ impl ObservationSeed {
 }
 
 async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
+    let observed_at = Utc
+        .with_ymd_and_hms(seed.date.0, seed.date.1, seed.date.2, 0, 0, 0)
+        .unwrap();
     sqlx::query(
         "INSERT INTO observations (
              series_key, time, revision_no, time_precision, value, status,
@@ -701,10 +767,7 @@ async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
                  '{}'::jsonb, $6, $7)",
     )
     .bind(seed.series_key.digest().as_bytes().as_slice())
-    .bind(
-        Utc.with_ymd_and_hms(seed.date.0, seed.date.1, seed.date.2, 0, 0, 0)
-            .unwrap(),
-    )
+    .bind(observed_at)
     .bind(seed.revision_no)
     .bind(seed.time_precision)
     .bind(seed.value)
@@ -713,6 +776,17 @@ async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
     .execute(pool)
     .await
     .expect("insert observation");
+    sqlx::query(
+        "UPDATE series
+         SET first_observed = LEAST(COALESCE(first_observed, $2), $2),
+             last_observed = GREATEST(COALESCE(last_observed, $2), $2)
+         WHERE series_key = $1",
+    )
+    .bind(seed.series_key.digest().as_bytes().as_slice())
+    .bind(observed_at)
+    .execute(pool)
+    .await
+    .expect("update series observation bounds");
 }
 
 fn docker_available() -> bool {

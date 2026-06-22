@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,7 @@ class ExtractRequest(BaseModel):
     source_id: str = Field(min_length=1)
     artifact_date: str | None = None
     strategy: ExtractionStrategy | None = None
+    pages: list[Annotated[int, Field(ge=1)]] | None = Field(default=None, min_length=1)
 
 
 class BackendInfo(BaseModel):

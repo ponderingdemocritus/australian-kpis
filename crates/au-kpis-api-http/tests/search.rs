@@ -240,6 +240,43 @@ async fn search_catalog_returns_ranked_dataflows_and_measures_with_cache() {
     assert_eq!(parsed["results"][0]["id"], "abs.cpi");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_catalog_matches_dataflow_acronyms() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_search_acronym").await;
+    seed_catalog(db.pool()).await;
+
+    let app = router(test_state(
+        db.pool().clone(),
+        Arc::new(CacheClient::from_backend(NoopCacheBackend)),
+    ))
+    .expect("router");
+
+    let response = app
+        .oneshot(request("/v1/search?q=CPI&limit=5"))
+        .await
+        .expect("search response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("search body");
+    let parsed: Value = serde_json::from_slice(&body).expect("search json");
+    let results = parsed["results"].as_array().expect("results array");
+
+    assert!(
+        results.iter().any(|result| {
+            result["kind"] == "dataflow"
+                && result["id"] == "abs.cpi"
+                && result["name"] == "Consumer Price Index"
+        }),
+        "expected CPI acronym query to return Consumer Price Index dataflow: {parsed}"
+    );
+}
+
 async fn assert_search_ok(app: axum::Router, uri: &str) {
     let response = app.oneshot(request(uri)).await.expect("search response");
     assert_eq!(response.status(), StatusCode::OK);
@@ -386,7 +423,7 @@ async fn seed_catalog(pool: &PgPool) {
          VALUES
          (
              'abs.cpi', 'abs', 'Consumer Price Index',
-             'Quarterly CPI across Australian regions.',
+             'Quarterly consumer price index across Australian regions.',
              ARRAY['region', 'measure'], ARRAY['index'], 'quarterly', 'CC-BY-4.0',
              'Source: Australian Bureau of Statistics',
              'https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia'

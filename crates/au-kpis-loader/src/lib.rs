@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
@@ -47,6 +47,7 @@ pub struct LoadItemAudit {
 pub struct StagedLoad {
     conn: PoolConnection<Postgres>,
     stats: LoadStats,
+    promotion_max_rows: usize,
     cleaned: bool,
 }
 
@@ -390,12 +391,13 @@ pub async fn begin_staged_load(
     drop_staging_tables(&mut conn).await?;
     let mut tx = (&mut conn).begin().await?;
     create_series_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
-    create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS").await?;
+    create_observation_staging_table_with_on_commit(&mut tx, "PRESERVE ROWS", true).await?;
     tx.commit().await?;
 
     Ok(StagedLoad {
         conn,
         stats: LoadStats::default(),
+        promotion_max_rows: options.max_rows,
         cleaned: false,
     })
 }
@@ -455,8 +457,10 @@ impl StagedLoad {
         let result = async {
             let mut tx = (&mut self.conn).begin().await?;
             self.stats.series_upserted += upsert_series(&mut tx).await?;
-            self.stats.observations_loaded += upsert_observations(&mut tx).await?;
             tx.commit().await?;
+            self.stats.observations_loaded +=
+                upsert_observations_in_chunk_transactions(&mut self.conn, self.promotion_max_rows)
+                    .await?;
             Ok(self.stats)
         }
         .await;
@@ -578,7 +582,7 @@ async fn load_observation_batch(
     create_series_staging_table(&mut tx).await?;
     create_observation_staging_table(&mut tx).await?;
     copy_series(&mut tx, batch).await?;
-    copy_observations(&mut tx, batch).await?;
+    copy_direct_observations(&mut tx, batch).await?;
     let observations_loaded = upsert_observations(&mut tx).await?;
     tx.commit().await?;
 
@@ -621,15 +625,22 @@ async fn create_series_staging_table_with_on_commit(
 async fn create_observation_staging_table(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), LoadError> {
-    create_observation_staging_table_with_on_commit(tx, "DROP").await
+    create_observation_staging_table_with_on_commit(tx, "DROP", false).await
 }
 
 async fn create_observation_staging_table_with_on_commit(
     tx: &mut Transaction<'_, Postgres>,
     on_commit: &str,
+    include_stage_row_id: bool,
 ) -> Result<(), LoadError> {
+    let stage_row_id = if include_stage_row_id {
+        "stage_row_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+    } else {
+        ""
+    };
     let query = format!(
         "CREATE TEMP TABLE staging_observations (
+             {stage_row_id}
              series_key_hex TEXT NOT NULL,
              time TIMESTAMPTZ NOT NULL,
              revision_no INTEGER NOT NULL,
@@ -726,8 +737,56 @@ async fn copy_observations(
     tx: &mut Transaction<'_, Postgres>,
     batch: &[LoadItem],
 ) -> Result<(), LoadError> {
-    let mut payload = String::new();
+    let payload = observation_copy_payload(batch.iter())?;
+    copy_observation_payload(tx, payload).await
+}
+
+async fn copy_observations_deduped(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &[LoadItem],
+) -> Result<(), LoadError> {
+    let mut rows = BTreeMap::new();
     for item in batch {
+        rows.insert(
+            (
+                item.observation.series_key,
+                item.observation.time,
+                item.observation.revision_no,
+            ),
+            item,
+        );
+    }
+    let payload = observation_copy_payload(rows.into_values())?;
+    copy_observation_payload(tx, payload).await
+}
+
+async fn copy_direct_observations(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &[LoadItem],
+) -> Result<(), LoadError> {
+    if has_duplicate_observation_keys(batch) {
+        copy_observations_deduped(tx, batch).await
+    } else {
+        copy_observations(tx, batch).await
+    }
+}
+
+fn has_duplicate_observation_keys(batch: &[LoadItem]) -> bool {
+    let mut seen = HashSet::with_capacity(batch.len());
+    batch.iter().any(|item| {
+        !seen.insert((
+            item.observation.series_key,
+            item.observation.time,
+            item.observation.revision_no,
+        ))
+    })
+}
+
+fn observation_copy_payload<'a>(
+    rows: impl IntoIterator<Item = &'a LoadItem>,
+) -> Result<String, LoadError> {
+    let mut payload = String::new();
+    for item in rows {
         let obs = &item.observation;
         push_copy_fields(
             &mut payload,
@@ -745,7 +804,13 @@ async fn copy_observations(
             ],
         );
     }
+    Ok(payload)
+}
 
+async fn copy_observation_payload(
+    tx: &mut Transaction<'_, Postgres>,
+    payload: String,
+) -> Result<(), LoadError> {
     let mut copy = tx
         .as_mut()
         .copy_in_raw(
@@ -763,7 +828,7 @@ async fn copy_observations(
 
 async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
     let result = sqlx::query(
-        "INSERT INTO observations (
+        "INSERT INTO observations AS existing (
              series_key, time, revision_no, time_precision, value, status,
              attributes, ingested_at, source_artifact_id
          )
@@ -777,12 +842,141 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
              status = EXCLUDED.status,
              attributes = EXCLUDED.attributes,
              ingested_at = EXCLUDED.ingested_at,
-             source_artifact_id = EXCLUDED.source_artifact_id",
+             source_artifact_id = EXCLUDED.source_artifact_id
+         WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
+            OR existing.value IS DISTINCT FROM EXCLUDED.value
+            OR existing.status IS DISTINCT FROM EXCLUDED.status
+            OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
+            OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id",
     )
     .execute(&mut **tx)
     .await?;
 
     let observations_loaded = result.rows_affected();
+    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
+    Ok(observations_loaded)
+}
+
+async fn upsert_observations_in_chunk_transactions(
+    conn: &mut PoolConnection<Postgres>,
+    max_rows: usize,
+) -> Result<u64, LoadError> {
+    let chunk_limit = chunk_limit(max_rows)?;
+    let final_stage_row_id = max_staged_observation_row_id(conn).await?.unwrap_or(0);
+    if final_stage_row_id == 0 {
+        return Ok(0);
+    }
+
+    let mut last_stage_row_id = 0_i64;
+    let mut observations_loaded = 0_u64;
+    loop {
+        let mut tx = (&mut *conn).begin().await?;
+        let (max_stage_row_id, chunk_rows_loaded, had_rows) =
+            upsert_next_observation_chunk(&mut tx, last_stage_row_id, chunk_limit).await?;
+
+        if !had_rows {
+            tx.commit().await?;
+            break;
+        }
+
+        observations_loaded += chunk_rows_loaded;
+        last_stage_row_id = max_stage_row_id;
+
+        if last_stage_row_id >= final_stage_row_id {
+            enqueue_webhook_deliveries_for_observations(&mut tx, observations_loaded).await?;
+            tx.commit().await?;
+            break;
+        }
+
+        tx.commit().await?;
+    }
+
+    Ok(observations_loaded)
+}
+
+async fn max_staged_observation_row_id(
+    conn: &mut PoolConnection<Postgres>,
+) -> Result<Option<i64>, LoadError> {
+    sqlx::query_scalar("SELECT max(stage_row_id) FROM staging_observations")
+        .fetch_one(&mut **conn)
+        .await
+        .map_err(LoadError::from)
+}
+
+fn chunk_limit(max_rows: usize) -> Result<i64, LoadError> {
+    let chunk_limit = i64::try_from(max_rows)
+        .map_err(|_| LoadError::Validation("max_rows exceeds the database integer range".into()))?;
+    if chunk_limit <= 0 {
+        return Err(LoadError::Validation(
+            "max_rows must be greater than 0".into(),
+        ));
+    }
+    Ok(chunk_limit)
+}
+
+async fn upsert_next_observation_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    last_stage_row_id: i64,
+    chunk_limit: i64,
+) -> Result<(i64, u64, bool), LoadError> {
+    let (max_stage_row_id, chunk_rows_loaded, had_rows): (i64, i64, bool) = sqlx::query_as(
+        "WITH next_rows AS MATERIALIZED (
+             SELECT stage_row_id, series_key_hex, time, revision_no, time_precision,
+                    value, status, attributes, ingested_at, source_artifact_hex
+             FROM staging_observations
+             WHERE stage_row_id > $1
+             ORDER BY stage_row_id
+             LIMIT $2
+         ),
+         deduped_rows AS MATERIALIZED (
+             SELECT DISTINCT ON (series_key_hex, time, revision_no)
+                    stage_row_id, series_key_hex, time, revision_no, time_precision,
+                    value, status, attributes, ingested_at, source_artifact_hex
+             FROM next_rows
+             ORDER BY series_key_hex, time, revision_no, stage_row_id DESC
+         ),
+         inserted AS (
+             INSERT INTO observations AS existing (
+                 series_key, time, revision_no, time_precision, value, status,
+                 attributes, ingested_at, source_artifact_id
+             )
+             SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
+                    value, status, attributes, ingested_at,
+                    decode(source_artifact_hex, 'hex')
+             FROM deduped_rows
+             ON CONFLICT (series_key, time, revision_no) DO UPDATE
+             SET time_precision = EXCLUDED.time_precision,
+                 value = EXCLUDED.value,
+                 status = EXCLUDED.status,
+                 attributes = EXCLUDED.attributes,
+                 ingested_at = EXCLUDED.ingested_at,
+                 source_artifact_id = EXCLUDED.source_artifact_id
+             WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
+                OR existing.value IS DISTINCT FROM EXCLUDED.value
+                OR existing.status IS DISTINCT FROM EXCLUDED.status
+                OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
+                OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id
+             RETURNING 1
+         )
+         SELECT COALESCE((SELECT max(stage_row_id) FROM next_rows), $1)::BIGINT,
+                (SELECT count(*) FROM inserted)::BIGINT,
+                EXISTS(SELECT 1 FROM next_rows)",
+    )
+    .bind(last_stage_row_id)
+    .bind(chunk_limit)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    let chunk_rows_loaded = u64::try_from(chunk_rows_loaded)
+        .map_err(|_| LoadError::Validation("loaded observation count exceeded u64 range".into()))?;
+
+    Ok((max_stage_row_id, chunk_rows_loaded, had_rows))
+}
+
+async fn enqueue_webhook_deliveries_for_observations(
+    tx: &mut Transaction<'_, Postgres>,
+    observations_loaded: u64,
+) -> Result<(), LoadError> {
     let deliveries_enqueued = enqueue_webhook_deliveries_for_staging(tx).await?;
     if deliveries_enqueued > 0 {
         tracing::info!(
@@ -792,7 +986,7 @@ async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, 
         );
     }
 
-    Ok(observations_loaded)
+    Ok(())
 }
 
 async fn enqueue_webhook_deliveries_for_staging(
@@ -998,6 +1192,7 @@ fn escape_copy_field(payload: &mut String, field: &str) {
 
 fn time_precision_db(value: TimePrecision) -> &'static str {
     match value {
+        TimePrecision::Minute => "minute",
         TimePrecision::Day => "day",
         TimePrecision::Week => "week",
         TimePrecision::Month => "month",

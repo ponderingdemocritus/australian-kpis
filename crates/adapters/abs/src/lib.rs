@@ -18,7 +18,7 @@ use au_kpis_adapter::{
 };
 use au_kpis_domain::{
     Artifact, ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, Observation,
-    ObservationStatus, SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
+    ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_error::CoreError;
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_BASE_URL: &str = "https://data.api.abs.gov.au/rest";
 const STRUCTURE_JSON_ACCEPT: &str = "application/vnd.sdmx.structure+json";
-const DATA_JSON_ACCEPT: &str = "application/vnd.sdmx.data+json";
+const DATA_JSON_ACCEPT: &str = "application/vnd.sdmx.data+json;version=1.0.0-wd";
 const CPI_DATAFLOW_ID: &str = "CPI";
 const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
@@ -138,6 +138,15 @@ impl SourceAdapter for AbsAdapter {
 
     fn manifest(&self) -> &AdapterManifest {
         &self.manifest
+    }
+
+    fn source_metadata(&self) -> Option<Source> {
+        Some(Source {
+            id: SourceId::new("abs").expect("static source id is valid"),
+            name: "Australian Bureau of Statistics".into(),
+            homepage: "https://www.abs.gov.au".into(),
+            description: Some("Australia's national statistical agency.".into()),
+        })
     }
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
