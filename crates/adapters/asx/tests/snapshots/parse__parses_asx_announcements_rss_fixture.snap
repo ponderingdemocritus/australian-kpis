@@ -1,0 +1,54 @@
+---
+source: crates/adapters/asx/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "asx.announcements",
+    "measure_id": "announcement_count",
+    "dimensions": {
+      "category": "market_sensitive",
+      "symbol": "BHP"
+    },
+    "unit": "count",
+    "time": "2026-06-18T19:15:00+00:00",
+    "time_precision": "Minute",
+    "value": 1.0,
+    "status": "Normal",
+    "attributes": {
+      "announcement_category": "Market Sensitive",
+      "announcement_guid": "027xyz",
+      "announcement_title": "BHP - Change in substantial holding",
+      "announcement_url": "https://www.asx.com.au/asxpdf/20260619/pdf/027xyz.pdf",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/asx/rss/announcements.xml"
+    },
+    "source_artifact_id": "6bf912f332bf6fd95fe03fcb7205401fa1b759526149d6e95feaf65b1f491dee"
+  },
+  {
+    "dataflow_id": "asx.announcements",
+    "measure_id": "announcement_count",
+    "dimensions": {
+      "category": "director_interest_notice",
+      "symbol": "WBC"
+    },
+    "unit": "count",
+    "time": "2026-06-18T20:30:00+00:00",
+    "time_precision": "Minute",
+    "value": 1.0,
+    "status": "Normal",
+    "attributes": {
+      "announcement_category": "Director Interest Notice",
+      "announcement_guid": "027abc",
+      "announcement_title": "WBC - Appendix 3Y",
+      "announcement_url": "https://www.asx.com.au/asxpdf/20260619/pdf/027abc.pdf",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/asx/rss/announcements.xml"
+    },
+    "source_artifact_id": "6bf912f332bf6fd95fe03fcb7205401fa1b759526149d6e95feaf65b1f491dee"
+  }
+]
