@@ -554,6 +554,21 @@ mod tests {
                 .iter()
                 .any(|indicator| indicator.coverage_status == CoverageStatus::VisibleUnscored)
         );
+        assert!(config.indicators.iter().any(|indicator| {
+            indicator.indicator_id == "housing.commencements"
+                && indicator.source_dataflow_id == "abs.building_activity"
+                && indicator.measure_id == "dwellings_commenced"
+                && indicator
+                    .dimension_selector
+                    .get("region")
+                    .map(String::as_str)
+                    == Some("AUS")
+                && indicator
+                    .dimension_selector
+                    .get("measure")
+                    .map(String::as_str)
+                    == Some("dwellings_commenced")
+        }));
     }
 
     #[test]

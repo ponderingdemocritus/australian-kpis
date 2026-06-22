@@ -1,0 +1,78 @@
+---
+source: crates/adapters/abs/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "series_key": "3ea16e9bd99bb07bc0d8901d1b1ff052bb92177a38cb6605bb4742146aae1f25",
+    "dataflow_id": "abs.building_activity",
+    "measure_id": "dwellings_commenced",
+    "dimensions": {
+      "measure": "dwellings_commenced",
+      "region": "AUS"
+    },
+    "time": "2025-07-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 49582.0,
+    "status": "normal",
+    "attributes": {
+      "abs_release_period": "December 2025",
+      "abs_series": "seasonally_adjusted",
+      "source_url": "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release"
+    }
+  },
+  {
+    "series_key": "3ea16e9bd99bb07bc0d8901d1b1ff052bb92177a38cb6605bb4742146aae1f25",
+    "dataflow_id": "abs.building_activity",
+    "measure_id": "dwellings_commenced",
+    "dimensions": {
+      "measure": "dwellings_commenced",
+      "region": "AUS"
+    },
+    "time": "2025-10-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 53567.0,
+    "status": "normal",
+    "attributes": {
+      "abs_release_period": "December 2025",
+      "abs_series": "seasonally_adjusted",
+      "source_url": "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release"
+    }
+  },
+  {
+    "series_key": "b1d2f6bccc018817007b3ec2ae2f85795155535618411c94dfd92b8bc28307cc",
+    "dataflow_id": "abs.building_activity",
+    "measure_id": "dwellings_completed",
+    "dimensions": {
+      "measure": "dwellings_completed",
+      "region": "AUS"
+    },
+    "time": "2025-07-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 44304.0,
+    "status": "normal",
+    "attributes": {
+      "abs_release_period": "December 2025",
+      "abs_series": "seasonally_adjusted",
+      "source_url": "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release"
+    }
+  },
+  {
+    "series_key": "b1d2f6bccc018817007b3ec2ae2f85795155535618411c94dfd92b8bc28307cc",
+    "dataflow_id": "abs.building_activity",
+    "measure_id": "dwellings_completed",
+    "dimensions": {
+      "measure": "dwellings_completed",
+      "region": "AUS"
+    },
+    "time": "2025-10-01T00:00:00+00:00",
+    "time_precision": "quarter",
+    "value": 43536.0,
+    "status": "normal",
+    "attributes": {
+      "abs_release_period": "December 2025",
+      "abs_series": "seasonally_adjusted",
+      "source_url": "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release"
+    }
+  }
+]

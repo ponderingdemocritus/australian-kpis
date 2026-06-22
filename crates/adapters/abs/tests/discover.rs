@@ -104,10 +104,28 @@ const BUILDING_APPROVALS_RELEASE_FIXTURE: &str = r#"
 </main>
 "#;
 
-async fn serve_once(body: &'static str) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+const BUILDING_ACTIVITY_RELEASE_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Building Activity, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>December 2025</dd>
+    <dt>Released</dt><dd>8/04/2026</dd>
+  </dl>
+  <h2>Dwellings commenced</h2>
+  <p>Total dwellings commenced rose 8.0% to 53,567 dwellings.</p>
+</main>
+"#;
+
+async fn serve_once(body: &'static str) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -134,13 +152,18 @@ async fn serve_once(body: &'static str) -> String {
             .expect("write response");
     });
 
-    format!("http://{addr}/rest")
+    Some(format!("http://{addr}/rest"))
 }
 
-async fn serve_gzip_once(body: &'static [u8]) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+async fn serve_gzip_once(body: &'static [u8]) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -162,7 +185,7 @@ async fn serve_gzip_once(body: &'static [u8]) -> String {
         stream.write_all(body).await.expect("write gzip body");
     });
 
-    format!("http://{addr}/rest")
+    Some(format!("http://{addr}/rest"))
 }
 
 async fn serve_building_approvals_release_once(body: &'static str) -> Option<String> {
@@ -202,6 +225,43 @@ async fn serve_building_approvals_release_once(body: &'static str) -> Option<Str
     Some(format!("http://{addr}/building-approvals/latest-release"))
 }
 
+async fn serve_building_activity_release_once(body: &'static str) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.starts_with("GET /building-activity/latest-release HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+
+    Some(format!("http://{addr}/building-activity/latest-release"))
+}
+
 #[test]
 fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
     let current = AbsAdapter::parse_dataflow_listing(DATAFLOW_FIXTURE).expect("parse fixture");
@@ -237,7 +297,9 @@ fn diff_cpi_dataflow_emits_only_new_or_changed_releases() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_fetches_abs_dataflow_listing_over_http() {
-    let base_url = serve_once(DATAFLOW_FIXTURE).await;
+    let Some(base_url) = serve_once(DATAFLOW_FIXTURE).await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap())
@@ -256,7 +318,9 @@ async fn discover_fetches_abs_dataflow_listing_over_http() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_decodes_compressed_abs_dataflow_listing() {
-    let base_url = serve_gzip_once(GZIP_DATAFLOW_FIXTURE).await;
+    let Some(base_url) = serve_gzip_once(GZIP_DATAFLOW_FIXTURE).await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap());
@@ -272,7 +336,9 @@ async fn discover_decodes_compressed_abs_dataflow_listing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discover_applies_known_revisions_from_context() {
-    let base_url = serve_once(DATAFLOW_FIXTURE).await;
+    let Some(base_url) = serve_once(DATAFLOW_FIXTURE).await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(base_url).build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap())
@@ -483,7 +549,9 @@ async fn discover_derives_fetch_url_from_configured_abs_base() {
         ]
       }
     }"#;
-    let base_url = serve_once(body).await;
+    let Some(base_url) = serve_once(body).await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(base_url.clone()).build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap());
@@ -536,6 +604,12 @@ fn manifest_declares_abs_cpi_and_conservative_rate_limit() {
             .iter()
             .any(|dataflow| dataflow.as_str() == "abs.building_approvals")
     );
+    assert!(
+        manifest
+            .dataflows
+            .iter()
+            .any(|dataflow| dataflow.as_str() == "abs.building_activity")
+    );
     assert_eq!(manifest.rate_limit.max_requests, 60);
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
 }
@@ -568,6 +642,36 @@ async fn discover_fetches_building_approvals_release_page_when_requested() {
     assert_eq!(jobs[0].metadata["revision_key"], "ABS:building-approvals");
     assert_eq!(jobs[0].metadata["revision_version"], "April 2026");
     assert_eq!(jobs[0].metadata["released"], "2/06/2026");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_fetches_building_activity_release_page_when_requested() {
+    let Some(release_url) =
+        serve_building_activity_release_once(BUILDING_ACTIVITY_RELEASE_FIXTURE).await
+    else {
+        return;
+    };
+    let adapter = AbsAdapter::builder()
+        .building_activity_release_url(&release_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap())
+        .with_requested_dataflow_id(DataflowId::new("abs.building_activity").unwrap())
+        .with_trace_parent(TRACE_PARENT);
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover Building Activity release");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].source_id.as_str(), "abs");
+    assert_eq!(jobs[0].dataflow_id.as_str(), "abs.building_activity");
+    assert_eq!(jobs[0].source_url, release_url);
+    assert_eq!(jobs[0].trace_parent.as_deref(), Some(TRACE_PARENT));
+    assert_eq!(jobs[0].metadata["revision_key"], "ABS:building-activity");
+    assert_eq!(jobs[0].metadata["revision_version"], "December 2025");
+    assert_eq!(jobs[0].metadata["released"], "8/04/2026");
 }
 
 proptest! {
