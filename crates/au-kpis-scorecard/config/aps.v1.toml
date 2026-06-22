@@ -35,6 +35,34 @@ license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
 
 [[indicators]]
+indicator_id = "housing.commencements"
+source_dataflow_id = "abs.building_activity"
+measure_id = "dwellings_commenced"
+axis = "throughput"
+component = "housing"
+weight = 0.20
+direction = "higher_is_better"
+display_label = "Housing commencements"
+description = "Quarterly dwelling commencements from the APS v1 Building Activity source."
+unit = "dwellings"
+confidence = "high"
+coverage_status = "missing_expected"
+cadence = "quarterly"
+
+[indicators.dimension_selector]
+region = "AUS"
+measure = "dwellings_commenced"
+
+[indicators.normalization]
+worst = 30000.0
+best = 60000.0
+
+[indicators.provenance]
+source_url = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+
+[[indicators]]
 indicator_id = "housing.accord-progress"
 source_dataflow_id = "nhsac.housing_accord_progress"
 measure_id = "progress_to_target_pct"

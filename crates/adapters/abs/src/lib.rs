@@ -37,9 +37,14 @@ const DATA_JSON_ACCEPT: &str = "application/vnd.sdmx.data+json;version=1.0.0-wd"
 const CPI_DATAFLOW_ID: &str = "CPI";
 const CPI_CANONICAL_DATAFLOW_ID: &str = "abs.cpi";
 const BUILDING_APPROVALS_CANONICAL_DATAFLOW_ID: &str = "abs.building_approvals";
+const BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID: &str = "abs.building_activity";
 const BUILDING_APPROVALS_DATAFLOW_SLUG: &str = "building-approvals";
+const BUILDING_ACTIVITY_DATAFLOW_SLUG: &str = "building-activity";
 const BUILDING_APPROVALS_MEASURE_ID: &str = "dwellings_approved";
+const BUILDING_ACTIVITY_COMMENCED_MEASURE_ID: &str = "dwellings_commenced";
+const BUILDING_ACTIVITY_COMPLETED_MEASURE_ID: &str = "dwellings_completed";
 const DEFAULT_BUILDING_APPROVALS_RELEASE_URL: &str = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release";
+const DEFAULT_BUILDING_ACTIVITY_RELEASE_URL: &str = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release";
 const ABS_ATTRIBUTION: &str = "Source: Australian Bureau of Statistics";
 const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
@@ -49,6 +54,7 @@ pub struct AbsAdapter {
     manifest: AdapterManifest,
     base_url: String,
     building_approvals_release_url: String,
+    building_activity_release_url: String,
 }
 
 impl Default for AbsAdapter {
@@ -162,6 +168,17 @@ impl AbsAdapter {
                 url: job.source_url.clone(),
             });
         }
+        if job.dataflow_id.as_str() == BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID {
+            if !is_building_activity_release_url(&job.source_url) {
+                return Err(AdapterError::Validation(format!(
+                    "ABS fetch URL `{}` is not a Building Activity release artifact",
+                    job.source_url
+                )));
+            }
+            return Ok(AbsFetchKind::BuildingActivity {
+                url: job.source_url.clone(),
+            });
+        }
         Err(AdapterError::Validation(format!(
             "ABS fetch received unsupported dataflow `{}`",
             job.dataflow_id.as_str()
@@ -175,32 +192,41 @@ impl AbsAdapter {
     fn building_approvals_release_url(&self) -> &str {
         &self.building_approvals_release_url
     }
+
+    fn building_activity_release_url(&self) -> &str {
+        &self.building_activity_release_url
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AbsFetchKind {
     Cpi { url: String },
     BuildingApprovals { url: String },
+    BuildingActivity { url: String },
 }
 
 impl AbsFetchKind {
     fn url(&self) -> &str {
         match self {
-            Self::Cpi { url } | Self::BuildingApprovals { url } => url,
+            Self::Cpi { url }
+            | Self::BuildingApprovals { url }
+            | Self::BuildingActivity { url } => url,
         }
     }
 
     fn accept(&self) -> &'static str {
         match self {
             Self::Cpi { .. } => DATA_JSON_ACCEPT,
-            Self::BuildingApprovals { .. } => "text/html,application/xhtml+xml",
+            Self::BuildingApprovals { .. } | Self::BuildingActivity { .. } => {
+                "text/html,application/xhtml+xml"
+            }
         }
     }
 
     fn default_content_type(&self) -> &'static str {
         match self {
             Self::Cpi { .. } => DATA_JSON_ACCEPT,
-            Self::BuildingApprovals { .. } => "text/html",
+            Self::BuildingApprovals { .. } | Self::BuildingActivity { .. } => "text/html",
         }
     }
 }
@@ -271,6 +297,30 @@ impl SourceAdapter for AbsAdapter {
                 attribution: ABS_ATTRIBUTION.into(),
                 source_url: DEFAULT_BUILDING_APPROVALS_RELEASE_URL.into(),
             },
+            Dataflow {
+                id: DataflowId::new(BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID)
+                    .expect("static dataflow id is valid"),
+                source_id: SourceId::new("abs").expect("static source id is valid"),
+                name: "Building Activity".into(),
+                description: Some(
+                    "Quarterly national dwelling commencement and completion observations from the ABS Building Activity release."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("region").expect("static dimension id is valid"),
+                    DimensionId::new("measure").expect("static dimension id is valid"),
+                ],
+                measures: vec![
+                    MeasureId::new(BUILDING_ACTIVITY_COMMENCED_MEASURE_ID)
+                        .expect("static measure id is valid"),
+                    MeasureId::new(BUILDING_ACTIVITY_COMPLETED_MEASURE_ID)
+                        .expect("static measure id is valid"),
+                ],
+                frequency: Frequency::Quarterly,
+                license: License::CcBy40,
+                attribution: ABS_ATTRIBUTION.into(),
+                source_url: DEFAULT_BUILDING_ACTIVITY_RELEASE_URL.into(),
+            },
         ]
     }
 
@@ -278,6 +328,7 @@ impl SourceAdapter for AbsAdapter {
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
         let requested = ctx.requested_dataflow_id();
         let building_dataflow_id = building_approvals_dataflow_id();
+        let building_activity_dataflow_id = building_activity_dataflow_id();
         let cpi_dataflow_id = cpi_dataflow_id();
         if requested == Some(&building_dataflow_id) {
             let response = ctx
@@ -294,6 +345,28 @@ impl SourceAdapter for AbsAdapter {
             let body = response.text().await?;
             let release =
                 parse_building_approvals_release(&body, self.building_approvals_release_url())?;
+            let job = release.to_discovered_job(ctx.trace_parent());
+            let should_emit = ctx
+                .known_revisions()
+                .get(&job.metadata["revision_key"])
+                .is_none_or(|known| known != &release.revision());
+            return Ok(if should_emit { vec![job] } else { Vec::new() });
+        }
+        if requested == Some(&building_activity_dataflow_id) {
+            let response = ctx
+                .http
+                .execute(
+                    ctx.http
+                        .raw()
+                        .get(self.building_activity_release_url())
+                        .header("user-agent", USER_AGENT)
+                        .header("accept", "text/html,application/xhtml+xml"),
+                )
+                .await?
+                .error_for_status()?;
+            let body = response.text().await?;
+            let release =
+                parse_building_activity_release(&body, self.building_activity_release_url())?;
             let job = release.to_discovered_job(ctx.trace_parent());
             let should_emit = ctx
                 .known_revisions()
@@ -440,6 +513,9 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
         Ok(AbsParseKind::BuildingApprovals) => {
             parse_building_approvals_artifact_stream(artifact, ctx)
         }
+        Ok(AbsParseKind::BuildingActivity) => {
+            parse_building_activity_artifact_stream(artifact, ctx)
+        }
         Err(err) => Box::pin(stream::once(async move { Err(err) })),
     }
 }
@@ -566,10 +642,77 @@ fn parse_building_approvals_artifact_stream(
     }))
 }
 
+fn parse_building_activity_artifact_stream(
+    artifact: ArtifactRef,
+    ctx: &ParseCtx,
+) -> ObservationStream<'_> {
+    let blob_store = ctx.blob_store.clone();
+    let started_at = ctx.started_at;
+    let cancellation = ctx.cancellation().clone();
+    let (row_tx, row_rx) = tokio::sync::mpsc::channel(128);
+
+    tokio::spawn(async move {
+        let key = StorageKey::from_persisted(artifact.storage_key.clone());
+        let identity = tokio::select! {
+            () = cancellation.cancelled() => Err(cancelled_parse_error()),
+            result = verify_parse_artifact_identity(&blob_store, &key, &artifact) => result,
+        };
+        if let Err(err) = identity {
+            let _ = row_tx.send(Err(err)).await;
+            return;
+        }
+
+        let mut chunks = match tokio::select! {
+            () = cancellation.cancelled() => Err(cancelled_parse_error()),
+            chunks = blob_store.get(&key) => chunks.map_err(AdapterError::from),
+        } {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                let _ = row_tx.send(Err(err)).await;
+                return;
+            }
+        };
+        let mut bytes = Vec::new();
+        while let Some(chunk) = tokio::select! {
+            () = cancellation.cancelled() => {
+                let _ = row_tx.send(Err(cancelled_parse_error())).await;
+                return;
+            }
+            chunk = chunks.next() => chunk,
+        } {
+            match chunk {
+                Ok(chunk) => bytes.extend_from_slice(&chunk),
+                Err(err) => {
+                    let _ = row_tx.send(Err(err.into())).await;
+                    return;
+                }
+            }
+        }
+
+        match parse_building_activity_html(&bytes, &artifact, started_at) {
+            Ok(rows) => {
+                for row in rows {
+                    if row_tx.send(Ok(row)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(err) => {
+                let _ = row_tx.send(Err(err)).await;
+            }
+        }
+    });
+
+    Box::pin(stream::unfold(row_rx, |mut row_rx| async {
+        row_rx.recv().await.map(|item| (item, row_rx))
+    }))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AbsParseKind {
     Cpi,
     BuildingApprovals,
+    BuildingActivity,
 }
 
 fn validate_parse_artifact(
@@ -592,6 +735,11 @@ fn validate_parse_artifact(
         (
             AbsParseKind::BuildingApprovals,
             building_approvals_dataflow_id(),
+        )
+    } else if is_building_activity_release_url(&artifact.source_url) {
+        (
+            AbsParseKind::BuildingActivity,
+            building_activity_dataflow_id(),
         )
     } else {
         return Err(AdapterError::Validation(format!(
@@ -781,6 +929,171 @@ fn building_approvals_observation(
     Ok((descriptor, observation))
 }
 
+fn parse_building_activity_html(
+    bytes: &[u8],
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let body = String::from_utf8(bytes.to_vec()).map_err(|err| {
+        AdapterError::FormatDrift(format!("ABS release HTML is not UTF-8: {err}"))
+    })?;
+    let release = parse_building_activity_release(&body, &artifact.source_url)?;
+    let mut rows = Vec::new();
+    let mut current_measure: Option<(&str, usize)> = None;
+
+    for line in html_text_lines(&body) {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("total dwellings commenced") {
+            current_measure = Some((BUILDING_ACTIVITY_COMMENCED_MEASURE_ID, 1));
+            continue;
+        }
+        if lower.contains("total dwellings completed") {
+            current_measure = Some((BUILDING_ACTIVITY_COMPLETED_MEASURE_ID, 0));
+            continue;
+        }
+        if lower.contains("private dwellings commenced")
+            || lower.contains("private dwellings completed")
+            || lower.contains("selected states")
+            || lower.contains("dwellings under construction")
+            || lower.contains("data downloads")
+            || lower.contains("back to top")
+        {
+            current_measure = None;
+            continue;
+        }
+
+        let Some((measure_id, seasonally_adjusted_index)) = current_measure else {
+            continue;
+        };
+        let Some((time, value)) = parse_building_activity_row(&line, seasonally_adjusted_index)?
+        else {
+            continue;
+        };
+        rows.push(building_activity_observation(
+            time,
+            value,
+            measure_id,
+            &release,
+            artifact,
+            ingested_at,
+        )?);
+    }
+
+    if rows.is_empty() {
+        return Err(AdapterError::FormatDrift(
+            "ABS Building Activity release has no national dwelling activity rows".into(),
+        ));
+    }
+    Ok(rows)
+}
+
+fn parse_building_activity_row(
+    line: &str,
+    seasonally_adjusted_index: usize,
+) -> Result<Option<(DateTime<Utc>, f64)>, AdapterError> {
+    let mut parts = line.split_whitespace();
+    let Some(period) = parts.next() else {
+        return Ok(None);
+    };
+    let Some(time) = parse_abs_quarter(period)? else {
+        return Ok(None);
+    };
+    let values = parts
+        .take(2)
+        .map(|value| {
+            value.replace(',', "").parse::<f64>().map_err(|err| {
+                AdapterError::FormatDrift(format!(
+                    "ABS Building Activity value `{value}` in `{line}` is invalid: {err}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(value) = values.get(seasonally_adjusted_index).copied() else {
+        return Err(AdapterError::FormatDrift(format!(
+            "ABS Building Activity row `{line}` is missing seasonally adjusted value"
+        )));
+    };
+    Ok(Some((time, value)))
+}
+
+fn parse_abs_quarter(period: &str) -> Result<Option<DateTime<Utc>>, AdapterError> {
+    let Some((month, year)) = period.split_once('-') else {
+        return Ok(None);
+    };
+    let month = match month.to_ascii_lowercase().as_str() {
+        "mar" => 1,
+        "jun" => 4,
+        "sep" => 7,
+        "dec" => 10,
+        _ => return Ok(None),
+    };
+    if year.len() != 2 {
+        return Ok(None);
+    }
+    let year = year.parse::<i32>().map_err(|err| {
+        AdapterError::FormatDrift(format!(
+            "invalid ABS Building Activity year `{year}`: {err}"
+        ))
+    })?;
+    let year = if year >= 70 { 1900 + year } else { 2000 + year };
+    date_at_midnight(year, month, 1)
+        .map(Some)
+        .map_err(AdapterError::FormatDrift)
+}
+
+fn building_activity_observation(
+    time: DateTime<Utc>,
+    value: f64,
+    measure_id: &str,
+    release: &BuildingActivityRelease,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<(SeriesDescriptor, Observation), AdapterError> {
+    let dataflow_id = building_activity_dataflow_id();
+    let dimensions = BTreeMap::from([
+        (
+            DimensionId::new("measure").expect("static dimension id is valid"),
+            CodeId::new(measure_id).expect("static building activity measure code is valid"),
+        ),
+        (
+            DimensionId::new("region").expect("static dimension id is valid"),
+            CodeId::new("AUS").expect("static region code is valid"),
+        ),
+    ]);
+    let series_key = SeriesKey::derive(
+        &dataflow_id,
+        dimensions
+            .iter()
+            .map(|(dimension, code)| (dimension.as_str(), code.as_str())),
+    );
+    let descriptor = SeriesDescriptor {
+        series_key,
+        dataflow_id,
+        measure_id: MeasureId::new(measure_id).expect("static measure id is valid"),
+        dimensions,
+        unit: "dwellings".into(),
+    };
+    let observation = Observation {
+        series_key,
+        time,
+        time_precision: TimePrecision::Quarter,
+        value: Some(value),
+        status: ObservationStatus::Normal,
+        revision_no: 0,
+        attributes: BTreeMap::from([
+            (
+                "abs_release_period".into(),
+                release.reference_period.clone(),
+            ),
+            ("abs_series".into(), "seasonally_adjusted".into()),
+            ("source_url".into(), artifact.source_url.clone()),
+        ]),
+        ingested_at,
+        source_artifact_id: artifact.id,
+    };
+    Ok((descriptor, observation))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BuildingApprovalsRelease {
     source_url: String,
@@ -830,6 +1143,58 @@ impl BuildingApprovalsRelease {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BuildingActivityRelease {
+    source_url: String,
+    reference_period: String,
+    released: Option<String>,
+}
+
+impl BuildingActivityRelease {
+    fn revision(&self) -> UpstreamRevision {
+        UpstreamRevision::new(self.reference_period.clone(), self.released.clone())
+    }
+
+    fn to_discovered_job(&self, trace_parent: Option<&str>) -> DiscoveredJob {
+        let revision = self.revision();
+        let revision_version = revision.version().to_string();
+        let revision_key = "ABS:building-activity".to_string();
+        let mut metadata = BTreeMap::from([
+            ("adapter".into(), "abs".into()),
+            ("artifact_format".into(), "html".into()),
+            ("attribution".into(), ABS_ATTRIBUTION.into()),
+            ("cadence".into(), "quarterly".into()),
+            (
+                "dataflow_id".into(),
+                BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID.into(),
+            ),
+            ("license".into(), "CC-BY-4.0".into()),
+            (
+                "measure_id".into(),
+                BUILDING_ACTIVITY_COMMENCED_MEASURE_ID.into(),
+            ),
+            ("revision_key".into(), revision_key),
+            ("revision_version".into(), revision_version.clone()),
+            ("title".into(), "Building Activity, Australia".into()),
+        ]);
+        if let Some(released) = &self.released {
+            metadata.insert("released".into(), released.clone());
+        }
+        DiscoveredJob {
+            id: format!(
+                "abs:{}:{}",
+                BUILDING_ACTIVITY_DATAFLOW_SLUG,
+                revision_token(Some(&revision_version))
+            ),
+            source_id: SourceId::new("abs").expect("static source id is valid"),
+            dataflow_id: building_activity_dataflow_id(),
+            source_url: self.source_url.clone(),
+            trace_parent: trace_parent.map(ToOwned::to_owned),
+            metadata,
+        }
+    }
+}
+
 fn parse_building_approvals_release(
     body: &str,
     source_url: &str,
@@ -847,6 +1212,29 @@ fn parse_building_approvals_release(
     })?;
     let released = labeled_text_value(&lines, "Released");
     Ok(BuildingApprovalsRelease {
+        source_url: source_url.to_string(),
+        reference_period,
+        released,
+    })
+}
+
+fn parse_building_activity_release(
+    body: &str,
+    source_url: &str,
+) -> Result<BuildingActivityRelease, AdapterError> {
+    if !is_building_activity_release_url(source_url) {
+        return Err(AdapterError::Validation(format!(
+            "ABS Building Activity release URL `{source_url}` is not supported"
+        )));
+    }
+    let lines = html_text_lines(body);
+    let reference_period = labeled_text_value(&lines, "Reference period").ok_or_else(|| {
+        AdapterError::FormatDrift(
+            "ABS Building Activity release is missing reference period".into(),
+        )
+    })?;
+    let released = labeled_text_value(&lines, "Released");
+    Ok(BuildingActivityRelease {
         source_url: source_url.to_string(),
         reference_period,
         released,
@@ -902,12 +1290,25 @@ fn is_building_approvals_release_url(source_url: &str) -> bool {
         || without_query.contains("/building-approvals/")
 }
 
+fn is_building_activity_release_url(source_url: &str) -> bool {
+    let without_query = source_url
+        .split_once('?')
+        .map_or(source_url, |(source_url, _)| source_url);
+    without_query
+        .contains("/statistics/industry/building-and-construction/building-activity-australia/")
+        || without_query.contains("/building-activity/")
+}
+
 fn cpi_dataflow_id() -> DataflowId {
     DataflowId::new(CPI_CANONICAL_DATAFLOW_ID).expect("static dataflow id is valid")
 }
 
 fn building_approvals_dataflow_id() -> DataflowId {
     DataflowId::new(BUILDING_APPROVALS_CANONICAL_DATAFLOW_ID).expect("static dataflow id is valid")
+}
+
+fn building_activity_dataflow_id() -> DataflowId {
+    DataflowId::new(BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID).expect("static dataflow id is valid")
 }
 
 async fn verify_parse_artifact_identity(
@@ -2231,6 +2632,7 @@ async fn persist_expected_artifact(
 pub struct AbsAdapterBuilder {
     base_url: String,
     building_approvals_release_url: String,
+    building_activity_release_url: String,
 }
 
 impl Default for AbsAdapterBuilder {
@@ -2238,6 +2640,7 @@ impl Default for AbsAdapterBuilder {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
             building_approvals_release_url: DEFAULT_BUILDING_APPROVALS_RELEASE_URL.to_string(),
+            building_activity_release_url: DEFAULT_BUILDING_ACTIVITY_RELEASE_URL.to_string(),
         }
     }
 }
@@ -2257,6 +2660,13 @@ impl AbsAdapterBuilder {
         self
     }
 
+    /// Override the Building Activity latest-release URL. Intended for fixture tests.
+    #[must_use]
+    pub fn building_activity_release_url(mut self, url: impl Into<String>) -> Self {
+        self.building_activity_release_url = url.into();
+        self
+    }
+
     /// Build the adapter.
     #[must_use]
     pub fn build(self) -> AbsAdapter {
@@ -2272,10 +2682,13 @@ impl AbsAdapterBuilder {
                         .expect("static dataflow id is valid"),
                     DataflowId::new(BUILDING_APPROVALS_CANONICAL_DATAFLOW_ID)
                         .expect("static dataflow id is valid"),
+                    DataflowId::new(BUILDING_ACTIVITY_CANONICAL_DATAFLOW_ID)
+                        .expect("static dataflow id is valid"),
                 ],
             },
             base_url: self.base_url,
             building_approvals_release_url: self.building_approvals_release_url,
+            building_activity_release_url: self.building_activity_release_url,
         }
     }
 }

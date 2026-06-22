@@ -45,6 +45,34 @@ const BUILDING_APPROVALS_FIXTURE: &[u8] = br#"<!doctype html>
     </table>
   </section>
 </main>"#;
+const BUILDING_ACTIVITY_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Activity, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>December 2025</dd>
+    <dt>Released</dt><dd>8/04/2026</dd>
+  </dl>
+  <h2>Dwellings commenced</h2>
+  <section>
+    <h3>Total dwellings commenced</h3>
+    <p>Trend Seasonally adjusted</p>
+    <table>
+      <tr><th>Quarter</th><th>Trend</th><th>Seasonally adjusted</th></tr>
+      <tr><td>Sep-25</td><td>49,797</td><td>49,582</td></tr>
+      <tr><td>Dec-25</td><td>52,283</td><td>53,567</td></tr>
+    </table>
+  </section>
+  <h2>Dwellings completed</h2>
+  <section>
+    <h3>Total dwellings completed</h3>
+    <p>Seasonally adjusted Trend</p>
+    <table>
+      <tr><th>Quarter</th><th>Seasonally adjusted</th><th>Trend</th></tr>
+      <tr><td>Sep-25</td><td>44,304</td><td>43,093</td></tr>
+      <tr><td>Dec-25</td><td>43,536</td><td>43,598</td></tr>
+    </table>
+  </section>
+</main>"#;
 const REORDERED_FIXTURE: &[u8] = br#"{
   "data": {
     "dataSets": [
@@ -343,6 +371,38 @@ async fn parse_streams_building_approvals_release_page() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_streams_building_activity_release_page() {
+    let rows = parse_fixture_owned_with_url(
+        BUILDING_ACTIVITY_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release",
+    )
+    .await
+    .expect("parse Building Activity fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_activity"
+            && row.measure_id == "dwellings_commenced"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str) == Some("dwellings_commenced")
+            && row.time == "2025-10-01T00:00:00+00:00"
+            && row.time_precision == "quarter"
+            && row.value == Some(53_567.0)
+    }));
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_activity"
+            && row.measure_id == "dwellings_completed"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str) == Some("dwellings_completed")
+            && row.time == "2025-10-01T00:00:00+00:00"
+            && row.time_precision == "quarter"
+            && row.value == Some(43_536.0)
+    }));
+    insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_cpi_fixture_stays_under_runtime_budget() {
     let started = Instant::now();
     let rows = parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture");
@@ -522,6 +582,24 @@ async fn parse_rejects_building_approvals_artifact_without_release_provenance() 
     )
     .await
     .expect_err("mirrored Building Approvals artifact should be rejected");
+
+    assert!(matches!(err, AdapterError::Validation(_)));
+    assert_eq!(err.class(), ErrorClass::Validation);
+    assert!(
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_building_activity_artifact_without_release_provenance() {
+    let err = parse_fixture_owned_with_url(
+        BUILDING_ACTIVITY_FIXTURE.to_vec(),
+        "https://mirror.example.test/building-activity.html",
+    )
+    .await
+    .expect_err("mirrored Building Activity artifact should be rejected");
 
     assert!(matches!(err, AdapterError::Validation(_)));
     assert_eq!(err.class(), ErrorClass::Validation);
