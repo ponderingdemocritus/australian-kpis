@@ -39,6 +39,19 @@ console.log(apsLatest.score, apsLatest.zone)
 console.log(cpi.observations[0])
 ```
 
+APS helpers expose the scorecard config, latest point, and bounded history:
+
+```ts
+const apsConfig = await client.scorecards.aps.config()
+const apsHistory = await client.scorecards.aps.history({
+  since: '2024-01-01',
+  until: '2024-12-31',
+})
+
+console.log(apsConfig.version)
+console.log(apsHistory.map((snapshot) => snapshot.score))
+```
+
 ## Bulk Parquet
 
 JSON and CSV observation requests are page-sized and capped at 10,000 rows.

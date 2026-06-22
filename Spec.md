@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.5` |
+| **Version** | `v0.1.6` |
 | **Status** | Approved |
-| **Last updated** | 2026-06-22 |
+| **Last updated** | 2026-06-23 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -1630,6 +1630,9 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v0.1.6 (2026-06-23)** — Integrated APS scorecard/source work with
+  measure-aware series keys, artifact fetch provenance, loader-assigned
+  revisions, latest-revision rollups, and bulk Parquet export semantics.
 - **v0.1.5 (2026-06-22)** — Separated Parquet bulk export limits from JSON/CSV
   pagination: JSON/CSV stay capped at 10k rows, while Parquet can stream up to
   the configured 1,000,000-row bulk cap with `Cache-Control: no-store`.
