@@ -469,6 +469,9 @@ mod tests {
 
         let err = parse_dataflows_query(Some("frequency=hourly")).unwrap_err();
         assert!(err.to_string().contains("frequency"));
+
+        let err = parse_dataflows_query(Some("source=bad%00source")).unwrap_err();
+        assert!(err.to_string().contains("source"));
     }
 
     #[test]
@@ -481,6 +484,51 @@ mod tests {
         assert_eq!(
             list_cache_key(&query),
             "api:dataflows:list:source=abs:frequency=quarterly"
+        );
+
+        assert_eq!(
+            list_cache_key(&DataflowsQuery {
+                source: None,
+                frequency: None,
+            }),
+            "api:dataflows:list:source=-:frequency=-"
+        );
+    }
+
+    #[test]
+    fn frequency_labels_roundtrip_for_all_public_values() {
+        for (label, expected) in [
+            ("daily", Frequency::Daily),
+            ("weekly", Frequency::Weekly),
+            ("monthly", Frequency::Monthly),
+            ("quarterly", Frequency::Quarterly),
+            ("annual", Frequency::Annual),
+            ("irregular", Frequency::Irregular),
+        ] {
+            let frequency = parse_frequency(label).expect("parse frequency");
+            assert_eq!(frequency, expected);
+            assert_eq!(frequency_as_str(frequency), label);
+            assert_eq!(
+                parse_db_frequency(label).expect("parse db frequency"),
+                expected
+            );
+        }
+
+        assert!(matches!(
+            parse_db_frequency("hourly"),
+            Err(ApiError::Internal)
+        ));
+    }
+
+    #[test]
+    fn license_labels_map_to_domain_variants() {
+        assert_eq!(parse_license("CC-BY-4.0"), License::CcBy40);
+        assert_eq!(parse_license("CC-BY-ND-4.0"), License::CcByNd40);
+        assert_eq!(parse_license("CC-BY-SA-4.0"), License::CcBySa40);
+        assert_eq!(parse_license("public-domain"), License::PublicDomain);
+        assert_eq!(
+            parse_license("custom"),
+            License::Other("custom".to_string())
         );
     }
 }

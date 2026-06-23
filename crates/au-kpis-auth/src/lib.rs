@@ -387,4 +387,98 @@ mod tests {
             Err(AuthError::InvalidApiKey)
         ));
     }
+
+    #[test]
+    fn create_request_validation_reports_each_required_field() {
+        let valid = CreateApiKeyRequest {
+            name: "client".into(),
+            scopes: vec!["observations:read".into()],
+            rate_limit_tier: "free".into(),
+            actor: "admin".into(),
+        };
+
+        assert!(validate_create_request(&valid).is_ok());
+
+        let mut missing_name = valid.clone();
+        missing_name.name = " ".into();
+        assert!(matches!(
+            validate_create_request(&missing_name),
+            Err(AuthError::Validation(message)) if message.contains("name")
+        ));
+
+        let mut missing_tier = valid.clone();
+        missing_tier.rate_limit_tier = "\t".into();
+        assert!(matches!(
+            validate_create_request(&missing_tier),
+            Err(AuthError::Validation(message)) if message.contains("rate_limit_tier")
+        ));
+
+        let mut missing_actor = valid;
+        missing_actor.actor.clear();
+        assert!(matches!(
+            validate_create_request(&missing_actor),
+            Err(AuthError::Validation(message)) if message.contains("actor")
+        ));
+    }
+
+    #[test]
+    fn plaintext_key_parser_rejects_malformed_inputs() {
+        let valid_id = Uuid::new_v4().simple().to_string();
+
+        for candidate in [
+            "wrong_prefix",
+            "auk_live_missing_separator",
+            "auk_live__secret",
+            &format!("auk_live_{valid_id}_"),
+            "auk_live_not-a-uuid_secret",
+        ] {
+            assert!(
+                matches!(
+                    parse_plaintext_key(candidate),
+                    Err(AuthError::InvalidApiKey)
+                ),
+                "candidate should be rejected: {candidate}"
+            );
+        }
+    }
+
+    #[test]
+    fn argon_hash_verifier_accepts_matching_plaintext_only() {
+        let plaintext = generate_plaintext_key(Uuid::new_v4());
+        let hash = hash_key(&plaintext).expect("hash key");
+
+        verify_argon2_hash(&plaintext, &hash).expect("matching plaintext verifies");
+        assert!(matches!(
+            verify_argon2_hash("auk_live_00000000000000000000000000000000_wrong", &hash),
+            Err(AuthError::InvalidApiKey)
+        ));
+    }
+
+    #[test]
+    fn auth_errors_classify_by_retryability() {
+        assert_eq!(AuthError::InvalidApiKey.class(), ErrorClass::Validation);
+        assert_eq!(
+            AuthError::Validation("bad input".into()).class(),
+            ErrorClass::Validation
+        );
+        assert_eq!(
+            hash_key("not used")
+                .and_then(|_| {
+                    PasswordHash::new("not a phc string")
+                        .map_err(AuthError::from)
+                        .map(|_| ())
+                })
+                .unwrap_err()
+                .class(),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            AuthError::Db(sqlx::Error::RowNotFound).class(),
+            ErrorClass::Transient
+        );
+        assert_eq!(
+            AuthError::Cache(CacheError::Validation("bad cache".into())).class(),
+            ErrorClass::Transient
+        );
+    }
 }

@@ -2043,6 +2043,12 @@ mod tests {
         assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
         headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
         assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
+
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 ETag"),
+        );
+        assert!(!if_none_match_fresh(&headers, "W/\"fresh\""));
     }
 
     #[test]
@@ -2062,6 +2068,100 @@ mod tests {
         let parquet = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
         assert!(!requires_cache_fingerprint(&parquet));
         assert!(!emits_etag_header(&parquet));
+    }
+
+    #[test]
+    fn cached_json_response_returns_body_or_not_modified_by_etag() {
+        let cached = CachedJsonObservations {
+            etag: "W/\"fresh\"".into(),
+            body: "{\"metadata\":{},\"observations\":[],\"pagination\":{}}".into(),
+        };
+        let headers = HeaderMap::new();
+        let response = cached_json_observations_response(&headers, cached.clone())
+            .expect("cached body response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut fresh_headers = HeaderMap::new();
+        fresh_headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("W/\"fresh\""),
+        );
+        let response = cached_json_observations_response(&fresh_headers, cached)
+            .expect("not modified response");
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+        let invalid = CachedJsonObservations {
+            etag: "bad\netag".into(),
+            body: "{}".into(),
+        };
+        assert!(cached_json_observations_response(&HeaderMap::new(), invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn rollup_streaming_bounds_return_before_candidate_scan() {
+        let query = parse_observations_query(Some("dataflow=abs.cpi&frequency=weekly")).unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@localhost/unused")
+            .expect("lazy pool");
+
+        validate_streaming_observation_query_bounds(&pool, &query)
+            .await
+            .expect("rollup query does not need raw candidate scan");
+    }
+
+    #[test]
+    fn csv_helpers_escape_special_fields_and_empty_values() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+
+        let mut row = test_observation_row();
+        row.value = None;
+        row.dimensions.insert("note".into(), "a,b".into());
+        let csv = row_to_csv(&row).expect("csv row");
+        assert!(
+            csv.contains(",,normal,"),
+            "missing values should serialize as an empty CSV field: {csv}"
+        );
+        assert!(csv.contains("\"{\"\"note\"\":\"\"a,b\"\",\"\"region\"\":\"\"AUS\"\"}\""));
+    }
+
+    #[tokio::test]
+    async fn parquet_writer_handles_empty_chunks_and_dropped_receivers() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut writer = ChannelParquetWriter { tx };
+        writer
+            .write(Bytes::new())
+            .await
+            .expect("empty parquet chunks are ignored");
+        assert!(rx.try_recv().is_err());
+
+        drop(rx);
+        let err = writer
+            .write(Bytes::from_static(b"not empty"))
+            .await
+            .expect_err("dropped receiver should surface as parquet error");
+        assert!(err.to_string().contains("receiver dropped"));
+    }
+
+    #[tokio::test]
+    async fn empty_parquet_batch_is_a_noop() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut writer =
+            AsyncArrowWriter::try_new(ChannelParquetWriter { tx }, parquet_schema(), None)
+                .expect("writer");
+        let mut batch = ParquetBatchBuilder::default();
+
+        write_parquet_batch(
+            &mut writer,
+            parquet_schema(),
+            &mut batch,
+            PARQUET_ROW_GROUP_TARGET_BYTES,
+        )
+        .await
+        .expect("empty batch");
+
+        assert!(batch.is_empty());
     }
 
     fn test_observation_row() -> ObservationsRow {

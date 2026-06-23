@@ -504,9 +504,20 @@ fn digest_from_bytes(bytes: Vec<u8>) -> Result<Sha256Digest, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue, header};
+    use std::collections::BTreeMap;
 
-    use super::{if_none_match_fresh, parse_history_date};
+    use au_kpis_domain::ids::{ArtifactId, Sha256Digest};
+    use au_kpis_scorecard::{
+        Axis, Confidence, CoverageStatus, Direction, IndicatorConfig, Normalization, Provenance,
+    };
+    use axum::http::{HeaderMap, HeaderValue, header};
+    use chrono::{TimeZone as _, Utc};
+
+    use super::{
+        ResolvedIndicatorRow, artifact_id_from_bytes, digest_from_bytes, format_snapshot_date,
+        if_none_match_fresh, is_stale_for_cadence, json_cache_response, max_lag_for_cadence,
+        parse_history_date, resolved_indicator_status, series_key_from_bytes,
+    };
 
     #[test]
     fn if_none_match_accepts_lists_and_wildcards() {
@@ -522,12 +533,158 @@ mod tests {
     }
 
     #[test]
+    fn if_none_match_rejects_missing_invalid_and_stale_values() {
+        let mut headers = HeaderMap::new();
+        assert!(!if_none_match_fresh(&headers, "\"current\""));
+
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 header"),
+        );
+        assert!(!if_none_match_fresh(&headers, "\"current\""));
+
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"older\", \"other\""),
+        );
+        assert!(!if_none_match_fresh(&headers, "\"current\""));
+    }
+
+    #[test]
     fn history_dates_require_iso_day() {
+        assert_eq!(parse_history_date(None, "since").unwrap(), None);
         assert!(parse_history_date(Some("2024-01-31"), "since").is_ok());
         let err = parse_history_date(Some("31/01/2024"), "since").unwrap_err();
         assert!(
             err.to_string().contains("YYYY-MM-DD"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn cadence_helpers_cover_fresh_stale_and_unknown_cadences() {
+        let latest = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let snapshot = Utc.with_ymd_and_hms(2025, 2, 20, 0, 0, 0).unwrap();
+
+        assert!(is_stale_for_cadence("monthly", latest, snapshot));
+        assert!(!is_stale_for_cadence("quarterly", latest, snapshot));
+        assert!(!is_stale_for_cadence("ad hoc", latest, snapshot));
+
+        for cadence in ["daily", "weekly", "monthly", "quarterly", "annual"] {
+            assert!(
+                max_lag_for_cadence(cadence).is_some(),
+                "{cadence} should have a max lag"
+            );
+        }
+        assert_eq!(max_lag_for_cadence("irregular"), None);
+    }
+
+    #[test]
+    fn resolved_indicator_status_preserves_visible_and_missing_cases() {
+        let snapshot = Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0).unwrap();
+        let latest = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let mut indicator = indicator_config(CoverageStatus::MissingExpected, "monthly");
+        let row = resolved_row(Some(42.0), latest);
+
+        assert_eq!(
+            resolved_indicator_status(&indicator, &resolved_row(None, latest), snapshot),
+            CoverageStatus::MissingExpected
+        );
+        assert_eq!(
+            resolved_indicator_status(&indicator, &row, snapshot),
+            CoverageStatus::Stale
+        );
+
+        indicator.cadence = "quarterly".into();
+        assert_eq!(
+            resolved_indicator_status(&indicator, &row, snapshot),
+            CoverageStatus::Resolved
+        );
+
+        indicator.coverage_status = CoverageStatus::VisibleUnscored;
+        assert_eq!(
+            resolved_indicator_status(&indicator, &row, snapshot),
+            CoverageStatus::VisibleUnscored
+        );
+    }
+
+    #[test]
+    fn json_cache_response_returns_body_then_not_modified_for_fresh_etag() {
+        let headers = HeaderMap::new();
+        let response = json_cache_response(
+            &headers,
+            &serde_json::json!({"score": 1}),
+            "public, max-age=1",
+        )
+        .expect("json response");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let etag = response.headers().get(header::ETAG).expect("etag").clone();
+
+        let mut fresh = HeaderMap::new();
+        fresh.insert(header::IF_NONE_MATCH, etag);
+        let response = json_cache_response(
+            &fresh,
+            &serde_json::json!({"score": 1}),
+            "public, max-age=1",
+        )
+        .expect("not modified response");
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_MODIFIED);
+    }
+
+    #[test]
+    fn digest_helpers_reject_invalid_database_byte_lengths() {
+        let digest = Sha256Digest::hash(b"scorecard");
+        assert_eq!(
+            format_snapshot_date(Utc.with_ymd_and_hms(2025, 6, 30, 12, 0, 0).unwrap()),
+            "2025-06-30"
+        );
+        series_key_from_bytes(digest.as_bytes().to_vec()).expect("series key");
+        artifact_id_from_bytes(digest.as_bytes().to_vec()).expect("artifact id");
+        assert!(digest_from_bytes(vec![0; 31]).is_err());
+    }
+
+    fn indicator_config(status: CoverageStatus, cadence: &str) -> IndicatorConfig {
+        IndicatorConfig {
+            indicator_id: "indicator".into(),
+            source_dataflow_id: "source.flow".into(),
+            measure_id: "measure".into(),
+            dimension_selector: BTreeMap::new(),
+            axis: Axis::Throughput,
+            component: "component".into(),
+            weight: 1.0,
+            direction: Direction::HigherIsBetter,
+            normalization: Normalization {
+                worst: 0.0,
+                best: 100.0,
+            },
+            display_label: "Indicator".into(),
+            description: "Description".into(),
+            unit: "index".into(),
+            confidence: Confidence::High,
+            coverage_status: status,
+            cadence: cadence.into(),
+            provenance: Provenance {
+                source_url: "https://example.test".into(),
+                license: "CC-BY-4.0".into(),
+                attribution: "Example".into(),
+                retrieved_at: None,
+                reviewed_by: None,
+                reviewed_at: None,
+                notes: None,
+            },
+        }
+    }
+
+    fn resolved_row(
+        raw_value: Option<f64>,
+        latest_time: chrono::DateTime<Utc>,
+    ) -> ResolvedIndicatorRow {
+        let artifact_id = ArtifactId::of_content(b"artifact");
+        ResolvedIndicatorRow {
+            raw_value,
+            latest_time,
+            series_key: au_kpis_domain::ids::SeriesKey::from_digest(*artifact_id.digest()),
+            source_artifact_id: artifact_id,
+        }
     }
 }

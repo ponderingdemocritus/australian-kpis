@@ -319,4 +319,19 @@ mod tests {
         assert_eq!(query.limit, Some(MAX_LIMIT));
         assert_eq!(search_cache_key(&query), "api:search:q=cpi:limit=100");
     }
+
+    #[test]
+    fn search_query_rejects_invalid_values_and_ignores_unknown_keys() {
+        assert!(parse_search_query(Some("q=bad%00query")).is_err());
+        assert!(parse_search_query(Some("q=cpi&limit=not-a-number")).is_err());
+
+        let query = parse_search_query(Some("ignored=true&q=cpi&limit=0")).unwrap();
+        assert_eq!(
+            query,
+            SearchQuery {
+                q: "cpi".into(),
+                limit: Some(1),
+            }
+        );
+    }
 }
