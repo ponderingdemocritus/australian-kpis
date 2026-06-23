@@ -773,9 +773,16 @@ jobs:
             exit 1
           fi
           if [ "${nextest_status}" -ne 0 ]; then
-            grep -E '^(  TRY [0-9]+ FAIL|  FAIL|error:|test .* FAILED|failures:)' \
-              target/nextest/ci-run.log \
-              | head -80 \
+            summary="$(
+              grep -E '^(  TRY [0-9]+ FAIL|  FAIL|error:|test .* FAILED|failures:)' \
+                target/nextest/ci-run.log \
+                | head -80 \
+                || true
+            )"
+            if [ -z "${summary}" ]; then
+              summary="$(tail -120 target/nextest/ci-run.log)"
+            fi
+            printf '%s\n' "${summary}" \
               | while IFS= read -r line; do
                   echo "::error::${line}"
                 done
@@ -842,9 +849,16 @@ jobs:
           llvm_cov_status=${PIPESTATUS[0]}
           set -e
           if [ "${llvm_cov_status}" -ne 0 ]; then
-            grep -E '^(  TRY [0-9]+ FAIL|  FAIL|error:|test .* FAILED|failures:)' \
-              target/llvm-cov/ci-run.log \
-              | head -80 \
+            summary="$(
+              grep -E '^(  TRY [0-9]+ FAIL|  FAIL|error:|test .* FAILED|failures:)' \
+                target/llvm-cov/ci-run.log \
+                | head -80 \
+                || true
+            )"
+            if [ -z "${summary}" ]; then
+              summary="$(tail -120 target/llvm-cov/ci-run.log)"
+            fi
+            printf '%s\n' "${summary}" \
               | while IFS= read -r line; do
                   echo "::error::${line}"
                 done
