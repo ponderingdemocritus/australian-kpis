@@ -762,12 +762,24 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/nextest
+          set +e
           cargo nextest run --workspace --profile ci \
             -E 'not test(loads_ten_thousand_observations_with_copy_batches)' \
             2>&1 | tee target/nextest/ci-run.log
+          nextest_status=${PIPESTATUS[0]}
+          set -e
           if grep -n "FLAKY" target/nextest/ci-run.log; then
             echo "Flaky retries are not allowed in CI." >&2
             exit 1
+          fi
+          if [ "${nextest_status}" -ne 0 ]; then
+            grep -E '^(  TRY [0-9]+ FAIL|  FAIL|error:|test .* FAILED|failures:)' \
+              target/nextest/ci-run.log \
+              | head -80 \
+              | while IFS= read -r line; do
+                  echo "::error::${line}"
+                done
+            exit "${nextest_status}"
           fi
 
       - name: Enforce ABS streaming memory budgets
@@ -816,6 +828,7 @@ jobs:
           set -euo pipefail
           mkdir -p target/llvm-cov
           cargo +"$COVERAGE_RUST_TOOLCHAIN" llvm-cov clean --workspace
+          set +e
           cargo +"$COVERAGE_RUST_TOOLCHAIN" llvm-cov nextest \
             --workspace \
             --profile ci \
@@ -824,7 +837,19 @@ jobs:
             --branch \
             --lcov \
             --output-path target/llvm-cov/lcov.info \
-            --fail-under-lines 80
+            --fail-under-lines 80 \
+            2>&1 | tee target/llvm-cov/ci-run.log
+          llvm_cov_status=${PIPESTATUS[0]}
+          set -e
+          if [ "${llvm_cov_status}" -ne 0 ]; then
+            grep -E '^(  TRY [0-9]+ FAIL|  FAIL|error:|test .* FAILED|failures:)' \
+              target/llvm-cov/ci-run.log \
+              | head -80 \
+              | while IFS= read -r line; do
+                  echo "::error::${line}"
+                done
+            exit "${llvm_cov_status}"
+          fi
 
       - name: Enforce branch coverage floor
         shell: bash
