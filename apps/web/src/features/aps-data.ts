@@ -81,6 +81,14 @@ export function directionLabel(direction: ApsIndicatorConfig['direction']): stri
   return direction === 'higher_is_better' ? 'Higher is better' : 'Lower is better'
 }
 
+export function tokenLabel(value: string): string {
+  return value
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
 export function sourceLabel(contribution: ApsContribution): string {
   return contribution.source_dataflow_id.split('.')[0]?.toUpperCase() ?? 'SOURCE'
 }

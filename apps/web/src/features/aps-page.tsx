@@ -13,10 +13,12 @@ export function ApsPage() {
   const configQuery = useQuery({
     queryFn: () => client.scorecards.aps.config(),
     queryKey: ['aps', 'config'],
+    retry: false,
   })
   const latestQuery = useQuery({
     queryFn: () => client.scorecards.aps.latest(),
     queryKey: ['aps', 'latest'],
+    retry: false,
   })
 
   if (configQuery.isLoading || latestQuery.isLoading) {

@@ -31,6 +31,7 @@ import {
   scoreOffset,
   sortedContributions,
   sourceLabel,
+  tokenLabel,
   trendLabel,
   zoneLabel,
 } from '@/features/aps-data'
@@ -120,7 +121,7 @@ export function ApsDashboard({
   ).length
 
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:py-6">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:py-6">
       <section className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-normal">Abundance Position Score</h1>
@@ -150,7 +151,7 @@ export function ApsDashboard({
         <ApsSourceDrilldowns contributions={contributions} />
         <ApsConfigPanel indicators={config.indicators} />
       </section>
-    </main>
+    </div>
   )
 }
 
@@ -261,7 +262,7 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
         <CardAction>
           <Gauge aria-hidden="true" className="text-muted-foreground" />
         </CardAction>
-        <CardTitle className="capitalize">{subIndex.axis}</CardTitle>
+        <CardTitle>{tokenLabel(subIndex.axis)}</CardTitle>
         <CardDescription>
           Weight {formatApsPercent(subIndex.weight * 100)} · coverage{' '}
           {formatApsPercent(subIndex.coverage_pct)}
@@ -281,7 +282,7 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
           {subIndex.components.map((component) => (
             <div className="grid gap-1" key={component.component}>
               <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="truncate capitalize">{component.component}</span>
+                <span className="truncate">{tokenLabel(component.component)}</span>
                 <span className="font-mono">{formatApsScore(component.score * 100)}</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -325,7 +326,9 @@ function ApsSourceDrilldowns({ contributions }: { contributions: ApsContribution
               <TableRow key={contribution.indicator_id}>
                 <TableCell className="max-w-[260px] whitespace-normal">
                   <div className="font-medium">{contribution.label}</div>
-                  <div className="text-xs text-muted-foreground">{contribution.component}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {tokenLabel(contribution.component)}
+                  </div>
                 </TableCell>
                 <TableCell>
                   <div className="font-medium">{sourceLabel(contribution)}</div>
