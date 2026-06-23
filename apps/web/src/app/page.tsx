@@ -1,5 +1,5 @@
-import { IndexPage } from '@/features/index-page'
+import { ApsPage } from '@/features/aps-page'
 
 export default function Page() {
-  return <IndexPage />
+  return <ApsPage />
 }
