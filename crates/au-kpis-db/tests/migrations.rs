@@ -285,8 +285,9 @@ async fn migration_creates_hypertable_and_compression_policy() {
     for expected in [
         "api_key_audit_log",
         "api_keys",
-        "artifacts",
+        "artifact_fetches",
         "artifact_loads",
+        "artifacts",
         "codelists",
         "codes",
         "dataflows",
@@ -295,8 +296,11 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "observations",
         "observations_latest",
         "observations_rollup_monthly",
+        "observations_rollup_monthly_points",
         "observations_rollup_quarterly",
+        "observations_rollup_quarterly_points",
         "observations_rollup_weekly",
+        "observations_rollup_weekly_points",
         "parse_errors",
         "series",
         "sources",
@@ -318,6 +322,10 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "measures_name_trgm_gin",
         "measures_description_trgm_gin",
         "series_dataflow_first_observed_series_key_idx",
+        "artifact_fetches_artifact_idx",
+        "artifact_fetches_source_idx",
+        "artifact_fetches_source_url_idx",
+        "artifact_loads_artifact_fetch_idx",
         "artifact_loads_source_dataflow_idx",
     ] {
         assert!(
@@ -327,9 +335,9 @@ async fn migration_creates_hypertable_and_compression_policy() {
     }
 
     for expected in [
-        "observations_rollup_weekly",
-        "observations_rollup_monthly",
-        "observations_rollup_quarterly",
+        "observations_rollup_weekly_points",
+        "observations_rollup_monthly_points",
+        "observations_rollup_quarterly_points",
     ] {
         assert!(
             continuous_aggregate_exists(&pool, expected).await,

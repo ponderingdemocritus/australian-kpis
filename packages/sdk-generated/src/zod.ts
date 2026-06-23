@@ -67,6 +67,114 @@ type DataflowCodelistResponse = {
   dataflow_id: DataflowId;
   dimension_id: DimensionId;
 };
+type Axis = "throughput" | "orientation";
+type Direction = "higher_is_better" | "lower_is_better";
+type Confidence = "high" | "medium" | "low";
+type CoverageStatus =
+  | "resolved"
+  | "stale"
+  | "missing_expected"
+  | "coverage_gap"
+  | "manual_pending"
+  | "visible_unscored";
+type ScoreZone = "red" | "yellow" | "green";
+type Trend = "up" | "down" | "flat" | "unavailable";
+type Normalization = {
+  best: number;
+  worst: number;
+};
+type Provenance = {
+  attribution: string;
+  license: string;
+  notes?: (string | null) | undefined;
+  retrieved_at?: (string | null) | undefined;
+  reviewed_at?: (string | null) | undefined;
+  reviewed_by?: (string | null) | undefined;
+  source_url: string;
+};
+type IndicatorConfig = {
+  axis: Axis;
+  cadence: string;
+  component: string;
+  confidence: Confidence;
+  coverage_status: CoverageStatus;
+  description: string;
+  dimension_selector?: Record<string, string> | undefined;
+  direction: Direction;
+  display_label: string;
+  indicator_id: string;
+  measure_id: string;
+  normalization: Normalization;
+  provenance: Provenance;
+  source_dataflow_id: string;
+  unit: string;
+  weight: number;
+};
+type ScorecardConfig = {
+  attribution: string;
+  description: string;
+  formula: string;
+  id: string;
+  indicators: Array<IndicatorConfig>;
+  label: string;
+  license: string;
+  version: string;
+};
+type ConfidenceBand = {
+  high: number;
+  low: number;
+};
+type ComponentScore = {
+  component: string;
+  coverage_pct: number;
+  score: number;
+  weight: number;
+};
+type SubIndexScore = {
+  axis: Axis;
+  components: Array<ComponentScore>;
+  confidence_band: ConfidenceBand;
+  coverage_pct: number;
+  score: number;
+  weight: number;
+};
+type IndicatorContribution = {
+  attribution: string;
+  axis: Axis;
+  component: string;
+  confidence: Confidence;
+  coverage_status: CoverageStatus;
+  dimensions: Record<string, string>;
+  direction: Direction;
+  indicator_id: string;
+  label: string;
+  latest_period?: (string | null) | undefined;
+  license: string;
+  measure_id: string;
+  normalized_value?: (number | null) | undefined;
+  notes?: (string | null) | undefined;
+  raw_value?: (number | null) | undefined;
+  series_key?: (string | null) | undefined;
+  source_artifact_id?: (string | null) | undefined;
+  source_dataflow_id: string;
+  source_url: string;
+  unit: string;
+  weight: number;
+};
+type ScorecardSnapshot = {
+  as_of: string;
+  confidence: Confidence;
+  confidence_band: ConfidenceBand;
+  config_version: string;
+  contributions: Array<IndicatorContribution>;
+  coverage_pct: number;
+  latest_period?: (string | null) | undefined;
+  score: number;
+  scorecard_id: string;
+  sub_indexes: Array<SubIndexScore>;
+  trend: Trend;
+  zone: ScoreZone;
+};
 type DataflowDetailResponse = {
   dataflow: Dataflow;
   dimensions: Array<Dimension>;
@@ -246,6 +354,128 @@ const DataflowCodelistResponse: z.ZodType<DataflowCodelistResponse> = z
     dimension_id: DimensionId,
   })
   .passthrough();
+const Axis = z.enum(["throughput", "orientation"]);
+const Direction = z.enum(["higher_is_better", "lower_is_better"]);
+const Confidence = z.enum(["high", "medium", "low"]);
+const CoverageStatus = z.enum([
+  "resolved",
+  "stale",
+  "missing_expected",
+  "coverage_gap",
+  "manual_pending",
+  "visible_unscored",
+]);
+const ScoreZone = z.enum(["red", "yellow", "green"]);
+const Trend = z.enum(["up", "down", "flat", "unavailable"]);
+const Normalization: z.ZodType<Normalization> = z
+  .object({ best: z.number(), worst: z.number() })
+  .passthrough();
+const Provenance: z.ZodType<Provenance> = z
+  .object({
+    attribution: z.string(),
+    license: z.string(),
+    notes: z.union([z.string(), z.null()]).optional(),
+    retrieved_at: z.union([z.string(), z.null()]).optional(),
+    reviewed_at: z.union([z.string(), z.null()]).optional(),
+    reviewed_by: z.union([z.string(), z.null()]).optional(),
+    source_url: z.string(),
+  })
+  .passthrough();
+const IndicatorConfig: z.ZodType<IndicatorConfig> = z
+  .object({
+    axis: Axis,
+    cadence: z.string(),
+    component: z.string(),
+    confidence: Confidence,
+    coverage_status: CoverageStatus,
+    description: z.string(),
+    dimension_selector: z.record(z.string()).optional(),
+    direction: Direction,
+    display_label: z.string(),
+    indicator_id: z.string(),
+    measure_id: z.string(),
+    normalization: Normalization,
+    provenance: Provenance,
+    source_dataflow_id: z.string(),
+    unit: z.string(),
+    weight: z.number(),
+  })
+  .passthrough();
+const ScorecardConfig: z.ZodType<ScorecardConfig> = z
+  .object({
+    attribution: z.string(),
+    description: z.string(),
+    formula: z.string(),
+    id: z.string(),
+    indicators: z.array(IndicatorConfig),
+    label: z.string(),
+    license: z.string(),
+    version: z.string(),
+  })
+  .passthrough();
+const ConfidenceBand: z.ZodType<ConfidenceBand> = z
+  .object({ high: z.number(), low: z.number() })
+  .passthrough();
+const ComponentScore: z.ZodType<ComponentScore> = z
+  .object({
+    component: z.string(),
+    coverage_pct: z.number(),
+    score: z.number(),
+    weight: z.number(),
+  })
+  .passthrough();
+const SubIndexScore: z.ZodType<SubIndexScore> = z
+  .object({
+    axis: Axis,
+    components: z.array(ComponentScore),
+    confidence_band: ConfidenceBand,
+    coverage_pct: z.number(),
+    score: z.number(),
+    weight: z.number(),
+  })
+  .passthrough();
+const IndicatorContribution: z.ZodType<IndicatorContribution> = z
+  .object({
+    attribution: z.string(),
+    axis: Axis,
+    component: z.string(),
+    confidence: Confidence,
+    coverage_status: CoverageStatus,
+    dimensions: z.record(z.string()),
+    direction: Direction,
+    indicator_id: z.string(),
+    label: z.string(),
+    latest_period: z.union([z.string(), z.null()]).optional(),
+    license: z.string(),
+    measure_id: z.string(),
+    normalized_value: z.union([z.number(), z.null()]).optional(),
+    notes: z.union([z.string(), z.null()]).optional(),
+    raw_value: z.union([z.number(), z.null()]).optional(),
+    series_key: z.union([z.string(), z.null()]).optional(),
+    source_artifact_id: z.union([z.string(), z.null()]).optional(),
+    source_dataflow_id: z.string(),
+    source_url: z.string(),
+    unit: z.string(),
+    weight: z.number(),
+  })
+  .passthrough();
+const ScorecardSnapshot: z.ZodType<ScorecardSnapshot> = z
+  .object({
+    as_of: z.string(),
+    confidence: Confidence,
+    confidence_band: ConfidenceBand,
+    config_version: z.string(),
+    contributions: z.array(IndicatorContribution),
+    coverage_pct: z.number(),
+    latest_period: z.union([z.string(), z.null()]).optional(),
+    score: z.number(),
+    scorecard_id: z.string(),
+    sub_indexes: z.array(SubIndexScore),
+    trend: Trend,
+    zone: ScoreZone,
+  })
+  .passthrough();
+const ScorecardSnapshotList = z.array(ScorecardSnapshot);
 const HealthResponse = z.object({ status: z.string() }).passthrough();
 const ObservationsMetadata: z.ZodType<ObservationsMetadata> = z
   .object({
@@ -402,6 +632,22 @@ export const schemas = {
   Code,
   Codelist,
   DataflowCodelistResponse,
+  Axis,
+  Direction,
+  Confidence,
+  CoverageStatus,
+  ScoreZone,
+  Trend,
+  Normalization,
+  Provenance,
+  IndicatorConfig,
+  ScorecardConfig,
+  ConfidenceBand,
+  ComponentScore,
+  SubIndexScore,
+  IndicatorContribution,
+  ScorecardSnapshot,
+  ScorecardSnapshotList,
   HealthResponse,
   ObservationsMetadata,
   SeriesKey,

@@ -1,0 +1,42 @@
+---
+source: crates/adapters/abs/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "series_key": "eea3608b71be6b526210e9760275a44035051ae99edad17619ab87448b9f62ee",
+    "dataflow_id": "abs.building_approvals",
+    "measure_id": "dwellings_approved",
+    "dimensions": {
+      "measure": "dwellings_approved",
+      "region": "AUS"
+    },
+    "time": "2026-03-01T00:00:00+00:00",
+    "time_precision": "month",
+    "value": 17307.0,
+    "status": "normal",
+    "attributes": {
+      "abs_release_period": "April 2026",
+      "abs_series": "seasonally_adjusted",
+      "source_url": "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release"
+    }
+  },
+  {
+    "series_key": "eea3608b71be6b526210e9760275a44035051ae99edad17619ab87448b9f62ee",
+    "dataflow_id": "abs.building_approvals",
+    "measure_id": "dwellings_approved",
+    "dimensions": {
+      "measure": "dwellings_approved",
+      "region": "AUS"
+    },
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "month",
+    "value": 16710.0,
+    "status": "normal",
+    "attributes": {
+      "abs_release_period": "April 2026",
+      "abs_series": "seasonally_adjusted",
+      "source_url": "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release"
+    }
+  }
+]

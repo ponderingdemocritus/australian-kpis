@@ -1,0 +1,19 @@
+[package]
+name = "au-kpis-scorecard"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure APS scorecard config validation and scoring logic."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+utoipa = "5"
+# Used only to parse the checked-in, versioned APS scorecard config file.
+toml = "0.8"
+
+[dev-dependencies]
+proptest = "1"
+serde_json = "1"

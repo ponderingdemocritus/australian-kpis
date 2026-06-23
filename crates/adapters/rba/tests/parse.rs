@@ -77,6 +77,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("rba").unwrap(),
         source_url: source_url.into(),
         content_type: content_type.into(),
@@ -318,6 +319,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("rba").unwrap(),
         source_url: "https://www.rba.gov.au/statistics/tables/csv/f01d.csv".into(),
         content_type: "text/csv".into(),

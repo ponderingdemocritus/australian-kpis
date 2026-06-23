@@ -1,0 +1,110 @@
+---
+source: crates/adapters/state-capital/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "dataflow_id": "state_capital.vic_major_projects",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "transport",
+      "jurisdiction": "VIC",
+      "metric": "cost_overrun_pct",
+      "project": "metro_tunnel"
+    },
+    "unit": "percent",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 13.6725,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vago-major-projects-2026.pdf",
+      "sidecar_page": "14",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "VAGO major projects performance 2026",
+      "source_url": "https://www.audit.vic.gov.au/report/major-projects-performance-2026.json"
+    },
+    "source_artifact_id": "bd3eee2b07ffb65515edff80d7f91430a6b6917b550124be3324fae7351ff34a"
+  },
+  {
+    "dataflow_id": "state_capital.vic_major_projects",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "transport",
+      "jurisdiction": "VIC",
+      "metric": "schedule_delay_months",
+      "project": "metro_tunnel"
+    },
+    "unit": "months",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 6.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vago-major-projects-2026.pdf",
+      "sidecar_page": "14",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "VAGO major projects performance 2026",
+      "source_url": "https://www.audit.vic.gov.au/report/major-projects-performance-2026.json"
+    },
+    "source_artifact_id": "bd3eee2b07ffb65515edff80d7f91430a6b6917b550124be3324fae7351ff34a"
+  },
+  {
+    "dataflow_id": "state_capital.vic_major_projects",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "transport",
+      "jurisdiction": "VIC",
+      "metric": "cost_overrun_pct",
+      "project": "west_gate_tunnel"
+    },
+    "unit": "percent",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 17.6471,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vago-major-projects-2026.pdf",
+      "sidecar_page": "14",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "VAGO major projects performance 2026",
+      "source_url": "https://www.audit.vic.gov.au/report/major-projects-performance-2026.json"
+    },
+    "source_artifact_id": "bd3eee2b07ffb65515edff80d7f91430a6b6917b550124be3324fae7351ff34a"
+  },
+  {
+    "dataflow_id": "state_capital.vic_major_projects",
+    "measure_id": "value",
+    "dimensions": {
+      "category": "transport",
+      "jurisdiction": "VIC",
+      "metric": "schedule_delay_months",
+      "project": "west_gate_tunnel"
+    },
+    "unit": "months",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Year",
+    "value": 12.0,
+    "status": "Normal",
+    "attributes": {
+      "attribution": "Pilot state capital sources: VAGO and Victorian Budget",
+      "license": "State publication terms",
+      "sidecar_artifact_key": "artifacts/vago-major-projects-2026.pdf",
+      "sidecar_page": "14",
+      "sidecar_retrieved_at": "2026-06-22",
+      "sidecar_reviewer": "aps-state-capital-fixture",
+      "source_document": "VAGO major projects performance 2026",
+      "source_url": "https://www.audit.vic.gov.au/report/major-projects-performance-2026.json"
+    },
+    "source_artifact_id": "bd3eee2b07ffb65515edff80d7f91430a6b6917b550124be3324fae7351ff34a"
+  }
+]

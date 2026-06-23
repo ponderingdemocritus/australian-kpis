@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.3` |
+| **Version** | `v0.1.6` |
 | **Status** | Approved |
-| **Last updated** | 2026-05-01 |
+| **Last updated** | 2026-06-23 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -25,23 +25,24 @@
 8. [Ingestion pipeline](#ingestion-pipeline)
 9. [PDF extractor service (Python)](#pdf-extractor-service-python)
 10. [API surface](#api-surface)
-11. [TypeScript SDK](#typescript-sdk)
-12. [Reference client (apps/web)](#reference-client-appsweb)
-13. [Observability](#observability)
-14. [Testing strategy](#testing-strategy)
-15. [CI/CD pipeline](#cicd-pipeline)
-16. [Benchmarking](#benchmarking)
-17. [Security posture](#security-posture)
-18. [Data licensing and attribution](#data-licensing-and-attribution)
-19. [Deployment](#deployment)
-20. [Phased rollout](#phased-rollout)
-21. [Critical files/modules to create (Phase 1 + 2)](#critical-filesmodules-to-create-phase-1--2)
-22. [Verification plan](#verification-plan)
-23. [Review findings — best practices + abstraction checks](#review-findings--best-practices--abstraction-checks)
-24. [Decisions log](#decisions-log)
-25. [Glossary](#glossary)
-26. [References](#references)
-27. [Changelog](#changelog)
+11. [Derived scorecards](#derived-scorecards)
+12. [TypeScript SDK](#typescript-sdk)
+13. [Reference client (apps/web)](#reference-client-appsweb)
+14. [Observability](#observability)
+15. [Testing strategy](#testing-strategy)
+16. [CI/CD pipeline](#cicd-pipeline)
+17. [Benchmarking](#benchmarking)
+18. [Security posture](#security-posture)
+19. [Data licensing and attribution](#data-licensing-and-attribution)
+20. [Deployment](#deployment)
+21. [Phased rollout](#phased-rollout)
+22. [Critical files/modules to create (Phase 1 + 2)](#critical-filesmodules-to-create-phase-1--2)
+23. [Verification plan](#verification-plan)
+24. [Review findings — best practices + abstraction checks](#review-findings--best-practices--abstraction-checks)
+25. [Decisions log](#decisions-log)
+26. [Glossary](#glossary)
+27. [References](#references)
+28. [Changelog](#changelog)
 
 ---
 
@@ -444,7 +445,7 @@ Defined in `au-kpis-domain`. Core decomposition: **`Series` (metadata + dimensio
 // crates/au-kpis-domain/src/series.rs
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Series {
-    pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || sorted dimensions)
+    pub series_key: SeriesKey,           // sha256 hash of (dataflow_id || measure_id || sorted dimensions)
     pub dataflow_id: DataflowId,
     pub measure_id: MeasureId,
     pub dimensions: BTreeMap<DimensionId, CodeId>,  // JSONB in DB, GIN-indexed
@@ -479,13 +480,15 @@ Core types: `Source`, `Dataflow`, `Dimension`, `Codelist`, `Code`, `Measure`, `S
 - **Compression** on chunks >7 days old (90%+ savings on numeric data).
 - **Continuous aggregates** for weekly/monthly/quarterly rollups per series, refreshed by policy.
 - `sources`, `dataflows`, `dimensions`, `codelists`, `codes`, `measures` — vanilla relational tables.
-- `artifacts` — content-addressed (sha256) → S3 key plus captured HTTP response headers, including repeated values for the same header name; dedup on hash so refetching same file is a no-op.
+- `artifacts` — content-addressed blob identity (sha256) → S3 key and first-seen compatibility metadata; storage remains deduplicated on hash.
+- `artifact_fetches` — one row per upstream retrieval, referencing `artifacts(id)` and preserving source id, URL, response headers, content type, size, storage key, and fetch timestamp so identical bytes from mirrors or different sources retain separate provenance.
+- `artifact_loads` — completed parse/load audit per artifact/dataflow, with optional `artifact_fetch_id` pointing at the exact retrieval used when available.
 - `parse_errors` — rows that failed validation, keyed to artifact for re-processing.
 - `api_keys` — hashed (argon2id), scopes, rate-limit tier.
 
 Typical latest-observation query plan:
 ```
-1. Resolve Dataflow + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
+1. Resolve Dataflow + Measure + Dimensions → lookup Series rows (JSONB GIN) → Vec<SeriesKey>.
 2. If a latest-observation request still matches a high-cardinality series set,
    reject it with `400` and ask the client to add more dimension filters.
 3. Query `observations` by the accepted concrete `series_key` values, ordered by
@@ -509,6 +512,10 @@ Each source = its own crate implementing `SourceAdapter`. Adding source 15 never
 | **Treasury** | `crates/adapters/treasury` (`au-kpis-adapter-treasury`) | Watch budget pages | PDF | `pdf-client` -> Python sidecar extraction strategy |
 | **AEMO** | `crates/adapters/aemo` (`au-kpis-adapter-aemo`) | NEMWeb directory listings | CSV (frequent) | `csv-async` |
 | **State budgets** | `crates/adapters/state-budgets` (`au-kpis-adapter-state-budgets`) | Hand-curated | PDF | Python sidecar extraction strategy |
+
+ASX emits `asx.announcements` for RSS announcement counts and `asx.eod`
+for daily OHLCV observations. `asx.market_statistics` remains a supplemental
+monthly public market-statistics dataflow while that ASX page is available.
 
 ### Guardrails
 
@@ -550,7 +557,9 @@ Postgres-backed jobs = transactional dequeue (`FOR UPDATE SKIP LOCKED`), no sepa
 
 - Fetch: S3 key = `sha256(content)` → content-addressed, write is idempotent.
 - Parse: snapshot tested; same artifact → same observations.
-- Load: `ON CONFLICT (dataflow_id, series_key, time, revision_no) DO UPDATE`; revisions tracked not overwritten.
+- Load: the loader owns effective `revision_no` assignment. Exact replays of
+  the same observation/artifact are no-ops; changed value/status/attributes or
+  source artifact for the same `(series_key, time)` inserts `max(revision_no)+1`.
 - Jobs carry correlation ID from discovery to load for tracing.
 
 ### Failure handling
@@ -572,13 +581,13 @@ async fn load_batch(
     batch: Vec<Observation>,
 ) -> Result<LoadStats, LoadError> {
     // 1000-row batches → single COPY into staging table
-    // Then INSERT ... ON CONFLICT from staging → hypertable
+    // Then INSERT changed rows from staging → hypertable with loader-assigned revisions.
     // Staging table is TEMP, dropped automatically at tx end.
     let mut tx = pool.begin().await?;
     let mut copy = tx.copy_in_raw("COPY staging_obs (...) FROM STDIN BINARY").await?;
     for obs in &batch { copy.send(encode_row(obs)).await?; }
     copy.finish().await?;
-    sqlx::query("INSERT INTO observations (...) SELECT ... FROM staging_obs ON CONFLICT ... DO UPDATE ...")
+    sqlx::query("INSERT INTO observations (...) SELECT ... max(revision_no)+1 FROM staging_obs ...")
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -588,6 +597,9 @@ async fn load_batch(
 
 - COPY is 10-50x faster than row-by-row INSERT for bulk loads.
 - Batches bounded at 1000 rows or 10MB, whichever first.
+- Adapter-emitted `revision_no` is provisional for normal ingestion. The loader
+  preserves the original row, skips exact artifact replays, and appends a new
+  revision when the persisted observation content or source artifact changes.
 - Loader owns COPY batch sizing and byte estimation. Orchestrators may buffer
   accepted rows for artifact-level commit/rollback semantics, but must delegate
   row/byte boundary decisions to `au-kpis-loader` helpers so staging and direct
@@ -700,6 +712,9 @@ GET  /v1/observations
 GET  /v1/observations/latest
 GET  /v1/series/{dataflow}/{series_key}
 GET  /v1/search?q=unemployment
+GET  /v1/scorecards/aps/config
+GET  /v1/scorecards/aps/latest
+GET  /v1/scorecards/aps/history?since=2025-01-01&until=2026-01-01
 POST /v1/subscriptions                        # phase 5
 GET  /v1/health
 GET  /v1/openapi.json
@@ -709,15 +724,28 @@ GET  /v1/openapi.json
 
 - **Auth**: `X-API-Key` header. Keys stored **argon2id-hashed** in DB; lookup cached in Redis with short TTL; constant-time compare. JWT for client app.
 - **Rate limits** (free tier defaults): 60 rps / 1000 requests per hour per key. Burst allowance of 2x. Token bucket in Redis via `fred`. Returns `429` with `Retry-After` header and `X-RateLimit-*` headers on every response. Anonymous (no key) tier: 10 rps / 100 per hour per IP.
-- **Caching**: Dataflow metadata long TTL. Observation responses ETag + `Cache-Control: public, max-age=60, stale-while-revalidate=300`. Cloudflare CDN in front.
-- **Pagination**: cursor-based (opaque base64 of `(time, series_key)` pair). Max 10k rows per page.
+- **Caching**: Dataflow metadata long TTL. Cacheable first-page JSON
+  observation responses use ETag + `Cache-Control: public, max-age=60,
+  stale-while-revalidate=300`. Cursor pages, large JSON pages, CSV, and Parquet
+  are streaming responses; they omit ETag, use `Cache-Control: no-store`, and
+  must not run the full ETag fingerprint aggregate before streaming. Cloudflare
+  CDN in front.
+- **Pagination and bulk export**: JSON/CSV reads are cursor-based (opaque
+  base64 of `(time, series_key)` pair) and capped at 10k rows per page. Parquet
+  is a bulk streaming export path, not a JSON page envelope; it may stream up
+  to 1,000,000 rows per request under the same rate limits and query
+  cardinality guardrails.
 - **High-cardinality latest reads**: `/v1/observations` latest-revision requests
   must be dimension-filtered enough to match fewer than 512 series. Broader
   requests return `400` with a problem detail explaining that more
   `dimensions[]` filters are required; clients should use codelist/catalog
   endpoints to discover the needed dimension values first. Rollup requests use
   their aggregate views and are exempt from this latest-read guard.
-- **Formats**: JSON default; CSV; **Parquet streamed via arrow-rs** — this is the killer feature for data-science consumers.
+- **Formats**: JSON default; CSV; **Parquet streamed via arrow-rs** — this is
+  the killer feature for data-science consumers. Parquet responses return
+  `application/vnd.apache.parquet`, `Cache-Control: no-store`, and no cursor
+  payload; clients narrow the query or raise the explicit bulk `limit` up to
+  the configured cap.
 - **Versioning**: additive changes same version; breaking changes → `/v2`. OpenAPI diff enforced in CI via `oasdiff`.
 - **Problem+JSON** error bodies (RFC 7807).
 
@@ -753,6 +781,133 @@ pub struct ApiDoc;
   `GET /v1/openapi.json` response against the OpenAPI 3.1 schema before
   fuzzing covered routes with Schemathesis.
 - CI compares against committed `openapi.json`; drift is a PR comment.
+
+---
+
+## Derived scorecards
+
+Derived scorecards are public read models computed from auditable observations
+and explicit configuration. They do not replace the time-series API: every
+scored value must either resolve to a source observation with provenance or be
+reported as a coverage gap/manual input. Scorecards are additive `/v1` API
+surface because they introduce new routes and schemas without changing existing
+observation contracts.
+
+### Abundance Position Score (APS) v1
+
+APS v1 is a national Australia scorecard. State or jurisdiction drilldowns are
+allowed only where the underlying source has defensible jurisdictional coverage;
+otherwise the contribution must be marked as missing for that jurisdiction.
+
+The canonical formula is:
+
+```text
+APS = 100 * T * (0.5 + 0.5 * O)
+```
+
+Where:
+
+- `T` is the weighted throughput sub-index normalized to `[0, 1]`.
+- `O` is the weighted orientation sub-index normalized to `[-1, 1]`.
+- The final APS point estimate is clamped to `[0, 100]` after floating-point
+  rounding.
+
+Score zones:
+
+| Range | Zone |
+|---:|---|
+| `0..=33` | `scarcity` |
+| `34..=66` | `mixed` |
+| `67..=100` | `abundance` |
+
+### Scorecard configuration
+
+Scorecards are config-driven, not hard-coded in UI components. APS config is
+versioned and includes:
+
+- `scorecard_id` and `version`.
+- Indicator `id`, display label, description, component, and axis.
+- `source_id`, `dataflow_id`, `measure_id`, and dimension selector for
+  observation-backed indicators.
+- Weight, scoring direction (`higher_is_better` or `lower_is_better`), and
+  normalization reference (`min`, `max`, `target`, or source-defined baseline).
+- Coverage status (`resolved`, `expected_missing`, `manual`, `unscored`, or
+  `experimental`) and confidence (`high`, `medium`, `low`) for every indicator.
+- Required attribution and license notes for indicator-level source drilldowns.
+
+Manual or low-cadence inputs must include source URL, retrieval date, cadence,
+reviewer or review process, and confidence. Red/yellow/manual orientation inputs
+may be visible in APS v1, but they must not silently reduce the point estimate
+unless the config marks them as scored and the source taxonomy has been
+reviewed.
+
+### Missing data, coverage, and confidence
+
+Missing indicators are excluded from point estimates. Coverage reports the
+share of configured scored weight that resolved to a usable value for the
+snapshot. Missing, manual, visible-unscored, and experimental inputs remain in
+the contribution list so clients can show gaps instead of implying full
+coverage.
+
+The confidence band is computed by re-running the APS calculation with missing
+inputs at conservative bounds:
+
+- Missing throughput inputs contribute `[0, 1]`.
+- Missing orientation inputs contribute `[-1, 1]`.
+- Resolved inputs keep their normalized value.
+- Visible-unscored inputs do not affect the point estimate or confidence band.
+
+Trend arrows compare the latest snapshot to the previous comparable snapshot:
+`up`, `flat`, `down`, or `unavailable`. The APS config defines the minimum
+absolute score movement required to leave `flat`; v1 default is one APS point.
+
+### APS API schemas
+
+`GET /v1/scorecards/aps/config` returns `ScorecardConfig`.
+
+`GET /v1/scorecards/aps/latest` returns the latest `ScorecardSnapshot`.
+
+`GET /v1/scorecards/aps/history?since=&until=` returns ordered
+`ScorecardSnapshot` values within the inclusive date range.
+
+Core schema names:
+
+- `ScorecardConfig`
+- `ScorecardSnapshot`
+- `SubIndexScore`
+- `IndicatorContribution`
+- `CoverageStatus`
+- `ScoreZone`
+
+Each `IndicatorContribution` includes:
+
+- Indicator id, label, component, axis, weight, direction, normalized value, raw
+  value, unit, coverage status, and confidence.
+- Source id, dataflow id, measure id, dimensions, latest period, and source URL.
+- Series key and source artifact id when resolved from an observation.
+- Attribution/license text suitable for source drilldowns.
+
+### APS v1 source register
+
+APS v1 uses the following planned source/dataflow ids. Missing sources must be
+reported as expected coverage gaps until their adapter issue lands.
+
+| APS area | Source/dataflow ids | v1 scoring status |
+|---|---|---|
+| Housing approvals/activity/completion time | `abs.building_approvals`, `abs.building_activity`, `abs.dwelling_completion_times` | Scored when resolved |
+| Housing Accord progress | `nhsac.housing_accord_progress` | Scored when resolved |
+| Planning approval throughput | `state_planning.nsw_da_processing`, `state_planning.vic_permit_activity` | Scored with explicit jurisdiction coverage |
+| Permitting/public-services proxy | `worldbank.bready` | Scored when resolved |
+| Productivity | `pc.productivity_bulletin`; optional later `abs.industry_mfp` | Scored when resolved |
+| Energy price/demand/generation/capacity | `aemo.dispatch`, `aemo.generation_mix`, `aemo.dispatchability_capacity` | Scored when resolved |
+| Infrastructure delivery | `state_capital.vic_major_projects`, `state_capital.budget_capital_papers` | Pilot/experimental unless coverage broadens |
+| Cost to serve per transaction | curated annual Services Australia/DTA inputs | Visible manual unless provenance is reviewed |
+| Control-vs-enable spend ratio | Treasury/state budget taxonomy | Visible unscored until taxonomy review |
+| Oversight strength | curated OAIC, ANAO, FOI, and audit-office statutory/funding inputs | Manual/low cadence |
+| Surveillance intensity | Carnegie AIGS-derived input | Low confidence/manual |
+| Compute capacity | `compute.au_datacentre_capacity_mw` | Low confidence/manual unless licensed machine-readable data exists |
+| Super productive infrastructure | `apra.super_asset_allocation` | Scored when reviewed category mapping exists |
+| AI readiness/adoption/talent | `oxford.gari`, `naic.ai_adoption_tracker`, `abs.ai_rd`, `home_affairs.skillselect_talent_proxy` | Scored or low-confidence according to source quality |
 
 ---
 
@@ -808,12 +963,18 @@ for await (const obs of client.observations.stream({
 // Catalog
 const dataflows = await client.dataflows.list({ source: 'abs' })
 const matches = await client.search.catalog({ q: 'unemployment' })
+
+// Derived scorecards
+const aps = await client.scorecards.aps.latest()
+console.log(aps.score, aps.zone, aps.coverage.weighted_percent)
 ```
 
 - **Runtime validation** (optional, off by default): Zod schemas generated from OpenAPI via `openapi-zod-client`; consumers pass `{ validate: true }` to enable.
 - **Retries + Retry-After** awareness built in.
 - **Bun + Node + browser + Deno** compatible — `fetch` only.
 - **Tree-shakeable**: subpath imports supported.
+- **Scorecards**: ergonomic helpers wrap `/v1/scorecards/aps/config`,
+  `/v1/scorecards/aps/latest`, and `/v1/scorecards/aps/history`.
 
 ---
 
@@ -822,12 +983,18 @@ const matches = await client.search.catalog({ q: 'unemployment' })
 Next.js App Router + React + TanStack Query + Tailwind + shadcn/ui dashboard components + Recharts.
 
 Pages:
-- **Index** — overview of loaded sources, frequencies, featured indicators, and catalog/search coverage.
+- **Index** — APS product view with score spectrum, marker, throughput and
+  orientation sub-indexes, trend, confidence band, coverage meter, source
+  drilldowns, config/weight panel, and indicator register.
 - **Explorer** — browse dataflows, pick dimensions, chart.
 - **Compare** — multiple series on one chart.
 - **Playground** — live query form → response viewer with curl / SDK snippet.
 
-Demonstrates the SDK and doubles as internal data browser.
+Explorer, Compare, and Playground remain secondary "Data tools" views.
+The homepage must consume the scorecard API/SDK response and must not duplicate
+APS scoring math in UI code. Missing/manual inputs are shown as coverage states,
+not hidden rows. The app demonstrates the SDK and doubles as internal data
+browser.
 
 ---
 
@@ -871,10 +1038,13 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - In-memory, no I/O.
 - Rule: every public fn in every `au-kpis-*` crate has at least one test.
 - Coverage floor: **80% line, 70% branch** (`cargo-llvm-cov`, uploaded to Codecov, PR comment diff).
+- APS scorecard tests cover formula bounds, zone bands, weighted means,
+  direction-aware normalization, missing-data exclusion, coverage percentage,
+  confidence-band bounds, visible-unscored behavior, and trend-arrow rules.
 
 **Property-based** (`proptest`)
 - Parse/serialize round-trip: `parse(serialize(obs)) == obs`
-- `SeriesKey` determinism: same dimensions → same hash; different dimensions → different hash (no collisions over 1M samples)
+- `SeriesKey` determinism: same dataflow, measure, and dimensions → same hash; different measure or dimensions → different hash (no collisions over 1M samples)
 - Pagination invariants: `concat(pages) == full_result`
 - Revision chain: latest revision always wins regardless of insertion order
 - Chunk exclusion: queries with narrow time windows never scan chunks outside range
@@ -884,6 +1054,7 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - PDF sidecar fixtures: raw table candidates snapshot per backend. Adapter
   snapshots remain the merge contract for final observations.
 - Golden API responses (JSON shape stability).
+- APS scorecard config snapshots make reviewed weight/config changes obvious.
 - OpenAPI spec snapshot — intentional changes get committed; drift needs review.
 
 **Integration** (`testcontainers` — real PG+Timescale+Redis+Minio per test file)
@@ -892,6 +1063,10 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 - PDF sidecar: deterministic backend, model fallback trigger, validation
   failure, and provenance metadata covered with committed fixtures.
 - API: full request through middleware stack → DB → response validated against OpenAPI schema.
+- Scorecards: seeded observations/config → APS config/latest/history responses
+  prove source attribution, formula output, confidence-band bounds, cache
+  headers, missing indicators, manual/visible-unscored inputs, and contribution
+  provenance.
 - Queue: enqueue → worker dequeue → retry on failure → DLQ on exhaustion.
 - Migrations: apply forward; apply backward (where reversible); apply forward again — idempotent.
 
@@ -903,9 +1078,14 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 **SDK integration**
 - TS SDK test suite runs against real API via docker-compose.
 - Verifies each SDK method: hits right endpoint, parses response, handles `4xx`/`5xx`, retries on `Retry-After`, streams correctly, types match runtime.
+- Scorecard SDK tests verify APS config/latest/history helpers, generated
+  response types, history query serialization, and optional runtime validation.
 
 **End-to-end** (Playwright — `apps/web/e2e/`)
 - Critical journeys: land → search "CPI" → pick series → view chart → download CSV → copy SDK snippet.
+- APS journeys: land on APS → inspect score spectrum and confidence band →
+  open source drilldown → inspect config/weights → navigate to Explorer,
+  Compare, and Playground.
 - Visual regression (screenshot diff vs committed baseline, per-breakpoint).
 - Accessibility: `axe-core` on every key page; WCAG AA required.
 
@@ -932,6 +1112,9 @@ Philosophy: data-intensive systems have most bugs at boundaries (source formats,
 
 **Data-quality** (scheduled, runs against prod data)
 - Per-dataflow rules: values within plausible ranges, cardinality stable, recency matches cadence.
+- APS input rules: every configured indicator has freshness, plausible range,
+  cardinality, coverage-status, and expected-missing checks; stale manual inputs
+  are reported separately from machine-ingested gaps.
 - Alerts on violation; does not fail CI (production-only).
 
 ### Test organisation
@@ -1353,7 +1536,7 @@ Each phase ends demo-able.
 Pass 1 over the plan. Fixes applied in-place:
 
 1. **Series vs Observation split** — added explicit `series` table so dimensions aren't duplicated across millions of observation rows. Hot table (`observations`) stays narrow: `(series_key, time, revision_no, value, status, attributes, artifact_id)`. Dimensional queries ("all VIC CPI") go through `series` with GIN index, then join to hypertable.
-2. **Revision handling** — `revision_no` as part of PK rather than `revision_of` pointer. Simpler. `observations_latest` view (continuous aggregate) is the default query target.
+2. **Revision handling** — `revision_no` as part of PK rather than `revision_of` pointer. The loader assigns effective revisions from existing `(series_key, time)` rows; adapters may emit `0`. `observations_latest` view (continuous aggregate) is the default query target.
 3. **`SeriesKey` as a newtype** — type-safe at every boundary; prevents string/id mix-ups.
 4. **Queue trait abstraction** — `au-kpis-queue` exports a `Queue` trait backed by Postgres transactional leasing. Business logic depends on the trait, so the backend remains swappable later.
 5. **`async-trait` justified** — adapters live behind `Arc<dyn SourceAdapter>` for the registry pattern; native async-fn-in-trait does not yet support this cleanly. Revisit when Rust stabilises dyn-compat for async.
@@ -1397,8 +1580,8 @@ All confirmed 2026-04-23:
 | **Codelist** | A reusable vocabulary of codes for a dimension (e.g. Australian states). |
 | **Measure** | What is being counted (unemployment rate, CPI index, GDP $). |
 | **Observation** | A single data point — one row in the `observations` hypertable. |
-| **Series** | A conceptual time-series identified by `(dataflow, dimension values)`. Stored in `series` table. |
-| **Series key** | Deterministic hash of `dataflow_id + sorted dimensions` — primary identifier for a series. |
+| **Series** | A conceptual time-series identified by `(dataflow, measure, dimension values)`. Stored in `series` table. |
+| **Series key** | Deterministic hash of `dataflow_id + measure_id + sorted dimensions` — primary identifier for a series. |
 | **Revision** | A later-published correction to a previously-observed value. Tracked via `revision_no`; `observations_latest` view shows latest per `(series_key, time)`. |
 | **Hypertable** | TimescaleDB-partitioned table. `observations` is partitioned by `time` (monthly chunks) + space-partitioned by `series_key` hash. |
 | **Continuous aggregate** | TimescaleDB materialized view that incrementally maintains aggregates (e.g. monthly averages) as new data arrives. |
@@ -1447,6 +1630,13 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v0.1.6 (2026-06-23)** — Integrated APS scorecard/source work with
+  measure-aware series keys, artifact fetch provenance, loader-assigned
+  revisions, latest-revision rollups, and bulk Parquet export semantics.
+- **v0.1.5 (2026-06-22)** — Separated Parquet bulk export limits from JSON/CSV
+  pagination: JSON/CSV stay capped at 10k rows, while Parquet can stream up to
+  the configured 1,000,000-row bulk cap with `Cache-Control: no-store`.
+- **v0.1.4 (2026-06-22)** — Clarified observation response caching: bounded first-page JSON keeps ETags, while CSV/Parquet and other streaming responses skip fingerprint pre-scans and use `Cache-Control: no-store`.
 - **v0.1.3 (2026-05-01)** — Clarified repeated artifact response-header retention and source-specific streaming memory guardrails in PR CI.
 - **v0.1.2 (2026-04-30)** — Clarified that artifact records retain upstream fetch response headers alongside the content-addressed storage key.
 - **v0.1.1 (2026-04-28)** — Clarified PDF extraction architecture: deterministic `pdfplumber`/`camelot` remains the baseline, with optional pinned local document-model backends for fallback/comparison. Added validation, provenance, testing, and model-governance requirements.

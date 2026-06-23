@@ -23,7 +23,7 @@ async fn data_quality_checks_report_range_cardinality_recency_and_revision_anoma
         max_value: 200.0,
         min_active_series: 2,
         latest_period_cardinality_floor: 1.0,
-        max_recency_lag_days: 90,
+        max_recency_lag_minutes: 90 * 24 * 60,
         max_daily_revisions: 0,
         z_score_sigma: 5.0,
     };
@@ -168,6 +168,31 @@ async fn seed_anomalous_dataflow(pool: &sqlx::PgPool, now: chrono::DateTime<Utc>
 }
 
 fn docker_available() -> bool {
+    docker_host_available() || docker_socket_available()
+}
+
+#[cfg(unix)]
+fn docker_host_available() -> bool {
+    let Some(host) = std::env::var("DOCKER_HOST").ok() else {
+        return false;
+    };
+    let Some(socket_path) = host.strip_prefix("unix://") else {
+        return true;
+    };
+    std::os::unix::net::UnixStream::connect(socket_path).is_ok()
+}
+
+#[cfg(not(unix))]
+fn docker_host_available() -> bool {
     std::env::var_os("DOCKER_HOST").is_some()
-        || std::path::Path::new("/var/run/docker.sock").exists()
+}
+
+#[cfg(unix)]
+fn docker_socket_available() -> bool {
+    std::os::unix::net::UnixStream::connect("/var/run/docker.sock").is_ok()
+}
+
+#[cfg(not(unix))]
+fn docker_socket_available() -> bool {
+    false
 }

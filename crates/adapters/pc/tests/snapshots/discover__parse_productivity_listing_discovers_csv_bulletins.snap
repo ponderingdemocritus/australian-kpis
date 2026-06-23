@@ -1,0 +1,18 @@
+---
+source: crates/adapters/pc/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "bulletin_id": "productivity-bulletin-2025",
+    "last_updated": "2025-06-04",
+    "source_url": "https://www.pc.gov.au/ongoing/productivity-insights/productivity-bulletin-2025.csv",
+    "title": "Productivity Bulletin 2025"
+  },
+  {
+    "bulletin_id": "productivity-bulletin-2026",
+    "last_updated": "2026-06-03",
+    "source_url": "https://www.pc.gov.au/ongoing/productivity-insights/productivity-bulletin-2026.csv",
+    "title": "Productivity Bulletin 2026"
+  }
+]

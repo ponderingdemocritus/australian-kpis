@@ -128,8 +128,12 @@ async fn abs_fetch_records_artifact_provenance_through_ingestion_context() {
         .await
         .expect("load artifact")
         .expect("artifact row exists");
+    let fetch_id = artifact
+        .fetch_id
+        .expect("persisted artifact ref carries fetch provenance id");
 
     assert_eq!(stored.id, artifact.id);
+    assert_eq!(stored.fetch_id, None);
     assert_eq!(stored.source_id, artifact.source_id);
     assert_eq!(stored.source_url, artifact.source_url);
     assert_eq!(stored.content_type, artifact.content_type);
@@ -141,4 +145,20 @@ async fn abs_fetch_records_artifact_provenance_through_ingestion_context() {
     );
     assert_eq!(stored.response_headers["etag"], ["\"fixture-etag\""]);
     assert_eq!(stored.response_headers["x-audit"], ["first", "second"]);
+
+    let fetch: (Vec<u8>, String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT artifact_id, source_id, source_url, response_headers
+         FROM artifact_fetches
+         WHERE id = $1",
+    )
+    .bind(fetch_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load artifact fetch provenance");
+
+    assert_eq!(fetch.0, artifact.id.digest().as_bytes().as_slice());
+    assert_eq!(fetch.1, artifact.source_id.as_str());
+    assert_eq!(fetch.2, artifact.source_url);
+    assert_eq!(fetch.3["etag"], serde_json::json!(["\"fixture-etag\""]));
+    assert_eq!(fetch.3["x-audit"], serde_json::json!(["first", "second"]));
 }

@@ -740,12 +740,164 @@ fn subscription_error_to_api_error(err: SubscriptionError) -> ApiError {
 mod tests {
     use std::time::Duration;
 
+    use au_kpis_domain::ids::{ArtifactId, DataflowId};
+    use chrono::TimeZone as _;
     use sqlx::postgres::PgPoolOptions;
     use tokio_util::sync::CancellationToken;
+    use uuid::Uuid;
 
     use super::{
-        DeliveryOptions, SubscriptionError, run_webhook_delivery_worker, validate_delivery_options,
+        ClaimedDelivery, CreateSubscriptionRequest, DeliveryOptions, FailureRecord,
+        SubscriptionError, WebhookDeliveryEvent, chrono_backoff, delivery_payload,
+        effective_max_attempts, generate_signing_secret, record_delivery_failure,
+        run_webhook_delivery_worker, sign_payload, subscription_error_to_api_error,
+        validate_delivery_options, validate_subscription_request,
     };
+
+    #[tokio::test]
+    async fn subscription_validation_covers_url_and_empty_filter_paths() {
+        let pool = lazy_pool();
+
+        validate_subscription_request(
+            &pool,
+            &CreateSubscriptionRequest {
+                url: "https://subscriber.example.test/hook".into(),
+                dataflow_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect("valid URL with no dataflow filters does not query the database");
+
+        let unsupported = validate_subscription_request(
+            &pool,
+            &CreateSubscriptionRequest {
+                url: "ftp://subscriber.example.test/hook".into(),
+                dataflow_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("unsupported scheme");
+        assert!(matches!(unsupported, SubscriptionError::Validation(_)));
+
+        let malformed = validate_subscription_request(
+            &pool,
+            &CreateSubscriptionRequest {
+                url: "not a url".into(),
+                dataflow_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("malformed URL");
+        assert!(matches!(malformed, SubscriptionError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn delivery_failure_retry_state_is_computed_before_database_write() {
+        let pool = lazy_pool();
+        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let options = DeliveryOptions::default();
+
+        let retry = record_delivery_failure(
+            &pool,
+            FailureRecord {
+                delivery_id: 1,
+                subscription_id: Uuid::new_v4(),
+                attempt: 1,
+                max_attempts: 2,
+                now,
+                status_code: Some(500),
+                error_message: "server error".into(),
+                latency_ms: 10,
+                options,
+            },
+        )
+        .await;
+        assert!(retry.is_err());
+
+        let exhausted = record_delivery_failure(
+            &pool,
+            FailureRecord {
+                delivery_id: 2,
+                subscription_id: Uuid::new_v4(),
+                attempt: 2,
+                max_attempts: 2,
+                now,
+                status_code: None,
+                error_message: "timeout".into(),
+                latency_ms: 20,
+                options,
+            },
+        )
+        .await;
+        assert!(exhausted.is_err());
+    }
+
+    #[test]
+    fn webhook_payload_signing_and_backoff_helpers_are_stable() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let event = WebhookDeliveryEvent {
+            dataflow_id: DataflowId::new("abs.cpi").unwrap(),
+            artifact_id: Some(ArtifactId::of_content(b"artifact")),
+            observations_loaded: 42,
+            occurred_at: now,
+        };
+        let payload = delivery_payload(&event);
+        assert_eq!(payload["event"], "data.updated");
+        assert_eq!(payload["observations_loaded"], 42);
+
+        let secret = generate_signing_secret();
+        assert!(secret.len() >= 43);
+        let signature =
+            sign_payload(&secret, &now.to_rfc3339(), br#"{"ok":true}"#).expect("sign payload");
+        assert!(signature.starts_with("sha256="));
+
+        let options = DeliveryOptions {
+            base_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(5),
+            ..DeliveryOptions::default()
+        };
+        assert_eq!(
+            chrono_backoff(1, options).expect("first retry"),
+            chrono::Duration::seconds(2)
+        );
+        assert_eq!(
+            chrono_backoff(10, options).expect("capped retry"),
+            chrono::Duration::seconds(5)
+        );
+
+        let delivery = ClaimedDelivery {
+            id: 1,
+            subscription_id: Uuid::new_v4(),
+            target_url: "https://subscriber.example.test/hook".into(),
+            signing_secret: secret,
+            payload,
+            attempts: 0,
+            max_attempts: 3,
+        };
+        assert_eq!(
+            effective_max_attempts(
+                &delivery,
+                DeliveryOptions {
+                    max_attempts: 5,
+                    ..DeliveryOptions::default()
+                },
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn subscription_errors_map_to_api_error_variants() {
+        drop(subscription_error_to_api_error(
+            SubscriptionError::Validation("bad subscription".into()),
+        ));
+        drop(subscription_error_to_api_error(SubscriptionError::Db(
+            sqlx::Error::RowNotFound,
+        )));
+        drop(subscription_error_to_api_error(SubscriptionError::Json(
+            serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+        )));
+    }
 
     #[test]
     fn delivery_options_reject_zero_values() {
@@ -774,10 +926,7 @@ mod tests {
 
     #[tokio::test]
     async fn delivery_worker_exits_when_shutdown_is_already_cancelled() {
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://postgres:postgres@localhost/au_kpis")
-            .expect("lazy postgres pool");
+        let pool = lazy_pool();
         let shutdown = CancellationToken::new();
         shutdown.cancel();
 
@@ -789,5 +938,12 @@ mod tests {
         )
         .await
         .expect("worker exits cleanly");
+    }
+
+    fn lazy_pool() -> sqlx::PgPool {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://postgres:postgres@localhost/au_kpis")
+            .expect("lazy postgres pool")
     }
 }

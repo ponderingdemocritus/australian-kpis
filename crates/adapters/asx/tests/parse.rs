@@ -65,6 +65,36 @@ const MARKET_STATS_HTML: &str = r#"
 </div>
 "#;
 
+const ANNOUNCEMENTS_RSS: &str = r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:asx="https://www.asx.com.au/rss">
+  <channel>
+    <title>ASX announcements</title>
+    <item>
+      <title>BHP - Change in substantial holding</title>
+      <link>https://www.asx.com.au/asxpdf/20260619/pdf/027xyz.pdf</link>
+      <guid>027xyz</guid>
+      <pubDate>Fri, 19 Jun 2026 05:15:00 +1000</pubDate>
+      <category>Market Sensitive</category>
+      <asx:code>BHP</asx:code>
+    </item>
+    <item>
+      <title>WBC - Appendix 3Y</title>
+      <link>https://www.asx.com.au/asxpdf/20260619/pdf/027abc.pdf</link>
+      <guid>027abc</guid>
+      <pubDate>Fri, 19 Jun 2026 06:30:00 +1000</pubDate>
+      <category>Director Interest Notice</category>
+      <asx:code>WBC</asx:code>
+    </item>
+  </channel>
+</rss>
+"#;
+
+const EOD_CSV: &str = r#"date,symbol,open,high,low,close,volume
+2026-06-19,BHP,42.10,42.80,41.90,42.50,12345678
+2026-06-19,WBC,28.00,28.35,27.95,28.20,8765432
+"#;
+
 #[derive(Debug, Serialize)]
 struct SnapshotRow {
     dataflow_id: String,
@@ -79,17 +109,22 @@ struct SnapshotRow {
     source_artifact_id: String,
 }
 
-async fn artifact_for(blob_store: &BlobStore, bytes: &'static [u8]) -> ArtifactRef {
+async fn artifact_for(
+    blob_store: &BlobStore,
+    bytes: &'static [u8],
+    source_url: &str,
+    content_type: &str,
+) -> ArtifactRef {
     let id = blob_store
         .put_artifact(Bytes::from_static(bytes))
         .await
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("asx").unwrap(),
-        source_url: "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
-            .into(),
-        content_type: "text/html".into(),
+        source_url: source_url.into(),
+        content_type: content_type.into(),
         response_headers: BTreeMap::new(),
         storage_key: StorageKey::canonical_for(&id).to_string(),
         size_bytes: bytes.len() as u64,
@@ -100,7 +135,13 @@ async fn artifact_for(blob_store: &BlobStore, bytes: &'static [u8]) -> ArtifactR
 #[tokio::test]
 async fn parses_asx_market_statistics_fixture() {
     let blob_store = BlobStore::new(InMemory::new());
-    let artifact = artifact_for(&blob_store, MARKET_STATS_HTML.as_bytes()).await;
+    let artifact = artifact_for(
+        &blob_store,
+        MARKET_STATS_HTML.as_bytes(),
+        "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+        "text/html",
+    )
+    .await;
     let adapter = AsxAdapter::default();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = ParseCtx::new(
@@ -141,9 +182,113 @@ async fn parses_asx_market_statistics_fixture() {
 }
 
 #[tokio::test]
+async fn parses_asx_announcements_rss_fixture() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        ANNOUNCEMENTS_RSS.as_bytes(),
+        "https://www.asx.com.au/asx/rss/announcements.xml",
+        "application/rss+xml",
+    )
+    .await;
+    let adapter = AsxAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 19, 7, 0, 0).unwrap(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse ASX announcements fixture");
+
+    let snapshot = rows
+        .into_iter()
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect::<Vec<_>>();
+
+    insta::assert_json_snapshot!(snapshot);
+}
+
+#[tokio::test]
+async fn parses_asx_eod_csv_fixture() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        EOD_CSV.as_bytes(),
+        "https://www.asx.com.au/data/eod/eod.csv",
+        "text/csv",
+    )
+    .await;
+    let adapter = AsxAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 19, 7, 0, 0).unwrap(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse ASX EOD fixture");
+
+    let snapshot = rows
+        .into_iter()
+        .map(|(series, observation)| SnapshotRow {
+            dataflow_id: series.dataflow_id.as_str().to_string(),
+            measure_id: series.measure_id.as_str().to_string(),
+            dimensions: series
+                .dimensions
+                .into_iter()
+                .map(|(key, value)| (key.as_str().to_string(), value.as_str().to_string()))
+                .collect(),
+            unit: series.unit,
+            time: observation.time.to_rfc3339(),
+            time_precision: format!("{:?}", observation.time_precision),
+            value: observation.value,
+            status: format!("{:?}", observation.status),
+            attributes: observation.attributes,
+            source_artifact_id: observation.source_artifact_id.to_hex(),
+        })
+        .collect::<Vec<_>>();
+
+    insta::assert_json_snapshot!(snapshot);
+}
+
+#[tokio::test]
 async fn parse_rejects_ambiguous_asx_provenance() {
     let blob_store = BlobStore::new(InMemory::new());
-    let mut artifact = artifact_for(&blob_store, MARKET_STATS_HTML.as_bytes()).await;
+    let mut artifact = artifact_for(
+        &blob_store,
+        MARKET_STATS_HTML.as_bytes(),
+        "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+        "text/html",
+    )
+    .await;
     artifact.source_id = SourceId::new("aemo").unwrap();
 
     let adapter = AsxAdapter::default();
@@ -179,6 +324,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("asx").unwrap(),
         source_url: "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
             .into(),

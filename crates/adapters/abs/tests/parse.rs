@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use au_kpis_adapter::{AdapterError, AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
 use au_kpis_adapter_abs::AbsAdapter;
 use au_kpis_domain::{
-    ArtifactId, DataflowId, DimensionId, Observation, ObservationStatus, SeriesDescriptor,
-    SeriesKey, SourceId, TimePrecision,
+    ArtifactId, DataflowId, DimensionId, MeasureId, Observation, ObservationStatus,
+    SeriesDescriptor, SeriesKey, SourceId, TimePrecision,
 };
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageKey};
@@ -27,6 +27,79 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 const CPI_FIXTURE: &[u8] = include_bytes!("fixtures/cpi_sdmx.json");
+const BUILDING_APPROVALS_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Approvals, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>April 2026</dd>
+    <dt>Released</dt><dd>2/06/2026</dd>
+  </dl>
+  <h2>Dwellings approved</h2>
+  <section>
+    <h3>Dwelling units approved (a)</h3>
+    <p>Seasonally adjusted (no.) Trend (no.)</p>
+    <table>
+      <tr><th>Month</th><th>Seasonally adjusted</th><th>Trend</th></tr>
+      <tr><td>Mar-26</td><td>17,307</td><td>17,361</td></tr>
+      <tr><td>Apr-26</td><td>16,710</td><td>17,363</td></tr>
+    </table>
+  </section>
+</main>"#;
+const BUILDING_ACTIVITY_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Activity, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>December 2025</dd>
+    <dt>Released</dt><dd>8/04/2026</dd>
+  </dl>
+  <h2>Dwellings commenced</h2>
+  <section>
+    <h3>Total dwellings commenced</h3>
+    <p>Trend Seasonally adjusted</p>
+    <table>
+      <tr><th>Quarter</th><th>Trend</th><th>Seasonally adjusted</th></tr>
+      <tr><td>Sep-25</td><td>49,797</td><td>49,582</td></tr>
+      <tr><td>Dec-25</td><td>52,283</td><td>53,567</td></tr>
+    </table>
+  </section>
+  <h2>Dwellings completed</h2>
+  <section>
+    <h3>Total dwellings completed</h3>
+    <p>Seasonally adjusted Trend</p>
+    <table>
+      <tr><th>Quarter</th><th>Seasonally adjusted</th><th>Trend</th></tr>
+      <tr><td>Sep-25</td><td>44,304</td><td>43,093</td></tr>
+      <tr><td>Dec-25</td><td>43,536</td><td>43,598</td></tr>
+    </table>
+  </section>
+</main>"#;
+const DWELLING_COMPLETION_TIMES_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Average dwelling completion times</h1>
+  <dl>
+    <dt>Released</dt><dd>9/10/2019</dd>
+  </dl>
+  <p>Data presented in this article are available in the Building Activity data cube.</p>
+  <h2>Results</h2>
+  <section>
+    <h3>Graph 1: Average completion times of new houses and new townhouses, Australia</h3>
+    <p>New houses (quarters) New townhouses (quarters)</p>
+    <table>
+      <tr><th>Financial year</th><th>New houses</th><th>New townhouses</th></tr>
+      <tr><td>2017-2018</td><td>2.23</td><td>3.09</td></tr>
+      <tr><td>2018-2019</td><td>2.22</td><td>3.36</td></tr>
+    </table>
+  </section>
+  <section>
+    <h3>Graph 2: Average completion times of new flats, units or apartments, Australia</h3>
+    <p>New apartments (quarters)</p>
+    <table>
+      <tr><th>Financial year</th><th>New apartments</th></tr>
+      <tr><td>2017-2018</td><td>6.47</td></tr>
+      <tr><td>2018-2019</td><td>6.66</td></tr>
+    </table>
+  </section>
+</main>"#;
 const REORDERED_FIXTURE: &[u8] = br#"{
   "data": {
     "dataSets": [
@@ -302,6 +375,86 @@ async fn parse_streams_cpi_sdmx_observations_from_artifact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_streams_building_approvals_release_page() {
+    let rows = parse_fixture_owned_with_url(
+        BUILDING_APPROVALS_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release",
+    )
+    .await
+    .expect("parse Building Approvals fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_approvals"
+            && row.measure_id == "dwellings_approved"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str) == Some("dwellings_approved")
+            && row.time == "2026-04-01T00:00:00+00:00"
+            && row.time_precision == "month"
+            && row.value == Some(16_710.0)
+    }));
+    insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_streams_building_activity_release_page() {
+    let rows = parse_fixture_owned_with_url(
+        BUILDING_ACTIVITY_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release",
+    )
+    .await
+    .expect("parse Building Activity fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_activity"
+            && row.measure_id == "dwellings_commenced"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str) == Some("dwellings_commenced")
+            && row.time == "2025-10-01T00:00:00+00:00"
+            && row.time_precision == "quarter"
+            && row.value == Some(53_567.0)
+    }));
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_activity"
+            && row.measure_id == "dwellings_completed"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str) == Some("dwellings_completed")
+            && row.time == "2025-10-01T00:00:00+00:00"
+            && row.time_precision == "quarter"
+            && row.value == Some(43_536.0)
+    }));
+    insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_streams_dwelling_completion_times_article() {
+    let rows = parse_fixture_owned_with_url(
+        DWELLING_COMPLETION_TIMES_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/articles/average-dwelling-completion-times",
+    )
+    .await
+    .expect("parse dwelling completion times fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.dwelling_completion_times"
+            && row.measure_id == "average_completion_months"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.dimensions.get("measure").map(String::as_str)
+                == Some("average_completion_months")
+            && row.dimensions.get("dwelling_type").map(String::as_str) == Some("apartments")
+            && row.time == "2018-07-01T00:00:00+00:00"
+            && row.time_precision == "year"
+            && row.value == Some(19.98)
+    }));
+    insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_cpi_fixture_stays_under_runtime_budget() {
     let started = Instant::now();
     let rows = parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture");
@@ -332,6 +485,7 @@ async fn parse_emits_canonical_series_key_boundary_ids() {
     let rows = parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture");
     let (series, observation) = rows.first().expect("fixture has observations");
     let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
+    let measure = MeasureId::new("index").expect("static measure id is valid");
 
     assert_eq!(series.measure_id.as_str(), "index");
     assert_eq!(series.unit, "index");
@@ -345,7 +499,11 @@ async fn parse_emits_canonical_series_key_boundary_ids() {
     );
     assert_eq!(
         series.series_key,
-        SeriesKey::derive(&dataflow, [("measure", "index"), ("region", "AUS")])
+        SeriesKey::derive(
+            &dataflow,
+            &measure,
+            [("measure", "index"), ("region", "AUS")]
+        )
     );
     assert_eq!(observation.series_key, series.series_key);
 }
@@ -456,7 +614,7 @@ async fn parse_rejects_non_time_observation_dimension() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parse_rejects_non_cpi_artifact_url() {
+async fn parse_rejects_unsupported_abs_sdmx_artifact_url() {
     let err = parse_fixture_owned_with_url(
         CPI_FIXTURE.to_vec(),
         "https://data.api.abs.gov.au/rest/data/ABS,WPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD",
@@ -467,13 +625,68 @@ async fn parse_rejects_non_cpi_artifact_url() {
     assert!(matches!(err, AdapterError::Validation(_)));
     assert_eq!(err.class(), ErrorClass::Validation);
     assert!(
-        err.to_string().contains("does not match CPI dataflow"),
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
         "{err}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parse_rejects_artifact_url_without_cpi_dataflow_provenance() {
+async fn parse_rejects_building_approvals_artifact_without_release_provenance() {
+    let err = parse_fixture_owned_with_url(
+        BUILDING_APPROVALS_FIXTURE.to_vec(),
+        "https://mirror.example.test/building-approvals.html",
+    )
+    .await
+    .expect_err("mirrored Building Approvals artifact should be rejected");
+
+    assert!(matches!(err, AdapterError::Validation(_)));
+    assert_eq!(err.class(), ErrorClass::Validation);
+    assert!(
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_building_activity_artifact_without_release_provenance() {
+    let err = parse_fixture_owned_with_url(
+        BUILDING_ACTIVITY_FIXTURE.to_vec(),
+        "https://mirror.example.test/building-activity.html",
+    )
+    .await
+    .expect_err("mirrored Building Activity artifact should be rejected");
+
+    assert!(matches!(err, AdapterError::Validation(_)));
+    assert_eq!(err.class(), ErrorClass::Validation);
+    assert!(
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_dwelling_completion_times_without_article_provenance() {
+    let err = parse_fixture_owned_with_url(
+        DWELLING_COMPLETION_TIMES_FIXTURE.to_vec(),
+        "https://mirror.example.test/average-dwelling-completion-times.html",
+    )
+    .await
+    .expect_err("mirrored completion times artifact should be rejected");
+
+    assert!(matches!(err, AdapterError::Validation(_)));
+    assert_eq!(err.class(), ErrorClass::Validation);
+    assert!(
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parse_rejects_artifact_url_without_supported_dataflow_provenance() {
     let err = parse_fixture_owned_with_url(
         CPI_FIXTURE.to_vec(),
         "https://mirror.example.test/archive/cpi_sdmx.json",
@@ -484,7 +697,8 @@ async fn parse_rejects_artifact_url_without_cpi_dataflow_provenance() {
     assert!(matches!(err, AdapterError::Validation(_)));
     assert_eq!(err.class(), ErrorClass::Validation);
     assert!(
-        err.to_string().contains("missing CPI dataflow provenance"),
+        err.to_string()
+            .contains("missing supported ABS dataflow provenance"),
         "{err}"
     );
 }
@@ -515,6 +729,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -618,6 +833,7 @@ async fn parse_preserves_transient_storage_read_classification() {
     let blob_store = BlobStore::new(FailingReadObjectStore);
     let artifact = ArtifactRef {
         id: ArtifactId::of_content(b"partial"),
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -659,6 +875,7 @@ async fn parse_observes_cancellation_before_reading_artifact() {
         .expect("store fixture artifact");
     let artifact = ArtifactRef {
         id: artifact_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -717,8 +934,9 @@ proptest! {
     ) {
         let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
         let measure = measure.to_ascii_lowercase();
-        let forward = SeriesKey::derive(&dataflow, [("region", region.as_str()), ("measure", measure.as_str())]);
-        let reverse = SeriesKey::derive(&dataflow, [("measure", measure.as_str()), ("region", region.as_str())]);
+        let measure_id = MeasureId::new(measure.clone()).expect("generated measure id is valid");
+        let forward = SeriesKey::derive(&dataflow, &measure_id, [("region", region.as_str()), ("measure", measure.as_str())]);
+        let reverse = SeriesKey::derive(&dataflow, &measure_id, [("measure", measure.as_str()), ("region", region.as_str())]);
 
         prop_assert_eq!(forward, reverse);
     }
@@ -729,7 +947,8 @@ proptest! {
         revision_no in 0_u32..32,
     ) {
         let dataflow = DataflowId::new("abs.cpi").expect("static dataflow id is valid");
-        let series_key = SeriesKey::derive(&dataflow, [("region", "AUS"), ("measure", "index")]);
+        let measure = MeasureId::new("index").expect("static measure id is valid");
+        let series_key = SeriesKey::derive(&dataflow, &measure, [("region", "AUS"), ("measure", "index")]);
         let observation = Observation {
             series_key,
             time: DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
@@ -758,10 +977,11 @@ proptest! {
 }
 
 async fn parse_fixture_rows() -> Vec<ParsedRow> {
-    parse_fixture_raw(CPI_FIXTURE)
-        .await
-        .expect("parse fixture")
-        .into_iter()
+    rows_to_parsed_rows(parse_fixture_raw(CPI_FIXTURE).await.expect("parse fixture"))
+}
+
+fn rows_to_parsed_rows(rows: Vec<(SeriesDescriptor, Observation)>) -> Vec<ParsedRow> {
+    rows.into_iter()
         .map(|(series, observation)| ParsedRow {
             series_key: series.series_key.to_string(),
             dataflow_id: series.dataflow_id.to_string(),
@@ -812,6 +1032,7 @@ async fn parse_fixture_owned_with_url(
 
     let artifact = ArtifactRef {
         id: artifact_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: source_url.into(),
         content_type: "application/vnd.sdmx.data+json".into(),

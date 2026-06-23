@@ -6,7 +6,7 @@ use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array}
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use au_kpis_domain::{
     ObservationStatus, TimePrecision,
-    ids::{ArtifactId, DataflowId, SeriesKey, Sha256Digest},
+    ids::{ArtifactId, DataflowId, MeasureId, SeriesKey, Sha256Digest},
 };
 use axum::{
     body::{Body, Bytes},
@@ -35,6 +35,7 @@ use crate::{AppState, error::ApiError};
 
 const DEFAULT_LIMIT: usize = 1_000;
 const MAX_LIMIT: usize = 10_000;
+const MAX_PARQUET_BULK_LIMIT: usize = 1_000_000;
 const CACHE_CONTROL_VALUE: &str = "public, max-age=60, stale-while-revalidate=300";
 const JSON_RESPONSE_CACHE_TTL: Duration = Duration::from_secs(300);
 const PARQUET_ROW_GROUP_TARGET_BYTES: usize = 1_000_000;
@@ -115,7 +116,7 @@ pub struct ObservationsResponse {
         ("frequency" = Option<String>, Query, min_length = 1, pattern = "^(annual|quarterly|monthly|weekly|daily|irregular)$", description = "Optional dataflow frequency filter, or weekly/monthly/quarterly rollup grain."),
         ("format" = Option<String>, Query, min_length = 3, max_length = 7, pattern = "^(json|csv|parquet)$", description = "Response format: json, csv, or parquet."),
         ("cursor" = Option<String>, Query, min_length = 1, description = "Opaque cursor from the previous page."),
-        ("limit" = Option<u32>, Query, maximum = 10000, description = "Page size, maximum 10000.")
+        ("limit" = Option<u32>, Query, maximum = 1000000, description = "Page size. JSON/CSV are capped at 10000 rows; Parquet bulk exports are capped at 1000000 rows.")
     ),
     responses(
         (
@@ -172,52 +173,63 @@ pub async fn list_observations(
     uri: Uri,
 ) -> Result<Response, ApiError> {
     let query = parse_observations_query(uri.query())?;
-    let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
-    validate_observation_query_bounds(&query, &fingerprint)?;
-    let json_cache_key = observations_json_cache_key(uri.query(), &query);
-    if should_cache_json_observations(&query) {
+    if requires_cache_fingerprint(&query) {
+        let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
+        validate_observation_query_bounds(&query, &fingerprint)?;
+        let json_cache_key = observations_json_cache_key(uri.query(), &query);
         if let Some(cached) = read_cached_json_observations(&state, &json_cache_key).await {
             return cached_json_observations_response(&headers, cached);
         }
-    }
 
-    let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
-    let etag = compute_etag(&query, &fingerprint)?;
-    let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
-    let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
-        tracing::error!(error = %err, "generated invalid ETag header");
-        ApiError::Internal
-    })?;
+        let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
+        let etag = compute_etag(&query, &fingerprint)?;
+        let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
+        let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
+            tracing::error!(error = %err, "generated invalid ETag header");
+            ApiError::Internal
+        })?;
 
-    if if_none_match_fresh(&headers, &etag) {
-        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        if if_none_match_fresh(&headers, &etag) {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, cache_control);
+            response.headers_mut().insert(header::ETAG, etag_header);
+            return Ok(response);
+        }
+
+        let body =
+            render_json_observations(state.db.clone(), query.clone(), metadata.clone()).await?;
+        write_cached_json_observations(
+            &state,
+            &json_cache_key,
+            &CachedJsonObservations {
+                etag: etag.clone(),
+                body: body.clone(),
+            },
+        )
+        .await;
+        let mut response = Response::new(Body::from(body));
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, cache_control);
         response.headers_mut().insert(header::ETAG, etag_header);
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
         return Ok(response);
     }
 
+    validate_streaming_observation_query_bounds(&state.db, &query).await?;
+    let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
+    let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
     let content_type = match query.format {
         ResponseFormat::Json => HeaderValue::from_static("application/json"),
         ResponseFormat::Csv => HeaderValue::from_static("text/csv; charset=utf-8"),
         ResponseFormat::Parquet => HeaderValue::from_static("application/vnd.apache.parquet"),
     };
     let stream = match query.format {
-        ResponseFormat::Json if should_cache_json_observations(&query) => {
-            let body =
-                render_json_observations(state.db.clone(), query.clone(), metadata.clone()).await?;
-            write_cached_json_observations(
-                &state,
-                &json_cache_key,
-                &CachedJsonObservations {
-                    etag: etag.clone(),
-                    body: body.clone(),
-                },
-            )
-            .await;
-            Body::from(body)
-        }
         ResponseFormat::Json => {
             Body::from_stream(json_observations_stream(state.db.clone(), query, metadata))
         }
@@ -235,7 +247,6 @@ pub async fn list_observations(
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, cache_control);
-    response.headers_mut().insert(header::ETAG, etag_header);
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
@@ -341,7 +352,7 @@ fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery
     let mut frequency = None;
     let mut format = ResponseFormat::Json;
     let mut cursor = None;
-    let mut limit = DEFAULT_LIMIT;
+    let mut limit = None;
 
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
         let key = key.into_owned();
@@ -358,7 +369,7 @@ fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery
             "frequency" => frequency = Some(parse_frequency(&value)?),
             "format" => format = parse_format(&value)?,
             "cursor" => cursor = Some(decode_cursor(&value)?),
-            "limit" => limit = parse_limit(&value)?,
+            "limit" => limit = Some(parse_limit(&value)?),
             "dimensions" | "dimensions[]" => {
                 let (dimension, code) = value
                     .split_once('=')
@@ -385,6 +396,8 @@ fn parse_observations_query(raw: Option<&str>) -> Result<ParsedObservationsQuery
             ));
         }
     }
+
+    let limit = validate_limit_for_format(limit.unwrap_or(DEFAULT_LIMIT), format)?;
 
     Ok(ParsedObservationsQuery {
         dataflow,
@@ -452,12 +465,27 @@ fn parse_limit(value: &str) -> Result<usize, ApiError> {
     let limit = value
         .parse::<usize>()
         .map_err(|err| ApiError::Validation(format!("invalid limit: {err}")))?;
-    if limit == 0 || limit > MAX_LIMIT {
+    if limit == 0 {
+        return Err(ApiError::Validation("limit must be greater than 0".into()));
+    }
+    Ok(limit)
+}
+
+fn validate_limit_for_format(limit: usize, format: ResponseFormat) -> Result<usize, ApiError> {
+    let max = max_limit_for_format(format);
+    if limit > max {
         return Err(ApiError::Validation(format!(
-            "limit must be between 1 and {MAX_LIMIT}"
+            "{format} limit must be between 1 and {max}"
         )));
     }
     Ok(limit)
+}
+
+fn max_limit_for_format(format: ResponseFormat) -> usize {
+    match format {
+        ResponseFormat::Parquet => MAX_PARQUET_BULK_LIMIT,
+        ResponseFormat::Json | ResponseFormat::Csv => MAX_LIMIT,
+    }
 }
 
 fn encode_cursor(cursor: &ObservationCursor) -> Result<String, ApiError> {
@@ -547,6 +575,18 @@ fn validate_latest_query_cardinality(
     Ok(())
 }
 
+async fn validate_streaming_observation_query_bounds(
+    pool: &PgPool,
+    query: &ParsedObservationsQuery,
+) -> Result<(), ApiError> {
+    if rollup_grain(query).is_some() {
+        return Ok(());
+    }
+
+    let candidates = load_candidate_series(pool, query).await?;
+    validate_latest_query_cardinality(query, candidates.len() as i64)
+}
+
 fn etag_seed(query: &ParsedObservationsQuery, fingerprint: &CacheFingerprint) -> String {
     format!(
         "dataflow={};dimensions={:?};since={:?};until={:?};frequency={:?};format={};cursor={:?};limit={};series_count={};max_series_updated_at={:?}",
@@ -578,6 +618,15 @@ fn if_none_match_fresh(headers: &HeaderMap, etag: &str) -> bool {
 fn should_cache_json_observations(query: &ParsedObservationsQuery) -> bool {
     // Keep the hot-path cache bounded; cursor pages and export formats stay streaming.
     query.format == ResponseFormat::Json && query.cursor.is_none() && query.limit <= DEFAULT_LIMIT
+}
+
+fn requires_cache_fingerprint(query: &ParsedObservationsQuery) -> bool {
+    should_cache_json_observations(query)
+}
+
+#[cfg(test)]
+fn emits_etag_header(query: &ParsedObservationsQuery) -> bool {
+    requires_cache_fingerprint(query)
 }
 
 fn observations_json_cache_key(raw_query: Option<&str>, query: &ParsedObservationsQuery) -> String {
@@ -1100,6 +1149,7 @@ pub mod benchmark_support {
     ) -> impl Stream<Item = Result<ObservationsRow, ApiError>> + Send + 'static {
         async_stream::try_stream! {
             let dataflow = DataflowId::new("abs.cpi").expect("benchmark dataflow id is valid");
+            let measure = MeasureId::new("index").expect("benchmark measure id is valid");
             let artifact = ArtifactId::of_content(b"parquet 1m benchmark artifact");
             let ingested_at = DateTime::from_timestamp(1_714_000_000, 0)
                 .expect("benchmark ingested timestamp is valid");
@@ -1111,7 +1161,7 @@ pub mod benchmark_support {
                 let region = regions[idx % regions.len()];
                 let dimensions: BTreeMap<String, String> =
                     [("region".to_string(), region.to_string())].into_iter().collect();
-                let series_key = SeriesKey::derive(&dataflow, [("region", region)]);
+                let series_key = SeriesKey::derive(&dataflow, &measure, [("region", region)]);
                 yield ObservationsRow {
                     series_key,
                     time: observed_at + chrono::Duration::seconds(idx as i64),
@@ -1619,14 +1669,15 @@ fn observation_status_label(value: ObservationStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+    use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
     use chrono::{TimeZone, Utc};
     use sqlx::Execute;
 
     #[test]
     fn parses_dimensions_dates_cursor_and_limit_from_query_string() {
         let dataflow = DataflowId::new("abs.cpi").unwrap();
-        let series_key = SeriesKey::derive(&dataflow, [("region", "AUS")]);
+        let measure = MeasureId::new("index").unwrap();
+        let series_key = SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]);
         let cursor = encode_cursor(&ObservationCursor {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             series_key,
@@ -1665,6 +1716,43 @@ mod tests {
         let query = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
 
         assert_eq!(query.format, ResponseFormat::Parquet);
+    }
+
+    #[test]
+    fn parquet_bulk_limits_can_exceed_json_page_cap() {
+        let parquet_before_limit =
+            parse_observations_query(Some("dataflow=abs.cpi&format=parquet&limit=10001"))
+                .expect("parquet bulk limit should exceed JSON page cap");
+        assert_eq!(parquet_before_limit.limit, MAX_LIMIT + 1);
+
+        let parquet_after_limit =
+            parse_observations_query(Some("dataflow=abs.cpi&limit=10001&format=parquet"))
+                .expect("format-aware limit validation should be order independent");
+        assert_eq!(parquet_after_limit.limit, MAX_LIMIT + 1);
+
+        let max_bulk = parse_observations_query(Some(&format!(
+            "dataflow=abs.cpi&format=parquet&limit={MAX_PARQUET_BULK_LIMIT}"
+        )))
+        .expect("configured parquet bulk cap should be accepted");
+        assert_eq!(max_bulk.limit, MAX_PARQUET_BULK_LIMIT);
+    }
+
+    #[test]
+    fn json_and_csv_limits_remain_capped_at_page_limit() {
+        let json = parse_observations_query(Some("dataflow=abs.cpi&limit=10001"))
+            .expect_err("JSON page limit must stay capped");
+        assert!(json.to_string().contains("json limit"));
+
+        let csv = parse_observations_query(Some("dataflow=abs.cpi&format=csv&limit=10001"))
+            .expect_err("CSV export limit must stay capped");
+        assert!(csv.to_string().contains("csv limit"));
+
+        let parquet = parse_observations_query(Some(&format!(
+            "dataflow=abs.cpi&format=parquet&limit={}",
+            MAX_PARQUET_BULK_LIMIT + 1
+        )))
+        .expect_err("parquet bulk cap should still be bounded");
+        assert!(parquet.to_string().contains("parquet limit"));
     }
 
     #[test]
@@ -1731,6 +1819,7 @@ mod tests {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             series_key: SeriesKey::derive(
                 &DataflowId::new("abs.cpi").unwrap(),
+                &MeasureId::new("index").unwrap(),
                 [("region", "AUS")],
             ),
         })
@@ -1787,12 +1876,13 @@ mod tests {
     #[test]
     fn latest_queries_use_one_bounded_candidate_key_scan() {
         let dataflow = DataflowId::new("state_budgets.vic_budget").unwrap();
+        let measure = MeasureId::new("value").unwrap();
         let query = parse_observations_query(Some(
             "dataflow=state_budgets.vic_budget&since=2026-07-01&until=2029-07-01&limit=10",
         ))
         .unwrap();
         let series = [CandidateSeries {
-            series_key: SeriesKey::derive(&dataflow, [("metric", "operating_revenue")]),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("metric", "operating_revenue")]),
         }];
 
         let mut query_builder = build_latest_observation_rows_query(&series, &query, None, 22);
@@ -1802,6 +1892,124 @@ mod tests {
         assert!(sql.contains("o.series_key = ANY"));
         assert!(sql.contains("o.time >="));
         assert!(sql.contains("o.time <="));
+        assert!(sql.contains("ORDER BY o.time ASC, o.series_key ASC LIMIT"));
+    }
+
+    #[test]
+    fn observation_query_builders_apply_optional_filters() {
+        let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("index").unwrap();
+        let cursor = ObservationCursor {
+            time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
+        };
+        let encoded_cursor = encode_cursor(&cursor).unwrap();
+        let query = parse_observations_query(Some(&format!(
+            "dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01T00:00:00Z&until=2024-06-30T00:00:00Z&frequency=daily&cursor={encoded_cursor}&limit=10"
+        )))
+        .unwrap();
+
+        let mut observation_builder = QueryBuilder::<Postgres>::new("");
+        push_observation_select(&mut observation_builder, None);
+        push_observation_filters(&mut observation_builder, &query);
+        let observation_query = observation_builder.build();
+        let sql = observation_query.sql();
+        assert!(sql.contains("FROM observations_latest o"));
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("o.time >="));
+        assert!(sql.contains("o.time <="));
+        assert!(sql.contains("d.frequency ="));
+        assert!(sql.contains("(o.time, o.series_key) >"));
+
+        let mut candidate_builder =
+            QueryBuilder::<Postgres>::new("SELECT s.series_key FROM series s JOIN dataflows d");
+        push_candidate_series_filters(&mut candidate_builder, &query);
+        let candidate_query = candidate_builder.build();
+        let sql = candidate_query.sql();
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("d.frequency ="));
+
+        let mut fingerprint_builder =
+            QueryBuilder::<Postgres>::new("SELECT count(*) FROM series s JOIN dataflows d");
+        push_series_fingerprint_filters(&mut fingerprint_builder, &query);
+        let fingerprint_query = fingerprint_builder.build();
+        let sql = fingerprint_query.sql();
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("d.frequency ="));
+
+        let series = [CandidateSeries {
+            series_key: cursor.series_key,
+        }];
+        let mut latest_builder =
+            build_latest_observation_rows_query(&series, &query, Some(cursor), 22);
+        let latest_query = latest_builder.build();
+        let sql = latest_query.sql();
+        assert!(sql.contains("o.time >="));
+        assert!(sql.contains("o.time <="));
+        assert!(sql.contains("(o.time, o.series_key) >"));
+    }
+
+    #[test]
+    fn observation_query_builders_omit_optional_filters_when_absent() {
+        let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("index").unwrap();
+        let query = parse_observations_query(Some("dataflow=abs.cpi&limit=10")).unwrap();
+
+        let mut observation_builder = QueryBuilder::<Postgres>::new("");
+        push_observation_select(&mut observation_builder, None);
+        push_observation_filters(&mut observation_builder, &query);
+        let observation_query = observation_builder.build();
+        let sql = observation_query.sql();
+        assert!(sql.contains("FROM observations_latest o"));
+        assert!(!sql.contains("s.dimensions @>"));
+        assert!(!sql.contains("o.time >="));
+        assert!(!sql.contains("o.time <="));
+        assert!(!sql.contains("d.frequency ="));
+        assert!(!sql.contains("(o.time, o.series_key) >"));
+
+        let mut candidate_builder =
+            QueryBuilder::<Postgres>::new("SELECT s.series_key FROM series s JOIN dataflows d");
+        push_candidate_series_filters(&mut candidate_builder, &query);
+        let candidate_query = candidate_builder.build();
+        let sql = candidate_query.sql();
+        assert!(!sql.contains("s.dimensions @>"));
+        assert!(!sql.contains("d.frequency ="));
+
+        let mut fingerprint_builder =
+            QueryBuilder::<Postgres>::new("SELECT count(*) FROM series s JOIN dataflows d");
+        push_series_fingerprint_filters(&mut fingerprint_builder, &query);
+        let fingerprint_query = fingerprint_builder.build();
+        let sql = fingerprint_query.sql();
+        assert!(!sql.contains("s.dimensions @>"));
+        assert!(!sql.contains("d.frequency ="));
+
+        let series = [CandidateSeries {
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
+        }];
+        let mut latest_builder = build_latest_observation_rows_query(&series, &query, None, 22);
+        let latest_query = latest_builder.build();
+        let sql = latest_query.sql();
+        assert!(!sql.contains("o.time >="));
+        assert!(!sql.contains("o.time <="));
+        assert!(!sql.contains("(o.time, o.series_key) >"));
+    }
+
+    #[test]
+    fn rollup_query_builder_uses_rollup_view_and_metadata() {
+        let query = parse_observations_query(Some(
+            "dataflow=abs.cpi&dimensions[region]=AUS&frequency=monthly&limit=10",
+        ))
+        .unwrap();
+
+        let mut builder = build_rollup_observation_rows_query(&query);
+        let built = builder.build();
+        let sql = built.sql();
+
+        assert!(sql.contains("'month'::text AS time_precision"));
+        assert!(sql.contains("'aggregate', 'avg'"));
+        assert!(sql.contains("'rollup_grain', 'monthly'"));
+        assert!(sql.contains("FROM observations_rollup_monthly o"));
+        assert!(sql.contains("s.dimensions @>"));
         assert!(sql.contains("ORDER BY o.time ASC, o.series_key ASC LIMIT"));
     }
 
@@ -1847,6 +2055,17 @@ mod tests {
         assert!(result.unwrap().expect("writer task").is_ok());
     }
 
+    #[tokio::test]
+    async fn parquet_writer_streams_more_than_json_page_cap() {
+        let stats = benchmark_support::drain_synthetic_parquet_stream(MAX_LIMIT + 1)
+            .await
+            .expect("drain synthetic parquet stream");
+
+        assert_eq!(stats.rows, MAX_LIMIT + 1);
+        assert!(stats.bytes > 0);
+        assert!(stats.chunks > 0);
+    }
+
     #[test]
     fn rejects_missing_dataflow_and_excessive_limits_before_db_access() {
         let missing = parse_observations_query(Some("limit=10")).unwrap_err();
@@ -1859,9 +2078,10 @@ mod tests {
     #[test]
     fn cursor_roundtrips_as_opaque_base64_payload() {
         let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("index").unwrap();
         let cursor = ObservationCursor {
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
-            series_key: SeriesKey::derive(&dataflow, [("region", "AUS")]),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
         };
 
         let encoded = encode_cursor(&cursor).unwrap();
@@ -1894,6 +2114,11 @@ mod tests {
         let malformed_dimension =
             parse_observations_query(Some("dataflow=abs.cpi&dimensions=region")).unwrap_err();
         assert!(malformed_dimension.to_string().contains("dimension=value"));
+
+        let malformed_bracket_dimension =
+            parse_observations_query(Some("dataflow=abs.cpi&dimensions[region=AUS&limit=10"))
+                .unwrap();
+        assert!(malformed_bracket_dimension.dimensions.is_empty());
 
         let bad_frequency =
             parse_observations_query(Some("dataflow=abs.cpi&frequency=hourly")).unwrap_err();
@@ -1941,12 +2166,132 @@ mod tests {
         assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
         headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
         assert!(if_none_match_fresh(&headers, "W/\"fresh\""));
+
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 ETag"),
+        );
+        assert!(!if_none_match_fresh(&headers, "W/\"fresh\""));
+    }
+
+    #[test]
+    fn only_json_observation_pages_require_cache_fingerprints() {
+        let json = parse_observations_query(Some("dataflow=abs.cpi")).unwrap();
+        assert!(requires_cache_fingerprint(&json));
+        assert!(emits_etag_header(&json));
+
+        let oversized_json = parse_observations_query(Some("dataflow=abs.cpi&limit=1001")).unwrap();
+        assert!(!requires_cache_fingerprint(&oversized_json));
+        assert!(!emits_etag_header(&oversized_json));
+
+        let csv = parse_observations_query(Some("dataflow=abs.cpi&format=csv")).unwrap();
+        assert!(!requires_cache_fingerprint(&csv));
+        assert!(!emits_etag_header(&csv));
+
+        let parquet = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
+        assert!(!requires_cache_fingerprint(&parquet));
+        assert!(!emits_etag_header(&parquet));
+    }
+
+    #[test]
+    fn cached_json_response_returns_body_or_not_modified_by_etag() {
+        let cached = CachedJsonObservations {
+            etag: "W/\"fresh\"".into(),
+            body: "{\"metadata\":{},\"observations\":[],\"pagination\":{}}".into(),
+        };
+        let headers = HeaderMap::new();
+        let response = cached_json_observations_response(&headers, cached.clone())
+            .expect("cached body response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut fresh_headers = HeaderMap::new();
+        fresh_headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("W/\"fresh\""),
+        );
+        let response = cached_json_observations_response(&fresh_headers, cached)
+            .expect("not modified response");
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+        let invalid = CachedJsonObservations {
+            etag: "bad\netag".into(),
+            body: "{}".into(),
+        };
+        assert!(cached_json_observations_response(&HeaderMap::new(), invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn rollup_streaming_bounds_return_before_candidate_scan() {
+        let query = parse_observations_query(Some("dataflow=abs.cpi&frequency=weekly")).unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@localhost/unused")
+            .expect("lazy pool");
+
+        validate_streaming_observation_query_bounds(&pool, &query)
+            .await
+            .expect("rollup query does not need raw candidate scan");
+    }
+
+    #[test]
+    fn csv_helpers_escape_special_fields_and_empty_values() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+
+        let mut row = test_observation_row();
+        row.value = None;
+        row.dimensions.insert("note".into(), "a,b".into());
+        let csv = row_to_csv(&row).expect("csv row");
+        assert!(
+            csv.contains(",,normal,"),
+            "missing values should serialize as an empty CSV field: {csv}"
+        );
+        assert!(csv.contains("\"{\"\"note\"\":\"\"a,b\"\",\"\"region\"\":\"\"AUS\"\"}\""));
+    }
+
+    #[tokio::test]
+    async fn parquet_writer_handles_empty_chunks_and_dropped_receivers() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut writer = ChannelParquetWriter { tx };
+        writer
+            .write(Bytes::new())
+            .await
+            .expect("empty parquet chunks are ignored");
+        assert!(rx.try_recv().is_err());
+
+        drop(rx);
+        let err = writer
+            .write(Bytes::from_static(b"not empty"))
+            .await
+            .expect_err("dropped receiver should surface as parquet error");
+        assert!(err.to_string().contains("receiver dropped"));
+    }
+
+    #[tokio::test]
+    async fn empty_parquet_batch_is_a_noop() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut writer =
+            AsyncArrowWriter::try_new(ChannelParquetWriter { tx }, parquet_schema(), None)
+                .expect("writer");
+        let mut batch = ParquetBatchBuilder::default();
+
+        write_parquet_batch(
+            &mut writer,
+            parquet_schema(),
+            &mut batch,
+            PARQUET_ROW_GROUP_TARGET_BYTES,
+        )
+        .await
+        .expect("empty batch");
+
+        assert!(batch.is_empty());
     }
 
     fn test_observation_row() -> ObservationsRow {
         let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("cpi").unwrap();
         ObservationsRow {
-            series_key: SeriesKey::derive(&dataflow, [("region", "AUS")]),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
             time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
             time_precision: TimePrecision::Quarter,
             value: Some(135.0),

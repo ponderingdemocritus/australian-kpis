@@ -1,0 +1,216 @@
+---
+source: crates/adapters/asx/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "open",
+      "symbol": "BHP"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 42.1,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "high",
+      "symbol": "BHP"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 42.8,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "low",
+      "symbol": "BHP"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 41.9,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "close",
+      "symbol": "BHP"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 42.5,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "volume",
+      "symbol": "BHP"
+    },
+    "unit": "shares",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 12345678.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "open",
+      "symbol": "WBC"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 28.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "high",
+      "symbol": "WBC"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 28.35,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "low",
+      "symbol": "WBC"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 27.95,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "close",
+      "symbol": "WBC"
+    },
+    "unit": "AUD",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 28.2,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  },
+  {
+    "dataflow_id": "asx.eod",
+    "measure_id": "value",
+    "dimensions": {
+      "metric": "volume",
+      "symbol": "WBC"
+    },
+    "unit": "shares",
+    "time": "2026-06-19T00:00:00+00:00",
+    "time_precision": "Day",
+    "value": 8765432.0,
+    "status": "Normal",
+    "attributes": {
+      "asx_section": "eod",
+      "license": "ASX Terms of Use",
+      "license_url": "https://www.asx.com.au/terms-of-use",
+      "source": "ASX",
+      "source_url": "https://www.asx.com.au/data/eod/eod.csv"
+    },
+    "source_artifact_id": "ece8042b6f46a2af8e37581b3e43eab278ff4fa7cbded424b2f6af9b43a3de1f"
+  }
+]

@@ -48,6 +48,7 @@ async fn parse_500mb_stays_below_100mb_peak_heap_under_dhat() {
         .len();
     let artifact = ArtifactRef {
         id: artifact_id,
+        fetch_id: None,
         source_id: SourceId::new("abs").expect("static source id is valid"),
         source_url: "https://data.api.abs.gov.au/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD".into(),
         content_type: "application/vnd.sdmx.data+json".into(),

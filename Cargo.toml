@@ -17,15 +17,22 @@ members = [
     "crates/au-kpis-adapter",
     "crates/au-kpis-loader",
     "crates/au-kpis-ingestion-core",
+    "crates/au-kpis-scorecard",
     "crates/au-kpis-api-http",
     "crates/au-kpis-openapi",
     "crates/adapters/abs",
     "crates/adapters/rba",
+    "crates/adapters/pc",
+    "crates/adapters/nhsac",
+    "crates/adapters/worldbank",
     "crates/adapters/apra",
     "crates/adapters/asx",
     "crates/adapters/treasury",
     "crates/adapters/aemo",
     "crates/adapters/state-budgets",
+    "crates/adapters/state-capital",
+    "crates/adapters/state-planning",
+    "crates/adapters/ai-readiness",
     "crates/bins/au-kpis-api",
     "crates/bins/au-kpis-ingestion",
     "crates/bins/au-kpis-scheduler",
@@ -52,8 +59,15 @@ au-kpis-queue = { path = "crates/au-kpis-queue" }
 au-kpis-auth = { path = "crates/au-kpis-auth" }
 au-kpis-pdf-client = { path = "crates/au-kpis-pdf-client" }
 au-kpis-adapter = { path = "crates/au-kpis-adapter" }
+au-kpis-adapter-pc = { path = "crates/adapters/pc" }
+au-kpis-adapter-nhsac = { path = "crates/adapters/nhsac" }
+au-kpis-adapter-worldbank = { path = "crates/adapters/worldbank" }
+au-kpis-adapter-state-capital = { path = "crates/adapters/state-capital" }
+au-kpis-adapter-state-planning = { path = "crates/adapters/state-planning" }
+au-kpis-adapter-ai-readiness = { path = "crates/adapters/ai-readiness" }
 au-kpis-loader = { path = "crates/au-kpis-loader" }
 au-kpis-ingestion-core = { path = "crates/au-kpis-ingestion-core" }
+au-kpis-scorecard = { path = "crates/au-kpis-scorecard" }
 au-kpis-api-http = { path = "crates/au-kpis-api-http" }
 au-kpis-openapi = { path = "crates/au-kpis-openapi" }
 criterion = { version = "0.5", features = ["html_reports"] }

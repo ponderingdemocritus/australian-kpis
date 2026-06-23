@@ -6,6 +6,8 @@ import type {
   ListDataflowsParams,
   ObservationsResponse,
   ObservationsRow,
+  ScorecardConfig,
+  ScorecardSnapshot,
   SearchCatalogParams,
   SearchResponse,
   SeriesLookupResponse,
@@ -52,9 +54,16 @@ export type ObservationsListParams = {
   until?: string
 }
 
+export type ObservationsParquetParams = Omit<ObservationsListParams, 'cursor'>
+
 export type ObservationLatestParams = {
   dataflow: string
   seriesKey: string
+}
+
+export type ScorecardHistoryParams = {
+  since?: string
+  until?: string
 }
 
 export type AuKpisClient = {
@@ -67,11 +76,19 @@ export type AuKpisClient = {
   observations: {
     latest: (params: ObservationLatestParams) => Promise<SeriesLookupResponse>
     list: (params: ObservationsListParams) => Promise<ObservationsResponse>
+    parquet: (params: ObservationsParquetParams) => Promise<Response>
     stream: (params: ObservationsListParams) => AsyncIterable<ObservationsRow>
   }
   openapi: () => Promise<unknown>
   search: {
     catalog: (params: SearchCatalogParams) => Promise<SearchResponse>
+  }
+  scorecards: {
+    aps: {
+      config: () => Promise<ScorecardConfig>
+      history: (params?: ScorecardHistoryParams) => Promise<ScorecardSnapshot[]>
+      latest: () => Promise<ScorecardSnapshot>
+    }
   }
 }
 
@@ -106,6 +123,9 @@ type SchemaName =
   | 'HealthResponse'
   | 'ObservationsResponse'
   | 'SearchResponse'
+  | 'ScorecardConfig'
+  | 'ScorecardSnapshot'
+  | 'ScorecardSnapshotList'
   | 'SeriesLookupResponse'
 
 type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
@@ -133,6 +153,15 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
       query: observationsQuery(params),
       schema: 'ObservationsResponse',
     })
+  const parquetObservations = (params: ObservationsParquetParams) =>
+    requestRaw(
+      context,
+      {
+        path: '/v1/observations',
+        query: { ...observationsQuery(params), format: 'parquet' },
+      },
+      'application/vnd.apache.parquet',
+    )
 
   return {
     dataflows: {
@@ -165,6 +194,7 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
           schema: 'SeriesLookupResponse',
         }),
       list: listObservations,
+      parquet: parquetObservations,
       stream: (params) => streamObservations(params, listObservations),
     },
     openapi: () =>
@@ -178,6 +208,26 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
           query: params,
           schema: 'SearchResponse',
         }),
+    },
+    scorecards: {
+      aps: {
+        config: () =>
+          requestJson<ScorecardConfig>(context, {
+            path: '/v1/scorecards/aps/config',
+            schema: 'ScorecardConfig',
+          }),
+        history: (params) =>
+          requestJson<ScorecardSnapshot[]>(context, {
+            path: '/v1/scorecards/aps/history',
+            query: params,
+            schema: 'ScorecardSnapshotList',
+          }),
+        latest: () =>
+          requestJson<ScorecardSnapshot>(context, {
+            path: '/v1/scorecards/aps/latest',
+            schema: 'ScorecardSnapshot',
+          }),
+      },
     },
   }
 }
@@ -223,6 +273,49 @@ async function requestJson<T>(context: RequestContext, spec: RequestSpec): Promi
       throw new ApiRequestError(response.status, response.statusText, body)
     } catch (error) {
       if (error instanceof ApiRequestError || error instanceof ApiValidationError) {
+        throw error
+      }
+
+      lastNetworkError = error
+      if (attempt < context.retry.maxAttempts) {
+        await context.retry.sleep(fallbackDelayMs(context.retry, attempt))
+      }
+    }
+  }
+
+  throw lastNetworkError instanceof Error ? lastNetworkError : new Error(String(lastNetworkError))
+}
+
+async function requestRaw(
+  context: RequestContext,
+  spec: RequestSpec,
+  accept: string,
+): Promise<Response> {
+  const url = buildUrl(context.baseUrl, spec.path, spec.query)
+  const headers = new Headers({ accept })
+
+  if (context.apiKey !== undefined && context.apiKey.length > 0) {
+    headers.set('x-api-key', context.apiKey)
+  }
+
+  let lastNetworkError: unknown
+  for (let attempt = 1; attempt <= context.retry.maxAttempts; attempt += 1) {
+    try {
+      const response = await context.fetchImpl(url, { headers, method: 'GET' })
+
+      if (response.ok) {
+        return response
+      }
+
+      const body = [204, 205, 304].includes(response.status) ? '' : await response.text()
+      if (attempt < context.retry.maxAttempts && shouldRetry(response.status)) {
+        await context.retry.sleep(retryDelayMs(response, context.retry, attempt))
+        continue
+      }
+
+      throw new ApiRequestError(response.status, response.statusText, body)
+    } catch (error) {
+      if (error instanceof ApiRequestError) {
         throw error
       }
 

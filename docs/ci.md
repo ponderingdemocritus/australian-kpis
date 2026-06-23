@@ -20,12 +20,25 @@ the single `CI OK` status check.
   `pnpm audit --audit-level critical`, and gitleaks over full history
 - API container build plus Trivy HIGH/CRITICAL image scan
 - k6 smoke checks against the docker-compose stack on pull requests and the
-  configured staging API in merge queue
+  configured staging API when called by merge queue
 - Advisory Criterion bench comparison through `critcmp`
 - Advisory Codex structured review when repository secrets allow it
 
 Rust jobs install `sccache` and use the GitHub Actions backend. TypeScript jobs
 restore the pnpm store and `.turbo` cache before running Turborepo tasks.
+
+## Merge queue workflow
+
+`.github/workflows/merge.yml` is triggered by GitHub's `merge_group` event. It
+calls the full pull request gate set from `.github/workflows/pr.yml` with
+merge-queue mode enabled, so k6 smoke runs against the configured staging API
+instead of the local compose API. It also runs the deeper Schemathesis profile
+against staging and aggregates both through `CI OK`.
+
+The `main` branch must require merge queue and status checks as documented in
+`docs/ops/merge-queue.md`. GitHub removes a queued batch when a required
+`merge_group` check fails or times out, so the full group is rejected before any
+member PR lands.
 
 ## k6 smoke gate
 

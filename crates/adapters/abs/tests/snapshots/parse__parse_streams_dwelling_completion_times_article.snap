@@ -1,0 +1,126 @@
+---
+source: crates/adapters/abs/tests/parse.rs
+expression: rows
+---
+[
+  {
+    "series_key": "3be8a3c846b650cf97809f1d7a3aeeb73f289cda27d5248628d33a5c83cf102f",
+    "dataflow_id": "abs.dwelling_completion_times",
+    "measure_id": "average_completion_months",
+    "dimensions": {
+      "dwelling_type": "houses",
+      "measure": "average_completion_months",
+      "region": "AUS"
+    },
+    "time": "2017-07-01T00:00:00+00:00",
+    "time_precision": "year",
+    "value": 6.69,
+    "status": "normal",
+    "attributes": {
+      "abs_article": "Average dwelling completion times",
+      "abs_financial_year": "2017-2018",
+      "abs_original_unit": "quarters",
+      "source_url": "https://www.abs.gov.au/articles/average-dwelling-completion-times"
+    }
+  },
+  {
+    "series_key": "02ea3b96b8506435f875ef167862ffb6847dc35767b151da4a41c4a1377e9fda",
+    "dataflow_id": "abs.dwelling_completion_times",
+    "measure_id": "average_completion_months",
+    "dimensions": {
+      "dwelling_type": "townhouses",
+      "measure": "average_completion_months",
+      "region": "AUS"
+    },
+    "time": "2017-07-01T00:00:00+00:00",
+    "time_precision": "year",
+    "value": 9.27,
+    "status": "normal",
+    "attributes": {
+      "abs_article": "Average dwelling completion times",
+      "abs_financial_year": "2017-2018",
+      "abs_original_unit": "quarters",
+      "source_url": "https://www.abs.gov.au/articles/average-dwelling-completion-times"
+    }
+  },
+  {
+    "series_key": "3be8a3c846b650cf97809f1d7a3aeeb73f289cda27d5248628d33a5c83cf102f",
+    "dataflow_id": "abs.dwelling_completion_times",
+    "measure_id": "average_completion_months",
+    "dimensions": {
+      "dwelling_type": "houses",
+      "measure": "average_completion_months",
+      "region": "AUS"
+    },
+    "time": "2018-07-01T00:00:00+00:00",
+    "time_precision": "year",
+    "value": 6.66,
+    "status": "normal",
+    "attributes": {
+      "abs_article": "Average dwelling completion times",
+      "abs_financial_year": "2018-2019",
+      "abs_original_unit": "quarters",
+      "source_url": "https://www.abs.gov.au/articles/average-dwelling-completion-times"
+    }
+  },
+  {
+    "series_key": "02ea3b96b8506435f875ef167862ffb6847dc35767b151da4a41c4a1377e9fda",
+    "dataflow_id": "abs.dwelling_completion_times",
+    "measure_id": "average_completion_months",
+    "dimensions": {
+      "dwelling_type": "townhouses",
+      "measure": "average_completion_months",
+      "region": "AUS"
+    },
+    "time": "2018-07-01T00:00:00+00:00",
+    "time_precision": "year",
+    "value": 10.08,
+    "status": "normal",
+    "attributes": {
+      "abs_article": "Average dwelling completion times",
+      "abs_financial_year": "2018-2019",
+      "abs_original_unit": "quarters",
+      "source_url": "https://www.abs.gov.au/articles/average-dwelling-completion-times"
+    }
+  },
+  {
+    "series_key": "e3eabf387328e30c125bc80ff42d0cf2ca2d9082f6206581e8b452d48929f095",
+    "dataflow_id": "abs.dwelling_completion_times",
+    "measure_id": "average_completion_months",
+    "dimensions": {
+      "dwelling_type": "apartments",
+      "measure": "average_completion_months",
+      "region": "AUS"
+    },
+    "time": "2017-07-01T00:00:00+00:00",
+    "time_precision": "year",
+    "value": 19.41,
+    "status": "normal",
+    "attributes": {
+      "abs_article": "Average dwelling completion times",
+      "abs_financial_year": "2017-2018",
+      "abs_original_unit": "quarters",
+      "source_url": "https://www.abs.gov.au/articles/average-dwelling-completion-times"
+    }
+  },
+  {
+    "series_key": "e3eabf387328e30c125bc80ff42d0cf2ca2d9082f6206581e8b452d48929f095",
+    "dataflow_id": "abs.dwelling_completion_times",
+    "measure_id": "average_completion_months",
+    "dimensions": {
+      "dwelling_type": "apartments",
+      "measure": "average_completion_months",
+      "region": "AUS"
+    },
+    "time": "2018-07-01T00:00:00+00:00",
+    "time_precision": "year",
+    "value": 19.98,
+    "status": "normal",
+    "attributes": {
+      "abs_article": "Average dwelling completion times",
+      "abs_financial_year": "2018-2019",
+      "abs_original_unit": "quarters",
+      "source_url": "https://www.abs.gov.au/articles/average-dwelling-completion-times"
+    }
+  }
+]

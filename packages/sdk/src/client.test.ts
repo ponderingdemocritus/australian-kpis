@@ -4,6 +4,8 @@ import type {
   DataflowsResponse,
   ObservationsResponse,
   ObservationsRow,
+  ScorecardConfig,
+  ScorecardSnapshot,
   SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
@@ -35,6 +37,12 @@ const stream: AsyncIterable<ObservationsRow> = client.observations.stream({
   dataflow: 'abs.cpi',
   limit: 1000,
 })
+const parquet: Promise<Response> = client.observations.parquet({
+  dataflow: 'abs.cpi',
+  dimensions: { region: 'AUS' },
+  limit: 50_000,
+  since: '2010-01-01',
+})
 const latest: Promise<SeriesLookupResponse> = client.observations.latest({
   dataflow: 'abs.cpi',
   seriesKey: 'a'.repeat(64),
@@ -42,6 +50,12 @@ const latest: Promise<SeriesLookupResponse> = client.observations.latest({
 const search: Promise<SearchResponse> = client.search.catalog({
   limit: 5,
   q: 'index',
+})
+const apsConfig: Promise<ScorecardConfig> = client.scorecards.aps.config()
+const apsLatest: Promise<ScorecardSnapshot> = client.scorecards.aps.latest()
+const apsHistory: Promise<ScorecardSnapshot[]> = client.scorecards.aps.history({
+  since: '2024-01-01',
+  until: '2024-12-31',
 })
 const validatingClient = createClient({
   baseUrl: 'https://api.example.test',
@@ -56,6 +70,10 @@ void dataflow
 void codelist
 void observations
 void stream
+void parquet
 void latest
 void search
+void apsConfig
+void apsLatest
+void apsHistory
 void validatingDataflows

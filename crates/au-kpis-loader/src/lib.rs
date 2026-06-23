@@ -582,8 +582,8 @@ async fn load_observation_batch(
     create_series_staging_table(&mut tx).await?;
     create_observation_staging_table(&mut tx).await?;
     copy_series(&mut tx, batch).await?;
-    copy_direct_observations(&mut tx, batch).await?;
-    let observations_loaded = upsert_observations(&mut tx).await?;
+    let staged_rows = copy_direct_observations(&mut tx, batch).await?;
+    let observations_loaded = upsert_observations(&mut tx, staged_rows).await?;
     tx.commit().await?;
 
     stats.observations_loaded += observations_loaded;
@@ -744,42 +744,51 @@ async fn copy_observations(
 async fn copy_observations_deduped(
     tx: &mut Transaction<'_, Postgres>,
     batch: &[LoadItem],
-) -> Result<(), LoadError> {
-    let mut rows = BTreeMap::new();
-    for item in batch {
-        rows.insert(
-            (
-                item.observation.series_key,
-                item.observation.time,
-                item.observation.revision_no,
-            ),
-            item,
-        );
-    }
-    let payload = observation_copy_payload(rows.into_values())?;
-    copy_observation_payload(tx, payload).await
+) -> Result<usize, LoadError> {
+    let rows = dedupe_observations_by_series_time(batch);
+    let row_count = rows.len();
+    let payload = observation_copy_payload(rows.into_iter())?;
+    copy_observation_payload(tx, payload).await?;
+    Ok(row_count)
 }
 
 async fn copy_direct_observations(
     tx: &mut Transaction<'_, Postgres>,
     batch: &[LoadItem],
-) -> Result<(), LoadError> {
-    if has_duplicate_observation_keys(batch) {
+) -> Result<usize, LoadError> {
+    if has_duplicate_observation_times(batch) {
         copy_observations_deduped(tx, batch).await
     } else {
-        copy_observations(tx, batch).await
+        copy_observations(tx, batch).await?;
+        Ok(batch.len())
     }
 }
 
-fn has_duplicate_observation_keys(batch: &[LoadItem]) -> bool {
+fn has_duplicate_observation_times(batch: &[LoadItem]) -> bool {
     let mut seen = HashSet::with_capacity(batch.len());
-    batch.iter().any(|item| {
-        !seen.insert((
-            item.observation.series_key,
-            item.observation.time,
-            item.observation.revision_no,
-        ))
-    })
+    batch
+        .iter()
+        .any(|item| !seen.insert((item.observation.series_key, item.observation.time)))
+}
+
+fn dedupe_observations_by_series_time(batch: &[LoadItem]) -> Vec<&LoadItem> {
+    let mut rows: BTreeMap<(SeriesKey, chrono::DateTime<chrono::Utc>), (usize, &LoadItem)> =
+        BTreeMap::new();
+    for (index, item) in batch.iter().enumerate() {
+        let key = (item.observation.series_key, item.observation.time);
+        match rows.entry(key) {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (_, previous) = entry.get();
+                if item.observation.revision_no >= previous.observation.revision_no {
+                    entry.insert((index, item));
+                }
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((index, item));
+            }
+        }
+    }
+    rows.into_values().map(|(_, item)| item).collect()
 }
 
 fn observation_copy_payload<'a>(
@@ -826,35 +835,103 @@ async fn copy_observation_payload(
     Ok(())
 }
 
-async fn upsert_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
+async fn upsert_observations(
+    tx: &mut Transaction<'_, Postgres>,
+    staged_row_count: usize,
+) -> Result<u64, LoadError> {
+    let staged_row_count = u64::try_from(staged_row_count)
+        .map_err(|_| LoadError::Validation("staged observation count exceeded u64 range".into()))?;
+    let inserted = insert_new_observations(tx).await?;
+    let observations_loaded = if inserted == staged_row_count {
+        inserted
+    } else {
+        inserted + upsert_observation_revisions(tx).await?
+    };
+    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
+    Ok(observations_loaded)
+}
+
+async fn insert_new_observations(tx: &mut Transaction<'_, Postgres>) -> Result<u64, LoadError> {
     let result = sqlx::query(
-        "INSERT INTO observations AS existing (
+        "INSERT INTO observations (
              series_key, time, revision_no, time_precision, value, status,
              attributes, ingested_at, source_artifact_id
          )
-         SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
+         SELECT decode(series_key_hex, 'hex'), time, 0, time_precision,
                 value, status, attributes, ingested_at,
                 decode(source_artifact_hex, 'hex')
          FROM staging_observations
-         ON CONFLICT (series_key, time, revision_no) DO UPDATE
-         SET time_precision = EXCLUDED.time_precision,
-             value = EXCLUDED.value,
-             status = EXCLUDED.status,
-             attributes = EXCLUDED.attributes,
-             ingested_at = EXCLUDED.ingested_at,
-             source_artifact_id = EXCLUDED.source_artifact_id
-         WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
-            OR existing.value IS DISTINCT FROM EXCLUDED.value
-            OR existing.status IS DISTINCT FROM EXCLUDED.status
-            OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
-            OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id",
+         ON CONFLICT (series_key, time, revision_no) DO NOTHING",
     )
     .execute(&mut **tx)
     .await?;
 
-    let observations_loaded = result.rows_affected();
-    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
-    Ok(observations_loaded)
+    Ok(result.rows_affected())
+}
+
+async fn upsert_observation_revisions(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<u64, LoadError> {
+    // Adapter revision numbers are provisional. Persist only changed staged rows
+    // and derive the effective revision from the existing chain.
+    let result = sqlx::query(
+        "WITH staged_rows AS MATERIALIZED (
+             SELECT decode(series_key_hex, 'hex') AS series_key,
+                    time,
+                    time_precision,
+                    value,
+                    status,
+                    attributes,
+                    ingested_at,
+                    decode(source_artifact_hex, 'hex') AS source_artifact_id
+             FROM staging_observations
+         ),
+         changed_rows AS MATERIALIZED (
+             SELECT staged.*
+             FROM staged_rows staged
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM observations existing
+                 WHERE existing.series_key = staged.series_key
+                   AND existing.time = staged.time
+                   AND existing.time_precision = staged.time_precision
+                   AND existing.value IS NOT DISTINCT FROM staged.value
+                   AND existing.status = staged.status
+                   AND existing.attributes = staged.attributes
+                   AND existing.source_artifact_id = staged.source_artifact_id
+             )
+         ),
+         assigned_rows AS MATERIALIZED (
+             SELECT staged.series_key,
+                    staged.time,
+                    (COALESCE(max(existing.revision_no), -1) + 1)::INTEGER AS revision_no,
+                    staged.time_precision,
+                    staged.value,
+                    staged.status,
+                    staged.attributes,
+                    staged.ingested_at,
+                    staged.source_artifact_id
+             FROM changed_rows staged
+             LEFT JOIN observations existing
+               ON existing.series_key = staged.series_key
+              AND existing.time = staged.time
+             GROUP BY staged.series_key, staged.time, staged.time_precision,
+                      staged.value, staged.status, staged.attributes,
+                      staged.ingested_at, staged.source_artifact_id
+         )
+         INSERT INTO observations (
+             series_key, time, revision_no, time_precision, value, status,
+             attributes, ingested_at, source_artifact_id
+         )
+         SELECT series_key, time, revision_no, time_precision, value, status,
+                attributes, ingested_at, source_artifact_id
+         FROM assigned_rows
+         ON CONFLICT (series_key, time, revision_no) DO NOTHING",
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(result.rows_affected())
 }
 
 async fn upsert_observations_in_chunk_transactions(
@@ -919,6 +996,9 @@ async fn upsert_next_observation_chunk(
     last_stage_row_id: i64,
     chunk_limit: i64,
 ) -> Result<(i64, u64, bool), LoadError> {
+    // Keep staged promotion semantics aligned with direct batch loads: staged
+    // rows are deduped per series/time, exact replays are skipped, and changed
+    // rows append to the existing revision chain.
     let (max_stage_row_id, chunk_rows_loaded, had_rows): (i64, i64, bool) = sqlx::query_as(
         "WITH next_rows AS MATERIALIZED (
              SELECT stage_row_id, series_key_hex, time, revision_no, time_precision,
@@ -929,33 +1009,61 @@ async fn upsert_next_observation_chunk(
              LIMIT $2
          ),
          deduped_rows AS MATERIALIZED (
-             SELECT DISTINCT ON (series_key_hex, time, revision_no)
-                    stage_row_id, series_key_hex, time, revision_no, time_precision,
-                    value, status, attributes, ingested_at, source_artifact_hex
+             SELECT DISTINCT ON (series_key_hex, time)
+                    stage_row_id,
+                    decode(series_key_hex, 'hex') AS series_key,
+                    time,
+                    time_precision,
+                    value,
+                    status,
+                    attributes,
+                    ingested_at,
+                    decode(source_artifact_hex, 'hex') AS source_artifact_id
              FROM next_rows
-             ORDER BY series_key_hex, time, revision_no, stage_row_id DESC
+             ORDER BY series_key_hex, time, stage_row_id DESC
+         ),
+         changed_rows AS MATERIALIZED (
+             SELECT staged.*
+             FROM deduped_rows staged
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM observations existing
+                 WHERE existing.series_key = staged.series_key
+                   AND existing.time = staged.time
+                   AND existing.time_precision = staged.time_precision
+                   AND existing.value IS NOT DISTINCT FROM staged.value
+                   AND existing.status = staged.status
+                   AND existing.attributes = staged.attributes
+                   AND existing.source_artifact_id = staged.source_artifact_id
+             )
+         ),
+         assigned_rows AS MATERIALIZED (
+             SELECT staged.series_key,
+                    staged.time,
+                    (COALESCE(max(existing.revision_no), -1) + 1)::INTEGER AS revision_no,
+                    staged.time_precision,
+                    staged.value,
+                    staged.status,
+                    staged.attributes,
+                    staged.ingested_at,
+                    staged.source_artifact_id
+             FROM changed_rows staged
+             LEFT JOIN observations existing
+               ON existing.series_key = staged.series_key
+              AND existing.time = staged.time
+             GROUP BY staged.series_key, staged.time, staged.time_precision,
+                      staged.value, staged.status, staged.attributes,
+                      staged.ingested_at, staged.source_artifact_id
          ),
          inserted AS (
-             INSERT INTO observations AS existing (
+             INSERT INTO observations (
                  series_key, time, revision_no, time_precision, value, status,
                  attributes, ingested_at, source_artifact_id
              )
-             SELECT decode(series_key_hex, 'hex'), time, revision_no, time_precision,
-                    value, status, attributes, ingested_at,
-                    decode(source_artifact_hex, 'hex')
-             FROM deduped_rows
-             ON CONFLICT (series_key, time, revision_no) DO UPDATE
-             SET time_precision = EXCLUDED.time_precision,
-                 value = EXCLUDED.value,
-                 status = EXCLUDED.status,
-                 attributes = EXCLUDED.attributes,
-                 ingested_at = EXCLUDED.ingested_at,
-                 source_artifact_id = EXCLUDED.source_artifact_id
-             WHERE existing.time_precision IS DISTINCT FROM EXCLUDED.time_precision
-                OR existing.value IS DISTINCT FROM EXCLUDED.value
-                OR existing.status IS DISTINCT FROM EXCLUDED.status
-                OR existing.attributes IS DISTINCT FROM EXCLUDED.attributes
-                OR existing.source_artifact_id IS DISTINCT FROM EXCLUDED.source_artifact_id
+             SELECT series_key, time, revision_no, time_precision, value, status,
+                    attributes, ingested_at, source_artifact_id
+             FROM assigned_rows
+             ON CONFLICT (series_key, time, revision_no) DO NOTHING
              RETURNING 1
          )
          SELECT COALESCE((SELECT max(stage_row_id) FROM next_rows), $1)::BIGINT,
@@ -1211,5 +1319,311 @@ fn observation_status_db(value: ObservationStatus) -> &'static str {
         ObservationStatus::Provisional => "provisional",
         ObservationStatus::Revised => "revised",
         ObservationStatus::Break => "break",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use au_kpis_domain::ids::{CodeId, DataflowId, DimensionId, MeasureId, Sha256Digest};
+    use chrono::TimeZone;
+
+    #[test]
+    fn validate_item_rejects_legacy_measureless_series_key() {
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let measure_id = MeasureId::new("index").unwrap();
+        let dimensions: BTreeMap<DimensionId, CodeId> = [(
+            DimensionId::new("region").unwrap(),
+            CodeId::new("AUS").unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let series_key = legacy_series_key_without_measure(&dataflow_id, &dimensions);
+        let artifact_id = ArtifactId::of_content(b"legacy key fixture");
+        let observed_at = chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+        let ingested_at = chrono::Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap();
+
+        let item = LoadItem {
+            series: SeriesDescriptor {
+                series_key,
+                dataflow_id,
+                measure_id,
+                dimensions,
+                unit: "index".into(),
+            },
+            observation: Observation {
+                series_key,
+                time: observed_at,
+                time_precision: TimePrecision::Quarter,
+                value: Some(134.2),
+                status: ObservationStatus::Normal,
+                revision_no: 0,
+                attributes: BTreeMap::new(),
+                ingested_at,
+                source_artifact_id: artifact_id,
+            },
+        };
+
+        let err = validate_item(&item).expect_err("legacy series key should be rejected");
+        assert!(err.contains("does not match computed key"), "{err}");
+    }
+
+    #[test]
+    fn direct_batch_dedup_keeps_highest_revision_then_latest_tie() {
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"direct dedupe fixture");
+        let time = chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+
+        let revisions = vec![
+            test_item(&descriptor, artifact_id, time, 0, 100.0),
+            test_item(&descriptor, artifact_id, time, 2, 102.0),
+            test_item(&descriptor, artifact_id, time, 1, 101.0),
+        ];
+        let deduped = dedupe_observations_by_series_time(&revisions);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].observation.revision_no, 2);
+        assert_eq!(deduped[0].observation.value, Some(102.0));
+
+        let ties = vec![
+            test_item(&descriptor, artifact_id, time, 0, 104.0),
+            test_item(&descriptor, artifact_id, time, 0, 105.0),
+        ];
+        let deduped = dedupe_observations_by_series_time(&ties);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].observation.value, Some(105.0));
+    }
+
+    #[test]
+    fn missing_reference_formatter_reports_all_missing_dependencies() {
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"missing reference fixture");
+        let item = test_item(
+            &descriptor,
+            artifact_id,
+            chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            0,
+            100.0,
+        );
+        let audited = vec![LoadItemAudit::from(item)];
+
+        let missing: Vec<_> = missing_references(
+            &audited,
+            vec![
+                (0, false, false, false),
+                (2, false, false, false),
+                (1, true, true, true),
+                (1, false, false, false),
+            ],
+        )
+        .collect();
+
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].0, 0);
+        assert_eq!(
+            missing[0].1,
+            vec![
+                "dataflow `abs.cpi`".to_string(),
+                "measure `index`".to_string(),
+                format!("artifact `{artifact_id}`"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_reference_load_skips_database_queries() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused/unused")
+            .expect("lazy pool");
+
+        let rows = load_reference_rows(&pool, &[])
+            .await
+            .expect("empty reference check");
+
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn validation_helpers_reject_zero_limits_and_key_mismatch() {
+        assert_eq!(
+            validate_options(LoadOptions {
+                max_rows: 0,
+                max_bytes: 1,
+            })
+            .unwrap_err()
+            .to_string(),
+            "loader validation: max_rows must be greater than 0"
+        );
+        assert_eq!(
+            validate_options(LoadOptions {
+                max_rows: 1,
+                max_bytes: 0,
+            })
+            .unwrap_err()
+            .to_string(),
+            "loader validation: max_bytes must be greater than 0"
+        );
+        assert!(
+            validate_options(LoadOptions {
+                max_rows: 1,
+                max_bytes: 1,
+            })
+            .is_ok()
+        );
+
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"observation key mismatch");
+        let mut item = test_item(
+            &descriptor,
+            artifact_id,
+            chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            0,
+            100.0,
+        );
+        item.observation.series_key =
+            legacy_series_key_without_measure(&descriptor.dataflow_id, &descriptor.dimensions);
+
+        let err = validate_item(&item).expect_err("observation key mismatch should fail");
+        assert!(err.contains("observation series key"), "{err}");
+
+        let valid = test_item(
+            &descriptor,
+            artifact_id,
+            chrono::Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap(),
+            0,
+            101.0,
+        );
+        assert!(validate_item(&valid).is_ok());
+    }
+
+    #[test]
+    fn batch_helpers_cover_empty_rows_and_byte_limits() {
+        let options = LoadOptions {
+            max_rows: 2,
+            max_bytes: 10,
+        };
+
+        assert!(!should_flush_load_batch(0, 11, 1, options));
+        assert!(!should_flush_load_batch(1, 4, 5, options));
+        assert!(should_flush_load_batch(2, 1, 1, options));
+        assert!(should_flush_load_batch(1, 10, 1, options));
+        assert!(!load_batch_boundary_reached(1, 9, options));
+        assert!(load_batch_boundary_reached(2, 1, options));
+        assert!(load_batch_boundary_reached(1, 10, options));
+    }
+
+    #[test]
+    fn duplicate_detection_and_dedup_keep_non_duplicate_rows() {
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"dedupe branch fixture");
+        let first_time = chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+        let second_time = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+        let distinct = vec![
+            test_item(&descriptor, artifact_id, first_time, 1, 101.0),
+            test_item(&descriptor, artifact_id, second_time, 0, 100.0),
+        ];
+        assert!(!has_duplicate_observation_times(&distinct));
+        assert_eq!(dedupe_observations_by_series_time(&distinct).len(), 2);
+
+        let duplicates = vec![
+            test_item(&descriptor, artifact_id, first_time, 2, 102.0),
+            test_item(&descriptor, artifact_id, first_time, 1, 101.0),
+        ];
+        assert!(has_duplicate_observation_times(&duplicates));
+        let deduped = dedupe_observations_by_series_time(&duplicates);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].observation.value, Some(102.0));
+    }
+
+    #[test]
+    fn row_context_merge_handles_absent_objects_and_scalars() {
+        let base = serde_json::json!({"artifact": "a1"});
+        assert_eq!(merge_row_context(base.clone(), None), base);
+
+        assert_eq!(
+            merge_row_context(base.clone(), Some(serde_json::json!({"row": 7}))),
+            serde_json::json!({"artifact": "a1", "row": 7})
+        );
+        assert_eq!(
+            merge_row_context(base, Some(serde_json::json!("line 7"))),
+            serde_json::json!({"artifact": "a1", "audit_context": "line 7"})
+        );
+        assert_eq!(
+            merge_row_context(
+                serde_json::json!("base"),
+                Some(serde_json::json!({"row": 7}))
+            ),
+            serde_json::json!({"row": 7})
+        );
+    }
+
+    #[test]
+    fn copy_field_helpers_escape_delimiters_and_preserve_nulls() {
+        let mut payload = String::new();
+        push_copy_fields(&mut payload, ["a\tb".into(), "\\N".into(), "c\\d\n".into()]);
+
+        assert_eq!(payload, "a\\tb\t\\N\tc\\\\d\\n\n");
+    }
+
+    fn test_descriptor() -> SeriesDescriptor {
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let measure_id = MeasureId::new("index").unwrap();
+        let dimensions: BTreeMap<DimensionId, CodeId> = [(
+            DimensionId::new("region").unwrap(),
+            CodeId::new("AUS").unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let series_key = SeriesKey::derive(
+            &dataflow_id,
+            &measure_id,
+            dimensions
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+        SeriesDescriptor {
+            series_key,
+            dataflow_id,
+            measure_id,
+            dimensions,
+            unit: "index".into(),
+        }
+    }
+
+    fn test_item(
+        descriptor: &SeriesDescriptor,
+        artifact_id: ArtifactId,
+        time: chrono::DateTime<chrono::Utc>,
+        revision_no: u32,
+        value: f64,
+    ) -> LoadItem {
+        LoadItem {
+            series: descriptor.clone(),
+            observation: Observation {
+                series_key: descriptor.series_key,
+                time,
+                time_precision: TimePrecision::Quarter,
+                value: Some(value),
+                status: ObservationStatus::Normal,
+                revision_no,
+                attributes: BTreeMap::new(),
+                ingested_at: chrono::Utc.with_ymd_and_hms(2024, 4, 24, 0, 0, 0).unwrap(),
+                source_artifact_id: artifact_id,
+            },
+        }
+    }
+
+    fn legacy_series_key_without_measure(
+        dataflow_id: &DataflowId,
+        dimensions: &BTreeMap<DimensionId, CodeId>,
+    ) -> SeriesKey {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(dataflow_id.as_str().as_bytes());
+        for (key, value) in dimensions {
+            bytes.push(0);
+            bytes.extend_from_slice(key.as_str().as_bytes());
+            bytes.push(b'=');
+            bytes.extend_from_slice(value.as_str().as_bytes());
+        }
+        SeriesKey::from_digest(Sha256Digest::hash(&bytes))
     }
 }

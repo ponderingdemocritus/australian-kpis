@@ -30,7 +30,7 @@ import { usePathname } from 'next/navigation'
 import type React from 'react'
 
 const navItems = [
-  { href: '/', icon: LayoutDashboard, label: 'Index' },
+  { href: '/', icon: LayoutDashboard, label: 'APS' },
   { href: '/explorer', icon: BarChart3, label: 'Explorer' },
   { href: '/compare', icon: GitCompareArrows, label: 'Compare' },
   { href: '/playground', icon: SquareTerminal, label: 'Playground' },
@@ -55,13 +55,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-semibold leading-5">Australian KPIs</span>
-              <span className="block text-xs text-sidebar-foreground/70">Economic data</span>
+              <span className="block text-xs text-sidebar-foreground/70">APS and data tools</span>
             </span>
           </Link>
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+            <SidebarGroupLabel>Data tools</SidebarGroupLabel>
             <SidebarGroupContent>
               <nav aria-label="Dashboard sections">
                 <SidebarMenu>
@@ -86,7 +86,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <SidebarTrigger aria-label="Open navigation" className="md:hidden" />
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold">Australian KPIs</p>
-                <p className="truncate text-xs text-muted-foreground">Public API dashboard</p>
+                <p className="truncate text-xs text-muted-foreground">APS scorecard dashboard</p>
               </div>
             </div>
             <Button asChild size="sm" variant="outline">

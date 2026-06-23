@@ -261,3 +261,418 @@ pub(crate) fn insert_rate_limit_error_headers(
         duration_header_secs(reset_after),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{BTreeMap, HashMap, VecDeque},
+        fmt,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use au_kpis_cache::{
+        CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig,
+    };
+    use au_kpis_config::{
+        AppConfig, CacheConfig, DatabaseConfig, HttpConfig, RateLimitConfig, RateLimitQuotaConfig,
+        RateLimitTierConfig, TelemetryConfig,
+    };
+    use au_kpis_telemetry::Telemetry;
+    use axum::{
+        body::Body,
+        http::{HeaderMap, HeaderName, HeaderValue, Request, header},
+    };
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sha2::{Digest as _, Sha256};
+    use sqlx::postgres::PgPoolOptions;
+    use tokio_util::sync::CancellationToken;
+    use uuid::Uuid;
+
+    use crate::{ApiError, AppState};
+
+    use super::{
+        RateLimitOutcome, X_RATE_LIMIT_LIMIT, X_RATE_LIMIT_REMAINING, X_RATE_LIMIT_RESET,
+        bucket_check, buckets_for_quota, check_request_limit, client_ip, duration_header_secs,
+        insert_rate_limit_error_headers, insert_rate_limit_headers, tier_config, verified_key,
+    };
+
+    #[test]
+    fn client_ip_prefers_forwarded_for_and_falls_back_to_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.9"));
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static(" 203.0.113.10, 198.51.100.1"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
+
+        headers.insert("x-forwarded-for", HeaderValue::from_static("   "));
+        assert_eq!(client_ip(&headers).as_deref(), Some("198.51.100.9"));
+
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 header value"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("198.51.100.9"));
+
+        headers.clear();
+        assert_eq!(client_ip(&headers), None);
+    }
+
+    #[test]
+    fn duration_headers_round_fractional_seconds_up() {
+        assert_eq!(duration_header_secs(Duration::ZERO), 0);
+        assert_eq!(duration_header_secs(Duration::from_secs(3)), 3);
+        assert_eq!(
+            duration_header_secs(Duration::new(3, 1)),
+            4,
+            "fractional reset values must be conservative"
+        );
+    }
+
+    #[test]
+    fn rate_limit_headers_include_success_and_error_metadata() {
+        let outcome = RateLimitOutcome {
+            allowed: true,
+            limit: 10,
+            remaining: 7,
+            retry_after: Duration::from_millis(1500),
+            reset_after: Duration::from_millis(2500),
+        };
+        let mut headers = HeaderMap::new();
+        insert_rate_limit_headers(&mut headers, &outcome);
+        assert_eq!(headers[&X_RATE_LIMIT_LIMIT], "10");
+        assert_eq!(headers[&X_RATE_LIMIT_REMAINING], "7");
+        assert_eq!(headers[&X_RATE_LIMIT_RESET], "3");
+
+        let limited = outcome.into_rate_limited();
+        let (limit, remaining, retry_after, reset_after) = expect_rate_limited(limited);
+        assert_eq!(limit, 10);
+        assert_eq!(remaining, 7);
+        assert_eq!(retry_after, Duration::from_millis(1500));
+        assert_eq!(reset_after, Duration::from_millis(1500));
+
+        headers.clear();
+        insert_rate_limit_error_headers(
+            &mut headers,
+            Duration::from_millis(1),
+            12,
+            0,
+            Duration::from_secs(5),
+        );
+        assert_eq!(headers[header::RETRY_AFTER], "1");
+        assert_eq!(headers[&X_RATE_LIMIT_LIMIT], "12");
+        assert_eq!(headers[&X_RATE_LIMIT_REMAINING], "0");
+        assert_eq!(headers[&X_RATE_LIMIT_RESET], "5");
+    }
+
+    #[test]
+    fn tier_config_uses_requested_tier_then_default() {
+        let free = RateLimitTierConfig {
+            per_key: quota(60, 1_000, 2),
+            per_ip: quota(10, 100, 2),
+        };
+        let pro = RateLimitTierConfig {
+            per_key: quota(600, 10_000, 3),
+            per_ip: quota(100, 1_000, 3),
+        };
+        let config = RateLimitConfig {
+            default_tier: "free".into(),
+            tiers: BTreeMap::from([("free".into(), free.clone()), ("pro".into(), pro.clone())]),
+            anonymous: quota(1, 10, 1),
+        };
+
+        assert_eq!(
+            tier_config(&config, "pro").unwrap().per_key.per_hour,
+            10_000
+        );
+        assert_eq!(
+            tier_config(&config, "unknown").unwrap().per_key.per_hour,
+            1_000
+        );
+
+        let missing_default = RateLimitConfig {
+            default_tier: "missing".into(),
+            tiers: BTreeMap::new(),
+            anonymous: quota(1, 10, 1),
+        };
+        assert!(tier_config(&missing_default, "unknown").is_err());
+    }
+
+    #[test]
+    fn bucket_helpers_normalize_zero_quota_inputs() {
+        let bucket = bucket_check("ip:unknown", "second", 0, Duration::from_secs(1), 0)
+            .expect("zero rate inputs are normalized to one-token buckets");
+        assert_eq!(bucket.key, "rate-limit:ip:unknown:second");
+        assert_eq!(bucket.limit, 1);
+        assert_eq!(bucket.reset_after, Duration::from_secs(1));
+
+        let buckets = buckets_for_quota("key:abc", quota(0, 5, 0)).expect("buckets");
+        assert_eq!(buckets[0].key, "rate-limit:key:abc:hour");
+        assert_eq!(buckets[0].limit, 5);
+        assert_eq!(buckets[1].key, "rate-limit:key:abc:second");
+        assert_eq!(buckets[1].limit, 1);
+    }
+
+    #[test]
+    fn invalid_display_values_are_not_inserted_as_headers() {
+        struct InvalidDisplay;
+
+        impl fmt::Display for InvalidDisplay {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("bad\nvalue")
+            }
+        }
+
+        let mut headers = HeaderMap::new();
+        super::insert_header(
+            &mut headers,
+            HeaderName::from_static("x-test-invalid"),
+            InvalidDisplay,
+        );
+        assert!(!headers.contains_key("x-test-invalid"));
+    }
+
+    #[tokio::test]
+    async fn anonymous_limit_uses_ip_buckets_and_returns_last_success() {
+        let state = state_with_rate_limits(
+            RateLimitConfig::default(),
+            vec![decision(true, 9), decision(true, 8)],
+        );
+
+        let outcome = check_request_limit(&state, Some("203.0.113.9"), None)
+            .await
+            .expect("anonymous request allowed");
+
+        assert_eq!(outcome.remaining, 8);
+    }
+
+    #[tokio::test]
+    async fn verified_key_reuses_extensions_and_ignores_absent_or_invalid_headers() {
+        let state = state_with_rate_limits(RateLimitConfig::default(), vec![]);
+        let verified = au_kpis_auth::VerifiedApiKey {
+            id: Uuid::new_v4(),
+            name: "client".into(),
+            scopes: vec!["observations:read".into()],
+            rate_limit_tier: "free".into(),
+        };
+
+        let mut with_extension = Request::builder().body(Body::empty()).unwrap();
+        with_extension.extensions_mut().insert(verified.clone());
+        assert_eq!(
+            verified_key(&state, &mut with_extension).await.unwrap(),
+            Some(verified)
+        );
+
+        let mut missing = Request::builder().body(Body::empty()).unwrap();
+        assert_eq!(verified_key(&state, &mut missing).await.unwrap(), None);
+
+        let mut non_utf8 = Request::builder().body(Body::empty()).unwrap();
+        non_utf8.headers_mut().insert(
+            "x-api-key",
+            HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 header"),
+        );
+        assert_eq!(verified_key(&state, &mut non_utf8).await.unwrap(), None);
+
+        let mut malformed = Request::builder().body(Body::empty()).unwrap();
+        malformed
+            .headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("not-a-key"));
+        assert_eq!(verified_key(&state, &mut malformed).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn verified_key_accepts_cached_valid_key_without_database() {
+        let id = Uuid::new_v4();
+        let plaintext = format!("auk_live_{}_secret", id.simple());
+        let cached = serde_json::json!({
+            "fingerprint": URL_SAFE_NO_PAD.encode(Sha256::digest(plaintext.as_bytes())),
+            "verified": {
+                "id": id,
+                "name": "client",
+                "scopes": ["observations:read"],
+                "rate_limit_tier": "free"
+            }
+        });
+        let state = state_with_rate_limits_and_cache(
+            RateLimitConfig::default(),
+            vec![],
+            HashMap::from([(
+                format!("auth:api-key:{id}"),
+                serde_json::to_string(&cached).unwrap(),
+            )]),
+        );
+        let mut request = Request::builder().body(Body::empty()).unwrap();
+        request
+            .headers_mut()
+            .insert("x-api-key", HeaderValue::from_str(&plaintext).unwrap());
+
+        let verified = verified_key(&state, &mut request)
+            .await
+            .unwrap()
+            .expect("cached key verifies");
+
+        assert_eq!(verified.id, id);
+        assert!(
+            request
+                .extensions()
+                .get::<au_kpis_auth::VerifiedApiKey>()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn key_limit_uses_default_tier_and_reports_key_bucket_denial() {
+        let state = state_with_rate_limits(
+            RateLimitConfig::default(),
+            vec![
+                decision(true, 99),
+                decision(true, 98),
+                decision(true, 97),
+                decision(false, 0),
+            ],
+        );
+        let verified = au_kpis_auth::VerifiedApiKey {
+            id: Uuid::new_v4(),
+            name: "client".into(),
+            scopes: vec!["observations:read".into()],
+            rate_limit_tier: "missing-tier".into(),
+        };
+
+        let err = check_request_limit(&state, None, Some(&verified))
+            .await
+            .expect_err("key bucket should deny");
+        let (limit, remaining, retry_after, reset_after) = expect_rate_limited(err);
+        assert_eq!(limit, 120);
+        assert_eq!(remaining, 0);
+        assert_eq!(retry_after, Duration::from_secs(1));
+        assert_eq!(reset_after, Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn ip_bucket_denial_short_circuits_key_checks() {
+        let state = state_with_rate_limits(RateLimitConfig::default(), vec![decision(false, 0)]);
+        let verified = au_kpis_auth::VerifiedApiKey {
+            id: Uuid::new_v4(),
+            name: "client".into(),
+            scopes: vec![],
+            rate_limit_tier: "free".into(),
+        };
+
+        let err = check_request_limit(&state, Some("203.0.113.9"), Some(&verified))
+            .await
+            .expect_err("ip bucket should deny");
+
+        assert!(matches!(err, ApiError::RateLimited { limit: 200, .. }));
+    }
+
+    fn quota(per_second: u32, per_hour: u32, burst_multiplier: u32) -> RateLimitQuotaConfig {
+        RateLimitQuotaConfig {
+            per_second,
+            per_hour,
+            burst_multiplier,
+        }
+    }
+
+    fn decision(allowed: bool, remaining: u32) -> RateLimitDecision {
+        RateLimitDecision {
+            allowed,
+            remaining,
+            retry_after: Duration::from_secs(1),
+        }
+    }
+
+    fn expect_rate_limited(err: ApiError) -> (u32, u32, Duration, Duration) {
+        match err {
+            ApiError::RateLimited {
+                limit,
+                remaining,
+                retry_after,
+                reset_after,
+            } => (limit, remaining, retry_after, reset_after),
+            other => panic!("expected rate limit error, got {other:?}"),
+        }
+    }
+
+    fn state_with_rate_limits(
+        rate_limits: RateLimitConfig,
+        decisions: Vec<RateLimitDecision>,
+    ) -> AppState {
+        state_with_rate_limits_and_cache(rate_limits, decisions, HashMap::new())
+    }
+
+    fn state_with_rate_limits_and_cache(
+        rate_limits: RateLimitConfig,
+        decisions: Vec<RateLimitDecision>,
+        values: HashMap<String, String>,
+    ) -> AppState {
+        let config = AppConfig {
+            http: HttpConfig::default(),
+            database: DatabaseConfig {
+                url: "postgres://postgres:postgres@localhost/unused".into(),
+            },
+            cache: CacheConfig {
+                url: "redis://localhost:6379".into(),
+            },
+            telemetry: TelemetryConfig::default(),
+            rate_limits,
+        };
+        AppState::new(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://postgres:postgres@localhost/unused")
+                .expect("lazy pool"),
+            Arc::new(CacheClient::from_backend(DecisionBackend::new(
+                decisions, values,
+            ))),
+            Arc::new(config),
+            Arc::new(Telemetry::disabled()),
+            CancellationToken::new(),
+        )
+    }
+
+    #[derive(Debug)]
+    struct DecisionBackend {
+        decisions: Mutex<VecDeque<RateLimitDecision>>,
+        values: Mutex<HashMap<String, String>>,
+    }
+
+    impl DecisionBackend {
+        fn new(decisions: Vec<RateLimitDecision>, values: HashMap<String, String>) -> Self {
+            Self {
+                decisions: Mutex::new(decisions.into()),
+                values: Mutex::new(values),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CacheBackend for DecisionBackend {
+        async fn get(&self, key: &str) -> Result<Option<String>, CacheError> {
+            Ok(self.values.lock().expect("values lock").get(key).cloned())
+        }
+
+        async fn set(&self, _key: &str, _value: String, _ttl: Duration) -> Result<(), CacheError> {
+            Ok(())
+        }
+
+        async fn delete(&self, _key: &str) -> Result<bool, CacheError> {
+            Ok(false)
+        }
+
+        async fn take_token_bucket(
+            &self,
+            _key: &str,
+            _config: TokenBucketConfig,
+            _requested: u32,
+            _now_ms: u64,
+        ) -> Result<RateLimitDecision, CacheError> {
+            Ok(self
+                .decisions
+                .lock()
+                .expect("decision lock")
+                .pop_front()
+                .expect("rate-limit decision"))
+        }
+    }
+}

@@ -4,7 +4,7 @@ expression: rows
 ---
 [
   {
-    "series_key": "214d5af143911f8196e7b803a6a735e84f5964dd3cc8bfa7f6aedaf845aa2c8e",
+    "series_key": "92956b504b1f31faae67efbae94914515b388e92018e6146fb812b5b94f7361b",
     "dataflow_id": "abs.cpi",
     "measure_id": "index",
     "dimensions": {
@@ -20,7 +20,7 @@ expression: rows
     }
   },
   {
-    "series_key": "214d5af143911f8196e7b803a6a735e84f5964dd3cc8bfa7f6aedaf845aa2c8e",
+    "series_key": "92956b504b1f31faae67efbae94914515b388e92018e6146fb812b5b94f7361b",
     "dataflow_id": "abs.cpi",
     "measure_id": "index",
     "dimensions": {
@@ -36,7 +36,7 @@ expression: rows
     }
   },
   {
-    "series_key": "214d5af143911f8196e7b803a6a735e84f5964dd3cc8bfa7f6aedaf845aa2c8e",
+    "series_key": "92956b504b1f31faae67efbae94914515b388e92018e6146fb812b5b94f7361b",
     "dataflow_id": "abs.cpi",
     "measure_id": "index",
     "dimensions": {
@@ -52,7 +52,7 @@ expression: rows
     }
   },
   {
-    "series_key": "140f81487a04649b0284511b2f820989271a16005bfd62ecb93d1e9a4f4d759d",
+    "series_key": "6e94821579ecdf1044cba5c2d4fecd4919d06835d146d6519e31c11f6599e2e5",
     "dataflow_id": "abs.cpi",
     "measure_id": "index",
     "dimensions": {
@@ -68,7 +68,7 @@ expression: rows
     }
   },
   {
-    "series_key": "140f81487a04649b0284511b2f820989271a16005bfd62ecb93d1e9a4f4d759d",
+    "series_key": "6e94821579ecdf1044cba5c2d4fecd4919d06835d146d6519e31c11f6599e2e5",
     "dataflow_id": "abs.cpi",
     "measure_id": "index",
     "dimensions": {
@@ -84,7 +84,7 @@ expression: rows
     }
   },
   {
-    "series_key": "140f81487a04649b0284511b2f820989271a16005bfd62ecb93d1e9a4f4d759d",
+    "series_key": "6e94821579ecdf1044cba5c2d4fecd4919d06835d146d6519e31c11f6599e2e5",
     "dataflow_id": "abs.cpi",
     "measure_id": "index",
     "dimensions": {

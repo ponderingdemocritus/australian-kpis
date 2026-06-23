@@ -230,6 +230,7 @@ impl SourceAdapter for RbaAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -463,6 +464,7 @@ fn fuzz_artifact(bytes: &[u8], source_url: &str) -> ArtifactRef {
     let id = au_kpis_domain::ArtifactId::of_content(bytes);
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("rba").expect("static source id is valid"),
         source_url: source_url.to_string(),
         content_type: "application/octet-stream".into(),
@@ -662,8 +664,10 @@ fn parse_table_rows(
                 ),
             ]);
             let dataflow_id = dataflow_id();
+            let measure_id = MeasureId::new("value").expect("static measure id is valid");
             let series_key = SeriesKey::derive(
                 &dataflow_id,
+                &measure_id,
                 dimensions
                     .iter()
                     .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -671,7 +675,7 @@ fn parse_table_rows(
             let descriptor = SeriesDescriptor {
                 series_key,
                 dataflow_id,
-                measure_id: MeasureId::new("value").expect("static measure id is valid"),
+                measure_id,
                 dimensions,
                 unit,
             };
@@ -1339,6 +1343,40 @@ mod tests {
     fn malformed_xlsx_returns_format_error_instead_of_panicking() {
         let bytes = decode_hex_fixture(include_str!(
             "../../../../tests/fixtures/calamine-row-overflow.xlsx.hex"
+        ));
+
+        let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(err.to_string().contains("RBA XLSX worksheet"), "{err}");
+    }
+
+    #[test]
+    fn malformed_xlsx_with_shifted_zip_header_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-shifted-zip-header.xlsx.hex"
+        ));
+
+        let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("RBA workbook has unsupported XLS/XLSX signature"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn malformed_xlsx_with_case_mismatched_worksheet_entry_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-case-mismatched-worksheet-entry.xlsx.hex"
         ));
 
         let parsed = std::panic::catch_unwind(|| parse_xls_rows(bytes));

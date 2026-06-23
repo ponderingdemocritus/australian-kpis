@@ -1,0 +1,4 @@
+period,jurisdiction,council,development_type,metric,value,unit
+2026-03-31,NSW,all,all,median_assessment_days,54,days
+2026-03-31,NSW,all,all,determinations_count,12345,count
+2026-03-31,NSW,all,residential,median_assessment_days,48,days

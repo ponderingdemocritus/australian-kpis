@@ -189,8 +189,12 @@ fn internal_server_error(
 mod tests {
     use std::time::Duration;
 
-    use axum::http::{HeaderMap, header};
+    use axum::{
+        http::{HeaderMap, StatusCode, header},
+        response::IntoResponse,
+    };
 
+    use super::ApiError;
     use crate::rate_limit::insert_rate_limit_error_headers;
 
     #[test]
@@ -209,5 +213,27 @@ mod tests {
         assert_eq!(headers.get("x-ratelimit-limit").unwrap(), "10");
         assert_eq!(headers.get("x-ratelimit-remaining").unwrap(), "0");
         assert_eq!(headers.get("x-ratelimit-reset").unwrap(), "1");
+    }
+
+    #[test]
+    fn api_errors_emit_problem_details_with_optional_rate_limit_headers() {
+        let validation = ApiError::Validation("bad query".into()).into_response();
+        assert_eq!(validation.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            validation.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        assert!(!validation.headers().contains_key(header::RETRY_AFTER));
+
+        let limited = ApiError::RateLimited {
+            retry_after: Duration::from_millis(250),
+            limit: 10,
+            remaining: 0,
+            reset_after: Duration::from_secs(1),
+        }
+        .into_response();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(limited.headers().get(header::RETRY_AFTER).unwrap(), "1");
+        assert_eq!(limited.headers().get("x-ratelimit-limit").unwrap(), "10");
     }
 }

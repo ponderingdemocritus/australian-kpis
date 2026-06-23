@@ -61,6 +61,7 @@ async fn artifact_for(
         .expect("store fixture artifact");
     ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("treasury").unwrap(),
         source_url: source_url.into(),
         content_type: "application/pdf".into(),
@@ -483,6 +484,7 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
 
     let artifact = ArtifactRef {
         id: wrong_id,
+        fetch_id: None,
         source_id: SourceId::new("treasury").unwrap(),
         source_url:
             "https://budget.gov.au/content/bp4/download/bp4_05_agency_resourcing_tables.pdf".into(),

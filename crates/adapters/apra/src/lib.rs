@@ -28,8 +28,11 @@ use futures::{StreamExt, stream};
 
 const DEFAULT_RELEASE_URL: &str =
     "https://www.apra.gov.au/quarterly-authorised-deposit-taking-institution-statistics";
+const DEFAULT_SUPER_RELEASE_URL: &str =
+    "https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics";
 const USER_AGENT: &str = concat!("au-kpis-adapter-apra/", env!("CARGO_PKG_VERSION"));
 const DATAFLOW_ID: &str = "apra.quarterly_statistics";
+const SUPER_ASSET_ALLOCATION_DATAFLOW_ID: &str = "apra.super_asset_allocation";
 const ATTRIBUTION: &str = "Source: Australian Prudential Regulation Authority";
 const LICENSE_NAME: &str = "Creative Commons Attribution 3.0 Australia Licence";
 const LICENSE_URL: &str = "http://creativecommons.org/licenses/by/3.0/au/";
@@ -39,6 +42,7 @@ const LICENSE_URL: &str = "http://creativecommons.org/licenses/by/3.0/au/";
 pub struct ApraAdapter {
     manifest: AdapterManifest,
     release_url: String,
+    super_release_url: String,
 }
 
 impl Default for ApraAdapter {
@@ -82,37 +86,64 @@ impl ApraAdapter {
             started_at,
             trace_parent,
             DEFAULT_RELEASE_URL,
+            ApraDataflow::QuarterlyStatistics,
+            None,
         )
     }
 
     /// Static metadata for the APRA quarterly statistics dataflow.
     #[must_use]
     pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
-        vec![Dataflow {
-            id: dataflow_id(),
-            source_id: source_id(),
-            name: "APRA quarterly statistics".into(),
-            description: Some(
-                "Quarterly APRA authorised deposit-taking institution statistics from XLS releases."
-                    .into(),
-            ),
-            dimensions: vec![
-                DimensionId::new("publication").expect("static dimension id is valid"),
-                DimensionId::new("table").expect("static dimension id is valid"),
-                DimensionId::new("series").expect("static dimension id is valid"),
-                DimensionId::new("entity").expect("static dimension id is valid"),
-                DimensionId::new("sector").expect("static dimension id is valid"),
-            ],
-            measures: vec![MeasureId::new("value").expect("static measure id is valid")],
-            frequency: Frequency::Quarterly,
-            license: License::Other(LICENSE_NAME.into()),
-            attribution: ATTRIBUTION.into(),
-            source_url: DEFAULT_RELEASE_URL.into(),
-        }]
+        vec![
+            Dataflow {
+                id: dataflow_id(),
+                source_id: source_id(),
+                name: "APRA quarterly statistics".into(),
+                description: Some(
+                    "Quarterly APRA authorised deposit-taking institution statistics from XLS releases."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("publication").expect("static dimension id is valid"),
+                    DimensionId::new("table").expect("static dimension id is valid"),
+                    DimensionId::new("series").expect("static dimension id is valid"),
+                    DimensionId::new("entity").expect("static dimension id is valid"),
+                    DimensionId::new("sector").expect("static dimension id is valid"),
+                ],
+                measures: vec![MeasureId::new("value").expect("static measure id is valid")],
+                frequency: Frequency::Quarterly,
+                license: License::Other(LICENSE_NAME.into()),
+                attribution: ATTRIBUTION.into(),
+                source_url: DEFAULT_RELEASE_URL.into(),
+            },
+            Dataflow {
+                id: super_asset_allocation_dataflow_id(),
+                source_id: source_id(),
+                name: "APRA superannuation asset allocation".into(),
+                description: Some(
+                    "Quarterly APRA superannuation asset-allocation rows mapped to the APS productive-infrastructure cut."
+                        .into(),
+                ),
+                dimensions: vec![
+                    DimensionId::new("fund_type").expect("static dimension id is valid"),
+                    DimensionId::new("asset_category").expect("static dimension id is valid"),
+                    DimensionId::new("mapping").expect("static dimension id is valid"),
+                ],
+                measures: vec![MeasureId::new("value").expect("static measure id is valid")],
+                frequency: Frequency::Quarterly,
+                license: License::Other(LICENSE_NAME.into()),
+                attribution: ATTRIBUTION.into(),
+                source_url: DEFAULT_SUPER_RELEASE_URL.into(),
+            },
+        ]
     }
 
     fn release_url(&self) -> &str {
         &self.release_url
+    }
+
+    fn super_release_url(&self) -> &str {
+        &self.super_release_url
     }
 
     fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<(), AdapterError> {
@@ -133,12 +164,20 @@ impl ApraAdapter {
                 job.dataflow_id.as_str()
             )));
         }
-        release_url_provenance_for_fetch(&job.source_url).ok_or_else(|| {
+        let provenance = release_url_provenance_for_fetch(&job.source_url).ok_or_else(|| {
             AdapterError::Validation(format!(
                 "APRA fetch URL `{}` is not a release XLS artifact",
                 job.source_url
             ))
         })?;
+        if job.dataflow_id == super_asset_allocation_dataflow_id()
+            && provenance.publication_slug != "super-performance"
+        {
+            return Err(AdapterError::Validation(format!(
+                "APRA super asset-allocation fetch received publication `{}`",
+                provenance.publication_slug
+            )));
+        }
         Ok(())
     }
 }
@@ -170,25 +209,32 @@ impl SourceAdapter for ApraAdapter {
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
+        let Some((release_url, dataflow, publication_filter)) =
+            self.discovery_target(ctx.requested_dataflow_id())
+        else {
+            return Ok(Vec::new());
+        };
         let response = ctx
             .http
             .execute(
                 ctx.http
                     .raw()
-                    .get(self.release_url())
+                    .get(release_url)
                     .header("user-agent", USER_AGENT)
                     .header("accept", "text/html,application/xhtml+xml"),
             )
             .await?
             .error_for_status()?;
         let body = response.text().await?;
-        let releases = parse_release_calendar_with_base(&body, self.release_url())?;
+        let releases = parse_release_calendar_with_base(&body, release_url)?;
         Ok(discoverable_jobs_with_release_url(
             &releases,
             ctx.known_revisions(),
             ctx.started_at,
             ctx.trace_parent(),
-            self.release_url(),
+            release_url,
+            dataflow,
+            publication_filter,
         ))
     }
 
@@ -234,6 +280,7 @@ impl SourceAdapter for ApraAdapter {
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
             id,
+            fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
             content_type,
@@ -251,9 +298,29 @@ impl SourceAdapter for ApraAdapter {
     }
 }
 
+impl ApraAdapter {
+    fn discovery_target(
+        &self,
+        requested: Option<&DataflowId>,
+    ) -> Option<(&str, ApraDataflow, Option<&'static str>)> {
+        match requested {
+            Some(dataflow) if dataflow == &dataflow_id() => {
+                Some((self.release_url(), ApraDataflow::QuarterlyStatistics, None))
+            }
+            Some(dataflow) if dataflow == &super_asset_allocation_dataflow_id() => Some((
+                self.super_release_url(),
+                ApraDataflow::SuperAssetAllocation,
+                Some("super-performance"),
+            )),
+            Some(_) => None,
+            None => Some((self.release_url(), ApraDataflow::QuarterlyStatistics, None)),
+        }
+    }
+}
+
 fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
-    let provenance = match validate_parse_artifact(&artifact, ctx) {
-        Ok(provenance) => provenance,
+    let plan = match validate_parse_artifact(&artifact, ctx) {
+        Ok(plan) => plan,
         Err(err) => return Box::pin(stream::once(async move { Err(err) })),
     };
 
@@ -273,15 +340,8 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        let result = parse_xls_artifact(
-            blob_store,
-            key,
-            artifact,
-            provenance,
-            started_at,
-            row_tx.clone(),
-        )
-        .await;
+        let result =
+            parse_xls_artifact(blob_store, key, artifact, plan, started_at, row_tx.clone()).await;
         if let Err(err) = result {
             let _ = row_tx.send(Err(err)).await;
         }
@@ -296,7 +356,7 @@ async fn parse_xls_artifact(
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
-    provenance: ApraReleaseProvenance,
+    plan: ApraParsePlan,
     ingested_at: DateTime<Utc>,
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
@@ -305,11 +365,10 @@ async fn parse_xls_artifact(
     while let Some(chunk) = chunks.next().await {
         bytes.extend_from_slice(&chunk?);
     }
-    let rows = tokio::task::spawn_blocking(move || {
-        parse_xls_workbook(bytes, artifact, provenance, ingested_at)
-    })
-    .await
-    .map_err(parse_worker_error)??;
+    let rows =
+        tokio::task::spawn_blocking(move || parse_xls_workbook(bytes, artifact, plan, ingested_at))
+            .await
+            .map_err(parse_worker_error)??;
     for row in rows {
         if tx.send(Ok(row)).await.is_err() {
             return Ok(());
@@ -321,10 +380,17 @@ async fn parse_xls_artifact(
 fn parse_xls_workbook(
     bytes: Vec<u8>,
     artifact: ArtifactRef,
-    provenance: ApraReleaseProvenance,
+    plan: ApraParsePlan,
     ingested_at: DateTime<Utc>,
 ) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
-    catch_xls_parser_panic(|| parse_xls_workbook_inner(bytes, artifact, provenance, ingested_at))
+    catch_xls_parser_panic(|| match plan.dataflow {
+        ApraDataflow::QuarterlyStatistics => {
+            parse_xls_workbook_inner(bytes, artifact, plan.provenance, ingested_at)
+        }
+        ApraDataflow::SuperAssetAllocation => {
+            parse_super_asset_allocation_workbook(bytes, artifact, plan.provenance, ingested_at)
+        }
+    })
 }
 
 fn parse_xls_workbook_inner(
@@ -389,6 +455,107 @@ fn parse_xls_workbook_inner(
     Ok(parsed)
 }
 
+fn parse_super_asset_allocation_workbook(
+    bytes: Vec<u8>,
+    artifact: ArtifactRef,
+    provenance: ApraReleaseProvenance,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    validate_xlsx_workbook_cell_refs(&bytes, "APRA")?;
+    let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes))
+        .map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
+    let mut parsed = Vec::new();
+    let mut onshore_totals: BTreeMap<DateTime<Utc>, f64> = BTreeMap::new();
+    let sheet_names = workbook.sheet_names().to_vec();
+    for sheet_name in sheet_names {
+        if should_skip_sheet(&sheet_name) {
+            continue;
+        }
+        let range = workbook
+            .worksheet_range(&sheet_name)
+            .map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
+        let rows = range
+            .rows()
+            .map(|row| row.iter().map(cell_to_string).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let table_title = table_title_for_sheet(&sheet_name, &rows);
+        if !normalize_header(&format!("{sheet_name} {table_title}")).contains("asset allocation") {
+            continue;
+        }
+        let Some(periods) = find_horizontal_period_columns(&rows)? else {
+            continue;
+        };
+        let unit = unit_from_rows(&rows[..periods.row_index]);
+        let first_period_col = periods
+            .columns
+            .first()
+            .map(|(column, _)| *column)
+            .expect("period finder returns at least one column");
+        let schema_hash = schema_hash_for_sheet(&sheet_name, &rows);
+        for row in rows.iter().skip(periods.row_index + 1) {
+            let Some(original_category) = label_before(row, first_period_col) else {
+                continue;
+            };
+            let Some(mapping) = super_asset_category_mapping(&original_category) else {
+                continue;
+            };
+            for (column, (time, precision)) in &periods.columns {
+                let cell = row.get(*column).map_or("", String::as_str);
+                let (value, status) = parse_value(cell)?;
+                if mapping.included_in_onshore_total {
+                    if let Some(value) = value {
+                        *onshore_totals.entry(*time).or_insert(0.0) += value;
+                    }
+                }
+                parsed.push(build_super_asset_allocation_row(SuperAssetAllocationRow {
+                    provenance: &provenance,
+                    table_title: &table_title,
+                    sheet_name: &sheet_name,
+                    original_category: &original_category,
+                    category: mapping.category,
+                    mapping: mapping.mapping,
+                    mapping_rule: mapping.rule,
+                    unit: &unit,
+                    time: *time,
+                    precision: *precision,
+                    value,
+                    status,
+                    schema_hash: &schema_hash,
+                    artifact: &artifact,
+                    ingested_at,
+                })?);
+            }
+        }
+    }
+
+    for (time, value) in onshore_totals {
+        parsed.push(build_super_asset_allocation_row(SuperAssetAllocationRow {
+            provenance: &provenance,
+            table_title: "Derived productive infrastructure total",
+            sheet_name: "derived",
+            original_category: "Productive infrastructure onshore total",
+            category: "total",
+            mapping: "productive_infrastructure_onshore",
+            mapping_rule: "sum_included_onshore_infrastructure_categories",
+            unit: "$ million",
+            time,
+            precision: TimePrecision::Quarter,
+            value: Some(value),
+            status: ObservationStatus::Normal,
+            schema_hash: "derived",
+            artifact: &artifact,
+            ingested_at,
+        })?);
+    }
+
+    if parsed.is_empty() {
+        return Err(AdapterError::FormatDrift(
+            "APRA super workbook contains no mapped asset-allocation rows".into(),
+        ));
+    }
+    Ok(parsed)
+}
+
 fn catch_xls_parser_panic<T>(
     parse: impl FnOnce() -> Result<T, AdapterError>,
 ) -> Result<T, AdapterError> {
@@ -408,6 +575,7 @@ pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
     let source_url = "https://www.apra.gov.au/sites/default/files/centralised.xlsx";
     let artifact = ArtifactRef {
         id,
+        fetch_id: None,
         source_id: SourceId::new("apra").expect("static source id is valid"),
         source_url: source_url.into(),
         content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
@@ -418,8 +586,11 @@ pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
     };
     let provenance =
         release_url_provenance_for_parse(source_url).expect("static APRA URL has provenance");
-    parse_xls_workbook(bytes.to_vec(), artifact, provenance, fuzz_ingested_at())
-        .map(|rows| rows.len())
+    let plan = ApraParsePlan {
+        provenance,
+        dataflow: ApraDataflow::QuarterlyStatistics,
+    };
+    parse_xls_workbook(bytes.to_vec(), artifact, plan, fuzz_ingested_at()).map(|rows| rows.len())
 }
 
 #[cfg(feature = "fuzzing")]
@@ -657,8 +828,10 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
             apra_code_id("sector", &slugify_code(input.sector))?,
         ),
     ]);
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -666,7 +839,7 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
     let descriptor = SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("value").expect("static measure id is valid"),
+        measure_id,
         dimensions,
         unit: input.unit.to_string(),
     };
@@ -710,31 +883,203 @@ fn build_row(input: BuildRow<'_>) -> Result<(SeriesDescriptor, Observation), Ada
     Ok((descriptor, observation))
 }
 
+struct SuperAssetAllocationRow<'a> {
+    provenance: &'a ApraReleaseProvenance,
+    table_title: &'a str,
+    sheet_name: &'a str,
+    original_category: &'a str,
+    category: &'a str,
+    mapping: &'a str,
+    mapping_rule: &'a str,
+    unit: &'a str,
+    time: DateTime<Utc>,
+    precision: TimePrecision,
+    value: Option<f64>,
+    status: ObservationStatus,
+    schema_hash: &'a str,
+    artifact: &'a ArtifactRef,
+    ingested_at: DateTime<Utc>,
+}
+
+fn build_super_asset_allocation_row(
+    input: SuperAssetAllocationRow<'_>,
+) -> Result<(SeriesDescriptor, Observation), AdapterError> {
+    let dataflow_id = super_asset_allocation_dataflow_id();
+    let dimensions = BTreeMap::from([
+        (
+            DimensionId::new("fund_type").expect("static dimension id is valid"),
+            apra_code_id("fund type", "all")?,
+        ),
+        (
+            DimensionId::new("asset_category").expect("static dimension id is valid"),
+            apra_code_id("asset category", input.category)?,
+        ),
+        (
+            DimensionId::new("mapping").expect("static dimension id is valid"),
+            apra_code_id("mapping", input.mapping)?,
+        ),
+    ]);
+    let measure_id = MeasureId::new("value").expect("static measure id is valid");
+    let series_key = SeriesKey::derive(
+        &dataflow_id,
+        &measure_id,
+        dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    let descriptor = SeriesDescriptor {
+        series_key,
+        dataflow_id,
+        measure_id,
+        dimensions,
+        unit: input.unit.to_string(),
+    };
+    let attributes = BTreeMap::from([
+        (
+            "source".into(),
+            "Australian Prudential Regulation Authority".into(),
+        ),
+        ("source_url".into(), input.artifact.source_url.clone()),
+        ("license".into(), LICENSE_NAME.into()),
+        ("license_url".into(), LICENSE_URL.into()),
+        ("attribution".into(), ATTRIBUTION.into()),
+        (
+            "publication".into(),
+            input.provenance.publication_slug.to_string(),
+        ),
+        (
+            "publication_title".into(),
+            input.provenance.publication_title.to_string(),
+        ),
+        ("table_title".into(), input.table_title.to_string()),
+        ("sheet_name".into(), input.sheet_name.to_string()),
+        ("schema_hash".into(), input.schema_hash.to_string()),
+        (
+            "apra_original_category".into(),
+            input.original_category.to_string(),
+        ),
+        (
+            "apra_mapping_review".into(),
+            "aps-v1-super-asset-allocation".into(),
+        ),
+        ("apra_mapping_rule".into(), input.mapping_rule.to_string()),
+    ]);
+    let observation = Observation {
+        series_key,
+        time: input.time,
+        time_precision: input.precision,
+        value: input.value,
+        status: input.status,
+        revision_no: 0,
+        attributes,
+        ingested_at: input.ingested_at,
+        source_artifact_id: input.artifact.id,
+    };
+    Ok((descriptor, observation))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SuperAssetCategoryMapping {
+    category: &'static str,
+    mapping: &'static str,
+    included_in_onshore_total: bool,
+    rule: &'static str,
+}
+
+fn super_asset_category_mapping(category: &str) -> Option<SuperAssetCategoryMapping> {
+    let normalized = normalize_header(category);
+    if normalized.contains("australian infrastructure")
+        || normalized.contains("domestic infrastructure")
+        || normalized.contains("onshore infrastructure")
+    {
+        return Some(SuperAssetCategoryMapping {
+            category: "australian_infrastructure",
+            mapping: "productive_infrastructure_onshore",
+            included_in_onshore_total: true,
+            rule: "include_explicit_onshore_infrastructure",
+        });
+    }
+    if normalized.contains("overseas infrastructure")
+        || normalized.contains("international infrastructure")
+        || normalized.contains("offshore infrastructure")
+    {
+        return Some(SuperAssetCategoryMapping {
+            category: "overseas_infrastructure",
+            mapping: "productive_infrastructure_offshore",
+            included_in_onshore_total: false,
+            rule: "exclude_offshore_infrastructure_from_onshore_cut",
+        });
+    }
+    if normalized.contains("infrastructure") {
+        return Some(SuperAssetCategoryMapping {
+            category: "infrastructure_unclassified",
+            mapping: "productive_infrastructure_unclassified",
+            included_in_onshore_total: false,
+            rule: "exclude_unclassified_infrastructure_until_jurisdiction_review",
+        });
+    }
+    if normalized.contains("property") {
+        return Some(SuperAssetCategoryMapping {
+            category: "property",
+            mapping: "non_infrastructure_real_asset",
+            included_in_onshore_total: false,
+            rule: "exclude_property_from_infrastructure_cut",
+        });
+    }
+    if normalized.contains("cash") {
+        return Some(SuperAssetCategoryMapping {
+            category: "cash",
+            mapping: "liquidity",
+            included_in_onshore_total: false,
+            rule: "exclude_cash_from_productive_infrastructure_cut",
+        });
+    }
+    None
+}
+
 fn validate_parse_artifact(
     artifact: &ArtifactRef,
     ctx: &ParseCtx,
-) -> Result<ApraReleaseProvenance, AdapterError> {
+) -> Result<ApraParsePlan, AdapterError> {
     if artifact.source_id.as_str() != "apra" {
         return Err(AdapterError::Validation(format!(
             "APRA parse received artifact for source `{}`",
             artifact.source_id.as_str()
         )));
     }
-    if let Some(expected) = ctx.expected_dataflow_id() {
-        let actual = dataflow_id();
-        if expected != &actual {
-            return Err(AdapterError::Validation(format!(
-                "APRA parse expected dataflow `{}` but adapter emits `{}`",
-                expected.as_str(),
-                actual.as_str()
-            )));
-        }
-    }
-    release_url_provenance_for_parse(&artifact.source_url).ok_or_else(|| {
+    let provenance = release_url_provenance_for_parse(&artifact.source_url).ok_or_else(|| {
         AdapterError::Validation(format!(
             "APRA parse artifact `{}` is missing APRA release provenance",
             artifact.source_url
         ))
+    })?;
+    let dataflow = match ctx.expected_dataflow_id() {
+        Some(expected) if expected == &dataflow_id() => ApraDataflow::QuarterlyStatistics,
+        Some(expected) if expected == &super_asset_allocation_dataflow_id() => {
+            ApraDataflow::SuperAssetAllocation
+        }
+        Some(expected) => {
+            return Err(AdapterError::Validation(format!(
+                "APRA parse expected unsupported dataflow `{}`",
+                expected.as_str()
+            )));
+        }
+        None if provenance.publication_slug == "super-performance" => {
+            ApraDataflow::SuperAssetAllocation
+        }
+        None => ApraDataflow::QuarterlyStatistics,
+    };
+    if dataflow == ApraDataflow::SuperAssetAllocation
+        && provenance.publication_slug != "super-performance"
+    {
+        return Err(AdapterError::Validation(format!(
+            "APRA super asset-allocation parse received publication `{}`",
+            provenance.publication_slug
+        )));
+    }
+    Ok(ApraParsePlan {
+        provenance,
+        dataflow,
     })
 }
 
@@ -869,6 +1214,34 @@ struct ApraReleaseProvenance {
     publication_title: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApraDataflow {
+    QuarterlyStatistics,
+    SuperAssetAllocation,
+}
+
+impl ApraDataflow {
+    fn id(self) -> DataflowId {
+        match self {
+            Self::QuarterlyStatistics => dataflow_id(),
+            Self::SuperAssetAllocation => super_asset_allocation_dataflow_id(),
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::QuarterlyStatistics => DATAFLOW_ID,
+            Self::SuperAssetAllocation => SUPER_ASSET_ALLOCATION_DATAFLOW_ID,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ApraParsePlan {
+    provenance: ApraReleaseProvenance,
+    dataflow: ApraDataflow,
+}
+
 fn release_url_provenance_for_fetch(source_url: &str) -> Option<ApraReleaseProvenance> {
     release_url_provenance(source_url, false)
 }
@@ -901,7 +1274,14 @@ fn release_url_provenance(
         .or_else(|| filename.strip_suffix(".xls"))?;
     let title = decode_url_component(stem).replace(['_', '-'], " ");
     let normalized = title.to_ascii_lowercase();
-    let publication_slug = if normalized.contains("centralised") {
+    let publication_slug = if normalized.contains("superannuation")
+        && normalized.contains("performance")
+        && normalized.contains("statistics")
+    {
+        "super-performance".to_string()
+    } else if normalized.contains("mysuper") && normalized.contains("statistics") {
+        "super-mysuper".to_string()
+    } else if normalized.contains("centralised") {
         "adi-centralised".to_string()
     } else if normalized.contains("property")
         && normalized.contains("exposure")
@@ -931,15 +1311,21 @@ fn discoverable_jobs_with_release_url(
     started_at: DateTime<Utc>,
     trace_parent: Option<&str>,
     release_url: &str,
+    dataflow: ApraDataflow,
+    publication_filter: Option<&str>,
 ) -> Vec<DiscoveredJob> {
     current
         .iter()
+        .filter(|release| {
+            publication_filter
+                .is_none_or(|publication_slug| release.publication_slug == publication_slug)
+        })
         .filter_map(|release| {
             let revision = release.revision(started_at);
             known_revisions
                 .get(&release.revision_key())
                 .is_none_or(|known| known != &revision)
-                .then(|| release.to_discovered_job(started_at, trace_parent, release_url))
+                .then(|| release.to_discovered_job(started_at, trace_parent, release_url, dataflow))
         })
         .collect()
 }
@@ -1304,6 +1690,10 @@ fn dataflow_id() -> DataflowId {
     DataflowId::new(DATAFLOW_ID).expect("static dataflow id is valid")
 }
 
+fn super_asset_allocation_dataflow_id() -> DataflowId {
+    DataflowId::new(SUPER_ASSET_ALLOCATION_DATAFLOW_ID).expect("static dataflow id is valid")
+}
+
 fn parse_worker_error(err: tokio::task::JoinError) -> AdapterError {
     CoreError::Io(io::Error::other(format!("APRA parse worker failed: {err}"))).into()
 }
@@ -1320,12 +1710,14 @@ fn cancelled_parse_error() -> AdapterError {
 #[derive(Debug, Clone)]
 pub struct ApraAdapterBuilder {
     release_url: String,
+    super_release_url: String,
 }
 
 impl Default for ApraAdapterBuilder {
     fn default() -> Self {
         Self {
             release_url: DEFAULT_RELEASE_URL.into(),
+            super_release_url: DEFAULT_SUPER_RELEASE_URL.into(),
         }
     }
 }
@@ -1335,6 +1727,13 @@ impl ApraAdapterBuilder {
     #[must_use]
     pub fn release_url(mut self, release_url: impl Into<String>) -> Self {
         self.release_url = release_url.into();
+        self
+    }
+
+    /// Override the superannuation statistics release URL, usually for fixture tests.
+    #[must_use]
+    pub fn super_release_url(mut self, release_url: impl Into<String>) -> Self {
+        self.super_release_url = release_url.into();
         self
     }
 
@@ -1348,9 +1747,10 @@ impl ApraAdapterBuilder {
                 version: env!("CARGO_PKG_VERSION").into(),
                 rate_limit: RateLimit::new(30, Duration::from_secs(60))
                     .expect("static APRA rate limit is valid"),
-                dataflows: vec![dataflow_id()],
+                dataflows: vec![dataflow_id(), super_asset_allocation_dataflow_id()],
             },
             release_url: self.release_url,
+            super_release_url: self.super_release_url,
         }
     }
 }
@@ -1409,6 +1809,7 @@ impl ApraRelease {
         started_at: DateTime<Utc>,
         trace_parent: Option<&str>,
         release_url: &str,
+        dataflow: ApraDataflow,
     ) -> DiscoveredJob {
         let revision = self.revision(started_at);
         let revision_version = revision.version().to_string();
@@ -1416,7 +1817,7 @@ impl ApraRelease {
         DiscoveredJob {
             id: format!("apra:{}:{revision_version}", self.publication_slug),
             source_id: source_id(),
-            dataflow_id: dataflow_id(),
+            dataflow_id: dataflow.id(),
             source_url: self.source_url.clone(),
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
@@ -1424,7 +1825,7 @@ impl ApraRelease {
                 ("artifact_format".into(), self.format.as_str().into()),
                 ("attribution".into(), ATTRIBUTION.into()),
                 ("cadence".into(), "quarterly".into()),
-                ("dataflow_id".into(), DATAFLOW_ID.into()),
+                ("dataflow_id".into(), dataflow.label().into()),
                 ("license".into(), LICENSE_NAME.into()),
                 ("license_url".into(), LICENSE_URL.into()),
                 ("publication_slug".into(), self.publication_slug.clone()),
@@ -1481,6 +1882,7 @@ mod tests {
         let fetched_at = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
         let artifact = ArtifactRef {
             id,
+            fetch_id: None,
             source_id: source_id(),
             source_url: source_url.into(),
             content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1516,10 +1918,59 @@ mod tests {
             "../../../../tests/fixtures/calamine-row-overflow.xlsx.hex"
         ));
         let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+        let plan = ApraParsePlan {
+            provenance,
+            dataflow: ApraDataflow::QuarterlyStatistics,
+        };
 
-        let parsed = std::panic::catch_unwind(|| {
-            parse_xls_workbook(bytes, artifact, provenance, ingested_at)
-        });
+        let parsed =
+            std::panic::catch_unwind(|| parse_xls_workbook(bytes, artifact, plan, ingested_at));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(err.to_string().contains("APRA XLSX worksheet"), "{err}");
+    }
+
+    #[test]
+    fn malformed_xlsx_with_shifted_zip_header_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-shifted-zip-header.xlsx.hex"
+        ));
+        let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+        let plan = ApraParsePlan {
+            provenance,
+            dataflow: ApraDataflow::QuarterlyStatistics,
+        };
+
+        let parsed =
+            std::panic::catch_unwind(|| parse_xls_workbook(bytes, artifact, plan, ingested_at));
+        assert!(parsed.is_ok(), "malformed XLSX should not panic");
+        let err = parsed
+            .expect("panic handled")
+            .expect_err("malformed XLSX should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("APRA workbook has unsupported XLS/XLSX signature"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn malformed_xlsx_with_case_mismatched_worksheet_entry_is_rejected_before_calamine() {
+        let bytes = decode_hex_fixture(include_str!(
+            "../../../../tests/fixtures/calamine-case-mismatched-worksheet-entry.xlsx.hex"
+        ));
+        let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+        let plan = ApraParsePlan {
+            provenance,
+            dataflow: ApraDataflow::QuarterlyStatistics,
+        };
+
+        let parsed =
+            std::panic::catch_unwind(|| parse_xls_workbook(bytes, artifact, plan, ingested_at));
         assert!(parsed.is_ok(), "malformed XLSX should not panic");
         let err = parsed
             .expect("panic handled")
@@ -1573,6 +2024,30 @@ mod tests {
                 .to_string()
                 .contains("not a release XLS artifact")
         );
+    }
+
+    #[test]
+    fn super_asset_category_mapping_is_reviewed_and_deterministic() {
+        let onshore = super_asset_category_mapping("Australian infrastructure")
+            .expect("onshore infrastructure mapping");
+        assert_eq!(onshore.category, "australian_infrastructure");
+        assert_eq!(onshore.mapping, "productive_infrastructure_onshore");
+        assert!(onshore.included_in_onshore_total);
+        assert_eq!(onshore.rule, "include_explicit_onshore_infrastructure");
+
+        let offshore = super_asset_category_mapping("Overseas infrastructure")
+            .expect("offshore infrastructure mapping");
+        assert_eq!(offshore.mapping, "productive_infrastructure_offshore");
+        assert!(!offshore.included_in_onshore_total);
+
+        let property =
+            super_asset_category_mapping("Australian property").expect("property mapping");
+        assert_eq!(property.mapping, "non_infrastructure_real_asset");
+        assert!(!property.included_in_onshore_total);
+
+        let cash = super_asset_category_mapping("Cash").expect("cash mapping");
+        assert_eq!(cash.mapping, "liquidity");
+        assert!(!cash.included_in_onshore_total);
     }
 
     #[test]

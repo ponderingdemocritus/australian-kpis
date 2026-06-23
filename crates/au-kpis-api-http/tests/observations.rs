@@ -10,7 +10,7 @@ use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, To
 use au_kpis_config::{
     AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
 };
-use au_kpis_domain::ids::{ArtifactId, DataflowId, SeriesKey};
+use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
 use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
@@ -154,6 +154,11 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
         csv.headers().get(header::CONTENT_TYPE).unwrap(),
         "text/csv; charset=utf-8"
     );
+    assert_eq!(
+        csv.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=60, stale-while-revalidate=300"
+    );
+    assert!(!csv.headers().contains_key(header::ETAG));
     let body = String::from_utf8(
         to_bytes(csv.into_body(), usize::MAX)
             .await
@@ -194,7 +199,7 @@ async fn observations_endpoint_streams_decodable_parquet_with_headers() {
         response.headers().get(header::CACHE_CONTROL).unwrap(),
         "public, max-age=60, stale-while-revalidate=300"
     );
-    assert!(response.headers().contains_key(header::ETAG));
+    assert!(!response.headers().contains_key(header::ETAG));
 
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -338,18 +343,42 @@ async fn paginated_observations_concatenate_to_the_full_result() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain() {
+async fn observations_endpoint_uses_latest_revisions_for_rollup_grains() {
     if !docker_available() {
         eprintln!("skipping testcontainers integration test: Docker socket unavailable");
         return;
     }
 
     let db = TestDb::start("au_kpis_api_observations_rollup").await;
-    disable_monthly_rollup_policy(db.pool()).await;
+    disable_rollup_policies(db.pool()).await;
     seed_observations(db.pool()).await;
     seed_daily_rollup_observations(db.pool()).await;
-    refresh_monthly_rollup(db.pool()).await;
+    refresh_rollup_points(db.pool()).await;
     let app = router(test_state(db.pool().clone())).expect("router");
+
+    let weekly = get_observations_json(
+        app.clone(),
+        "/v1/observations?dataflow=abs.daily&frequency=weekly&limit=10",
+    )
+    .await;
+    assert_eq!(weekly.metadata.dataflow.as_str(), "abs.daily");
+    assert_eq!(weekly.observations.len(), 3);
+    assert_eq!(
+        weekly.observations[0].time,
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    );
+    assert_eq!(
+        weekly.observations[0].time_precision,
+        au_kpis_domain::TimePrecision::Week
+    );
+    assert_eq!(weekly.observations[0].value, Some(30.0));
+    assert_eq!(
+        weekly.observations[0]
+            .attributes
+            .get("observations_count")
+            .map(String::as_str),
+        Some("1")
+    );
 
     let response = get_observations_json(
         app.clone(),
@@ -367,7 +396,7 @@ async fn observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain(
         response.observations[0].time_precision,
         au_kpis_domain::TimePrecision::Month
     );
-    assert_eq!(response.observations[0].value, Some(15.0));
+    assert_eq!(response.observations[0].value, Some(25.0));
     assert_eq!(
         response.observations[0]
             .attributes
@@ -383,10 +412,47 @@ async fn observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain(
         Some("2")
     );
     assert_eq!(
+        response.observations[0]
+            .attributes
+            .get("min_value")
+            .map(String::as_str),
+        Some("20")
+    );
+    assert_eq!(
+        response.observations[0]
+            .attributes
+            .get("max_value")
+            .map(String::as_str),
+        Some("30")
+    );
+    assert_eq!(
         response.observations[1].time,
         Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap()
     );
     assert_eq!(response.observations[1].value, Some(40.0));
+
+    let quarterly = get_observations_json(
+        app.clone(),
+        "/v1/observations?dataflow=abs.daily&frequency=quarterly&limit=10",
+    )
+    .await;
+    assert_eq!(quarterly.observations.len(), 1);
+    assert_eq!(
+        quarterly.observations[0].time,
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    );
+    assert_eq!(
+        quarterly.observations[0].time_precision,
+        au_kpis_domain::TimePrecision::Quarter
+    );
+    assert_eq!(quarterly.observations[0].value, Some(30.0));
+    assert_eq!(
+        quarterly.observations[0]
+            .attributes
+            .get("observations_count")
+            .map(String::as_str),
+        Some("3")
+    );
 
     for _ in 0..3 {
         let response = get_observations_json(
@@ -406,6 +472,7 @@ async fn observations_endpoint_uses_monthly_rollup_when_frequency_matches_grain(
         )
         .await;
         assert_eq!(response.observations.len(), 2);
+        assert_eq!(response.observations[0].value, Some(25.0));
         samples.push(started.elapsed());
     }
     samples.sort_unstable();
@@ -590,7 +657,11 @@ async fn seed_extra_pagination_observations(pool: &PgPool, artifact: ArtifactId)
         }
     }
 
-    let aus = SeriesKey::derive(&DataflowId::new("abs.cpi").unwrap(), [("region", "AUS")]);
+    let aus = SeriesKey::derive(
+        &DataflowId::new("abs.cpi").unwrap(),
+        &MeasureId::new("index").unwrap(),
+        [("region", "AUS")],
+    );
     for (offset, date) in [(0.0, (2024, 9, 1)), (1.0, (2024, 12, 1))] {
         insert_observation(
             pool,
@@ -634,11 +705,13 @@ async fn seed_daily_rollup_observations(pool: &PgPool) {
     .expect("insert daily artifact");
 
     let dataflow = DataflowId::new("abs.daily").unwrap();
+    let measure = MeasureId::new("index").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), "AUS".to_string())]
         .into_iter()
         .collect();
     let key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -670,35 +743,57 @@ async fn seed_daily_rollup_observations(pool: &PgPool) {
         )
         .await;
     }
-}
-
-async fn refresh_monthly_rollup(pool: &PgPool) {
-    sqlx::query(
-        "CALL refresh_continuous_aggregate(
-            'observations_rollup_monthly',
-            '2024-01-01 00:00:00+00'::timestamptz,
-            '2024-03-01 00:00:00+00'::timestamptz
-         )",
+    insert_observation(
+        pool,
+        ObservationSeed::new(key, artifact, (2024, 1, 1), 1, 30.0).with_time_precision("day"),
     )
-    .execute(pool)
-    .await
-    .expect("refresh monthly continuous aggregate");
+    .await;
 }
 
-async fn disable_monthly_rollup_policy(pool: &PgPool) {
-    sqlx::query("SELECT remove_continuous_aggregate_policy('observations_rollup_monthly', if_exists => TRUE)")
-        .execute(pool)
-        .await
-        .expect("remove monthly rollup refresh policy");
+async fn refresh_rollup_points(pool: &PgPool) {
+    for view in [
+        "observations_rollup_weekly_points",
+        "observations_rollup_monthly_points",
+        "observations_rollup_quarterly_points",
+    ] {
+        let query = format!(
+            "CALL refresh_continuous_aggregate(
+                '{view}',
+                '2024-01-01 00:00:00+00'::timestamptz,
+                '2024-04-01 00:00:00+00'::timestamptz
+             )"
+        );
+        sqlx::query(&query)
+            .execute(pool)
+            .await
+            .expect("refresh rollup continuous aggregate");
+    }
+}
+
+async fn disable_rollup_policies(pool: &PgPool) {
+    for view in [
+        "observations_rollup_weekly_points",
+        "observations_rollup_monthly_points",
+        "observations_rollup_quarterly_points",
+    ] {
+        let query =
+            format!("SELECT remove_continuous_aggregate_policy('{view}', if_exists => TRUE)");
+        sqlx::query(&query)
+            .execute(pool)
+            .await
+            .expect("remove rollup refresh policy");
+    }
 }
 
 async fn insert_series(pool: &PgPool, region: &str) -> SeriesKey {
     let dataflow = DataflowId::new("abs.cpi").unwrap();
+    let measure = MeasureId::new("index").unwrap();
     let dimensions: BTreeMap<String, String> = [("region".to_string(), region.to_string())]
         .into_iter()
         .collect();
     let key = SeriesKey::derive(
         &dataflow,
+        &measure,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -790,6 +885,23 @@ async fn insert_observation(pool: &PgPool, seed: ObservationSeed) {
 }
 
 fn docker_available() -> bool {
-    std::env::var_os("DOCKER_HOST").is_some()
-        || std::path::Path::new("/var/run/docker.sock").exists()
+    if let Some(host) = std::env::var_os("DOCKER_HOST") {
+        let host = host.to_string_lossy();
+        if let Some(path) = host.strip_prefix("unix://") {
+            return docker_socket_available(std::path::Path::new(path));
+        }
+        return true;
+    }
+
+    docker_socket_available(std::path::Path::new("/var/run/docker.sock"))
+}
+
+#[cfg(unix)]
+fn docker_socket_available(path: &std::path::Path) -> bool {
+    std::os::unix::net::UnixStream::connect(path).is_ok()
+}
+
+#[cfg(not(unix))]
+fn docker_socket_available(_path: &std::path::Path) -> bool {
+    false
 }

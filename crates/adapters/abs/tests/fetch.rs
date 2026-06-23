@@ -1,9 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, io, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use au_kpis_adapter::{AdapterError, AdapterHttpClient, ArtifactRecorder, FetchCtx, SourceAdapter};
+use au_kpis_adapter::{
+    AdapterError, AdapterHttpClient, ArtifactRecorder, DiscoveredJob, FetchCtx, SourceAdapter,
+};
 use au_kpis_adapter_abs::AbsAdapter;
-use au_kpis_domain::{Artifact, ArtifactId};
+use au_kpis_domain::{Artifact, ArtifactId, DataflowId, SourceId};
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
@@ -16,6 +18,32 @@ use tokio::{
 };
 
 const SDMX_FIXTURE: &[u8] = br#"{"data":{"dataSets":[{"observations":{"0:0":[123.4]}}]}}"#;
+const BUILDING_APPROVALS_HTML: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Approvals, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>April 2026</dd>
+    <dt>Released</dt><dd>2/06/2026</dd>
+  </dl>
+  <h2>Dwellings approved</h2>
+</main>"#;
+const BUILDING_ACTIVITY_HTML: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Activity, Australia</h1>
+  <dl>
+    <dt>Reference period</dt><dd>December 2025</dd>
+    <dt>Released</dt><dd>8/04/2026</dd>
+  </dl>
+  <h2>Dwellings commenced</h2>
+</main>"#;
+const DWELLING_COMPLETION_TIMES_HTML: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Average dwelling completion times</h1>
+  <dl>
+    <dt>Released</dt><dd>9/10/2019</dd>
+    <dt>Source</dt><dd>Building Activity, Australia, June 2019</dd>
+  </dl>
+</main>"#;
 const GZIP_SDMX_FIXTURE: &[u8] = &[
     0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xab, 0x56, 0x4a, 0x49, 0x2c, 0x49,
     0x54, 0xb2, 0xaa, 0x06, 0xd3, 0xc1, 0xa9, 0x25, 0xc5, 0x4a, 0x56, 0xd1, 0xd5, 0x4a, 0xf9, 0x49,
@@ -224,10 +252,66 @@ fn cpi_job(source_url: String) -> au_kpis_adapter::DiscoveredJob {
     au_kpis_adapter::DiscoveredJob { source_url, ..job }
 }
 
-async fn serve_artifact_once() -> (String, String) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+fn building_approvals_job(source_url: String) -> DiscoveredJob {
+    DiscoveredJob {
+        id: "abs:building-approvals:April 2026".into(),
+        source_id: SourceId::new("abs").unwrap(),
+        dataflow_id: DataflowId::new("abs.building_approvals").unwrap(),
+        source_url,
+        trace_parent: None,
+        metadata: BTreeMap::from([
+            ("adapter".into(), "abs".into()),
+            ("artifact_format".into(), "html".into()),
+            ("revision_key".into(), "ABS:building-approvals".into()),
+            ("revision_version".into(), "April 2026".into()),
+        ]),
+    }
+}
+
+fn building_activity_job(source_url: String) -> DiscoveredJob {
+    DiscoveredJob {
+        id: "abs:building-activity:December 2025".into(),
+        source_id: SourceId::new("abs").unwrap(),
+        dataflow_id: DataflowId::new("abs.building_activity").unwrap(),
+        source_url,
+        trace_parent: None,
+        metadata: BTreeMap::from([
+            ("adapter".into(), "abs".into()),
+            ("artifact_format".into(), "html".into()),
+            ("revision_key".into(), "ABS:building-activity".into()),
+            ("revision_version".into(), "December 2025".into()),
+        ]),
+    }
+}
+
+fn dwelling_completion_times_job(source_url: String) -> DiscoveredJob {
+    DiscoveredJob {
+        id: "abs:dwelling-completion-times:2019".into(),
+        source_id: SourceId::new("abs").unwrap(),
+        dataflow_id: DataflowId::new("abs.dwelling_completion_times").unwrap(),
+        source_url,
+        trace_parent: None,
+        metadata: BTreeMap::from([
+            ("adapter".into(), "abs".into()),
+            ("artifact_format".into(), "html".into()),
+            (
+                "revision_key".into(),
+                "ABS:dwelling-completion-times".into(),
+            ),
+            ("revision_version".into(), "9/10/2019".into()),
+        ]),
+    }
+}
+
+async fn serve_artifact_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -261,16 +345,153 @@ async fn serve_artifact_once() -> (String, String) {
         stream.write_all(SDMX_FIXTURE).await.expect("write body");
     });
 
-    (
+    Some((
         format!("http://{addr}/rest"),
         format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
-    )
+    ))
 }
 
-async fn serve_gzip_artifact_once() -> (String, String) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+async fn serve_building_approvals_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+
+        assert!(request.starts_with("GET /building-approvals/latest-release HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+        assert!(request.to_ascii_lowercase().contains("accept: text/html"));
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nx-abs-fixture: building-approvals\r\ncontent-length: {}\r\n\r\n",
+            BUILDING_APPROVALS_HTML.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        stream
+            .write_all(BUILDING_APPROVALS_HTML)
+            .await
+            .expect("write body");
+    });
+
+    let base_url = format!("http://{addr}");
+    let source_url = format!("{base_url}/building-approvals/latest-release");
+    Some((base_url, source_url))
+}
+
+async fn serve_building_activity_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+
+        assert!(request.starts_with("GET /building-activity/latest-release HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+        assert!(request.to_ascii_lowercase().contains("accept: text/html"));
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nx-abs-fixture: building-activity\r\ncontent-length: {}\r\n\r\n",
+            BUILDING_ACTIVITY_HTML.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        stream
+            .write_all(BUILDING_ACTIVITY_HTML)
+            .await
+            .expect("write body");
+    });
+
+    let base_url = format!("http://{addr}");
+    let source_url = format!("{base_url}/building-activity/latest-release");
+    Some((base_url, source_url))
+}
+
+async fn serve_dwelling_completion_times_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+
+        assert!(request.starts_with("GET /articles/average-dwelling-completion-times HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-abs/")
+        );
+        assert!(request.to_ascii_lowercase().contains("accept: text/html"));
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nx-abs-fixture: completion-times\r\ncontent-length: {}\r\n\r\n",
+            DWELLING_COMPLETION_TIMES_HTML.len(),
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        stream
+            .write_all(DWELLING_COMPLETION_TIMES_HTML)
+            .await
+            .expect("write body");
+    });
+
+    let base_url = format!("http://{addr}");
+    let source_url = format!("{base_url}/articles/average-dwelling-completion-times");
+    Some((base_url, source_url))
+}
+
+async fn serve_gzip_artifact_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -292,16 +513,21 @@ async fn serve_gzip_artifact_once() -> (String, String) {
             .expect("write gzip body");
     });
 
-    (
+    Some((
         format!("http://{addr}/rest"),
         format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
-    )
+    ))
 }
 
-async fn serve_throttle_once() -> (String, String) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+async fn serve_throttle_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -316,16 +542,21 @@ async fn serve_throttle_once() -> (String, String) {
             .expect("write throttle response");
     });
 
-    (
+    Some((
         format!("http://{addr}/rest"),
         format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
-    )
+    ))
 }
 
-async fn serve_redirect_once() -> (String, String) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+async fn serve_redirect_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -340,16 +571,21 @@ async fn serve_redirect_once() -> (String, String) {
             .expect("write redirect response");
     });
 
-    (
+    Some((
         format!("http://{addr}/rest"),
         format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
-    )
+    ))
 }
 
-async fn serve_non_utf8_header_once() -> (String, String) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fixture server");
+async fn serve_non_utf8_header_once() -> Option<(String, String)> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
     let addr = listener.local_addr().expect("fixture server address");
 
     tokio::spawn(async move {
@@ -370,15 +606,17 @@ async fn serve_non_utf8_header_once() -> (String, String) {
         stream.write_all(SDMX_FIXTURE).await.expect("write body");
     });
 
-    (
+    Some((
         format!("http://{addr}/rest"),
         format!("http://{addr}/rest/data/ABS,CPI,2.0.0/all?dimensionAtObservation=TIME_PERIOD"),
-    )
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let job = cpi_job(source_url);
     let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 0, 0, 0).unwrap();
@@ -431,8 +669,156 @@ async fn fetch_streams_abs_sdmx_json_to_content_addressed_storage() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_streams_building_approvals_release_html_to_storage() {
+    let Some((_base_url, source_url)) = serve_building_approvals_once().await else {
+        return;
+    };
+    let adapter = AbsAdapter::default();
+    let job = building_approvals_job(source_url);
+    let started_at = Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let blob_store = BlobStore::new(InMemory::new());
+    let recorder = Arc::new(RecordingArtifactRecorder::default());
+
+    let artifact = adapter
+        .fetch(
+            job.clone(),
+            &FetchCtx::new(http, blob_store.clone(), started_at, recorder.clone()),
+        )
+        .await
+        .expect("fetch Building Approvals release artifact");
+
+    let expected_id = ArtifactId::of_content(BUILDING_APPROVALS_HTML);
+    assert_eq!(artifact.id, expected_id);
+    assert_eq!(artifact.source_id.as_str(), "abs");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "text/html");
+    assert_eq!(
+        artifact.response_headers["x-abs-fixture"],
+        ["building-approvals"]
+    );
+    assert_eq!(artifact.size_bytes, BUILDING_APPROVALS_HTML.len() as u64);
+    assert!(artifact.fetched_at > started_at);
+
+    let recorded = recorder.artifacts.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0], Artifact::from(artifact.clone()));
+
+    let mut stored = blob_store
+        .get(&StorageKey::from_persisted(&artifact.storage_key))
+        .await
+        .expect("read stored artifact");
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stored.next().await {
+        bytes.extend_from_slice(&chunk.expect("stored chunk"));
+    }
+    assert_eq!(bytes, BUILDING_APPROVALS_HTML);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_streams_building_activity_release_html_to_storage() {
+    let Some((_base_url, source_url)) = serve_building_activity_once().await else {
+        return;
+    };
+    let adapter = AbsAdapter::default();
+    let job = building_activity_job(source_url);
+    let started_at = Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let blob_store = BlobStore::new(InMemory::new());
+    let recorder = Arc::new(RecordingArtifactRecorder::default());
+
+    let artifact = adapter
+        .fetch(
+            job.clone(),
+            &FetchCtx::new(http, blob_store.clone(), started_at, recorder.clone()),
+        )
+        .await
+        .expect("fetch Building Activity release artifact");
+
+    let expected_id = ArtifactId::of_content(BUILDING_ACTIVITY_HTML);
+    assert_eq!(artifact.id, expected_id);
+    assert_eq!(artifact.source_id.as_str(), "abs");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "text/html");
+    assert_eq!(
+        artifact.response_headers["x-abs-fixture"],
+        ["building-activity"]
+    );
+    assert_eq!(artifact.size_bytes, BUILDING_ACTIVITY_HTML.len() as u64);
+    assert!(artifact.fetched_at > started_at);
+
+    let recorded = recorder.artifacts.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0], Artifact::from(artifact.clone()));
+    drop(recorded);
+
+    let mut stored = blob_store
+        .get(&StorageKey::from_persisted(&artifact.storage_key))
+        .await
+        .expect("read stored artifact");
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stored.next().await {
+        bytes.extend_from_slice(&chunk.expect("stored chunk"));
+    }
+    assert_eq!(bytes, BUILDING_ACTIVITY_HTML);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_streams_dwelling_completion_times_article_to_storage() {
+    let Some((_base_url, source_url)) = serve_dwelling_completion_times_once().await else {
+        return;
+    };
+    let adapter = AbsAdapter::default();
+    let job = dwelling_completion_times_job(source_url);
+    let started_at = Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let blob_store = BlobStore::new(InMemory::new());
+    let recorder = Arc::new(RecordingArtifactRecorder::default());
+
+    let artifact = adapter
+        .fetch(
+            job.clone(),
+            &FetchCtx::new(http, blob_store.clone(), started_at, recorder.clone()),
+        )
+        .await
+        .expect("fetch dwelling completion times article");
+
+    let expected_id = ArtifactId::of_content(DWELLING_COMPLETION_TIMES_HTML);
+    assert_eq!(artifact.id, expected_id);
+    assert_eq!(artifact.source_id.as_str(), "abs");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "text/html");
+    assert_eq!(
+        artifact.response_headers["x-abs-fixture"],
+        ["completion-times"]
+    );
+    assert_eq!(
+        artifact.size_bytes,
+        DWELLING_COMPLETION_TIMES_HTML.len() as u64
+    );
+    assert!(artifact.fetched_at > started_at);
+
+    let recorded = recorder.artifacts.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0], Artifact::from(artifact.clone()));
+    drop(recorded);
+
+    let mut stored = blob_store
+        .get(&StorageKey::from_persisted(&artifact.storage_key))
+        .await
+        .expect("read stored artifact");
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stored.next().await {
+        bytes.extend_from_slice(&chunk.expect("stored chunk"));
+    }
+    assert_eq!(bytes, DWELLING_COMPLETION_TIMES_HTML);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_stores_compressed_response_as_raw_artifact() {
-    let (base_url, source_url) = serve_gzip_artifact_once().await;
+    let Some((base_url, source_url)) = serve_gzip_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let blob_store = BlobStore::new(InMemory::new());
 
@@ -467,7 +853,9 @@ async fn fetch_stores_compressed_response_as_raw_artifact() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_keeps_canonical_blob_for_retry_when_primary_record_fails() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let blob_store = BlobStore::new(InMemory::new());
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
@@ -497,7 +885,9 @@ async fn fetch_keeps_canonical_blob_for_retry_when_primary_record_fails() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_discards_staged_blob_when_artifact_lookup_fails() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let backend = Arc::new(InMemory::new());
     let blob_store = BlobStore::from_arc(backend.clone());
@@ -525,7 +915,9 @@ async fn fetch_discards_staged_blob_when_artifact_lookup_fails() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let cold_key = format!("cold/{}", expected_id.to_hex());
@@ -540,6 +932,7 @@ async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
     let blob_store = BlobStore::from_arc(backend.clone());
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -574,7 +967,9 @@ async fn fetch_skips_hot_copy_when_durable_row_uses_rewritten_storage_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_backfills_headers_for_duplicate_durable_artifact() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let storage_key = format!("artifacts/{}", expected_id.to_hex());
@@ -589,6 +984,7 @@ async fn fetch_backfills_headers_for_duplicate_durable_artifact() {
     let blob_store = BlobStore::from_arc(Arc::clone(&backend));
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -623,7 +1019,9 @@ async fn fetch_backfills_headers_for_duplicate_durable_artifact() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_keeps_canonical_duplicate_as_storage_noop() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let storage_key = format!("artifacts/{}", expected_id.to_hex());
@@ -642,6 +1040,7 @@ async fn fetch_keeps_canonical_duplicate_as_storage_noop() {
     let blob_store = BlobStore::from_arc(backend.clone());
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -676,7 +1075,9 @@ async fn fetch_keeps_canonical_duplicate_as_storage_noop() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let storage_key = format!("artifacts/{}", expected_id.to_hex());
@@ -693,6 +1094,7 @@ async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -726,7 +1128,9 @@ async fn fetch_repairs_canonical_duplicate_when_blob_hash_mismatches() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let cold_key = format!("cold/{}", expected_id.to_hex());
@@ -741,6 +1145,7 @@ async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -782,13 +1187,16 @@ async fn fetch_preserves_valid_rewritten_storage_key_when_record_races() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let blob_store = BlobStore::new(InMemory::new());
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let missing_key = format!("cold/{}", expected_id.to_hex());
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -826,7 +1234,9 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_is_missing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches() {
-    let (base_url, source_url) = serve_artifact_once().await;
+    let Some((base_url, source_url)) = serve_artifact_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let expected_id = ArtifactId::of_content(SDMX_FIXTURE);
     let cold_key = format!("cold/{}", expected_id.to_hex());
@@ -843,6 +1253,7 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches()
     let blob_store = BlobStore::from_arc(backend);
     let existing = Artifact {
         id: expected_id,
+        fetch_id: None,
         source_id: au_kpis_domain::SourceId::new("abs").unwrap(),
         source_url: source_url.clone(),
         content_type: "application/vnd.sdmx.data+json".into(),
@@ -880,7 +1291,9 @@ async fn fetch_repairs_rewritten_storage_key_when_durable_blob_hash_mismatches()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_preserves_retry_after_on_upstream_throttle() {
-    let (base_url, source_url) = serve_throttle_once().await;
+    let Some((base_url, source_url)) = serve_throttle_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let err = adapter
         .fetch(
@@ -913,7 +1326,9 @@ async fn fetch_preserves_retry_after_on_upstream_throttle() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_rejects_upstream_redirect_without_following_location() {
-    let (base_url, source_url) = serve_redirect_once().await;
+    let Some((base_url, source_url)) = serve_redirect_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let err = adapter
         .fetch(
@@ -946,7 +1361,9 @@ async fn fetch_rejects_upstream_redirect_without_following_location() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_encodes_non_utf8_response_headers_losslessly() {
-    let (base_url, source_url) = serve_non_utf8_header_once().await;
+    let Some((base_url, source_url)) = serve_non_utf8_header_once().await else {
+        return;
+    };
     let adapter = AbsAdapter::builder().base_url(&base_url).build();
     let artifact = adapter
         .fetch(

@@ -1,4 +1,8 @@
-import type { ObservationsResponse } from '@au-kpis/sdk-generated/client'
+import type {
+  ObservationsResponse,
+  ScorecardConfig,
+  ScorecardSnapshot,
+} from '@au-kpis/sdk-generated/client'
 import { ApiRequestError, ApiValidationError, createClient } from './index.js'
 
 type FetchCall = {
@@ -148,6 +152,35 @@ await run('observations.list encodes dimensions and returns the response envelop
   assertSearchValues(mock.calls[0], 'dimensions[]', ['measure=All groups CPI', 'region=AUS'])
 })
 
+await run('observations.parquet requests raw bulk parquet export', async () => {
+  const mock = mockFetch([
+    new Response(new Uint8Array([80, 65, 82, 49]), {
+      headers: { 'content-type': 'application/vnd.apache.parquet' },
+      status: 200,
+    }),
+  ])
+  const client = createClient({ baseUrl: 'https://api.example.test', fetch: mock.fetch })
+
+  const response = await client.observations.parquet({
+    dataflow: 'abs.cpi',
+    dimensions: { region: 'AUS' },
+    limit: 50_000,
+    since: '2024-01-01',
+  })
+
+  assertEqual(response.headers.get('content-type'), 'application/vnd.apache.parquet')
+  assertPath(mock.calls[0], '/v1/observations')
+  assertSearch(mock.calls[0], 'dataflow', 'abs.cpi')
+  assertSearch(mock.calls[0], 'format', 'parquet')
+  assertSearch(mock.calls[0], 'limit', '50000')
+  assertSearch(mock.calls[0], 'since', '2024-01-01')
+  assertSearchValues(mock.calls[0], 'dimensions[]', ['region=AUS'])
+  assertEqual(
+    new Headers(mock.calls[0]?.init?.headers).get('accept'),
+    'application/vnd.apache.parquet',
+  )
+})
+
 await run('observations.stream follows pagination cursors', async () => {
   const first = observationsPage({ nextCursor: 'cursor-2', value: 136.2 })
   const second = observationsPage({ nextCursor: null, value: 136.9 })
@@ -198,6 +231,47 @@ await run('observations.latest calls the series lookup endpoint', async () => {
 
   assertEqual(result, response)
   assertPath(mock.calls[0], `/v1/series/abs.cpi/${seriesKey}`)
+})
+
+await run('scorecard helpers call APS endpoints and serialize history bounds', async () => {
+  const config = scorecardConfig()
+  const latest = scorecardSnapshot()
+  const history = [scorecardSnapshot({ asOf: '2024-01-01', score: 40 })]
+  const mock = mockFetch([jsonResponse(config), jsonResponse(latest), jsonResponse(history)])
+  const client = createClient({ baseUrl: 'https://api.example.test', fetch: mock.fetch })
+
+  assertEqual(await client.scorecards.aps.config(), config)
+  assertEqual(await client.scorecards.aps.latest(), latest)
+  assertEqual(
+    await client.scorecards.aps.history({
+      since: '2024-01-01',
+      until: '2024-12-31',
+    }),
+    history,
+  )
+
+  assertPath(mock.calls[0], '/v1/scorecards/aps/config')
+  assertPath(mock.calls[1], '/v1/scorecards/aps/latest')
+  assertPath(mock.calls[2], '/v1/scorecards/aps/history')
+  assertSearch(mock.calls[2], 'since', '2024-01-01')
+  assertSearch(mock.calls[2], 'until', '2024-12-31')
+})
+
+await run('validate true accepts scorecard config latest and history responses', async () => {
+  const mock = mockFetch([
+    jsonResponse(scorecardConfig()),
+    jsonResponse(scorecardSnapshot()),
+    jsonResponse([scorecardSnapshot()]),
+  ])
+  const client = createClient({
+    baseUrl: 'https://api.example.test',
+    fetch: mock.fetch,
+    validate: true,
+  })
+
+  await client.scorecards.aps.config()
+  await client.scorecards.aps.latest()
+  await client.scorecards.aps.history()
 })
 
 await run('search.catalog calls the catalog search endpoint', async () => {
@@ -359,6 +433,98 @@ function dataflow() {
     source_id: 'abs',
     source_url: 'https://www.abs.gov.au/',
   } as const
+}
+
+function scorecardConfig(): ScorecardConfig {
+  return {
+    attribution: 'Derived scorecard configuration maintained by australian-kpis.',
+    description: 'National Australia scorecard.',
+    formula: 'APS = 100 * T * (0.5 + 0.5 * O)',
+    id: 'aps',
+    indicators: [
+      {
+        axis: 'throughput',
+        cadence: 'monthly',
+        component: 'housing',
+        confidence: 'high',
+        coverage_status: 'missing_expected',
+        description: 'Monthly dwelling approvals.',
+        dimension_selector: { region: 'AUS' },
+        direction: 'higher_is_better',
+        display_label: 'Housing approvals',
+        indicator_id: 'housing.approvals',
+        measure_id: 'dwellings_approved',
+        normalization: { best: 25000, worst: 10000 },
+        provenance: {
+          attribution: 'Source: Australian Bureau of Statistics',
+          license: 'CC-BY-4.0',
+          source_url: 'https://www.abs.gov.au/',
+        },
+        source_dataflow_id: 'abs.building_approvals',
+        unit: 'dwellings',
+        weight: 0.35,
+      },
+    ],
+    label: 'Abundance Position Score',
+    license: 'Apache-2.0',
+    version: 'aps.v1',
+  }
+}
+
+function scorecardSnapshot(options: { asOf?: string; score?: number } = {}): ScorecardSnapshot {
+  return {
+    as_of: options.asOf ?? '2024-02-01',
+    confidence: 'medium',
+    confidence_band: { high: 100, low: 0 },
+    config_version: 'aps.v1',
+    contributions: [
+      {
+        attribution: 'Source: Australian Bureau of Statistics',
+        axis: 'throughput',
+        component: 'housing',
+        confidence: 'high',
+        coverage_status: 'resolved',
+        dimensions: { region: 'AUS' },
+        direction: 'higher_is_better',
+        indicator_id: 'housing.approvals',
+        label: 'Housing approvals',
+        latest_period: '2024-02-01',
+        license: 'CC-BY-4.0',
+        measure_id: 'dwellings_approved',
+        normalized_value: 1,
+        raw_value: 25000,
+        series_key: seriesKey,
+        source_artifact_id: artifactId,
+        source_dataflow_id: 'abs.building_approvals',
+        source_url: 'https://www.abs.gov.au/',
+        unit: 'dwellings',
+        weight: 0.35,
+      },
+    ],
+    coverage_pct: 40,
+    latest_period: '2024-02-01',
+    score: options.score ?? 100,
+    scorecard_id: 'aps',
+    sub_indexes: [
+      {
+        axis: 'throughput',
+        components: [
+          {
+            component: 'housing',
+            coverage_pct: 100,
+            score: 1,
+            weight: 0.35,
+          },
+        ],
+        confidence_band: { high: 1, low: 0 },
+        coverage_pct: 35,
+        score: 1,
+        weight: 1,
+      },
+    ],
+    trend: 'up',
+    zone: 'green',
+  }
 }
 
 function dimension() {

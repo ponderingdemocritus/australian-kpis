@@ -1,0 +1,306 @@
+---
+source: crates/adapters/apra/tests/parse.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "australian_infrastructure",
+      "fund_type": "all",
+      "mapping": "productive_infrastructure_onshore"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 12100.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "include_explicit_onshore_infrastructure",
+      "apra_original_category": "Australian infrastructure",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "australian_infrastructure",
+      "fund_type": "all",
+      "mapping": "productive_infrastructure_onshore"
+    },
+    "unit": "$ million",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 12600.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "include_explicit_onshore_infrastructure",
+      "apra_original_category": "Australian infrastructure",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "overseas_infrastructure",
+      "fund_type": "all",
+      "mapping": "productive_infrastructure_offshore"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 2800.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "exclude_offshore_infrastructure_from_onshore_cut",
+      "apra_original_category": "Overseas infrastructure",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "overseas_infrastructure",
+      "fund_type": "all",
+      "mapping": "productive_infrastructure_offshore"
+    },
+    "unit": "$ million",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 2900.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "exclude_offshore_infrastructure_from_onshore_cut",
+      "apra_original_category": "Overseas infrastructure",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "property",
+      "fund_type": "all",
+      "mapping": "non_infrastructure_real_asset"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 7300.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "exclude_property_from_infrastructure_cut",
+      "apra_original_category": "Australian property",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "property",
+      "fund_type": "all",
+      "mapping": "non_infrastructure_real_asset"
+    },
+    "unit": "$ million",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 7100.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "exclude_property_from_infrastructure_cut",
+      "apra_original_category": "Australian property",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "cash",
+      "fund_type": "all",
+      "mapping": "liquidity"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 9000.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "exclude_cash_from_productive_infrastructure_cut",
+      "apra_original_category": "Cash",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "cash",
+      "fund_type": "all",
+      "mapping": "liquidity"
+    },
+    "unit": "$ million",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 8500.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "exclude_cash_from_productive_infrastructure_cut",
+      "apra_original_category": "Cash",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "27696266ef8c85d927772aa63b5eb75b8ca1cf7da8ef8c59503ce1ffe1dffce6",
+      "sheet_name": "Asset allocation",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Quarterly superannuation performance statistics"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "total",
+      "fund_type": "all",
+      "mapping": "productive_infrastructure_onshore"
+    },
+    "unit": "$ million",
+    "time": "2026-01-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 12100.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "sum_included_onshore_infrastructure_categories",
+      "apra_original_category": "Productive infrastructure onshore total",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "derived",
+      "sheet_name": "derived",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Derived productive infrastructure total"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  },
+  {
+    "dataflow_id": "apra.super_asset_allocation",
+    "measure_id": "value",
+    "dimensions": {
+      "asset_category": "total",
+      "fund_type": "all",
+      "mapping": "productive_infrastructure_onshore"
+    },
+    "unit": "$ million",
+    "time": "2026-04-01T00:00:00+00:00",
+    "time_precision": "Quarter",
+    "value": 12600.0,
+    "status": "Normal",
+    "attributes": {
+      "apra_mapping_review": "aps-v1-super-asset-allocation",
+      "apra_mapping_rule": "sum_included_onshore_infrastructure_categories",
+      "apra_original_category": "Productive infrastructure onshore total",
+      "attribution": "Source: Australian Prudential Regulation Authority",
+      "license": "Creative Commons Attribution 3.0 Australia Licence",
+      "license_url": "http://creativecommons.org/licenses/by/3.0/au/",
+      "publication": "super-performance",
+      "publication_title": "Quarterly superannuation performance statistics December 2004 to March 2026",
+      "schema_hash": "derived",
+      "sheet_name": "derived",
+      "source": "Australian Prudential Regulation Authority",
+      "source_url": "https://www.apra.gov.au/sites/default/files/2026-05/Quarterly%20superannuation%20performance%20statistics%20-%20December%202004%20to%20March%202026.xlsx",
+      "table_title": "Derived productive infrastructure total"
+    },
+    "source_artifact_id": "b1f03319073256fe6409fac125a542fed5d1b90377c8ceadab0cb96412e8659a"
+  }
+]

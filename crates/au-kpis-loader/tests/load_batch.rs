@@ -4,7 +4,7 @@ use au_kpis_config::DatabaseConfig;
 use au_kpis_db::{connect, migrate};
 use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, TimePrecision,
-    ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey},
+    ids::{ArtifactId, CodeId, DataflowId, DimensionId, MeasureId, SeriesKey, Sha256Digest},
 };
 use au_kpis_loader::{
     LoadItem, LoadItemAudit, LoadOptions, begin_staged_load, load_batch,
@@ -98,8 +98,31 @@ async fn seed_reference_data(pool: &PgPool, artifact_id: ArtifactId) {
     .expect("insert artifact");
 }
 
+async fn seed_artifact(pool: &PgPool, artifact_id: ArtifactId, source_url: &str) {
+    sqlx::query(
+        "INSERT INTO artifacts (
+             id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         )
+         VALUES ($1, 'abs', $2, 'application/json',
+                 '{}'::jsonb, 128, $3, $4)",
+    )
+    .bind(artifact_id.digest().as_bytes().as_slice())
+    .bind(source_url)
+    .bind(format!("artifacts/{artifact_id}"))
+    .bind(ts(2024, 4, 25))
+    .execute(pool)
+    .await
+    .expect("insert additional artifact");
+}
+
 fn descriptor(region: &str) -> SeriesDescriptor {
+    descriptor_with_measure(region, "index")
+}
+
+fn descriptor_with_measure(region: &str, measure_id: &str) -> SeriesDescriptor {
     let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+    let measure_id = MeasureId::new(measure_id).unwrap();
     let dimensions: BTreeMap<DimensionId, CodeId> = [(
         DimensionId::new("region").unwrap(),
         CodeId::new(region).unwrap(),
@@ -108,6 +131,7 @@ fn descriptor(region: &str) -> SeriesDescriptor {
     .collect();
     let series_key = SeriesKey::derive(
         &dataflow_id,
+        &measure_id,
         dimensions
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str())),
@@ -116,10 +140,22 @@ fn descriptor(region: &str) -> SeriesDescriptor {
     SeriesDescriptor {
         series_key,
         dataflow_id,
-        measure_id: MeasureId::new("index").unwrap(),
+        measure_id,
         dimensions,
         unit: "index".to_string(),
     }
+}
+
+fn legacy_series_key_without_measure(descriptor: &SeriesDescriptor) -> SeriesKey {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(descriptor.dataflow_id.as_str().as_bytes());
+    for (key, value) in &descriptor.dimensions {
+        bytes.push(0);
+        bytes.extend_from_slice(key.as_str().as_bytes());
+        bytes.push(b'=');
+        bytes.extend_from_slice(value.as_str().as_bytes());
+    }
+    SeriesKey::from_digest(Sha256Digest::hash(&bytes))
 }
 
 fn observation(
@@ -197,8 +233,18 @@ fn load_batch_boundary_helpers_cover_row_and_byte_edges() {
     assert!(!load_batch_boundary_reached(2, 99, options));
 }
 
+#[test]
+fn descriptor_keys_include_measure_id() {
+    let count = descriptor_with_measure("AUS", "count");
+    let value = descriptor_with_measure("AUS", "value");
+
+    assert_ne!(count.series_key, value.series_key);
+    assert_eq!(count.dimensions, value.dimensions);
+    assert_eq!(count.dataflow_id, value.dataflow_id);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn upserts_series_and_latest_revision() {
+async fn upserts_series_and_initial_revision() {
     let _guard = TEST_LOCK.lock().await;
     let db = test_db().await;
     let pool = &db.pool;
@@ -207,17 +253,11 @@ async fn upserts_series_and_latest_revision() {
     let aus = descriptor("AUS");
     let time = ts(2024, 3, 1);
 
-    let stats = load_batch(
-        pool,
-        vec![
-            item(&aus, artifact_id, time, 0, 134.2),
-            item(&aus, artifact_id, time, 1, 135.0),
-        ],
-    )
-    .await
-    .expect("load observations");
+    let stats = load_batch(pool, vec![item(&aus, artifact_id, time, 0, 134.2)])
+        .await
+        .expect("load observations");
 
-    assert_eq!(stats.observations_loaded, 2);
+    assert_eq!(stats.observations_loaded, 1);
     assert_eq!(stats.series_upserted, 1);
     assert_eq!(stats.parse_errors, 0);
 
@@ -236,8 +276,75 @@ async fn upserts_series_and_latest_revision() {
     assert_eq!(row.get::<String, _>("dataflow_id"), "abs.cpi");
     assert_eq!(row.get::<DateTime<Utc>, _>("first_observed"), time);
     assert_eq!(row.get::<DateTime<Utc>, _>("last_observed"), time);
-    assert_eq!(row.get::<i32, _>("revision_no"), 1);
-    assert_eq!(row.get::<Option<f64>, _>("value"), Some(135.0));
+    assert_eq!(row.get::<i32, _>("revision_no"), 0);
+    assert_eq!(row.get::<Option<f64>, _>("value"), Some(134.2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changed_reingest_with_adapter_revision_zero_appends_revision() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let initial_artifact = ArtifactId::of_content(b"loader initial revision assignment fixture");
+    let revised_artifact = ArtifactId::of_content(b"loader revised revision assignment fixture");
+    seed_reference_data(pool, initial_artifact).await;
+    seed_artifact(
+        pool,
+        revised_artifact,
+        "https://example.test/cpi-revised.json",
+    )
+    .await;
+    let aus = descriptor("AUS");
+    let time = ts(2024, 3, 1);
+
+    let initial = load_batch(pool, vec![item(&aus, initial_artifact, time, 0, 134.2)])
+        .await
+        .expect("load initial observation");
+    assert_eq!(initial.observations_loaded, 1);
+
+    let revised = load_batch(pool, vec![item(&aus, revised_artifact, time, 0, 135.0)])
+        .await
+        .expect("load revised observation");
+    assert_eq!(revised.observations_loaded, 1);
+
+    let rows = sqlx::query(
+        "SELECT revision_no, value, encode(source_artifact_id, 'hex') AS artifact_id_hex
+         FROM observations
+         WHERE series_key = $1 AND time = $2
+         ORDER BY revision_no",
+    )
+    .bind(aus.series_key.digest().as_bytes().as_slice())
+    .bind(time)
+    .fetch_all(pool)
+    .await
+    .expect("fetch revision chain");
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<i32, _>("revision_no"), 0);
+    assert_eq!(rows[0].get::<Option<f64>, _>("value"), Some(134.2));
+    assert_eq!(
+        rows[0].get::<String, _>("artifact_id_hex"),
+        initial_artifact.to_string()
+    );
+    assert_eq!(rows[1].get::<i32, _>("revision_no"), 1);
+    assert_eq!(rows[1].get::<Option<f64>, _>("value"), Some(135.0));
+    assert_eq!(
+        rows[1].get::<String, _>("artifact_id_hex"),
+        revised_artifact.to_string()
+    );
+
+    let latest = sqlx::query(
+        "SELECT revision_no, value
+         FROM observations_latest
+         WHERE series_key = $1 AND time = $2",
+    )
+    .bind(aus.series_key.digest().as_bytes().as_slice())
+    .bind(time)
+    .fetch_one(pool)
+    .await
+    .expect("fetch latest revision");
+    assert_eq!(latest.get::<i32, _>("revision_no"), 1);
+    assert_eq!(latest.get::<Option<f64>, _>("value"), Some(135.0));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -316,24 +423,33 @@ async fn latest_revision_wins_for_every_insertion_order() {
     let _guard = TEST_LOCK.lock().await;
     let db = test_db().await;
     let pool = &db.pool;
-    let artifact_id = ArtifactId::of_content(b"loader revision permutation fixture");
-    seed_reference_data(pool, artifact_id).await;
+    let artifact_a = ArtifactId::of_content(b"loader revision permutation fixture a");
+    let artifact_b = ArtifactId::of_content(b"loader revision permutation fixture b");
+    let artifact_c = ArtifactId::of_content(b"loader revision permutation fixture c");
+    let artifact_d = ArtifactId::of_content(b"loader revision permutation fixture d");
+    seed_reference_data(pool, artifact_a).await;
+    seed_artifact(pool, artifact_b, "https://example.test/cpi-b.json").await;
+    seed_artifact(pool, artifact_c, "https://example.test/cpi-c.json").await;
+    seed_artifact(pool, artifact_d, "https://example.test/cpi-d.json").await;
     let aus = descriptor("AUS");
-    let revisions = [(0_u32, 134.2), (1, 135.0), (2, 133.9), (3, 136.4)];
+    let revisions = [
+        (artifact_a, 134.2),
+        (artifact_b, 135.0),
+        (artifact_c, 133.9),
+        (artifact_d, 136.4),
+    ];
     let orders = permutations(&revisions);
 
     for (case, order) in orders.iter().enumerate() {
         let time = ts(2024, 3, 1) + ChronoDuration::days(case as i64);
-        let rows = order
-            .iter()
-            .map(|(revision_no, value)| item(&aus, artifact_id, time, *revision_no, *value))
-            .collect();
-        let stats = load_batch(pool, rows)
-            .await
-            .expect("load revision permutation");
+        for (artifact_id, value) in order {
+            let stats = load_batch(pool, vec![item(&aus, *artifact_id, time, 0, *value)])
+                .await
+                .expect("load revision permutation");
 
-        assert_eq!(stats.observations_loaded, revisions.len() as u64);
-        assert_eq!(stats.parse_errors, 0);
+            assert_eq!(stats.observations_loaded, 1);
+            assert_eq!(stats.parse_errors, 0);
+        }
     }
 
     let rows = sqlx::query(
@@ -348,9 +464,10 @@ async fn latest_revision_wins_for_every_insertion_order() {
     .expect("fetch latest revisions");
 
     assert_eq!(rows.len(), orders.len());
-    for row in rows {
+    for (row, order) in rows.iter().zip(orders) {
+        let expected_latest = order.last().expect("order has revisions").1;
         assert_eq!(row.get::<i32, _>("revision_no"), 3);
-        assert_eq!(row.get::<Option<f64>, _>("value"), Some(136.4));
+        assert_eq!(row.get::<Option<f64>, _>("value"), Some(expected_latest));
     }
 }
 
@@ -389,6 +506,34 @@ async fn validation_errors_are_recorded_without_failing_valid_rows() {
 
     assert_eq!(observation_count, 1);
     assert_eq!(parse_error_count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn descriptors_with_legacy_measureless_keys_are_rejected() {
+    let _guard = TEST_LOCK.lock().await;
+    let db = test_db().await;
+    let pool = &db.pool;
+    let artifact_id = ArtifactId::of_content(b"loader stale series key fixture");
+    seed_reference_data(pool, artifact_id).await;
+
+    let mut stale = descriptor("AUS");
+    stale.series_key = legacy_series_key_without_measure(&stale);
+    let mut stale_item = item(&stale, artifact_id, ts(2024, 3, 1), 0, 134.2);
+    stale_item.observation.series_key = stale.series_key;
+
+    let stats = load_batch(pool, vec![stale_item])
+        .await
+        .expect("record stale series key as parse error");
+
+    assert_eq!(stats.observations_loaded, 0);
+    assert_eq!(stats.series_upserted, 0);
+    assert_eq!(stats.parse_errors, 1);
+
+    let error: String = sqlx::query_scalar("SELECT error_message FROM parse_errors")
+        .fetch_one(pool)
+        .await
+        .expect("fetch parse error");
+    assert!(error.contains("does not match computed key"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

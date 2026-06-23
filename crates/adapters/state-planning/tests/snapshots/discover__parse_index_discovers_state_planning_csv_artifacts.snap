@@ -1,0 +1,20 @@
+---
+source: crates/adapters/state-planning/tests/discover.rs
+expression: snapshot
+---
+[
+  {
+    "dataflow_id": "state_planning.nsw_da_processing",
+    "last_updated": "2026-06-12",
+    "publication_id": "nsw-da-processing-2026",
+    "source_url": "https://www.planning.nsw.gov.au/data/nsw-da-processing-2026.csv",
+    "title": "NSW DA processing dashboard export 2026"
+  },
+  {
+    "dataflow_id": "state_planning.vic_permit_activity",
+    "last_updated": "2026-06-10",
+    "publication_id": "vic-permit-activity-2026",
+    "source_url": "https://www.planning.vic.gov.au/data/vic-permit-activity-2026.csv",
+    "title": "Victoria planning permit activity export 2026"
+  }
+]

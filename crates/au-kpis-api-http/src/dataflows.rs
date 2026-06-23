@@ -458,7 +458,105 @@ fn invalid_db_id(err: au_kpis_domain::ids::IdError) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use au_kpis_cache::{
+        CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig,
+    };
+    use au_kpis_config::{
+        AppConfig, CacheConfig, DatabaseConfig, HttpConfig, RateLimitConfig, TelemetryConfig,
+    };
+    use au_kpis_telemetry::Telemetry;
+    use axum::{
+        extract::{Path, State},
+        http::StatusCode,
+    };
+    use sqlx::postgres::PgPoolOptions;
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
+
+    #[tokio::test]
+    async fn catalog_handlers_use_cached_responses_before_database() {
+        let dataflow = sample_dataflow();
+        let dimension = sample_dimension();
+        let codelist = sample_codelist();
+        let dataflow_id = dataflow.id.clone();
+        let dimension_id = dimension.id.clone();
+        let state = test_state(HashMap::from([
+            (
+                "api:dataflows:list:source=-:frequency=-".to_string(),
+                serde_json::to_string(&DataflowsResponse {
+                    dataflows: vec![dataflow.clone()],
+                })
+                .unwrap(),
+            ),
+            (
+                format!("api:dataflows:get:{dataflow_id}"),
+                serde_json::to_string(&DataflowDetailResponse {
+                    dataflow,
+                    dimensions: vec![dimension],
+                })
+                .unwrap(),
+            ),
+            (
+                format!("api:dataflows:codelist:{dataflow_id}:{dimension_id}"),
+                serde_json::to_string(&DataflowCodelistResponse {
+                    dataflow_id: dataflow_id.clone(),
+                    dimension_id: dimension_id.clone(),
+                    codelist,
+                })
+                .unwrap(),
+            ),
+        ]));
+
+        let response = list_dataflows(State(state.clone()), Uri::from_static("/v1/dataflows"))
+            .await
+            .expect("cached list");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            CATALOG_CACHE_CONTROL
+        );
+
+        let response = get_dataflow(State(state.clone()), Path(dataflow_id.to_string()))
+            .await
+            .expect("cached dataflow");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = get_dataflow_codelist(
+            State(state),
+            Path((dataflow_id.to_string(), dimension_id.to_string())),
+        )
+        .await
+        .expect("cached codelist");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn catalog_handlers_fall_through_to_database_on_cache_miss() {
+        let state = test_state(HashMap::new());
+
+        assert!(
+            list_dataflows(State(state.clone()), Uri::from_static("/v1/dataflows"))
+                .await
+                .is_err()
+        );
+        assert!(
+            get_dataflow(State(state.clone()), Path("abs.cpi".into()))
+                .await
+                .is_err()
+        );
+        assert!(
+            get_dataflow_codelist(State(state), Path(("abs.cpi".into(), "region".into())))
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn parses_filters_and_rejects_unsupported_frequency() {
@@ -469,6 +567,9 @@ mod tests {
 
         let err = parse_dataflows_query(Some("frequency=hourly")).unwrap_err();
         assert!(err.to_string().contains("frequency"));
+
+        let err = parse_dataflows_query(Some("source=bad%00source")).unwrap_err();
+        assert!(err.to_string().contains("source"));
     }
 
     #[test]
@@ -482,5 +583,158 @@ mod tests {
             list_cache_key(&query),
             "api:dataflows:list:source=abs:frequency=quarterly"
         );
+
+        assert_eq!(
+            list_cache_key(&DataflowsQuery {
+                source: None,
+                frequency: None,
+            }),
+            "api:dataflows:list:source=-:frequency=-"
+        );
+    }
+
+    #[test]
+    fn frequency_labels_roundtrip_for_all_public_values() {
+        for (label, expected) in [
+            ("daily", Frequency::Daily),
+            ("weekly", Frequency::Weekly),
+            ("monthly", Frequency::Monthly),
+            ("quarterly", Frequency::Quarterly),
+            ("annual", Frequency::Annual),
+            ("irregular", Frequency::Irregular),
+        ] {
+            let frequency = parse_frequency(label).expect("parse frequency");
+            assert_eq!(frequency, expected);
+            assert_eq!(frequency_as_str(frequency), label);
+            assert_eq!(
+                parse_db_frequency(label).expect("parse db frequency"),
+                expected
+            );
+        }
+
+        assert!(matches!(
+            parse_db_frequency("hourly"),
+            Err(ApiError::Internal)
+        ));
+    }
+
+    #[test]
+    fn license_labels_map_to_domain_variants() {
+        assert_eq!(parse_license("CC-BY-4.0"), License::CcBy40);
+        assert_eq!(parse_license("CC-BY-ND-4.0"), License::CcByNd40);
+        assert_eq!(parse_license("CC-BY-SA-4.0"), License::CcBySa40);
+        assert_eq!(parse_license("public-domain"), License::PublicDomain);
+        assert_eq!(
+            parse_license("custom"),
+            License::Other("custom".to_string())
+        );
+    }
+
+    fn sample_dataflow() -> Dataflow {
+        Dataflow {
+            id: DataflowId::new("abs.cpi").unwrap(),
+            source_id: SourceId::new("abs").unwrap(),
+            name: "Consumer Price Index".into(),
+            description: Some("Quarterly CPI.".into()),
+            dimensions: vec![DimensionId::new("region").unwrap()],
+            measures: vec![MeasureId::new("index").unwrap()],
+            frequency: Frequency::Quarterly,
+            license: License::CcBy40,
+            attribution: "Source: Australian Bureau of Statistics".into(),
+            source_url: "https://www.abs.gov.au/".into(),
+        }
+    }
+
+    fn sample_dimension() -> Dimension {
+        Dimension {
+            id: DimensionId::new("region").unwrap(),
+            name: "Region".into(),
+            description: None,
+            codelist_id: CodelistId::new("CL_REGION").unwrap(),
+            position: 0,
+        }
+    }
+
+    fn sample_codelist() -> Codelist {
+        let codelist_id = CodelistId::new("CL_REGION").unwrap();
+        Codelist {
+            id: codelist_id.clone(),
+            name: "Regions".into(),
+            description: None,
+            codes: vec![Code {
+                id: CodeId::new("AUS").unwrap(),
+                codelist_id,
+                name: "Australia".into(),
+                description: None,
+                parent_id: None,
+            }],
+        }
+    }
+
+    fn test_state(values: HashMap<String, String>) -> AppState {
+        AppState::new(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://postgres:postgres@localhost/unused")
+                .expect("lazy pool"),
+            Arc::new(CacheClient::from_backend(MapBackend {
+                values: Arc::new(Mutex::new(values)),
+            })),
+            Arc::new(AppConfig {
+                http: HttpConfig::default(),
+                database: DatabaseConfig {
+                    url: "postgres://postgres:postgres@localhost/unused".into(),
+                },
+                cache: CacheConfig {
+                    url: "redis://localhost:6379".into(),
+                },
+                telemetry: TelemetryConfig::default(),
+                rate_limits: RateLimitConfig::default(),
+            }),
+            Arc::new(Telemetry::disabled()),
+            CancellationToken::new(),
+        )
+    }
+
+    #[derive(Debug)]
+    struct MapBackend {
+        values: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CacheBackend for MapBackend {
+        async fn get(&self, key: &str) -> Result<Option<String>, CacheError> {
+            Ok(self.values.lock().expect("cache lock").get(key).cloned())
+        }
+
+        async fn set(&self, key: &str, value: String, _ttl: Duration) -> Result<(), CacheError> {
+            self.values
+                .lock()
+                .expect("cache lock")
+                .insert(key.to_owned(), value);
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> Result<bool, CacheError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("cache lock")
+                .remove(key)
+                .is_some())
+        }
+
+        async fn take_token_bucket(
+            &self,
+            _key: &str,
+            _config: TokenBucketConfig,
+            _requested: u32,
+            _now_ms: u64,
+        ) -> Result<RateLimitDecision, CacheError> {
+            Ok(RateLimitDecision {
+                allowed: true,
+                remaining: 1,
+                retry_after: Duration::ZERO,
+            })
+        }
     }
 }

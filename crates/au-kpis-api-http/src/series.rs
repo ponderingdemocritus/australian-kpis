@@ -294,6 +294,8 @@ fn invalid_db_id(err: au_kpis_domain::ids::IdError) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone as _;
+
     use super::*;
 
     #[test]
@@ -303,5 +305,69 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("series_key"));
+    }
+
+    #[test]
+    fn series_lookup_revision_metadata_tracks_original_and_revised_rows() {
+        let series = example_series(None);
+        let empty = series_lookup_from_parts(series.clone(), None);
+        assert_eq!(empty.revision, None);
+
+        let original = series_lookup_from_parts(series.clone(), Some(example_observation(0)));
+        let original_revision = original.revision.expect("revision metadata");
+        assert_eq!(original_revision.revision_no, 0);
+        assert!(!original_revision.is_revision);
+
+        let revised = series_lookup_from_parts(series, Some(example_observation(2)));
+        let revised_revision = revised.revision.expect("revision metadata");
+        assert_eq!(revised_revision.revision_no, 2);
+        assert!(revised_revision.is_revision);
+    }
+
+    #[test]
+    fn series_parsers_reject_invalid_database_values() {
+        assert!(parse_time_precision("day").is_ok());
+        assert!(parse_observation_status("normal").is_ok());
+        assert!(parse_time_precision("fortnight").is_err());
+        assert!(parse_observation_status("withdrawn").is_err());
+        assert!(series_key_from_bytes(vec![0; SHA256_BYTES]).is_ok());
+        assert!(artifact_id_from_bytes(vec![0; SHA256_BYTES]).is_ok());
+        assert!(digest_from_bytes(vec![0; SHA256_BYTES - 1]).is_err());
+        assert!(dataflow_id_from_str("bad\0id".into()).is_err());
+        assert!(measure_id_from_str("bad\0id".into()).is_err());
+    }
+
+    fn example_series(last_observed: Option<DateTime<Utc>>) -> Series {
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let measure_id = MeasureId::new("index").unwrap();
+        let dimensions = BTreeMap::from([(
+            DimensionId::new("region").unwrap(),
+            CodeId::new("AUS").unwrap(),
+        )]);
+        Series {
+            series_key: SeriesKey::derive(&dataflow_id, &measure_id, [("region", "AUS")]),
+            dataflow_id,
+            measure_id,
+            dimensions,
+            unit: "index".into(),
+            first_observed: None,
+            last_observed,
+            active: true,
+        }
+    }
+
+    fn example_observation(revision_no: u32) -> Observation {
+        let time = Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0).unwrap();
+        Observation {
+            series_key: example_series(Some(time)).series_key,
+            time,
+            time_precision: TimePrecision::Quarter,
+            value: Some(120.0),
+            status: ObservationStatus::Normal,
+            revision_no,
+            attributes: BTreeMap::new(),
+            ingested_at: time,
+            source_artifact_id: ArtifactId::of_content(b"series-source"),
+        }
     }
 }
