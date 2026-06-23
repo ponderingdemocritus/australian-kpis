@@ -1491,4 +1491,25 @@ mod tests {
             .await
             .expect("successful half-open probe should close the circuit");
     }
+
+    #[tokio::test]
+    async fn circuit_breaker_reopens_after_half_open_failure() {
+        let breaker = CircuitBreaker::new(CircuitBreakerConfig {
+            min_samples: 1,
+            failure_ratio: 0.20,
+            open_for: Duration::from_millis(5),
+        });
+
+        breaker.record_failure().await;
+        assert!(breaker.before_request().await.is_err());
+
+        sleep(Duration::from_millis(6)).await;
+        breaker
+            .before_request()
+            .await
+            .expect("cooldown should allow a half-open probe");
+        breaker.record_failure().await;
+
+        assert!(breaker.before_request().await.is_err());
+    }
 }

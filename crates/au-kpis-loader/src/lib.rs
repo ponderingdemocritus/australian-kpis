@@ -778,11 +778,8 @@ fn dedupe_observations_by_series_time(batch: &[LoadItem]) -> Vec<&LoadItem> {
         let key = (item.observation.series_key, item.observation.time);
         match rows.entry(key) {
             std::collections::btree_map::Entry::Occupied(mut entry) => {
-                let (previous_index, previous) = entry.get();
-                if item.observation.revision_no > previous.observation.revision_no
-                    || (item.observation.revision_no == previous.observation.revision_no
-                        && index > *previous_index)
-                {
+                let (_, previous) = entry.get();
+                if item.observation.revision_no >= previous.observation.revision_no {
                     entry.insert((index, item));
                 }
             }
@@ -1394,6 +1391,177 @@ mod tests {
         let deduped = dedupe_observations_by_series_time(&ties);
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].observation.value, Some(105.0));
+    }
+
+    #[test]
+    fn missing_reference_formatter_reports_all_missing_dependencies() {
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"missing reference fixture");
+        let item = test_item(
+            &descriptor,
+            artifact_id,
+            chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            0,
+            100.0,
+        );
+        let audited = vec![LoadItemAudit::from(item)];
+
+        let missing: Vec<_> = missing_references(
+            &audited,
+            vec![
+                (0, false, false, false),
+                (2, false, false, false),
+                (1, true, true, true),
+                (1, false, false, false),
+            ],
+        )
+        .collect();
+
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].0, 0);
+        assert_eq!(
+            missing[0].1,
+            vec![
+                "dataflow `abs.cpi`".to_string(),
+                "measure `index`".to_string(),
+                format!("artifact `{artifact_id}`"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_reference_load_skips_database_queries() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused/unused")
+            .expect("lazy pool");
+
+        let rows = load_reference_rows(&pool, &[])
+            .await
+            .expect("empty reference check");
+
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn validation_helpers_reject_zero_limits_and_key_mismatch() {
+        assert_eq!(
+            validate_options(LoadOptions {
+                max_rows: 0,
+                max_bytes: 1,
+            })
+            .unwrap_err()
+            .to_string(),
+            "loader validation: max_rows must be greater than 0"
+        );
+        assert_eq!(
+            validate_options(LoadOptions {
+                max_rows: 1,
+                max_bytes: 0,
+            })
+            .unwrap_err()
+            .to_string(),
+            "loader validation: max_bytes must be greater than 0"
+        );
+        assert!(
+            validate_options(LoadOptions {
+                max_rows: 1,
+                max_bytes: 1,
+            })
+            .is_ok()
+        );
+
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"observation key mismatch");
+        let mut item = test_item(
+            &descriptor,
+            artifact_id,
+            chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            0,
+            100.0,
+        );
+        item.observation.series_key =
+            legacy_series_key_without_measure(&descriptor.dataflow_id, &descriptor.dimensions);
+
+        let err = validate_item(&item).expect_err("observation key mismatch should fail");
+        assert!(err.contains("observation series key"), "{err}");
+
+        let valid = test_item(
+            &descriptor,
+            artifact_id,
+            chrono::Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap(),
+            0,
+            101.0,
+        );
+        assert!(validate_item(&valid).is_ok());
+    }
+
+    #[test]
+    fn batch_helpers_cover_empty_rows_and_byte_limits() {
+        let options = LoadOptions {
+            max_rows: 2,
+            max_bytes: 10,
+        };
+
+        assert!(!should_flush_load_batch(0, 11, 1, options));
+        assert!(!should_flush_load_batch(1, 4, 5, options));
+        assert!(should_flush_load_batch(2, 1, 1, options));
+        assert!(should_flush_load_batch(1, 10, 1, options));
+        assert!(!load_batch_boundary_reached(1, 9, options));
+        assert!(load_batch_boundary_reached(2, 1, options));
+        assert!(load_batch_boundary_reached(1, 10, options));
+    }
+
+    #[test]
+    fn duplicate_detection_and_dedup_keep_non_duplicate_rows() {
+        let descriptor = test_descriptor();
+        let artifact_id = ArtifactId::of_content(b"dedupe branch fixture");
+        let first_time = chrono::Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
+        let second_time = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap();
+        let distinct = vec![
+            test_item(&descriptor, artifact_id, first_time, 1, 101.0),
+            test_item(&descriptor, artifact_id, second_time, 0, 100.0),
+        ];
+        assert!(!has_duplicate_observation_times(&distinct));
+        assert_eq!(dedupe_observations_by_series_time(&distinct).len(), 2);
+
+        let duplicates = vec![
+            test_item(&descriptor, artifact_id, first_time, 2, 102.0),
+            test_item(&descriptor, artifact_id, first_time, 1, 101.0),
+        ];
+        assert!(has_duplicate_observation_times(&duplicates));
+        let deduped = dedupe_observations_by_series_time(&duplicates);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].observation.value, Some(102.0));
+    }
+
+    #[test]
+    fn row_context_merge_handles_absent_objects_and_scalars() {
+        let base = serde_json::json!({"artifact": "a1"});
+        assert_eq!(merge_row_context(base.clone(), None), base);
+
+        assert_eq!(
+            merge_row_context(base.clone(), Some(serde_json::json!({"row": 7}))),
+            serde_json::json!({"artifact": "a1", "row": 7})
+        );
+        assert_eq!(
+            merge_row_context(base, Some(serde_json::json!("line 7"))),
+            serde_json::json!({"artifact": "a1", "audit_context": "line 7"})
+        );
+        assert_eq!(
+            merge_row_context(
+                serde_json::json!("base"),
+                Some(serde_json::json!({"row": 7}))
+            ),
+            serde_json::json!({"row": 7})
+        );
+    }
+
+    #[test]
+    fn copy_field_helpers_escape_delimiters_and_preserve_nulls() {
+        let mut payload = String::new();
+        push_copy_fields(&mut payload, ["a\tb".into(), "\\N".into(), "c\\d\n".into()]);
+
+        assert_eq!(payload, "a\\tb\t\\N\tc\\\\d\\n\n");
     }
 
     fn test_descriptor() -> SeriesDescriptor {

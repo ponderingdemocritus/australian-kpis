@@ -310,7 +310,7 @@ fn normalized_value(
     let Some(raw_value) = raw_value else {
         return Ok(None);
     };
-    if !status.can_score() || status.is_visible_unscored() {
+    if !status.can_score() {
         return Ok(None);
     }
     let unit_value = normalize_unit_interval(indicator, raw_value)?;
@@ -542,9 +542,19 @@ mod tests {
         IndicatorObservation::resolved(id, value)
     }
 
+    fn assert_invalid_config_contains(config: &ScorecardConfig, expected: &str) {
+        let err = validate_config(config).expect_err("config should fail validation");
+        assert!(err.to_string().contains(expected), "{err}");
+    }
+
     #[test]
     fn checked_in_aps_config_loads_and_validates() {
         let config = load_aps_v1_config().expect("load APS v1 config");
+        let indicators: BTreeMap<&str, &IndicatorConfig> = config
+            .indicators
+            .iter()
+            .map(|indicator| (indicator.indicator_id.as_str(), indicator))
+            .collect();
 
         assert_eq!(config.id, "aps");
         assert_eq!(config.version, "aps.v1");
@@ -554,158 +564,192 @@ mod tests {
                 .iter()
                 .any(|indicator| indicator.coverage_status == CoverageStatus::VisibleUnscored)
         );
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "housing.commencements"
-                && indicator.source_dataflow_id == "abs.building_activity"
-                && indicator.measure_id == "dwellings_commenced"
-                && indicator
-                    .dimension_selector
-                    .get("region")
-                    .map(String::as_str)
-                    == Some("AUS")
-                && indicator
-                    .dimension_selector
-                    .get("measure")
-                    .map(String::as_str)
-                    == Some("dwellings_commenced")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "construction.completion-time"
-                && indicator.source_dataflow_id == "abs.dwelling_completion_times"
-                && indicator.measure_id == "average_completion_months"
-                && indicator
-                    .dimension_selector
-                    .get("region")
-                    .map(String::as_str)
-                    == Some("AUS")
-                && indicator
-                    .dimension_selector
-                    .get("dwelling_type")
-                    .map(String::as_str)
-                    == Some("apartments")
-                && indicator
-                    .dimension_selector
-                    .get("measure")
-                    .map(String::as_str)
-                    == Some("average_completion_months")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "energy.price"
-                && indicator.source_dataflow_id == "aemo.dispatch"
-                && indicator.measure_id == "value"
-                && indicator
-                    .dimension_selector
-                    .get("region")
-                    .map(String::as_str)
-                    == Some("NSW1")
-                && indicator
-                    .dimension_selector
-                    .get("metric")
-                    .map(String::as_str)
-                    == Some("regional_reference_price")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "energy.renewable-generation"
-                && indicator.source_dataflow_id == "aemo.generation_mix"
-                && indicator.measure_id == "generation_mw"
-                && indicator
-                    .dimension_selector
-                    .get("fuel_type")
-                    .map(String::as_str)
-                    == Some("wind")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "energy.dispatchable-capacity"
-                && indicator.source_dataflow_id == "aemo.dispatchability_capacity"
-                && indicator.measure_id == "value"
-                && indicator
-                    .dimension_selector
-                    .get("metric")
-                    .map(String::as_str)
-                    == Some("dispatchable_capacity")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "ai.adoption"
-                && indicator.source_dataflow_id == "naic.ai_adoption_tracker"
-                && indicator.measure_id == "adoption_rate_pct"
-                && indicator.confidence == Confidence::Low
-                && indicator
-                    .dimension_selector
-                    .get("segment")
-                    .map(String::as_str)
-                    == Some("all")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "ai.rd"
-                && indicator.source_dataflow_id == "abs.ai_rd"
-                && indicator.measure_id == "value"
-                && indicator
-                    .dimension_selector
-                    .get("metric")
-                    .map(String::as_str)
-                    == Some("ai_rd_spend_m")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "ai.talent"
-                && indicator.source_dataflow_id == "home_affairs.skillselect_talent_proxy"
-                && indicator.measure_id == "value"
-                && indicator.confidence == Confidence::Low
-                && indicator
-                    .dimension_selector
-                    .get("occupation_group")
-                    .map(String::as_str)
-                    == Some("ai_related")
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "planning.nsw-da-processing"
-                && indicator.source_dataflow_id == "state_planning.nsw_da_processing"
-                && indicator.measure_id == "value"
-                && indicator
-                    .dimension_selector
-                    .get("jurisdiction")
-                    .map(String::as_str)
-                    == Some("NSW")
-                && indicator
-                    .dimension_selector
-                    .get("metric")
-                    .map(String::as_str)
-                    == Some("median_assessment_days")
-                && indicator.direction == Direction::LowerIsBetter
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "planning.vic-permit-activity"
-                && indicator.source_dataflow_id == "state_planning.vic_permit_activity"
-                && indicator.measure_id == "value"
-                && indicator
-                    .dimension_selector
-                    .get("jurisdiction")
-                    .map(String::as_str)
-                    == Some("VIC")
-                && indicator
-                    .dimension_selector
-                    .get("metric")
-                    .map(String::as_str)
-                    == Some("median_decision_days")
-                && indicator.direction == Direction::LowerIsBetter
-        }));
-        let oversight = config
-            .indicators
-            .iter()
-            .find(|indicator| indicator.indicator_id == "oversight.reviewed-strength")
-            .expect("oversight curated input");
+        let housing = indicators["housing.commencements"];
+        assert_eq!(housing.source_dataflow_id, "abs.building_activity");
+        assert_eq!(housing.measure_id, "dwellings_commenced");
+        assert_eq!(
+            housing.dimension_selector.get("region").map(String::as_str),
+            Some("AUS")
+        );
+        assert_eq!(
+            housing
+                .dimension_selector
+                .get("measure")
+                .map(String::as_str),
+            Some("dwellings_commenced")
+        );
+
+        let completion_time = indicators["construction.completion-time"];
+        assert_eq!(
+            completion_time.source_dataflow_id,
+            "abs.dwelling_completion_times"
+        );
+        assert_eq!(completion_time.measure_id, "average_completion_months");
+        assert_eq!(
+            completion_time
+                .dimension_selector
+                .get("region")
+                .map(String::as_str),
+            Some("AUS")
+        );
+        assert_eq!(
+            completion_time
+                .dimension_selector
+                .get("dwelling_type")
+                .map(String::as_str),
+            Some("apartments")
+        );
+        assert_eq!(
+            completion_time
+                .dimension_selector
+                .get("measure")
+                .map(String::as_str),
+            Some("average_completion_months")
+        );
+
+        let energy_price = indicators["energy.price"];
+        assert_eq!(energy_price.source_dataflow_id, "aemo.dispatch");
+        assert_eq!(energy_price.measure_id, "value");
+        assert_eq!(
+            energy_price
+                .dimension_selector
+                .get("region")
+                .map(String::as_str),
+            Some("NSW1")
+        );
+        assert_eq!(
+            energy_price
+                .dimension_selector
+                .get("metric")
+                .map(String::as_str),
+            Some("regional_reference_price")
+        );
+
+        let renewable_generation = indicators["energy.renewable-generation"];
+        assert_eq!(
+            renewable_generation.source_dataflow_id,
+            "aemo.generation_mix"
+        );
+        assert_eq!(renewable_generation.measure_id, "generation_mw");
+        assert_eq!(
+            renewable_generation
+                .dimension_selector
+                .get("fuel_type")
+                .map(String::as_str),
+            Some("wind")
+        );
+
+        let dispatchable_capacity = indicators["energy.dispatchable-capacity"];
+        assert_eq!(
+            dispatchable_capacity.source_dataflow_id,
+            "aemo.dispatchability_capacity"
+        );
+        assert_eq!(dispatchable_capacity.measure_id, "value");
+        assert_eq!(
+            dispatchable_capacity
+                .dimension_selector
+                .get("metric")
+                .map(String::as_str),
+            Some("dispatchable_capacity")
+        );
+
+        let ai_adoption = indicators["ai.adoption"];
+        assert_eq!(ai_adoption.source_dataflow_id, "naic.ai_adoption_tracker");
+        assert_eq!(ai_adoption.measure_id, "adoption_rate_pct");
+        assert_eq!(ai_adoption.confidence, Confidence::Low);
+        assert_eq!(
+            ai_adoption
+                .dimension_selector
+                .get("segment")
+                .map(String::as_str),
+            Some("all")
+        );
+
+        let ai_rd = indicators["ai.rd"];
+        assert_eq!(ai_rd.source_dataflow_id, "abs.ai_rd");
+        assert_eq!(ai_rd.measure_id, "value");
+        assert_eq!(
+            ai_rd.dimension_selector.get("metric").map(String::as_str),
+            Some("ai_rd_spend_m")
+        );
+
+        let ai_talent = indicators["ai.talent"];
+        assert_eq!(
+            ai_talent.source_dataflow_id,
+            "home_affairs.skillselect_talent_proxy"
+        );
+        assert_eq!(ai_talent.measure_id, "value");
+        assert_eq!(ai_talent.confidence, Confidence::Low);
+        assert_eq!(
+            ai_talent
+                .dimension_selector
+                .get("occupation_group")
+                .map(String::as_str),
+            Some("ai_related")
+        );
+
+        let nsw_planning = indicators["planning.nsw-da-processing"];
+        assert_eq!(
+            nsw_planning.source_dataflow_id,
+            "state_planning.nsw_da_processing"
+        );
+        assert_eq!(nsw_planning.measure_id, "value");
+        assert_eq!(
+            nsw_planning
+                .dimension_selector
+                .get("jurisdiction")
+                .map(String::as_str),
+            Some("NSW")
+        );
+        assert_eq!(
+            nsw_planning
+                .dimension_selector
+                .get("metric")
+                .map(String::as_str),
+            Some("median_assessment_days")
+        );
+        assert_eq!(nsw_planning.direction, Direction::LowerIsBetter);
+
+        let vic_planning = indicators["planning.vic-permit-activity"];
+        assert_eq!(
+            vic_planning.source_dataflow_id,
+            "state_planning.vic_permit_activity"
+        );
+        assert_eq!(vic_planning.measure_id, "value");
+        assert_eq!(
+            vic_planning
+                .dimension_selector
+                .get("jurisdiction")
+                .map(String::as_str),
+            Some("VIC")
+        );
+        assert_eq!(
+            vic_planning
+                .dimension_selector
+                .get("metric")
+                .map(String::as_str),
+            Some("median_decision_days")
+        );
+        assert_eq!(vic_planning.direction, Direction::LowerIsBetter);
+
+        let oversight = indicators["oversight.reviewed-strength"];
         assert_eq!(oversight.coverage_status, CoverageStatus::ManualPending);
         assert!(oversight.provenance.retrieved_at.is_some());
         assert!(oversight.provenance.reviewed_by.is_some());
         assert!(oversight.provenance.reviewed_at.is_some());
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "compute.datacentre-capacity"
-                && indicator.source_dataflow_id == "compute.au_datacentre_capacity_mw"
-                && indicator.confidence == Confidence::Low
-        }));
-        assert!(config.indicators.iter().any(|indicator| {
-            indicator.indicator_id == "surveillance.intensity"
-                && indicator.coverage_status == CoverageStatus::VisibleUnscored
-        }));
+
+        let compute = indicators["compute.datacentre-capacity"];
+        assert_eq!(
+            compute.source_dataflow_id,
+            "compute.au_datacentre_capacity_mw"
+        );
+        assert_eq!(compute.confidence, Confidence::Low);
+
+        let surveillance = indicators["surveillance.intensity"];
+        assert_eq!(
+            surveillance.coverage_status,
+            CoverageStatus::VisibleUnscored
+        );
     }
 
     #[test]
@@ -850,24 +894,19 @@ mod tests {
     fn invalid_configs_return_actionable_errors_without_panicking() {
         let mut duplicate = test_config();
         duplicate.indicators[1].indicator_id = duplicate.indicators[0].indicator_id.clone();
-        let err = validate_config(&duplicate).expect_err("duplicate id should fail");
-        assert!(err.to_string().contains("duplicate indicator id"));
+        assert_invalid_config_contains(&duplicate, "duplicate indicator id");
 
         let mut bad_weight = test_config();
         bad_weight.indicators[0].weight = 0.0;
-        let err = validate_config(&bad_weight).expect_err("zero scored weight should fail");
-        assert!(err.to_string().contains("positive finite weight"));
+        assert_invalid_config_contains(&bad_weight, "positive finite weight");
 
         let mut bad_normalization = test_config();
         bad_normalization.indicators[0].normalization.best = -1.0;
-        let err = validate_config(&bad_normalization)
-            .expect_err("direction/reference mismatch should fail");
-        assert!(err.to_string().contains("normalization references"));
+        assert_invalid_config_contains(&bad_normalization, "normalization references");
 
         let mut missing_url = test_config();
         missing_url.indicators[0].provenance.source_url.clear();
-        let err = validate_config(&missing_url).expect_err("missing URL should fail");
-        assert!(err.to_string().contains("provenance.source_url"));
+        assert_invalid_config_contains(&missing_url, "provenance.source_url");
 
         let mut missing_review = test_config();
         missing_review.indicators[0].source_dataflow_id = "curated.oversight_strength".into();
@@ -875,9 +914,148 @@ mod tests {
         missing_review.indicators[0].provenance.retrieved_at = None;
         missing_review.indicators[0].provenance.reviewed_by = None;
         missing_review.indicators[0].provenance.reviewed_at = None;
-        let err = validate_config(&missing_review)
-            .expect_err("curated input without review metadata should fail");
-        assert!(err.to_string().contains("review metadata"), "{err}");
+        assert_invalid_config_contains(&missing_review, "review metadata");
+    }
+
+    #[test]
+    fn config_validation_rejects_empty_unscored_and_nonfinite_cases() {
+        let mut empty = test_config();
+        empty.indicators.clear();
+        assert_invalid_config_contains(&empty, "at least one indicator");
+
+        let mut missing_axis_weight = test_config();
+        missing_axis_weight
+            .indicators
+            .retain(|indicator| indicator.axis == Axis::Throughput);
+        assert_invalid_config_contains(&missing_axis_weight, "Orientation");
+
+        let mut negative_visible_weight = test_config();
+        negative_visible_weight.indicators[4].weight = -1.0;
+        assert_invalid_config_contains(&negative_visible_weight, "cannot have negative weight");
+
+        let mut infinite_weight = test_config();
+        infinite_weight.indicators[0].weight = f64::INFINITY;
+        assert_invalid_config_contains(&infinite_weight, "positive finite weight");
+
+        let mut nan_normalization = test_config();
+        nan_normalization.indicators[0].normalization.best = f64::NAN;
+        assert_invalid_config_contains(&nan_normalization, "must be finite");
+
+        let mut infinite_normalization = test_config();
+        infinite_normalization.indicators[0].normalization.worst = f64::INFINITY;
+        assert_invalid_config_contains(&infinite_normalization, "must be finite");
+    }
+
+    #[test]
+    fn scoring_rejects_unknown_and_nonfinite_observations() {
+        let config = test_config();
+        let err = score_aps_snapshot(
+            &config,
+            &[resolved("not.configured", 1.0)],
+            "2026-06-22",
+            None,
+        )
+        .expect_err("unknown runtime ids should fail");
+        assert!(err.to_string().contains("not.configured"), "{err}");
+
+        let err = score_aps_snapshot(
+            &config,
+            &[resolved("throughput.fast", f64::NAN)],
+            "2026-06-22",
+            None,
+        )
+        .expect_err("non-finite runtime values should fail");
+        assert!(
+            err.to_string().contains("raw value must be finite"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn stale_observations_score_and_carry_latest_period() {
+        let mut stale = resolved("throughput.fast", 90.0);
+        stale.coverage_status = CoverageStatus::Stale;
+        stale.latest_period = Some("2026-05".into());
+
+        let snapshot = score_aps_snapshot(
+            &test_config(),
+            &[
+                stale,
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                resolved("orientation.low_confidence", 75.0),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("stale inputs should still score");
+
+        assert_eq!(snapshot.latest_period.as_deref(), Some("2026-05"));
+        assert!(snapshot.score > 0.0);
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "throughput.fast")
+                .expect("stale contribution")
+                .coverage_status,
+            CoverageStatus::Stale
+        );
+    }
+
+    #[test]
+    fn low_coverage_sets_low_confidence_without_dropping_rows() {
+        let snapshot = score_aps_snapshot(
+            &test_config(),
+            &[resolved("throughput.fast", 50.0)],
+            "2026-06-22",
+            None,
+        )
+        .expect("low coverage snapshot");
+
+        assert_eq!(snapshot.coverage_pct, 25.0);
+        assert_eq!(snapshot.confidence, Confidence::Low);
+        assert_eq!(snapshot.contributions.len(), test_config().indicators.len());
+    }
+
+    #[test]
+    fn unscoreable_runtime_status_keeps_raw_value_without_normalizing() {
+        let mut manual_pending = resolved("throughput.fast", 90.0);
+        manual_pending.coverage_status = CoverageStatus::ManualPending;
+        manual_pending.notes = Some("awaiting review".into());
+
+        let snapshot = score_aps_snapshot(
+            &test_config(),
+            &[
+                manual_pending,
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                resolved("orientation.low_confidence", 75.0),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("manual pending runtime input");
+
+        let pending = snapshot
+            .contributions
+            .iter()
+            .find(|row| row.indicator_id == "throughput.fast")
+            .expect("pending contribution");
+        assert_eq!(pending.raw_value, Some(90.0));
+        assert_eq!(pending.normalized_value, None);
+        assert_eq!(pending.notes.as_deref(), Some("awaiting review"));
+    }
+
+    #[test]
+    fn scoring_helpers_handle_empty_and_clamped_totals() {
+        let empty = AxisTotals::empty();
+        assert_eq!(axis_point_score(empty, Axis::Throughput), 0.0);
+        assert_eq!(axis_point_score(empty, Axis::Orientation), 0.0);
+        assert_eq!(axis_band_score(empty, Axis::Throughput, true), 0.0);
+        assert_eq!(axis_band_score(empty, Axis::Orientation, false), 0.0);
+        assert_eq!(coverage_pct(0.0, 0.0), 100.0);
+        assert_eq!(coverage_pct(2.0, 1.0), 100.0);
     }
 
     proptest! {

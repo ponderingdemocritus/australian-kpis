@@ -310,7 +310,7 @@ mod tests {
             let err = load(None).expect_err("database.url has no default");
             let msg = err.to_string();
             assert!(
-                msg.contains("database") || msg.contains("url"),
+                msg.contains("database"),
                 "expected error to reference the missing path, got: {msg}"
             );
             match err {
@@ -328,7 +328,7 @@ mod tests {
             let err = load(None).expect_err("cache.url has no default");
             let msg = err.to_string();
             assert!(
-                msg.contains("cache") || msg.contains("url"),
+                msg.contains("cache"),
                 "expected error to reference the missing path, got: {msg}"
             );
             match err {
