@@ -193,6 +193,18 @@ oasdiff breaking openapi-main.json openapi.json    # must be empty
 
 **Lefthook** runs `cargo fmt --check`, `biome format --check`, `gitleaks protect`, and a >5 MB file block on every commit. Don't disable it.
 
+### Commit checklist
+
+Before creating any commit, tick this checklist locally or document why a box is not applicable:
+
+- [ ] Confirm the branch maps to one issue, or to an explicitly approved grouped PR scope.
+- [ ] Re-read the relevant `Spec.md` anchors and the issue's Pass requirements.
+- [ ] Verify every touched requirement is satisfied, or leave the PR in draft with the unmet boxes unticked.
+- [ ] Run the affected checks plus the § 6 pre-flight block where practical; record any checks blocked by local network, Docker, registry, or sandbox limits.
+- [ ] Regenerate committed artifacts when their source changed, including `openapi.json`, generated SDK files, fixtures, snapshots, or migrations.
+- [ ] Review `git diff` and `git status` for unrelated edits, secrets, production data, large files, and generated drift before staging.
+- [ ] For CI-follow-up fixes, complete the CI-fix checklist below before committing.
+
 ### CI-fix checklist before committing
 
 When committing a CI-only or CI-follow-up fix, tick this checklist locally or document what could not run:
