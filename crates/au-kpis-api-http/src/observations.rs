@@ -1895,6 +1895,79 @@ mod tests {
         assert!(sql.contains("ORDER BY o.time ASC, o.series_key ASC LIMIT"));
     }
 
+    #[test]
+    fn observation_query_builders_apply_optional_filters() {
+        let dataflow = DataflowId::new("abs.cpi").unwrap();
+        let measure = MeasureId::new("index").unwrap();
+        let cursor = ObservationCursor {
+            time: Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),
+            series_key: SeriesKey::derive(&dataflow, &measure, [("region", "AUS")]),
+        };
+        let encoded_cursor = encode_cursor(&cursor).unwrap();
+        let query = parse_observations_query(Some(&format!(
+            "dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01T00:00:00Z&until=2024-06-30T00:00:00Z&frequency=daily&cursor={encoded_cursor}&limit=10"
+        )))
+        .unwrap();
+
+        let mut observation_builder = QueryBuilder::<Postgres>::new("");
+        push_observation_select(&mut observation_builder, None);
+        push_observation_filters(&mut observation_builder, &query);
+        let observation_query = observation_builder.build();
+        let sql = observation_query.sql();
+        assert!(sql.contains("FROM observations_latest o"));
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("o.time >="));
+        assert!(sql.contains("o.time <="));
+        assert!(sql.contains("d.frequency ="));
+        assert!(sql.contains("(o.time, o.series_key) >"));
+
+        let mut candidate_builder =
+            QueryBuilder::<Postgres>::new("SELECT s.series_key FROM series s JOIN dataflows d");
+        push_candidate_series_filters(&mut candidate_builder, &query);
+        let candidate_query = candidate_builder.build();
+        let sql = candidate_query.sql();
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("d.frequency ="));
+
+        let mut fingerprint_builder =
+            QueryBuilder::<Postgres>::new("SELECT count(*) FROM series s JOIN dataflows d");
+        push_series_fingerprint_filters(&mut fingerprint_builder, &query);
+        let fingerprint_query = fingerprint_builder.build();
+        let sql = fingerprint_query.sql();
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("d.frequency ="));
+
+        let series = [CandidateSeries {
+            series_key: cursor.series_key,
+        }];
+        let mut latest_builder =
+            build_latest_observation_rows_query(&series, &query, Some(cursor), 22);
+        let latest_query = latest_builder.build();
+        let sql = latest_query.sql();
+        assert!(sql.contains("o.time >="));
+        assert!(sql.contains("o.time <="));
+        assert!(sql.contains("(o.time, o.series_key) >"));
+    }
+
+    #[test]
+    fn rollup_query_builder_uses_rollup_view_and_metadata() {
+        let query = parse_observations_query(Some(
+            "dataflow=abs.cpi&dimensions[region]=AUS&frequency=monthly&limit=10",
+        ))
+        .unwrap();
+
+        let mut builder = build_rollup_observation_rows_query(&query);
+        let built = builder.build();
+        let sql = built.sql();
+
+        assert!(sql.contains("'month'::text AS time_precision"));
+        assert!(sql.contains("'aggregate', 'avg'"));
+        assert!(sql.contains("'rollup_grain', 'monthly'"));
+        assert!(sql.contains("FROM observations_rollup_monthly o"));
+        assert!(sql.contains("s.dimensions @>"));
+        assert!(sql.contains("ORDER BY o.time ASC, o.series_key ASC LIMIT"));
+    }
+
     #[tokio::test]
     async fn parquet_writer_returns_promptly_when_response_receiver_closes_mid_stream() {
         let (tx, rx) = mpsc::channel(1);

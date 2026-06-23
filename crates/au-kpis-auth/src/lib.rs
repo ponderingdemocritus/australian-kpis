@@ -428,6 +428,7 @@ mod tests {
         for candidate in [
             "wrong_prefix",
             "auk_live_missing_separator",
+            "auk_live_missingseparator",
             "auk_live__secret",
             &format!("auk_live_{valid_id}_"),
             "auk_live_not-a-uuid_secret",
