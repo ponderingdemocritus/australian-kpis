@@ -586,8 +586,11 @@ pub fn parse_xls_bytes_for_fuzz(bytes: &[u8]) -> Result<usize, AdapterError> {
     };
     let provenance =
         release_url_provenance_for_parse(source_url).expect("static APRA URL has provenance");
-    parse_xls_workbook(bytes.to_vec(), artifact, provenance, fuzz_ingested_at())
-        .map(|rows| rows.len())
+    let plan = ApraParsePlan {
+        provenance,
+        dataflow: ApraDataflow::QuarterlyStatistics,
+    };
+    parse_xls_workbook(bytes.to_vec(), artifact, plan, fuzz_ingested_at()).map(|rows| rows.len())
 }
 
 #[cfg(feature = "fuzzing")]
@@ -1936,10 +1939,13 @@ mod tests {
             "../../../../tests/fixtures/calamine-shifted-zip-header.xlsx.hex"
         ));
         let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+        let plan = ApraParsePlan {
+            provenance,
+            dataflow: ApraDataflow::QuarterlyStatistics,
+        };
 
-        let parsed = std::panic::catch_unwind(|| {
-            parse_xls_workbook(bytes, artifact, provenance, ingested_at)
-        });
+        let parsed =
+            std::panic::catch_unwind(|| parse_xls_workbook(bytes, artifact, plan, ingested_at));
         assert!(parsed.is_ok(), "malformed XLSX should not panic");
         let err = parsed
             .expect("panic handled")
@@ -1958,10 +1964,13 @@ mod tests {
             "../../../../tests/fixtures/calamine-case-mismatched-worksheet-entry.xlsx.hex"
         ));
         let (artifact, provenance, ingested_at) = apra_fuzz_artifact(&bytes);
+        let plan = ApraParsePlan {
+            provenance,
+            dataflow: ApraDataflow::QuarterlyStatistics,
+        };
 
-        let parsed = std::panic::catch_unwind(|| {
-            parse_xls_workbook(bytes, artifact, provenance, ingested_at)
-        });
+        let parsed =
+            std::panic::catch_unwind(|| parse_xls_workbook(bytes, artifact, plan, ingested_at));
         assert!(parsed.is_ok(), "malformed XLSX should not panic");
         let err = parsed
             .expect("panic handled")
