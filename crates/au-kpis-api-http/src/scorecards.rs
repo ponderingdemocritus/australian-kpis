@@ -599,6 +599,17 @@ mod tests {
         )
         .await;
         assert!(ordered.is_err());
+
+        let open_ended = aps_history(
+            State(test_state()),
+            HeaderMap::new(),
+            Query(ScorecardHistoryQuery {
+                since: Some("2025-01-01".into()),
+                until: None,
+            }),
+        )
+        .await;
+        assert!(open_ended.is_err());
     }
 
     #[tokio::test]

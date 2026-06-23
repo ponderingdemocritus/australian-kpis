@@ -401,24 +401,24 @@ mod tests {
 
         let mut missing_name = valid.clone();
         missing_name.name = " ".into();
-        assert!(matches!(
-            validate_create_request(&missing_name),
-            Err(AuthError::Validation(message)) if message.contains("name")
-        ));
+        assert!(validation_message(validate_create_request(&missing_name)).contains("name"));
 
         let mut missing_tier = valid.clone();
         missing_tier.rate_limit_tier = "\t".into();
-        assert!(matches!(
-            validate_create_request(&missing_tier),
-            Err(AuthError::Validation(message)) if message.contains("rate_limit_tier")
-        ));
+        assert!(
+            validation_message(validate_create_request(&missing_tier)).contains("rate_limit_tier")
+        );
 
         let mut missing_actor = valid;
         missing_actor.actor.clear();
-        assert!(matches!(
-            validate_create_request(&missing_actor),
-            Err(AuthError::Validation(message)) if message.contains("actor")
-        ));
+        assert!(validation_message(validate_create_request(&missing_actor)).contains("actor"));
+    }
+
+    fn validation_message(result: Result<(), AuthError>) -> String {
+        match result {
+            Err(AuthError::Validation(message)) => message,
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 
     #[test]

@@ -2115,6 +2115,11 @@ mod tests {
             parse_observations_query(Some("dataflow=abs.cpi&dimensions=region")).unwrap_err();
         assert!(malformed_dimension.to_string().contains("dimension=value"));
 
+        let malformed_bracket_dimension =
+            parse_observations_query(Some("dataflow=abs.cpi&dimensions[region=AUS&limit=10"))
+                .unwrap();
+        assert!(malformed_bracket_dimension.dimensions.is_empty());
+
         let bad_frequency =
             parse_observations_query(Some("dataflow=abs.cpi&frequency=hourly")).unwrap_err();
         assert!(bad_frequency.to_string().contains("unsupported frequency"));

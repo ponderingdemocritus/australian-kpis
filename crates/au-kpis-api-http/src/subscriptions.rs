@@ -750,8 +750,8 @@ mod tests {
         ClaimedDelivery, CreateSubscriptionRequest, DeliveryOptions, FailureRecord,
         SubscriptionError, WebhookDeliveryEvent, chrono_backoff, delivery_payload,
         effective_max_attempts, generate_signing_secret, record_delivery_failure,
-        run_webhook_delivery_worker, sign_payload, validate_delivery_options,
-        validate_subscription_request,
+        run_webhook_delivery_worker, sign_payload, subscription_error_to_api_error,
+        validate_delivery_options, validate_subscription_request,
     };
 
     #[tokio::test]
@@ -884,6 +884,19 @@ mod tests {
             ),
             3
         );
+    }
+
+    #[test]
+    fn subscription_errors_map_to_api_error_variants() {
+        drop(subscription_error_to_api_error(
+            SubscriptionError::Validation("bad subscription".into()),
+        ));
+        drop(subscription_error_to_api_error(SubscriptionError::Db(
+            sqlx::Error::RowNotFound,
+        )));
+        drop(subscription_error_to_api_error(SubscriptionError::Json(
+            serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+        )));
     }
 
     #[test]

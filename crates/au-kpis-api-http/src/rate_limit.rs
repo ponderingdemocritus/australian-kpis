@@ -265,7 +265,7 @@ pub(crate) fn insert_rate_limit_error_headers(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, VecDeque},
+        collections::{BTreeMap, HashMap, VecDeque},
         fmt,
         sync::{Arc, Mutex},
         time::Duration,
@@ -283,6 +283,8 @@ mod tests {
         body::Body,
         http::{HeaderMap, HeaderName, HeaderValue, Request, header},
     };
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sha2::{Digest as _, Sha256};
     use sqlx::postgres::PgPoolOptions;
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
@@ -345,16 +347,11 @@ mod tests {
         assert_eq!(headers[&X_RATE_LIMIT_RESET], "3");
 
         let limited = outcome.into_rate_limited();
-        assert!(matches!(
-            limited,
-            ApiError::RateLimited {
-                retry_after,
-                limit: 10,
-                remaining: 7,
-                reset_after,
-            } if retry_after == Duration::from_millis(1500)
-                && reset_after == Duration::from_millis(1500)
-        ));
+        let (limit, remaining, retry_after, reset_after) = expect_rate_limited(limited);
+        assert_eq!(limit, 10);
+        assert_eq!(remaining, 7);
+        assert_eq!(retry_after, Duration::from_millis(1500));
+        assert_eq!(reset_after, Duration::from_millis(1500));
 
         headers.clear();
         insert_rate_limit_error_headers(
@@ -477,6 +474,52 @@ mod tests {
             HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 header"),
         );
         assert_eq!(verified_key(&state, &mut non_utf8).await.unwrap(), None);
+
+        let mut malformed = Request::builder().body(Body::empty()).unwrap();
+        malformed
+            .headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("not-a-key"));
+        assert_eq!(verified_key(&state, &mut malformed).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn verified_key_accepts_cached_valid_key_without_database() {
+        let id = Uuid::new_v4();
+        let plaintext = format!("auk_live_{}_secret", id.simple());
+        let cached = serde_json::json!({
+            "fingerprint": URL_SAFE_NO_PAD.encode(Sha256::digest(plaintext.as_bytes())),
+            "verified": {
+                "id": id,
+                "name": "client",
+                "scopes": ["observations:read"],
+                "rate_limit_tier": "free"
+            }
+        });
+        let state = state_with_rate_limits_and_cache(
+            RateLimitConfig::default(),
+            vec![],
+            HashMap::from([(
+                format!("auth:api-key:{id}"),
+                serde_json::to_string(&cached).unwrap(),
+            )]),
+        );
+        let mut request = Request::builder().body(Body::empty()).unwrap();
+        request
+            .headers_mut()
+            .insert("x-api-key", HeaderValue::from_str(&plaintext).unwrap());
+
+        let verified = verified_key(&state, &mut request)
+            .await
+            .unwrap()
+            .expect("cached key verifies");
+
+        assert_eq!(verified.id, id);
+        assert!(
+            request
+                .extensions()
+                .get::<au_kpis_auth::VerifiedApiKey>()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -500,15 +543,7 @@ mod tests {
         let err = check_request_limit(&state, None, Some(&verified))
             .await
             .expect_err("key bucket should deny");
-        let ApiError::RateLimited {
-            limit,
-            remaining,
-            retry_after,
-            reset_after,
-        } = err
-        else {
-            panic!("expected rate limit error");
-        };
+        let (limit, remaining, retry_after, reset_after) = expect_rate_limited(err);
         assert_eq!(limit, 120);
         assert_eq!(remaining, 0);
         assert_eq!(retry_after, Duration::from_secs(1));
@@ -548,9 +583,29 @@ mod tests {
         }
     }
 
+    fn expect_rate_limited(err: ApiError) -> (u32, u32, Duration, Duration) {
+        match err {
+            ApiError::RateLimited {
+                limit,
+                remaining,
+                retry_after,
+                reset_after,
+            } => (limit, remaining, retry_after, reset_after),
+            other => panic!("expected rate limit error, got {other:?}"),
+        }
+    }
+
     fn state_with_rate_limits(
         rate_limits: RateLimitConfig,
         decisions: Vec<RateLimitDecision>,
+    ) -> AppState {
+        state_with_rate_limits_and_cache(rate_limits, decisions, HashMap::new())
+    }
+
+    fn state_with_rate_limits_and_cache(
+        rate_limits: RateLimitConfig,
+        decisions: Vec<RateLimitDecision>,
+        values: HashMap<String, String>,
     ) -> AppState {
         let config = AppConfig {
             http: HttpConfig::default(),
@@ -567,7 +622,9 @@ mod tests {
             PgPoolOptions::new()
                 .connect_lazy("postgres://postgres:postgres@localhost/unused")
                 .expect("lazy pool"),
-            Arc::new(CacheClient::from_backend(DecisionBackend::new(decisions))),
+            Arc::new(CacheClient::from_backend(DecisionBackend::new(
+                decisions, values,
+            ))),
             Arc::new(config),
             Arc::new(Telemetry::disabled()),
             CancellationToken::new(),
@@ -577,20 +634,22 @@ mod tests {
     #[derive(Debug)]
     struct DecisionBackend {
         decisions: Mutex<VecDeque<RateLimitDecision>>,
+        values: Mutex<HashMap<String, String>>,
     }
 
     impl DecisionBackend {
-        fn new(decisions: Vec<RateLimitDecision>) -> Self {
+        fn new(decisions: Vec<RateLimitDecision>, values: HashMap<String, String>) -> Self {
             Self {
                 decisions: Mutex::new(decisions.into()),
+                values: Mutex::new(values),
             }
         }
     }
 
     #[async_trait::async_trait]
     impl CacheBackend for DecisionBackend {
-        async fn get(&self, _key: &str) -> Result<Option<String>, CacheError> {
-            Ok(None)
+        async fn get(&self, key: &str) -> Result<Option<String>, CacheError> {
+            Ok(self.values.lock().expect("values lock").get(key).cloned())
         }
 
         async fn set(&self, _key: &str, _value: String, _ttl: Duration) -> Result<(), CacheError> {
