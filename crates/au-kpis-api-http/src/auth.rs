@@ -119,6 +119,13 @@ mod tests {
             .await
             .expect_err("invalid key");
         assert!(matches!(invalid, ApiError::Unauthorized(_)));
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_static("not-a-key"));
+        let malformed = verify_api_key_header(&state, &headers)
+            .await
+            .expect_err("malformed key");
+        assert!(matches!(malformed, ApiError::Unauthorized(_)));
     }
 
     fn test_state() -> AppState {

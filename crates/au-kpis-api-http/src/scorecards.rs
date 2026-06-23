@@ -504,20 +504,34 @@ fn digest_from_bytes(bytes: Vec<u8>) -> Result<Sha256Digest, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+    use au_kpis_cache::{
+        CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig,
+    };
+    use au_kpis_config::{
+        AppConfig, CacheConfig, DatabaseConfig, HttpConfig, RateLimitConfig, TelemetryConfig,
+    };
     use au_kpis_domain::ids::{ArtifactId, Sha256Digest};
     use au_kpis_scorecard::{
         Axis, Confidence, CoverageStatus, Direction, IndicatorConfig, Normalization, Provenance,
     };
-    use axum::http::{HeaderMap, HeaderValue, header};
+    use au_kpis_telemetry::Telemetry;
+    use axum::{
+        extract::{Query, State},
+        http::{HeaderMap, HeaderValue, header},
+    };
     use chrono::{TimeZone as _, Utc};
+    use sqlx::postgres::PgPoolOptions;
+    use tokio_util::sync::CancellationToken;
 
     use super::{
-        ResolvedIndicatorRow, artifact_id_from_bytes, digest_from_bytes, format_snapshot_date,
-        if_none_match_fresh, is_stale_for_cadence, json_cache_response, max_lag_for_cadence,
-        parse_history_date, resolved_indicator_status, series_key_from_bytes,
+        ResolvedIndicatorRow, ScorecardHistoryQuery, aps_history, artifact_id_from_bytes,
+        digest_from_bytes, format_snapshot_date, if_none_match_fresh, is_stale_for_cadence,
+        json_cache_response, load_config, max_lag_for_cadence, parse_history_date, previous_score,
+        resolved_indicator_status, series_key_from_bytes,
     };
+    use crate::{AppState, error::ApiError};
 
     #[test]
     fn if_none_match_accepts_lists_and_wildcards() {
@@ -559,6 +573,53 @@ mod tests {
             err.to_string().contains("YYYY-MM-DD"),
             "unexpected error: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn history_bounds_validate_before_database_access() {
+        let reversed = aps_history(
+            State(test_state()),
+            HeaderMap::new(),
+            Query(ScorecardHistoryQuery {
+                since: Some("2025-02-01".into()),
+                until: Some("2025-01-01".into()),
+            }),
+        )
+        .await
+        .expect_err("reversed history bounds should be rejected");
+        assert!(matches!(reversed, ApiError::Validation(_)));
+
+        let ordered = aps_history(
+            State(test_state()),
+            HeaderMap::new(),
+            Query(ScorecardHistoryQuery {
+                since: Some("2025-01-01".into()),
+                until: Some("2025-02-01".into()),
+            }),
+        )
+        .await;
+        assert!(ordered.is_err());
+    }
+
+    #[tokio::test]
+    async fn previous_score_skips_database_when_latest_time_is_absent() {
+        let pool = lazy_pool();
+        let config = load_config().expect("scorecard config");
+
+        assert_eq!(
+            previous_score(&pool, &config, None)
+                .await
+                .expect("no latest snapshot skips lookup"),
+            None
+        );
+
+        let with_latest = previous_score(
+            &pool,
+            &config,
+            Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
+        )
+        .await;
+        assert!(with_latest.is_err());
     }
 
     #[test]
@@ -685,6 +746,64 @@ mod tests {
             latest_time,
             series_key: au_kpis_domain::ids::SeriesKey::from_digest(*artifact_id.digest()),
             source_artifact_id: artifact_id,
+        }
+    }
+
+    fn test_state() -> AppState {
+        AppState::new(
+            lazy_pool(),
+            Arc::new(CacheClient::from_backend(NoopBackend)),
+            Arc::new(AppConfig {
+                http: HttpConfig::default(),
+                database: DatabaseConfig {
+                    url: "postgres://postgres:postgres@localhost/unused".into(),
+                },
+                cache: CacheConfig {
+                    url: "redis://localhost:6379".into(),
+                },
+                telemetry: TelemetryConfig::default(),
+                rate_limits: RateLimitConfig::default(),
+            }),
+            Arc::new(Telemetry::disabled()),
+            CancellationToken::new(),
+        )
+    }
+
+    fn lazy_pool() -> sqlx::PgPool {
+        PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@localhost/unused")
+            .expect("lazy pool")
+    }
+
+    #[derive(Debug)]
+    struct NoopBackend;
+
+    #[async_trait::async_trait]
+    impl CacheBackend for NoopBackend {
+        async fn get(&self, _key: &str) -> Result<Option<String>, CacheError> {
+            Ok(None)
+        }
+
+        async fn set(&self, _key: &str, _value: String, _ttl: Duration) -> Result<(), CacheError> {
+            Ok(())
+        }
+
+        async fn delete(&self, _key: &str) -> Result<bool, CacheError> {
+            Ok(false)
+        }
+
+        async fn take_token_bucket(
+            &self,
+            _key: &str,
+            _config: TokenBucketConfig,
+            _requested: u32,
+            _now_ms: u64,
+        ) -> Result<RateLimitDecision, CacheError> {
+            Ok(RateLimitDecision {
+                allowed: true,
+                remaining: 1,
+                retry_after: Duration::ZERO,
+            })
         }
     }
 }

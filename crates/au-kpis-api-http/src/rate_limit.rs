@@ -279,7 +279,10 @@ mod tests {
         RateLimitTierConfig, TelemetryConfig,
     };
     use au_kpis_telemetry::Telemetry;
-    use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
+    use axum::{
+        body::Body,
+        http::{HeaderMap, HeaderName, HeaderValue, Request, header},
+    };
     use sqlx::postgres::PgPoolOptions;
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
@@ -289,7 +292,7 @@ mod tests {
     use super::{
         RateLimitOutcome, X_RATE_LIMIT_LIMIT, X_RATE_LIMIT_REMAINING, X_RATE_LIMIT_RESET,
         bucket_check, buckets_for_quota, check_request_limit, client_ip, duration_header_secs,
-        insert_rate_limit_error_headers, insert_rate_limit_headers, tier_config,
+        insert_rate_limit_error_headers, insert_rate_limit_headers, tier_config, verified_key,
     };
 
     #[test]
@@ -446,6 +449,34 @@ mod tests {
             .expect("anonymous request allowed");
 
         assert_eq!(outcome.remaining, 8);
+    }
+
+    #[tokio::test]
+    async fn verified_key_reuses_extensions_and_ignores_absent_or_invalid_headers() {
+        let state = state_with_rate_limits(RateLimitConfig::default(), vec![]);
+        let verified = au_kpis_auth::VerifiedApiKey {
+            id: Uuid::new_v4(),
+            name: "client".into(),
+            scopes: vec!["observations:read".into()],
+            rate_limit_tier: "free".into(),
+        };
+
+        let mut with_extension = Request::builder().body(Body::empty()).unwrap();
+        with_extension.extensions_mut().insert(verified.clone());
+        assert_eq!(
+            verified_key(&state, &mut with_extension).await.unwrap(),
+            Some(verified)
+        );
+
+        let mut missing = Request::builder().body(Body::empty()).unwrap();
+        assert_eq!(verified_key(&state, &mut missing).await.unwrap(), None);
+
+        let mut non_utf8 = Request::builder().body(Body::empty()).unwrap();
+        non_utf8.headers_mut().insert(
+            "x-api-key",
+            HeaderValue::from_bytes(&[0xff]).expect("non-UTF8 header"),
+        );
+        assert_eq!(verified_key(&state, &mut non_utf8).await.unwrap(), None);
     }
 
     #[tokio::test]

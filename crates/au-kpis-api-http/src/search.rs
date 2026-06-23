@@ -287,7 +287,57 @@ fn invalid_db_id(err: au_kpis_domain::ids::IdError) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use au_kpis_cache::{
+        CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig,
+    };
+    use au_kpis_config::{
+        AppConfig, CacheConfig, DatabaseConfig, HttpConfig, RateLimitConfig, TelemetryConfig,
+    };
+    use au_kpis_telemetry::Telemetry;
+    use axum::{extract::State, http::StatusCode};
+    use sqlx::postgres::PgPoolOptions;
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
+
+    #[tokio::test]
+    async fn search_catalog_uses_cached_response_before_database() {
+        let state = test_state(HashMap::from([(
+            "api:search:q=cpi:limit=20".to_string(),
+            serde_json::to_string(&SearchResponse {
+                query: "cpi".into(),
+                results: Vec::new(),
+            })
+            .unwrap(),
+        )]));
+
+        let response = search_catalog(State(state), Uri::from_static("/v1/search?q=cpi"))
+            .await
+            .expect("cached search");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            SEARCH_CACHE_CONTROL
+        );
+    }
+
+    #[tokio::test]
+    async fn search_catalog_falls_through_to_database_on_cache_miss() {
+        let state = test_state(HashMap::new());
+
+        assert!(
+            search_catalog(State(state), Uri::from_static("/v1/search?q=cpi"))
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn search_query_trims_and_cache_key_encodes_form_query() {
@@ -333,5 +383,72 @@ mod tests {
                 limit: Some(1),
             }
         );
+    }
+
+    fn test_state(values: HashMap<String, String>) -> AppState {
+        AppState::new(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://postgres:postgres@localhost/unused")
+                .expect("lazy pool"),
+            Arc::new(CacheClient::from_backend(MapBackend {
+                values: Arc::new(Mutex::new(values)),
+            })),
+            Arc::new(AppConfig {
+                http: HttpConfig::default(),
+                database: DatabaseConfig {
+                    url: "postgres://postgres:postgres@localhost/unused".into(),
+                },
+                cache: CacheConfig {
+                    url: "redis://localhost:6379".into(),
+                },
+                telemetry: TelemetryConfig::default(),
+                rate_limits: RateLimitConfig::default(),
+            }),
+            Arc::new(Telemetry::disabled()),
+            CancellationToken::new(),
+        )
+    }
+
+    #[derive(Debug)]
+    struct MapBackend {
+        values: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CacheBackend for MapBackend {
+        async fn get(&self, key: &str) -> Result<Option<String>, CacheError> {
+            Ok(self.values.lock().expect("cache lock").get(key).cloned())
+        }
+
+        async fn set(&self, key: &str, value: String, _ttl: Duration) -> Result<(), CacheError> {
+            self.values
+                .lock()
+                .expect("cache lock")
+                .insert(key.to_owned(), value);
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> Result<bool, CacheError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("cache lock")
+                .remove(key)
+                .is_some())
+        }
+
+        async fn take_token_bucket(
+            &self,
+            _key: &str,
+            _config: TokenBucketConfig,
+            _requested: u32,
+            _now_ms: u64,
+        ) -> Result<RateLimitDecision, CacheError> {
+            Ok(RateLimitDecision {
+                allowed: true,
+                remaining: 1,
+                retry_after: Duration::ZERO,
+            })
+        }
     }
 }
