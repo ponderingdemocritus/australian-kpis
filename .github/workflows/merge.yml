@@ -82,7 +82,7 @@ jobs:
           if-no-files-found: ignore
 
   merge-queue-ok:
-    name: Merge Queue OK
+    name: CI OK
     runs-on: ubuntu-latest
     needs:
       - full-pr-flow

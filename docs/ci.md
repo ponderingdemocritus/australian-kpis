@@ -33,7 +33,7 @@ restore the pnpm store and `.turbo` cache before running Turborepo tasks.
 calls the full pull request gate set from `.github/workflows/pr.yml` with
 merge-queue mode enabled, so k6 smoke runs against the configured staging API
 instead of the local compose API. It also runs the deeper Schemathesis profile
-against staging and aggregates both through `Merge Queue OK`.
+against staging and aggregates both through `CI OK`.
 
 The `main` branch must require merge queue and status checks as documented in
 `docs/ops/merge-queue.md`. GitHub removes a queued batch when a required

@@ -291,7 +291,7 @@ Before committing merge-queue or branch-protection work, tick this checklist loc
 
 - [ ] `.github/workflows/merge.yml` triggers on `merge_group`.
 - [ ] `merge.yml` runs the full PR flow, staging k6 smoke, deep Schemathesis, blocking bench regression, and the currently available full Playwright suite.
-- [ ] `docs/ops/merge-queue.md` lists the exact `main` branch settings, including required `CI OK`, required `Merge Queue OK`, CODEOWNERS review, signed commits, and merge queue.
+- [ ] `docs/ops/merge-queue.md` lists the exact `main` branch settings, including required `CI OK`, CODEOWNERS review, signed commits, and merge queue.
 - [ ] Repository variables/secrets needed by staging smoke and contract fuzzing are named in the ops note.
 - [ ] The PR or follow-up settings proof shows that a failed merge group is ejected without partially landing.
 

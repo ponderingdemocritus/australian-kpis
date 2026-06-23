@@ -13,8 +13,8 @@ Configure `main` with a branch protection rule or repository ruleset that has:
 - [ ] CODEOWNERS review is required before a pull request can merge.
 - [ ] Signed commits are required.
 - [ ] Status checks are required before merging.
-- [ ] Required check `CI OK` is selected for pull request heads.
-- [ ] Required check `Merge Queue OK` is selected for merge groups.
+- [ ] Required check `CI OK` is selected. The pull request workflow emits it
+      for PR heads and the merge-queue workflow emits it for merge groups.
 - [ ] Merge queue is required.
 - [ ] Merge queue uses squash merging.
 - [ ] Build concurrency is `1` until the suite is consistently under the
@@ -40,8 +40,8 @@ Configure `main` with a branch protection rule or repository ruleset that has:
 
 ## Failure Semantics
 
-When `Merge Queue OK` fails or times out, GitHub removes the merge group from
-the queue. Because `Merge Queue OK` depends on the full reusable PR flow and the
+When merge queue's `CI OK` fails or times out, GitHub removes the merge group
+from the queue. Because that check depends on the full reusable PR flow and the
 deep Schemathesis gate, no queued batch can partially land after a failed
 merge-group build.
 
@@ -49,7 +49,7 @@ merge-group build.
 
 - [ ] `.github/workflows/merge.yml` exists on the branch and is visible in the
       repository Actions tab after push.
-- [ ] A `merge_group` run reports `Merge Queue OK`.
+- [ ] A `merge_group` run reports `CI OK`.
 - [ ] Repository settings show merge queue required on `main`.
 - [ ] Repository settings show required CODEOWNERS review on `main`.
 - [ ] Repository settings show signed commits required on `main`.
