@@ -202,6 +202,7 @@ Before creating any commit, tick this checklist locally or document why a box is
 - [ ] Verify every touched requirement is satisfied, or leave the PR in draft with the unmet boxes unticked.
 - [ ] Run the affected checks plus the § 6 pre-flight block where practical; record any checks blocked by local network, Docker, registry, or sandbox limits.
 - [ ] Regenerate committed artifacts when their source changed, including `openapi.json`, generated SDK files, fixtures, snapshots, or migrations.
+- [ ] For CI, merge-queue, or branch-protection changes, update the repository settings notes in `docs/ops/merge-queue.md`.
 - [ ] Review `git diff` and `git status` for unrelated edits, secrets, production data, large files, and generated drift before staging.
 - [ ] For CI-follow-up fixes, complete the CI-fix checklist below before committing.
 
@@ -278,12 +279,21 @@ Full details in `Spec.md § CI/CD pipeline`. Summary:
 
 ### Merge queue (blocking, runs once per batch)
 
+- Full PR flow through `.github/workflows/pr.yml`
 - Playwright full suite
 - k6 `smoke.js` against staging
 - `schemathesis` deep fuzz
 - Bench regression (no longer advisory)
 
 Merge queue **ejects the entire batch** on failure. Respect the queue — don't force-push to bypass.
+
+Before committing merge-queue or branch-protection work, tick this checklist locally or document the blocked item in the PR:
+
+- [ ] `.github/workflows/merge.yml` triggers on `merge_group`.
+- [ ] `merge.yml` runs the full PR flow, staging k6 smoke, deep Schemathesis, blocking bench regression, and the currently available full Playwright suite.
+- [ ] `docs/ops/merge-queue.md` lists the exact `main` branch settings, including required `CI OK`, required `Merge Queue OK`, CODEOWNERS review, signed commits, and merge queue.
+- [ ] Repository variables/secrets needed by staging smoke and contract fuzzing are named in the ops note.
+- [ ] The PR or follow-up settings proof shows that a failed merge group is ejected without partially landing.
 
 ### Scheduled (non-blocking, but watch for alerts)
 
