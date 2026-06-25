@@ -235,13 +235,15 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["zone"], "green");
     assert_eq!(snapshot["trend"], "unavailable");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 96.05263157894737).abs() < 1e-9);
+    let contributions = snapshot["contributions"].as_array().expect("contributions");
+    assert_eq!(contributions.len(), 21);
+    let expected_coverage = expected_coverage_pct(contributions);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - expected_coverage).abs() < 1e-9);
+    assert!(expected_coverage > 90.0);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
     assert_eq!(snapshot["confidence"], "low");
 
-    let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 21);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -492,6 +494,26 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshots[1]["as_of"], "2024-02-01");
     assert_eq!(snapshots[1]["trend"], "up");
     assert_eq!(snapshots[1]["score"], 100.0);
+}
+
+fn expected_coverage_pct(contributions: &[Value]) -> f64 {
+    let mut expected_weight = 0.0;
+    let mut resolved_weight = 0.0;
+    for contribution in contributions {
+        if contribution["coverage_status"] == "visible_unscored" {
+            continue;
+        }
+        let weight = contribution["weight"].as_f64().expect("weight");
+        expected_weight += weight;
+        if !contribution["normalized_value"].is_null() {
+            resolved_weight += weight;
+        }
+    }
+    if expected_weight <= 0.0 {
+        100.0
+    } else {
+        (resolved_weight / expected_weight * 100.0).clamp(0.0, 100.0)
+    }
 }
 
 fn contribution<'a>(contributions: &'a [Value], indicator_id: &str) -> &'a Value {

@@ -60,6 +60,9 @@ AU_KPIS_CACHE__URL=redis://127.0.0.1:63790 \
   cargo run --bin au-kpis-api
 ```
 
+For the Phase 2 clean-clone walkthrough, see
+[`docs/demos/phase-2.md`](./docs/demos/phase-2.md).
+
 ## Contributing
 
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — human-oriented workflow guide
