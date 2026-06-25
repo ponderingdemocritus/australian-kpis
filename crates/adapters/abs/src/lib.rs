@@ -23,7 +23,7 @@ use au_kpis_domain::{
 use au_kpis_error::CoreError;
 use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use bytes::Bytes;
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use futures::{StreamExt, stream};
 use serde::{
     Deserialize,
@@ -290,11 +290,14 @@ impl SourceAdapter for AbsAdapter {
                 source_id: SourceId::new("abs").expect("static source id is valid"),
                 name: "Consumer Price Index".into(),
                 description: Some("ABS CPI observations from SDMX-JSON artifacts.".into()),
-                dimensions: vec![
-                    DimensionId::new("region").expect("static dimension id is valid"),
-                    DimensionId::new("measure").expect("static dimension id is valid"),
-                ],
-                measures: vec![MeasureId::new("index").expect("static measure id is valid")],
+                dimensions: ["measure", "index", "tsest", "region", "freq"]
+                    .into_iter()
+                    .map(|id| DimensionId::new(id).expect("static dimension id is valid"))
+                    .collect(),
+                measures: ["1", "2", "3", "4", "5", "6", "7"]
+                    .into_iter()
+                    .map(|id| MeasureId::new(id).expect("static measure id is valid"))
+                    .collect(),
                 frequency: Frequency::Quarterly,
                 license: License::CcBy40,
                 attribution: ABS_ATTRIBUTION.into(),
@@ -934,9 +937,23 @@ fn parse_building_approvals_html(
         AdapterError::FormatDrift(format!("ABS release HTML is not UTF-8: {err}"))
     })?;
     let release = parse_building_approvals_release(&body, &artifact.source_url)?;
+    let lines = html_text_lines(&body);
     let mut rows = Vec::new();
+    for (time, value) in parse_building_approvals_chart_rows(&lines)? {
+        rows.push(building_approvals_observation(
+            time,
+            value,
+            &release,
+            artifact,
+            ingested_at,
+        )?);
+    }
+    if !rows.is_empty() {
+        return Ok(rows);
+    }
+
     let mut in_dwelling_table = false;
-    for line in html_text_lines(&body) {
+    for line in lines {
         let lower = line.to_ascii_lowercase();
         if lower.contains("dwelling units approved") {
             in_dwelling_table = true;
@@ -968,6 +985,69 @@ fn parse_building_approvals_html(
         ));
     }
     Ok(rows)
+}
+
+fn parse_building_approvals_chart_rows(
+    lines: &[String],
+) -> Result<Vec<(DateTime<Utc>, f64)>, AdapterError> {
+    let mut in_dwelling_section = false;
+    for line in lines {
+        let lower = line.to_ascii_lowercase();
+        if lower == "dwellings approved" {
+            in_dwelling_section = true;
+            continue;
+        }
+        if in_dwelling_section && lower.contains("dwellings approved, by building type") {
+            break;
+        }
+        if !in_dwelling_section || !line.starts_with("[[") {
+            continue;
+        }
+        if let Some(rows) = parse_abs_period_value_matrix(line)? {
+            return Ok(rows);
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn parse_abs_period_value_matrix(
+    line: &str,
+) -> Result<Option<Vec<(DateTime<Utc>, f64)>>, AdapterError> {
+    let value = serde_json::from_str::<serde_json::Value>(line).map_err(|err| {
+        AdapterError::FormatDrift(format!("ABS chart data JSON is invalid: {err}"))
+    })?;
+    let Some(matrix) = value.as_array() else {
+        return Ok(None);
+    };
+    let (Some(period_values), Some(series_values)) = (matrix.first(), matrix.get(1)) else {
+        return Ok(None);
+    };
+    let Some(periods) = period_values.as_array() else {
+        return Ok(None);
+    };
+    let Some(series) = series_values.as_array() else {
+        return Ok(None);
+    };
+    let mut rows = Vec::new();
+    for (period, value) in periods.iter().zip(series.iter()) {
+        let Some(period) = period.as_str() else {
+            continue;
+        };
+        let Some(time) = parse_abs_month(period)? else {
+            continue;
+        };
+        let value = value
+            .as_array()
+            .and_then(|values| values.first())
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| {
+                AdapterError::FormatDrift(format!(
+                    "ABS chart data value for `{period}` is missing or not numeric"
+                ))
+            })?;
+        rows.push((time, value));
+    }
+    Ok((!rows.is_empty()).then_some(rows))
 }
 
 fn parse_building_approvals_row(line: &str) -> Result<Option<(DateTime<Utc>, f64)>, AdapterError> {
@@ -1639,11 +1719,12 @@ fn parse_building_approvals_release(
         )));
     }
     let lines = html_text_lines(body);
-    let reference_period = labeled_text_value(&lines, "Reference period").ok_or_else(|| {
-        AdapterError::FormatDrift(
-            "ABS Building Approvals release is missing reference period".into(),
-        )
-    })?;
+    let reference_period = abs_release_reference_period(&lines, "Building Approvals, Australia")
+        .ok_or_else(|| {
+            AdapterError::FormatDrift(
+                "ABS Building Approvals release is missing reference period".into(),
+            )
+        })?;
     let released = labeled_text_value(&lines, "Released");
     Ok(BuildingApprovalsRelease {
         source_url: source_url.to_string(),
@@ -1662,11 +1743,12 @@ fn parse_building_activity_release(
         )));
     }
     let lines = html_text_lines(body);
-    let reference_period = labeled_text_value(&lines, "Reference period").ok_or_else(|| {
-        AdapterError::FormatDrift(
-            "ABS Building Activity release is missing reference period".into(),
-        )
-    })?;
+    let reference_period = abs_release_reference_period(&lines, "Building Activity, Australia")
+        .ok_or_else(|| {
+            AdapterError::FormatDrift(
+                "ABS Building Activity release is missing reference period".into(),
+            )
+        })?;
     let released = labeled_text_value(&lines, "Released");
     Ok(BuildingActivityRelease {
         source_url: source_url.to_string(),
@@ -1690,11 +1772,13 @@ fn parse_dwelling_completion_times_article(
         .find(|line| line.eq_ignore_ascii_case("Average dwelling completion times"))
         .cloned()
         .unwrap_or_else(|| "Average dwelling completion times".into());
-    let released = labeled_text_value(&lines, "Released").ok_or_else(|| {
-        AdapterError::FormatDrift(
-            "ABS dwelling completion times article is missing released date".into(),
-        )
-    })?;
+    let released = labeled_text_value(&lines, "Released")
+        .or_else(|| abs_article_issued_date(body))
+        .ok_or_else(|| {
+            AdapterError::FormatDrift(
+                "ABS dwelling completion times article is missing released date".into(),
+            )
+        })?;
     Ok(DwellingCompletionTimesArticle {
         source_url: source_url.to_string(),
         title,
@@ -1713,17 +1797,93 @@ fn labeled_text_value(lines: &[String], label: &str) -> Option<String> {
     })
 }
 
+fn abs_article_issued_date(body: &str) -> Option<String> {
+    html_meta_content(body, "dcterms.issued").and_then(|value| abs_slash_date_from_text(&value))
+}
+
+fn html_meta_content(body: &str, name: &str) -> Option<String> {
+    let marker = format!(r#"<meta name="{name}" content=""#);
+    let start = body.find(&marker)? + marker.len();
+    let value = body[start..].split('"').next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn abs_slash_date_from_text(value: &str) -> Option<String> {
+    value
+        .split(|ch: char| ch.is_whitespace() || ch == ',')
+        .filter_map(|token| {
+            let candidate = token.trim_matches(|ch: char| ch != '/' && !ch.is_ascii_digit());
+            NaiveDate::parse_from_str(candidate, "%d/%m/%Y").ok()
+        })
+        .map(|date| format!("{}/{}/{}", date.day(), date.month(), date.year()))
+        .next()
+}
+
+fn abs_release_reference_period(lines: &[String], title: &str) -> Option<String> {
+    labeled_text_value(lines, "Reference period")
+        .or_else(|| reference_period_from_title(lines, title))
+}
+
+fn reference_period_from_title(lines: &[String], title: &str) -> Option<String> {
+    let title_prefix = format!("{title}, ");
+    lines.iter().enumerate().find_map(|(index, line)| {
+        if let Some(value) = line.strip_prefix(&title_prefix) {
+            let period = value.split('|').next()?.trim();
+            if is_abs_reference_period(period) {
+                return Some(period.to_string());
+            }
+        }
+        if line.eq_ignore_ascii_case(title) {
+            let next = lines.get(index + 1)?.trim();
+            if is_abs_reference_period(next) {
+                return Some(next.to_string());
+            }
+        }
+        None
+    })
+}
+
+fn is_abs_reference_period(value: &str) -> bool {
+    let mut parts = value.split_whitespace();
+    let Some(month) = parts.next() else {
+        return false;
+    };
+    let Some(year) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && matches!(
+            month.to_ascii_lowercase().as_str(),
+            "january"
+                | "february"
+                | "march"
+                | "april"
+                | "may"
+                | "june"
+                | "july"
+                | "august"
+                | "september"
+                | "october"
+                | "november"
+                | "december"
+        )
+        && year.len() == 4
+        && year.chars().all(|ch| ch.is_ascii_digit())
+}
+
 fn html_text_lines(body: &str) -> Vec<String> {
     let prepared = body
         .replace("</td>", " ")
         .replace("</th>", " ")
         .replace("</tr>", "\n")
         .replace("</p>", "\n")
+        .replace("</li>", "\n")
         .replace("</h1>", "\n")
         .replace("</h2>", "\n")
         .replace("</h3>", "\n")
         .replace("</dt>", "\n")
-        .replace("</dd>", "\n");
+        .replace("</dd>", "\n")
+        .replace("</pre>", "\n");
     let mut out = String::with_capacity(prepared.len());
     let mut in_tag = false;
     for ch in prepared.chars() {
@@ -1735,6 +1895,10 @@ fn html_text_lines(body: &str) -> Vec<String> {
         }
     }
     out.replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&#039;", "'")
+        .replace("&apos;", "'")
         .replace("&amp;", "&")
         .lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))

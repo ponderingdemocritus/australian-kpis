@@ -634,6 +634,13 @@ mod tests {
         assert_eq!(
             renewable_generation
                 .dimension_selector
+                .get("region")
+                .map(String::as_str),
+            Some("NEM")
+        );
+        assert_eq!(
+            renewable_generation
+                .dimension_selector
                 .get("fuel_type")
                 .map(String::as_str),
             Some("wind")
@@ -650,7 +657,7 @@ mod tests {
                 .dimension_selector
                 .get("metric")
                 .map(String::as_str),
-            Some("dispatchable_capacity")
+            Some("available_generation")
         );
 
         let ai_adoption = indicators["ai.adoption"];
@@ -680,6 +687,7 @@ mod tests {
         );
         assert_eq!(ai_talent.measure_id, "value");
         assert_eq!(ai_talent.confidence, Confidence::Low);
+        assert_eq!(ai_talent.coverage_status, CoverageStatus::CoverageGap);
         assert_eq!(
             ai_talent
                 .dimension_selector
@@ -706,7 +714,7 @@ mod tests {
                 .dimension_selector
                 .get("metric")
                 .map(String::as_str),
-            Some("median_assessment_days")
+            Some("average_assessment_days")
         );
         assert_eq!(nsw_planning.direction, Direction::LowerIsBetter);
 
@@ -731,6 +739,7 @@ mod tests {
             Some("median_decision_days")
         );
         assert_eq!(vic_planning.direction, Direction::LowerIsBetter);
+        assert_eq!(vic_planning.coverage_status, CoverageStatus::CoverageGap);
 
         let oversight = indicators["oversight.reviewed-strength"];
         assert_eq!(oversight.coverage_status, CoverageStatus::ManualPending);

@@ -13,6 +13,7 @@ from au_kpis_pdf_extractor.models import (
     BackendInfo,
     ExtractionBackendKind,
     ExtractionResponse,
+    TableCandidate,
 )
 from au_kpis_pdf_extractor.runtime import configured_port
 from au_kpis_pdf_extractor.storage import ObjectNotFound
@@ -124,6 +125,43 @@ def test_extract_fetches_s3_key_and_returns_real_budget_tables() -> None:
     flattened = " ".join(cell for row in first_table["cells"] for cell in row)
     assert "Department" in flattened or "Agency Resourcing" in flattened
     assert first_table["diagnostics"]["source_backend"] in {"pdfplumber", "camelot"}
+
+
+def test_deterministic_extractor_prefers_pdfplumber_before_camelot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    extractor = DeterministicExtractor(max_pages=1)
+
+    def pdfplumber_tables(
+        _pdf_path: Path,
+        _page_numbers: tuple[int, ...] | None,
+    ) -> list[TableCandidate]:
+        calls.append("pdfplumber")
+        return [
+            TableCandidate(
+                page=1,
+                bbox=(0.0, 0.0, 1.0, 1.0),
+                cells=[["Department", "Budget"]],
+                diagnostics={"source_backend": "pdfplumber"},
+            )
+        ]
+
+    def camelot_tables(
+        _pdf_path: Path,
+        _page_numbers: tuple[int, ...] | None,
+    ) -> list[TableCandidate]:
+        calls.append("camelot")
+        return []
+
+    monkeypatch.setattr(extractor, "_pdfplumber_tables", pdfplumber_tables)
+    monkeypatch.setattr(extractor, "_camelot_tables", camelot_tables)
+
+    response = extractor.extract(tmp_path / "fixture.pdf", "artifacts/fixture.pdf")
+
+    assert calls == ["pdfplumber"]
+    assert response.tables[0].diagnostics["source_backend"] == "pdfplumber"
 
 
 def test_extract_forwards_requested_pages_to_extractor() -> None:

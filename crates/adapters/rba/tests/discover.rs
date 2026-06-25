@@ -21,6 +21,7 @@ const INDEX_FIXTURE: &str = r#"
   <a href="/statistics/tables/xls/f02d.xls" data-updated="2026-05-19">F2 - Data</a>
   <h2>Inflation and Inflation Expectations</h2>
   <a href="https://www.rba.gov.au/statistics/tables/csv/g01.csv">G1 - Data</a>
+  <a href="/statistics/tables/csv/a3.1-ags---notes.csv">A3.1 notes ignored</a>
   <a href="/statistics/tables/pdf/not-data.pdf">PDF ignored</a>
   <a href="/chart-pack/data.csv">Chart pack ignored</a>
 </main>

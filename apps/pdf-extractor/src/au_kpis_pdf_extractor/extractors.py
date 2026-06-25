@@ -33,9 +33,9 @@ class DeterministicExtractor:
         pages: Sequence[int] | None = None,
     ) -> ExtractionResponse:
         page_numbers = self._page_numbers(pages)
-        tables = self._camelot_tables(pdf_path, page_numbers)
+        tables = self._pdfplumber_tables(pdf_path, page_numbers)
         if not tables:
-            tables = self._pdfplumber_tables(pdf_path, page_numbers)
+            tables = self._camelot_tables(pdf_path, page_numbers)
 
         return ExtractionResponse(
             artifact_key=artifact_key,

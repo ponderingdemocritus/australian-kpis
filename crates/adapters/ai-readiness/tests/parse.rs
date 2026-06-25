@@ -15,6 +15,21 @@ const NAIC_ADOPTION: &[u8] = include_bytes!("fixtures/naic_ai_adoption_tracker.c
 const ABS_AI_RD: &[u8] = include_bytes!("fixtures/abs_ai_rd.csv");
 const HOME_AFFAIRS_TALENT: &[u8] =
     include_bytes!("fixtures/home_affairs_skillselect_talent_proxy.csv");
+const OXFORD_GARI_HTML: &[u8] = br#"
+<script>
+[{"name":"Austria","code":"AT","total":69.72},{"id":4635,"name":"Australia","code":"AU","total":75.730000000000003979,"policy_capacity":100}]
+</script>
+"#;
+const NAIC_ADOPTION_HTML: &[u8] = br#"
+<article>
+<p>Across the December to February quarter, 43% of Australian SMEs reported some level of AI adoption.</p>
+</article>
+"#;
+const ABS_AI_RD_HTML: &[u8] = br#"
+<main>
+<p>Businesses more than doubled their investment, putting $668.3 million into AI R&amp;D in 2023-24.</p>
+</main>
+"#;
 
 #[derive(Debug, Serialize)]
 struct SnapshotRow {
@@ -180,6 +195,85 @@ async fn parses_home_affairs_skillselect_fixture() {
             && row.value == Some(6400.0)
     }));
     insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test]
+async fn parses_official_oxford_gari_html() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        OXFORD_GARI_HTML,
+        "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/",
+    )
+    .await;
+
+    let rows = snapshot_rows(artifact, blob_store, "oxford.gari").await;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].dimensions.get("country").map(String::as_str),
+        Some("AUS")
+    );
+    assert_eq!(rows[0].measure_id, "ai_readiness_score");
+    assert_eq!(rows[0].time, "2025-12-31T00:00:00+00:00");
+    assert_eq!(rows[0].value, Some(75.73));
+    assert_eq!(rows[0].attributes["publication_id"], "oxford-gari-2025");
+}
+
+#[tokio::test]
+async fn parses_official_naic_adoption_html() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        NAIC_ADOPTION_HTML,
+        "https://www.ai.gov.au/news-and-insights/blog/ai-adoption-insights-december-2025-february-2026",
+    )
+    .await;
+
+    let rows = snapshot_rows(artifact, blob_store, "naic.ai_adoption_tracker").await;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].dimensions.get("country").map(String::as_str),
+        Some("AUS")
+    );
+    assert_eq!(
+        rows[0].dimensions.get("segment").map(String::as_str),
+        Some("all")
+    );
+    assert_eq!(rows[0].measure_id, "adoption_rate_pct");
+    assert_eq!(rows[0].time, "2026-02-28T00:00:00+00:00");
+    assert_eq!(rows[0].value, Some(43.0));
+}
+
+#[tokio::test]
+async fn parses_official_abs_ai_rd_html() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        ABS_AI_RD_HTML,
+        "https://www.abs.gov.au/media-centre/media-releases/ai-now-fastest-growing-area-business-rd",
+    )
+    .await;
+
+    let rows = snapshot_rows(artifact, blob_store, "abs.ai_rd").await;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].dimensions.get("country").map(String::as_str),
+        Some("AUS")
+    );
+    assert_eq!(
+        rows[0].dimensions.get("sector").map(String::as_str),
+        Some("all")
+    );
+    assert_eq!(
+        rows[0].dimensions.get("metric").map(String::as_str),
+        Some("ai_rd_spend_m")
+    );
+    assert_eq!(rows[0].measure_id, "value");
+    assert_eq!(rows[0].time, "2024-06-30T00:00:00+00:00");
+    assert_eq!(rows[0].value, Some(668.3));
 }
 
 #[tokio::test]

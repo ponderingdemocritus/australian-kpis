@@ -123,7 +123,7 @@ fn parse_release_calendar_discovers_current_system_files_xls_artifacts() {
     assert_eq!(releases[0].publication_slug, "adi-centralised");
     assert_eq!(
         releases[0].source_url,
-        "https://www.apra.gov.au/system/files/2026-05/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx"
+        "https://apra.gov.au/system/files/2026-05/Authorised%20deposit-taking%20institution%20centralised%20publication%20-%20March%202013%20to%20December%202025.xlsx"
     );
     assert_eq!(releases[1].publication_slug, "adi-performance");
     assert_eq!(releases[2].publication_slug, "adi-property-exposures");
@@ -209,7 +209,9 @@ async fn discover_honours_super_asset_allocation_dataflow_scope() {
     let Some(release_url) = serve_release_calendar_once(SUPER_RELEASE_FIXTURE).await else {
         return;
     };
-    let adapter = ApraAdapter::builder().release_url(&release_url).build();
+    let adapter = ApraAdapter::builder()
+        .super_release_url(&release_url)
+        .build();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
     let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 5, 28, 0, 0, 0).unwrap())
         .with_requested_dataflow_id(
@@ -253,7 +255,7 @@ fn manifest_declares_apra_rate_limit_and_dataflow_metadata() {
     );
     assert_eq!(
         dataflows[0].source_url,
-        "https://www.apra.gov.au/quarterly-authorised-deposit-taking-institution-statistics"
+        "https://apra.gov.au/news-and-publications/quarterly-authorised-deposit-taking-institution-statistics"
     );
     assert_eq!(dataflows[1].id.as_str(), "apra.super_asset_allocation");
     assert_eq!(

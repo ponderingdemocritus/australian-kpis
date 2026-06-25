@@ -112,7 +112,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
     );
     assert_eq!(
         dispatchable_capacity["dimension_selector"]["metric"],
-        "dispatchable_capacity"
+        "available_generation"
     );
     let nsw_planning = indicators
         .iter()
@@ -124,7 +124,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
     );
     assert_eq!(
         nsw_planning["dimension_selector"]["metric"],
-        "median_assessment_days"
+        "average_assessment_days"
     );
     let vic_planning = indicators
         .iter()
@@ -138,6 +138,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
         vic_planning["dimension_selector"]["metric"],
         "median_decision_days"
     );
+    assert_eq!(vic_planning["coverage_status"], "coverage_gap");
     let ai_adoption = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "ai.adoption")
@@ -165,6 +166,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
         ai_talent["dimension_selector"]["occupation_group"],
         "ai_related"
     );
+    assert_eq!(ai_talent["coverage_status"], "coverage_gap");
     let oversight = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "oversight.reviewed-strength")
@@ -231,7 +233,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["scorecard_id"], "aps");
     assert_eq!(snapshot["config_version"], "aps.v1");
     assert_eq!(snapshot["zone"], "green");
-    assert_eq!(snapshot["trend"], "up");
+    assert_eq!(snapshot["trend"], "unavailable");
     assert_eq!(snapshot["score"], 100.0);
     assert!((snapshot["coverage_pct"].as_f64().unwrap() - 96.05263157894737).abs() < 1e-9);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
@@ -371,6 +373,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
         renewable_generation["source_dataflow_id"],
         "aemo.generation_mix"
     );
+    assert_eq!(renewable_generation["dimensions"]["region"], "NEM");
     assert_eq!(renewable_generation["dimensions"]["fuel_type"], "wind");
 
     let dispatchable_capacity = contribution(contributions, "energy.dispatchable-capacity");
@@ -383,7 +386,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     );
     assert_eq!(
         dispatchable_capacity["dimensions"]["metric"],
-        "dispatchable_capacity"
+        "available_generation"
     );
 
     let ai_readiness = contribution(contributions, "ai.readiness");
@@ -431,7 +434,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(nsw_planning["dimensions"]["jurisdiction"], "NSW");
     assert_eq!(
         nsw_planning["dimensions"]["metric"],
-        "median_assessment_days"
+        "average_assessment_days"
     );
 
     let vic_planning = contribution(contributions, "planning.vic-permit-activity");
@@ -667,19 +670,19 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'aemo.dispatch', 'aemo', 'NEM dispatch', NULL,
              ARRAY['region', 'metric'], ARRAY['value'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
              'Source: Australian Energy Market Operator',
-             'https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/'
+             'https://nemweb.com.au/Reports/Current/DispatchIS_Reports/'
          ),
          (
              'aemo.generation_mix', 'aemo', 'NEM generation mix', NULL,
              ARRAY['region', 'fuel_type'], ARRAY['generation_mw'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
              'Source: Australian Energy Market Operator',
-             'https://www.nemweb.com.au/Reports/CURRENT/FuelMix/'
+             'https://nemweb.com.au/Reports/Current/'
          ),
          (
              'aemo.dispatchability_capacity', 'aemo', 'NEM dispatchability capacity', NULL,
              ARRAY['region', 'metric'], ARRAY['value'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
              'Source: Australian Energy Market Operator',
-             'https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/'
+             'https://nemweb.com.au/Reports/Current/DispatchIS_Reports/'
          ),
          (
              'oxford.gari', 'ai-readiness', 'Oxford Government AI Readiness Index', NULL,
@@ -851,7 +854,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "aemo.generation_mix",
         "generation_mw",
         "MW",
-        [("region", "NSW1"), ("fuel_type", "wind")],
+        [("region", "NEM"), ("fuel_type", "wind")],
     )
     .await;
     let dispatchable_capacity = insert_series(
@@ -859,7 +862,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "aemo.dispatchability_capacity",
         "value",
         "MW",
-        [("region", "NSW1"), ("metric", "dispatchable_capacity")],
+        [("region", "NSW1"), ("metric", "available_generation")],
     )
     .await;
     let ai_readiness = insert_series(
@@ -911,7 +914,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ("jurisdiction", "NSW"),
             ("council", "all"),
             ("development_type", "all"),
-            ("metric", "median_assessment_days"),
+            ("metric", "average_assessment_days"),
         ],
     )
     .await;

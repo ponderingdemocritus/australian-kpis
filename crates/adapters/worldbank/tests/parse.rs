@@ -219,3 +219,23 @@ async fn parse_rejects_artifact_id_storage_key_mismatch() {
         "{err}"
     );
 }
+
+#[tokio::test]
+async fn parse_accepts_official_indicator_api_provenance() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        BREADY_CSV,
+        "https://api.worldbank.org/v2/country/AUS/indicator/IC.BRE.BE.OS?format=json&source=2&per_page=100",
+    )
+    .await;
+
+    let rows = snapshot_rows(artifact, blob_store).await;
+
+    assert_eq!(rows.len(), 3);
+    assert!(
+        rows.iter()
+            .any(|row| row.measure_id == "business_entry_score"
+                && row.dimensions.get("country").map(String::as_str) == Some("AUS"))
+    );
+}

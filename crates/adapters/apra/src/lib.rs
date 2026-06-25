@@ -26,10 +26,9 @@ use calamine::{Data, ExcelDateTime, ExcelDateTimeType, Reader, open_workbook_aut
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use futures::{StreamExt, stream};
 
-const DEFAULT_RELEASE_URL: &str =
-    "https://www.apra.gov.au/quarterly-authorised-deposit-taking-institution-statistics";
+const DEFAULT_RELEASE_URL: &str = "https://apra.gov.au/news-and-publications/quarterly-authorised-deposit-taking-institution-statistics";
 const DEFAULT_SUPER_RELEASE_URL: &str =
-    "https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics";
+    "https://apra.gov.au/news-and-publications/quarterly-superannuation-statistics";
 const USER_AGENT: &str = concat!("au-kpis-adapter-apra/", env!("CARGO_PKG_VERSION"));
 const DATAFLOW_ID: &str = "apra.quarterly_statistics";
 const SUPER_ASSET_ALLOCATION_DATAFLOW_ID: &str = "apra.super_asset_allocation";
@@ -479,13 +478,13 @@ fn parse_super_asset_allocation_workbook(
             .map(|row| row.iter().map(cell_to_string).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let table_title = table_title_for_sheet(&sheet_name, &rows);
-        if !normalize_header(&format!("{sheet_name} {table_title}")).contains("asset allocation") {
+        if !is_super_asset_aggregate_table(&sheet_name, &table_title) {
             continue;
         }
         let Some(periods) = find_horizontal_period_columns(&rows)? else {
             continue;
         };
-        let unit = unit_from_rows(&rows[..periods.row_index]);
+        let mut unit = unit_from_rows(&rows[..periods.row_index]);
         let first_period_col = periods
             .columns
             .first()
@@ -493,9 +492,19 @@ fn parse_super_asset_allocation_workbook(
             .expect("period finder returns at least one column");
         let schema_hash = schema_hash_for_sheet(&sheet_name, &rows);
         for row in rows.iter().skip(periods.row_index + 1) {
+            if label_before(row, first_period_col).is_none() && row_period_count(row)? >= 2 {
+                break;
+            }
             let Some(original_category) = label_before(row, first_period_col) else {
                 continue;
             };
+            if is_inline_unit_marker(&original_category) {
+                unit = unit_from_rows(std::slice::from_ref(row));
+                continue;
+            }
+            if !is_super_asset_value_unit(&unit) {
+                continue;
+            }
             let Some(mapping) = super_asset_category_mapping(&original_category) else {
                 continue;
             };
@@ -554,6 +563,25 @@ fn parse_super_asset_allocation_workbook(
         ));
     }
     Ok(parsed)
+}
+
+fn is_super_asset_aggregate_table(sheet_name: &str, table_title: &str) -> bool {
+    let normalized = normalize_header(&format!("{sheet_name} {table_title}"));
+    normalized.contains("asset allocation")
+        && (normalized.contains("superannuation industry asset allocation")
+            || (normalize_header(sheet_name) == "asset allocation"
+                && normalized.contains("quarterly superannuation performance statistics")))
+}
+
+fn row_period_count(row: &[String]) -> Result<usize, AdapterError> {
+    row.iter()
+        .filter_map(|cell| parse_apra_quarter(cell).transpose())
+        .collect::<Result<Vec<_>, _>>()
+        .map(|periods| periods.len())
+}
+
+fn is_super_asset_value_unit(unit: &str) -> bool {
+    matches!(unit, "$ million" | "unknown")
 }
 
 fn catch_xls_parser_panic<T>(
@@ -989,6 +1017,7 @@ struct SuperAssetCategoryMapping {
 fn super_asset_category_mapping(category: &str) -> Option<SuperAssetCategoryMapping> {
     let normalized = normalize_header(category);
     if normalized.contains("australian infrastructure")
+        || normalized.contains("australian unlisted infrastructure")
         || normalized.contains("domestic infrastructure")
         || normalized.contains("onshore infrastructure")
     {
@@ -1460,6 +1489,20 @@ fn find_horizontal_period_columns(
             }
         }
     }
+    for (row_index, row) in rows.iter().enumerate().take(12) {
+        let columns = row
+            .iter()
+            .enumerate()
+            .filter_map(|(column, cell)| {
+                parse_apra_quarter(cell)
+                    .transpose()
+                    .map(|result| result.map(|period| (column, period)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if columns.len() >= 2 {
+            return Ok(Some(HorizontalPeriods { row_index, columns }));
+        }
+    }
     Ok(None)
 }
 
@@ -1491,7 +1534,7 @@ fn unit_from_rows(rows: &[Vec<String>]) -> String {
 }
 
 fn parse_apra_quarter(value: &str) -> Result<Option<(DateTime<Utc>, TimePrecision)>, AdapterError> {
-    let trimmed = value.trim();
+    let trimmed = value.trim().trim_end_matches('*').trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
@@ -1910,6 +1953,88 @@ mod tests {
             .expect("period");
         assert_eq!(precision, TimePrecision::Quarter);
         assert_eq!(time.to_rfc3339(), "2025-10-01T00:00:00+00:00");
+
+        let (time, precision) = parse_apra_quarter("Sep 2023*")
+            .expect("parse footnoted month label")
+            .expect("period");
+        assert_eq!(precision, TimePrecision::Quarter);
+        assert_eq!(time.to_rfc3339(), "2023-07-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn horizontal_period_finder_accepts_current_super_asset_header_without_marker() {
+        let rows = vec![
+            vec![
+                "Table 1d Superannuation industry asset allocation".to_string(),
+                String::new(),
+                String::new(),
+            ],
+            vec![
+                String::new(),
+                "Sep 2013".to_string(),
+                "Dec 2013".to_string(),
+            ],
+            vec!["($ million)".to_string(), String::new(), String::new()],
+        ];
+
+        let periods = find_horizontal_period_columns(&rows)
+            .expect("scan horizontal periods")
+            .expect("current APRA period row");
+
+        assert_eq!(periods.row_index, 1);
+        assert_eq!(periods.columns.len(), 2);
+        assert_eq!(periods.columns[0].0, 1);
+        assert_eq!(
+            periods.columns[0].1.0.to_rfc3339(),
+            "2013-07-01T00:00:00+00:00"
+        );
+        assert_eq!(periods.columns[1].0, 2);
+        assert_eq!(
+            periods.columns[1].1.0.to_rfc3339(),
+            "2013-10-01T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn super_asset_value_unit_gate_skips_percent_share_blocks() {
+        assert!(is_super_asset_value_unit("$ million"));
+        assert!(is_super_asset_value_unit("unknown"));
+        assert!(!is_super_asset_value_unit("percent"));
+    }
+
+    #[test]
+    fn super_asset_parser_scope_keeps_aggregate_table_only() {
+        assert!(is_super_asset_aggregate_table(
+            "Table 1d",
+            "Table 1d Superannuation industry asset allocation"
+        ));
+        assert!(is_super_asset_aggregate_table(
+            "Asset allocation",
+            "Quarterly superannuation performance statistics"
+        ));
+        assert!(!is_super_asset_aggregate_table(
+            "Table 2d",
+            "Table 2d Corporate funds asset allocation"
+        ));
+        assert!(!is_super_asset_aggregate_table(
+            "Table 6a",
+            "Table 6a MySuper asset allocation"
+        ));
+    }
+
+    #[test]
+    fn row_period_count_detects_repeated_period_header() {
+        let count = row_period_count(&[
+            String::new(),
+            "Sep 2013".to_string(),
+            "Dec 2013".to_string(),
+            "Mar 2014".to_string(),
+        ])
+        .expect("period row count");
+
+        assert_eq!(count, 3);
+
+        assert!(label_before(&["Cash".to_string(), "159608".to_string()], 1).is_some());
     }
 
     #[test]
@@ -2034,6 +2159,11 @@ mod tests {
         assert_eq!(onshore.mapping, "productive_infrastructure_onshore");
         assert!(onshore.included_in_onshore_total);
         assert_eq!(onshore.rule, "include_explicit_onshore_infrastructure");
+
+        let current_onshore = super_asset_category_mapping("Australian unlisted infrastructure")
+            .expect("current onshore infrastructure mapping");
+        assert_eq!(current_onshore.mapping, "productive_infrastructure_onshore");
+        assert!(current_onshore.included_in_onshore_total);
 
         let offshore = super_asset_category_mapping("Overseas infrastructure")
             .expect("offshore infrastructure mapping");

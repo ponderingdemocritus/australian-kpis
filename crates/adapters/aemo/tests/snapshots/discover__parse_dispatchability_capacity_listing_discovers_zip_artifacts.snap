@@ -7,6 +7,6 @@ expression: snapshot
     "file_name": "PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip",
     "interval": "2026-06-19T17:05:00Z",
     "revision_key": "AEMO:dispatchability_capacity:PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip",
-    "source_url": "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip"
+    "source_url": "https://nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip"
   }
 ]

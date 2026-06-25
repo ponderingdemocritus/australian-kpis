@@ -448,7 +448,7 @@ Fixes applied:
 Focused verification:
 
 - `cargo fmt --all --check`
-- `pnpm exec markdownlint-cli2 Spec.md docs/pdf-extractor.md docs/full-stack-verification-2026-06-19.md docs/ui-ux-approachability-prd.md`
+- `pnpm exec markdownlint-cli2 Spec.md docs/pdf-extractor.md docs/full-stack-verification-2026-06-19.md`
 - `cd apps/pdf-extractor && uv run pytest -p no:capture tests/test_app.py`
 - `CARGO_INCREMENTAL=0 RUSTFLAGS='-C debuginfo=0' cargo test -p au-kpis-pdf-client extraction_request_requires_source_id_and_omits_optional_fields_until_set --lib`
 - `CARGO_INCREMENTAL=0 RUSTFLAGS='-C debuginfo=0' cargo test -p au-kpis-adapter-treasury --test parse parses_treasury_budget_pdf_fixtures_through_sidecar_contract -- --nocapture`
@@ -864,7 +864,7 @@ Verified:
 - 390px mobile screenshot after CPI data loaded
 - `/favicon.ico` returns `200` after adding the favicon route
 
-Browser findings that feed the UI/UX PRD:
+Browser findings for the next UI implementation slice:
 
 - The current app is credible and data-focused, but first use still leads with
   internal vocabulary and controls instead of the latest answer.

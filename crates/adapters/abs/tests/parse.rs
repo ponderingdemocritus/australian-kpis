@@ -45,6 +45,23 @@ const BUILDING_APPROVALS_FIXTURE: &[u8] = br#"<!doctype html>
     </table>
   </section>
 </main>"#;
+const BUILDING_APPROVALS_CURRENT_CHART_FIXTURE: &[u8] = br#"<!doctype html>
+<main>
+  <h1>Building Approvals, Australia</h1>
+  <p>April 2026</p>
+  <dl><dt>Released</dt><dd>2/06/2026</dd></dl>
+  <ul>
+    <li>Total dwellings approved fell 3.4%, to 16,710.</li>
+  </ul>
+  <h2>Dwellings approved</h2>
+  <div class="chart-data-wrapper">
+    <pre class="chart-caption">Dwelling units approved (a)</pre><pre class="chart-headers">[&quot;&quot;,&quot;Seasonally adjusted&quot;,&quot;Trend&quot;]</pre><pre class="chart-data">[[&quot;Mar-26&quot;,&quot;Apr-26&quot;],[[17307],[16710]],[[17361],[17363]]]</pre>
+  </div>
+  <h2>Dwellings approved, by building type (a)</h2>
+  <div class="chart-data-wrapper">
+    <pre class="chart-caption">Dwellings approved, by building type (a)</pre><pre class="chart-headers">[&quot;&quot;,&quot;Seasonally adjusted - Private sector houses&quot;,&quot;Trend - Private sector houses&quot;]</pre><pre class="chart-data">[[&quot;Mar-26&quot;,&quot;Apr-26&quot;],[[10189],[10088]],[[10121],[10199]]]</pre>
+  </div>
+</main>"#;
 const BUILDING_ACTIVITY_FIXTURE: &[u8] = br#"<!doctype html>
 <main>
   <h1>Building Activity, Australia</h1>
@@ -74,11 +91,11 @@ const BUILDING_ACTIVITY_FIXTURE: &[u8] = br#"<!doctype html>
   </section>
 </main>"#;
 const DWELLING_COMPLETION_TIMES_FIXTURE: &[u8] = br#"<!doctype html>
+<head>
+  <meta name="dcterms.issued" content="Wed, 09/10/2019 - 11:30" />
+</head>
 <main>
   <h1>Average dwelling completion times</h1>
-  <dl>
-    <dt>Released</dt><dd>9/10/2019</dd>
-  </dl>
   <p>Data presented in this article are available in the Building Activity data cube.</p>
   <h2>Results</h2>
   <section>
@@ -395,6 +412,26 @@ async fn parse_streams_building_approvals_release_page() {
             && row.value == Some(16_710.0)
     }));
     insta::assert_json_snapshot!(rows);
+}
+
+#[tokio::test]
+async fn parse_streams_current_building_approvals_chart_total_only() {
+    let rows = parse_fixture_owned_with_url(
+        BUILDING_APPROVALS_CURRENT_CHART_FIXTURE.to_vec(),
+        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release",
+    )
+    .await
+    .expect("parse current Building Approvals chart fixture");
+    let rows = rows_to_parsed_rows(rows);
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| {
+        row.dataflow_id == "abs.building_approvals"
+            && row.measure_id == "dwellings_approved"
+            && row.time == "2026-04-01T00:00:00+00:00"
+            && row.value == Some(16_710.0)
+    }));
+    assert!(!rows.iter().any(|row| row.value == Some(10_088.0)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

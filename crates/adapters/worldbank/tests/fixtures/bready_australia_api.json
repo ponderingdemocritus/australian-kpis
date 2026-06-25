@@ -1,0 +1,44 @@
+[
+  {
+    "page": 1,
+    "pages": 14,
+    "per_page": 100,
+    "total": 66,
+    "sourceid": "2",
+    "lastupdated": "2026-04-08"
+  },
+  [
+    {
+      "indicator": {
+        "id": "IC.BRE.BE.OS",
+        "value": "B-READY: Business Entry: Overall Score"
+      },
+      "country": {
+        "id": "AU",
+        "value": "Australia"
+      },
+      "countryiso3code": "AUS",
+      "date": "2025",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "IC.BRE.BE.OS",
+        "value": "B-READY: Business Entry: Overall Score"
+      },
+      "country": {
+        "id": "AU",
+        "value": "Australia"
+      },
+      "countryiso3code": "AUS",
+      "date": "2024",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    }
+  ]
+]

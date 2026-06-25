@@ -21,6 +21,22 @@ const INDEX_FIXTURE: &str = r#"
 </main>
 "#;
 
+const CURRENT_BULLETINS_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Bulletins</h1>
+  <a href="/ongoing/productivity-insights/bulletins/quarterly-bulletin-june-2026">
+    <h3>Quarterly productivity bulletin &ndash; June 2026</h3>
+  </a>
+  <a href="/ongoing/productivity-insights/bulletins/bulletin-2026">
+    <h3>Annual productivity bulletin 2026</h3>
+  </a>
+  <a href="/ongoing/productivity-insights/bulletins/bulletin-2025">
+    <h3>Annual productivity bulletin 2025</h3>
+  </a>
+</main>
+"#;
+
 async fn serve_index_once(body: &'static str) -> Option<String> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -104,6 +120,49 @@ fn discoverable_jobs_apply_revisions_and_source_metadata() {
         "PC:productivity-bulletin-2026"
     );
     assert_eq!(jobs[0].metadata["revision_version"], "2026-06-03");
+}
+
+#[test]
+fn parse_bulletins_listing_discovers_current_annual_html_bulletin() {
+    let bulletins = PcAdapter::parse_productivity_bulletins(CURRENT_BULLETINS_FIXTURE)
+        .expect("parse PC current bulletins index");
+
+    assert!(
+        bulletins
+            .iter()
+            .any(|bulletin| bulletin.bulletin_id == "bulletin-2026"
+                && bulletin.title == "Annual productivity bulletin 2026"
+                && bulletin.source_url
+                    == "https://www.pc.gov.au/ongoing/productivity-insights/bulletins/bulletin-2026/")
+    );
+
+    let annual = bulletins
+        .into_iter()
+        .find(|bulletin| bulletin.bulletin_id == "bulletin-2026")
+        .expect("annual bulletin discovered");
+    let jobs = PcAdapter::current_jobs_with_started_at(
+        &[annual],
+        Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].metadata["artifact_format"], "html");
+    assert_eq!(jobs[0].metadata["revision_key"], "PC:bulletin-2026");
+}
+
+#[test]
+fn parse_bulletins_listing_keeps_latest_annual_html_bulletin() {
+    let bulletins = PcAdapter::parse_productivity_bulletins(CURRENT_BULLETINS_FIXTURE)
+        .expect("parse PC current bulletins index");
+
+    assert_eq!(
+        bulletins
+            .iter()
+            .filter(|bulletin| bulletin.bulletin_id.starts_with("bulletin-"))
+            .map(|bulletin| bulletin.bulletin_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["bulletin-2026"]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

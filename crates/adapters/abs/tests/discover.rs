@@ -104,6 +104,23 @@ const BUILDING_APPROVALS_RELEASE_FIXTURE: &str = r#"
 </main>
 "#;
 
+const BUILDING_APPROVALS_CURRENT_HEADER_FIXTURE: &str = r#"
+<!doctype html>
+<html>
+  <head><title>Building Approvals, Australia, April 2026 | Australian Bureau of Statistics</title></head>
+  <body>
+    <main>
+      <h1>Building Approvals, Australia</h1>
+      <p>April 2026</p>
+      <dl>
+        <dt>Released</dt><dd>2/06/2026</dd>
+      </dl>
+      <h2>Dwellings approved</h2>
+    </main>
+  </body>
+</html>
+"#;
+
 const BUILDING_ACTIVITY_RELEASE_FIXTURE: &str = r#"
 <!doctype html>
 <main>
@@ -119,12 +136,11 @@ const BUILDING_ACTIVITY_RELEASE_FIXTURE: &str = r#"
 
 const DWELLING_COMPLETION_TIMES_FIXTURE: &str = r#"
 <!doctype html>
+<head>
+  <meta name="dcterms.issued" content="Wed, 09/10/2019 - 11:30" />
+</head>
 <main>
   <h1>Average dwelling completion times</h1>
-  <dl>
-    <dt>Released</dt><dd>9/10/2019</dd>
-    <dt>Source</dt><dd>Building Activity, Australia, June 2019</dd>
-  </dl>
   <p>The Building Activity: Average dwelling completion times data cube is released annually.</p>
 </main>
 "#;
@@ -669,6 +685,26 @@ fn manifest_declares_abs_cpi_and_conservative_rate_limit() {
     );
     assert_eq!(manifest.rate_limit.max_requests, 60);
     assert_eq!(manifest.rate_limit.per, Duration::from_secs(60));
+
+    let metadata = adapter.dataflow_metadata();
+    let cpi = metadata
+        .iter()
+        .find(|dataflow| dataflow.id.as_str() == "abs.cpi")
+        .expect("ABS CPI dataflow metadata");
+    assert_eq!(
+        cpi.dimensions
+            .iter()
+            .map(|dimension| dimension.as_str())
+            .collect::<Vec<_>>(),
+        ["measure", "index", "tsest", "region", "freq"]
+    );
+    assert_eq!(
+        cpi.measures
+            .iter()
+            .map(|measure| measure.as_str())
+            .collect::<Vec<_>>(),
+        ["1", "2", "3", "4", "5", "6", "7"]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -697,6 +733,30 @@ async fn discover_fetches_building_approvals_release_page_when_requested() {
     assert_eq!(jobs[0].source_url, release_url);
     assert_eq!(jobs[0].trace_parent.as_deref(), Some(TRACE_PARENT));
     assert_eq!(jobs[0].metadata["revision_key"], "ABS:building-approvals");
+    assert_eq!(jobs[0].metadata["revision_version"], "April 2026");
+    assert_eq!(jobs[0].metadata["released"], "2/06/2026");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_accepts_current_building_approvals_header_period() {
+    let Some(release_url) =
+        serve_building_approvals_release_once(BUILDING_APPROVALS_CURRENT_HEADER_FIXTURE).await
+    else {
+        return;
+    };
+    let adapter = AbsAdapter::builder()
+        .building_approvals_release_url(&release_url)
+        .build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap())
+        .with_requested_dataflow_id(DataflowId::new("abs.building_approvals").unwrap());
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover current Building Approvals release");
+
+    assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].metadata["revision_version"], "April 2026");
     assert_eq!(jobs[0].metadata["released"], "2/06/2026");
 }

@@ -74,6 +74,10 @@ export function ExplorerPage() {
   const regions = regionsQuery.data?.codelist.codes ?? []
   const activeNationalRegion = useMemo(() => nationalRegionId(regions), [regions])
   const states = useMemo(() => stateRegions(regions), [regions])
+  const observationDimensionIds = useMemo(
+    () => detailQuery.data?.dimensions.map((dimension) => dimension.id) ?? ['region'],
+    [detailQuery.data],
+  )
 
   useEffect(() => {
     if (regions.length === 0) {
@@ -86,14 +90,15 @@ export function ExplorerPage() {
 
   const nationalQuery = useQuery({
     enabled: selectedDataflow.length > 0 && regions.length > 0,
-    queryFn: () => collectObservations(selectedDataflow, activeNationalRegion),
-    queryKey: ['observations', selectedDataflow, activeNationalRegion],
+    queryFn: () =>
+      collectObservations(selectedDataflow, activeNationalRegion, observationDimensionIds),
+    queryKey: ['observations', selectedDataflow, activeNationalRegion, observationDimensionIds],
   })
 
   const selectedQuery = useQuery({
     enabled: selectedDataflow.length > 0,
-    queryFn: () => collectObservations(selectedDataflow, selectedRegion),
-    queryKey: ['observations', selectedDataflow, selectedRegion],
+    queryFn: () => collectObservations(selectedDataflow, selectedRegion, observationDimensionIds),
+    queryKey: ['observations', selectedDataflow, selectedRegion, observationDimensionIds],
   })
 
   const comparisonQuery = useQuery({
@@ -101,13 +106,22 @@ export function ExplorerPage() {
     queryFn: async () => {
       const rows = await Promise.all(
         states.map(async (region) => ({
-          observations: await collectObservations(selectedDataflow, region.id),
+          observations: await collectObservations(
+            selectedDataflow,
+            region.id,
+            observationDimensionIds,
+          ),
           region,
         })),
       )
       return rows
     },
-    queryKey: ['comparison', selectedDataflow, states.map((region) => region.id).join(',')],
+    queryKey: [
+      'comparison',
+      selectedDataflow,
+      states.map((region) => region.id).join(','),
+      observationDimensionIds,
+    ],
   })
 
   const nationalRows = nationalQuery.data ?? []

@@ -80,6 +80,10 @@ export function ComparePage() {
     () => [regionById(regions, activeNationalRegion), ...stateRegions(regions)],
     [activeNationalRegion, regions],
   )
+  const observationDimensionIds = useMemo(
+    () => detailQuery.data?.dimensions.map((dimension) => dimension.id) ?? ['region'],
+    [detailQuery.data],
+  )
 
   useEffect(() => {
     if (regions.length === 0 || defaultSelectedRegions.length === 0) {
@@ -98,12 +102,21 @@ export function ComparePage() {
         selectedRegions.map(async (regionId) => {
           const region = regionById(regions, regionId)
           return {
-            observations: await collectObservations(selectedDataflow, region.id),
+            observations: await collectObservations(
+              selectedDataflow,
+              region.id,
+              observationDimensionIds,
+            ),
             region,
           }
         }),
       ),
-    queryKey: ['compare-observations', selectedDataflow, selectedRegions.join(',')],
+    queryKey: [
+      'compare-observations',
+      selectedDataflow,
+      selectedRegions.join(','),
+      observationDimensionIds,
+    ],
   })
 
   const comparisonRows = comparisonQuery.data ?? []

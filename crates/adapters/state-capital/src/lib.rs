@@ -21,7 +21,8 @@ use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use futures::{StreamExt, stream};
 use serde::Deserialize;
 
-const DEFAULT_INDEX_URL: &str = "https://www.audit.vic.gov.au/reports";
+const DEFAULT_INDEX_URL: &str =
+    "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025";
 const USER_AGENT: &str = concat!("au-kpis-adapter-state-capital/", env!("CARGO_PKG_VERSION"));
 const SOURCE_ID: &str = "state_capital";
 const VIC_MAJOR_PROJECTS_DATAFLOW_ID: &str = "state_capital.vic_major_projects";

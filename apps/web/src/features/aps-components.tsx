@@ -310,43 +310,42 @@ function ApsSourceDrilldowns({ contributions }: { contributions: ApsContribution
         <CardDescription>Contribution rows expose coverage state and provenance.</CardDescription>
       </CardHeader>
       <CardContent>
-        <Table aria-label="APS source drilldowns" className="min-w-[900px]">
+        <Table aria-label="APS source drilldowns" className="min-w-[640px] table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead>Indicator</TableHead>
-              <TableHead>Source</TableHead>
-              <TableHead>Latest period</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Provenance</TableHead>
-              <TableHead className="text-right">Value</TableHead>
+              <TableHead className="w-[22%]">Indicator</TableHead>
+              <TableHead className="w-[34%]">Source</TableHead>
+              <TableHead className="w-[15%]">Latest period</TableHead>
+              <TableHead className="w-[18%]">Status</TableHead>
+              <TableHead className="w-[11%] text-right">Value</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {contributions.map((contribution) => (
               <TableRow key={contribution.indicator_id}>
-                <TableCell className="max-w-[260px] whitespace-normal">
+                <TableCell className="whitespace-normal">
                   <div className="font-medium">{contribution.label}</div>
                   <div className="text-xs text-muted-foreground">
                     {tokenLabel(contribution.component)}
                   </div>
                 </TableCell>
-                <TableCell>
+                <TableCell className="whitespace-normal">
                   <div className="font-medium">{sourceLabel(contribution)}</div>
-                  <div className="font-mono text-xs text-muted-foreground">
+                  <div className="break-all font-mono text-xs text-muted-foreground">
                     {contribution.source_dataflow_id}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 font-mono text-xs text-muted-foreground">
+                    <span title={contribution.series_key ?? undefined}>
+                      series {shortFingerprint(contribution.series_key)}
+                    </span>
+                    <span title={contribution.source_artifact_id ?? undefined}>
+                      artifact {shortFingerprint(contribution.source_artifact_id)}
+                    </span>
                   </div>
                 </TableCell>
                 <TableCell>{formatApsDate(contribution.latest_period)}</TableCell>
                 <TableCell>
                   <CoverageBadge status={contribution.coverage_status} />
-                </TableCell>
-                <TableCell className="max-w-[260px] whitespace-normal">
-                  <div className="font-mono text-xs">
-                    {contribution.series_key ?? 'series unavailable'}
-                  </div>
-                  <div className="mt-1 font-mono text-xs text-muted-foreground">
-                    {contribution.source_artifact_id ?? 'artifact unavailable'}
-                  </div>
                 </TableCell>
                 <TableCell className="text-right font-mono">
                   {formatApsRawValue(contribution.raw_value)}
@@ -358,6 +357,13 @@ function ApsSourceDrilldowns({ contributions }: { contributions: ApsContribution
       </CardContent>
     </Card>
   )
+}
+
+function shortFingerprint(value: string | null | undefined): string {
+  if (value === null || value === undefined || value.length === 0) {
+    return 'unavailable'
+  }
+  return value.length <= 12 ? value : `${value.slice(0, 12)}...`
 }
 
 function ApsConfigPanel({ indicators }: { indicators: ApsIndicatorConfig[] }) {

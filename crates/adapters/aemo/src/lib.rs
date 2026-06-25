@@ -28,11 +28,11 @@ use tokio_util::{io::StreamReader, sync::CancellationToken};
 use zip::ZipArchive;
 
 const DEFAULT_DISPATCH_LISTING_URL: &str =
-    "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/";
-const DEFAULT_GENERATION_MIX_LISTING_URL: &str =
-    "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/";
-const DEFAULT_DISPATCHABILITY_CAPACITY_LISTING_URL: &str =
-    "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/";
+    "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/";
+const DEFAULT_GENERATION_MIX_LISTING_URL: &str = "https://nemweb.com.au/Reports/Current/";
+const DEFAULT_NEXT_DAY_ACTUAL_GEN_LISTING_URL: &str =
+    "https://nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/";
+const DEFAULT_DISPATCHABILITY_CAPACITY_LISTING_URL: &str = DEFAULT_DISPATCH_LISTING_URL;
 const USER_AGENT: &str = concat!("au-kpis-adapter-aemo/", env!("CARGO_PKG_VERSION"));
 const DISPATCH_DATAFLOW_ID: &str = "aemo.dispatch";
 const GENERATION_MIX_DATAFLOW_ID: &str = "aemo.generation_mix";
@@ -142,6 +142,30 @@ impl AemoAdapter {
             .collect()
     }
 
+    /// Diff current DispatchIS artifacts as dispatchability-capacity proxy jobs.
+    #[must_use]
+    pub fn discoverable_capacity_proxy_jobs_with_started_at(
+        current: &[AemoDispatchArtifact],
+        known_revisions: &BTreeMap<String, UpstreamRevision>,
+        started_at: DateTime<Utc>,
+        trace_parent: Option<&str>,
+    ) -> Vec<DiscoveredJob> {
+        current
+            .iter()
+            .filter_map(|artifact| {
+                let revision =
+                    UpstreamRevision::new(artifact.revision_version(), Some(&artifact.file_name));
+                known_revisions
+                    .get(&artifact.capacity_revision_key())
+                    .is_none_or(|known| known != &revision)
+                    .then(|| {
+                        artifact
+                            .to_dispatchability_capacity_discovered_job(started_at, trace_parent)
+                    })
+            })
+            .collect()
+    }
+
     /// Static metadata for the AEMO dispatch dataflow.
     #[must_use]
     pub fn dataflow_metadata(&self) -> Vec<Dataflow> {
@@ -169,7 +193,7 @@ impl AemoAdapter {
                 source_id: source_id(),
                 name: "AEMO NEM generation mix".into(),
                 description: Some(
-                    "Five-minute regional generation by fuel type from AEMO NEMWeb fuel mix reports."
+                    "Five-minute generation by fuel type from AEMO NEMWeb FuelMix reports when available, falling back to a NEM-wide wind proxy from Next Day Actual Gen metered DUID readings."
                         .into(),
                 ),
                 dimensions: vec![
@@ -182,14 +206,14 @@ impl AemoAdapter {
                 frequency: Frequency::Irregular,
                 license: License::Other(LICENSE_NAME.into()),
                 attribution: ATTRIBUTION.into(),
-                source_url: DEFAULT_GENERATION_MIX_LISTING_URL.into(),
+                source_url: DEFAULT_NEXT_DAY_ACTUAL_GEN_LISTING_URL.into(),
             },
             Dataflow {
                 id: dataflow_id(AemoArtifactKind::DispatchabilityCapacity),
                 source_id: source_id(),
                 name: "AEMO NEM dispatchability capacity".into(),
                 description: Some(
-                    "Five-minute regional available generation, dispatchable capacity, and interchange capacity signals from AEMO NEMWeb."
+                    "Five-minute regional available generation from AEMO NEMWeb DispatchIS reports, with legacy DispatchCapacity artifacts still accepted when available."
                         .into(),
                 ),
                 dimensions: vec![
@@ -241,8 +265,8 @@ impl AemoAdapter {
                 job.source_url
             ))
         })?;
-        let expected = dataflow_id(provenance.kind());
-        if job.dataflow_id != expected {
+        if !fetch_job_matches_provenance(&job.dataflow_id, provenance.kind()) {
+            let expected = dataflow_id(provenance.kind());
             return Err(AdapterError::Validation(format!(
                 "AEMO fetch URL `{}` resolves to `{}` but job requested `{}`",
                 job.source_url,
@@ -281,43 +305,79 @@ impl SourceAdapter for AemoAdapter {
 
     #[tracing::instrument(skip(self, ctx), fields(source = self.id()))]
     async fn discover(&self, ctx: &DiscoveryCtx) -> Result<Vec<DiscoveredJob>, AdapterError> {
-        let dispatch_body = fetch_listing_body(ctx, self.dispatch_listing_url()).await?;
-        let dispatch_current =
-            parse_dispatch_listing_with_base(&dispatch_body, self.dispatch_listing_url())?;
-        let mut jobs = Self::discoverable_jobs_with_started_at(
-            &dispatch_current,
-            ctx.known_revisions(),
-            ctx.started_at,
-            ctx.trace_parent(),
-        );
+        let requested = ctx.requested_dataflow_id().cloned();
+        if let Some(requested) = &requested {
+            if !self
+                .manifest
+                .dataflows
+                .iter()
+                .any(|dataflow| dataflow == requested)
+            {
+                return Ok(Vec::new());
+            }
+        }
 
-        let generation_mix_body =
-            fetch_listing_body(ctx, self.generation_mix_listing_url()).await?;
-        let generation_mix_current = parse_energy_listing_with_base(
-            &generation_mix_body,
-            self.generation_mix_listing_url(),
-            AemoArtifactKind::GenerationMix,
-        )?;
-        jobs.extend(Self::discoverable_energy_jobs_with_started_at(
-            &generation_mix_current,
-            ctx.known_revisions(),
-            ctx.started_at,
-            ctx.trace_parent(),
-        ));
+        let mut jobs = Vec::new();
+        if should_discover_kind(requested.as_ref(), AemoArtifactKind::Dispatch) {
+            let dispatch_body = fetch_listing_body(ctx, self.dispatch_listing_url()).await?;
+            let dispatch_current =
+                parse_dispatch_listing_with_base(&dispatch_body, self.dispatch_listing_url())?;
+            jobs.extend(Self::discoverable_jobs_with_started_at(
+                &dispatch_current,
+                ctx.known_revisions(),
+                ctx.started_at,
+                ctx.trace_parent(),
+            ));
+        }
 
-        let capacity_body =
-            fetch_listing_body(ctx, self.dispatchability_capacity_listing_url()).await?;
-        let capacity_current = parse_energy_listing_with_base(
-            &capacity_body,
-            self.dispatchability_capacity_listing_url(),
+        if should_discover_kind(requested.as_ref(), AemoArtifactKind::GenerationMix) {
+            let generation_mix_body =
+                fetch_listing_body(ctx, self.generation_mix_listing_url()).await?;
+            let generation_mix_current = discover_generation_mix_artifacts(
+                ctx,
+                &generation_mix_body,
+                self.generation_mix_listing_url(),
+            )
+            .await?;
+            jobs.extend(Self::discoverable_energy_jobs_with_started_at(
+                &generation_mix_current,
+                ctx.known_revisions(),
+                ctx.started_at,
+                ctx.trace_parent(),
+            ));
+        }
+
+        if should_discover_kind(
+            requested.as_ref(),
             AemoArtifactKind::DispatchabilityCapacity,
-        )?;
-        jobs.extend(Self::discoverable_energy_jobs_with_started_at(
-            &capacity_current,
-            ctx.known_revisions(),
-            ctx.started_at,
-            ctx.trace_parent(),
-        ));
+        ) {
+            let capacity_body =
+                fetch_listing_body(ctx, self.dispatchability_capacity_listing_url()).await?;
+            let capacity_current = parse_energy_listing_with_base(
+                &capacity_body,
+                self.dispatchability_capacity_listing_url(),
+                AemoArtifactKind::DispatchabilityCapacity,
+            )?;
+            if capacity_current.is_empty() {
+                let dispatch_current = parse_dispatch_listing_with_base(
+                    &capacity_body,
+                    self.dispatchability_capacity_listing_url(),
+                )?;
+                jobs.extend(Self::discoverable_capacity_proxy_jobs_with_started_at(
+                    &dispatch_current,
+                    ctx.known_revisions(),
+                    ctx.started_at,
+                    ctx.trace_parent(),
+                ));
+            } else {
+                jobs.extend(Self::discoverable_energy_jobs_with_started_at(
+                    &capacity_current,
+                    ctx.known_revisions(),
+                    ctx.started_at,
+                    ctx.trace_parent(),
+                ));
+            }
+        }
 
         Ok(jobs)
     }
@@ -493,6 +553,42 @@ impl AemoDispatchArtifact {
             ]),
         }
     }
+
+    fn capacity_revision_key(&self) -> String {
+        format!("AEMO:dispatchability_capacity:{}", self.file_name)
+    }
+
+    fn to_dispatchability_capacity_discovered_job(
+        &self,
+        _started_at: DateTime<Utc>,
+        trace_parent: Option<&str>,
+    ) -> DiscoveredJob {
+        DiscoveredJob {
+            id: format!("aemo:dispatchability_capacity:{}", self.file_name),
+            source_id: source_id(),
+            dataflow_id: dataflow_id(AemoArtifactKind::DispatchabilityCapacity),
+            source_url: self.source_url.clone(),
+            trace_parent: trace_parent.map(str::to_owned),
+            metadata: BTreeMap::from([
+                ("artifact_format".into(), "zip".into()),
+                ("file_name".into(), self.file_name.clone()),
+                (
+                    "dispatch_interval".into(),
+                    self.dispatch_interval
+                        .to_rfc3339_opts(SecondsFormat::Secs, true),
+                ),
+                ("revision_key".into(), self.capacity_revision_key()),
+                ("revision_version".into(), self.revision_version()),
+                ("cadence".into(), "5-minute".into()),
+                ("proxy_source_dataflow".into(), DISPATCH_DATAFLOW_ID.into()),
+                ("aemo_table".into(), "DISPATCH.REGIONSUM".into()),
+                ("aemo_field".into(), "AVAILABLEGENERATION".into()),
+                ("attribution".into(), ATTRIBUTION.into()),
+                ("license".into(), LICENSE_NAME.into()),
+                ("license_url".into(), LICENSE_URL.into()),
+            ]),
+        }
+    }
 }
 
 /// One AEMO APS energy ZIP listed by NEMWeb.
@@ -525,26 +621,36 @@ impl AemoEnergyArtifact {
         _started_at: DateTime<Utc>,
         trace_parent: Option<&str>,
     ) -> DiscoveredJob {
+        let mut metadata = BTreeMap::from([
+            ("artifact_format".into(), "zip".into()),
+            ("file_name".into(), self.file_name.clone()),
+            (
+                "interval".into(),
+                self.interval.to_rfc3339_opts(SecondsFormat::Secs, true),
+            ),
+            ("revision_key".into(), self.revision_key()),
+            ("revision_version".into(), self.revision_version()),
+            ("cadence".into(), "5-minute".into()),
+            ("attribution".into(), ATTRIBUTION.into()),
+            ("license".into(), LICENSE_NAME.into()),
+            ("license_url".into(), LICENSE_URL.into()),
+        ]);
+        if self.kind == AemoArtifactKind::NextDayActualGen {
+            metadata.extend([
+                ("proxy_source_family".into(), "Next_Day_Actual_Gen".into()),
+                ("aemo_table".into(), "METER_DATA.GEN_DUID".into()),
+                ("aemo_field".into(), "MWH_READING".into()),
+                ("fuel_type_inference".into(), "DUID contains WF".into()),
+                ("unit_conversion".into(), "MWH_READING * 12".into()),
+            ]);
+        }
         DiscoveredJob {
             id: format!("aemo:{}:{}", self.kind.revision_name(), self.file_name),
             source_id: source_id(),
             dataflow_id: dataflow_id(self.kind),
             source_url: self.source_url.clone(),
             trace_parent: trace_parent.map(str::to_owned),
-            metadata: BTreeMap::from([
-                ("artifact_format".into(), "zip".into()),
-                ("file_name".into(), self.file_name.clone()),
-                (
-                    "interval".into(),
-                    self.interval.to_rfc3339_opts(SecondsFormat::Secs, true),
-                ),
-                ("revision_key".into(), self.revision_key()),
-                ("revision_version".into(), self.revision_version()),
-                ("cadence".into(), "5-minute".into()),
-                ("attribution".into(), ATTRIBUTION.into()),
-                ("license".into(), LICENSE_NAME.into()),
-                ("license_url".into(), LICENSE_URL.into()),
-            ]),
+            metadata,
         }
     }
 }
@@ -553,6 +659,7 @@ impl AemoEnergyArtifact {
 enum AemoArtifactKind {
     Dispatch,
     GenerationMix,
+    NextDayActualGen,
     DispatchabilityCapacity,
 }
 
@@ -560,7 +667,7 @@ impl AemoArtifactKind {
     const fn dataflow_id(self) -> &'static str {
         match self {
             Self::Dispatch => DISPATCH_DATAFLOW_ID,
-            Self::GenerationMix => GENERATION_MIX_DATAFLOW_ID,
+            Self::GenerationMix | Self::NextDayActualGen => GENERATION_MIX_DATAFLOW_ID,
             Self::DispatchabilityCapacity => DISPATCHABILITY_CAPACITY_DATAFLOW_ID,
         }
     }
@@ -568,7 +675,7 @@ impl AemoArtifactKind {
     const fn revision_name(self) -> &'static str {
         match self {
             Self::Dispatch => "dispatch",
-            Self::GenerationMix => "generation_mix",
+            Self::GenerationMix | Self::NextDayActualGen => "generation_mix",
             Self::DispatchabilityCapacity => "dispatchability_capacity",
         }
     }
@@ -577,6 +684,7 @@ impl AemoArtifactKind {
         match self {
             Self::Dispatch => "/DispatchIS_Reports/",
             Self::GenerationMix => "/FuelMix/",
+            Self::NextDayActualGen => "/Next_Day_Actual_Gen/",
             Self::DispatchabilityCapacity => "/DispatchCapacity/",
         }
     }
@@ -585,6 +693,7 @@ impl AemoArtifactKind {
         match self {
             Self::Dispatch => "PUBLIC_DISPATCHIS_",
             Self::GenerationMix => "PUBLIC_FUEL_MIX_",
+            Self::NextDayActualGen => "PUBLIC_NEXT_DAY_ACTUAL_GEN_",
             Self::DispatchabilityCapacity => "PUBLIC_DISPATCHCAPACITY_",
         }
     }
@@ -593,9 +702,20 @@ impl AemoArtifactKind {
         match self {
             Self::Dispatch => "AEMO DispatchIS",
             Self::GenerationMix => "AEMO FuelMix",
+            Self::NextDayActualGen => "AEMO Next Day Actual Gen",
             Self::DispatchabilityCapacity => "AEMO DispatchCapacity",
         }
     }
+}
+
+fn should_discover_kind(requested: Option<&DataflowId>, kind: AemoArtifactKind) -> bool {
+    requested.is_none_or(|dataflow_id| dataflow_id.as_str() == kind.dataflow_id())
+}
+
+fn fetch_job_matches_provenance(requested: &DataflowId, source_kind: AemoArtifactKind) -> bool {
+    requested.as_str() == source_kind.dataflow_id()
+        || (requested.as_str() == DISPATCHABILITY_CAPACITY_DATAFLOW_ID
+            && source_kind == AemoArtifactKind::Dispatch)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -613,12 +733,32 @@ impl AemoArtifactProvenance {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AemoParseKind {
+    Dispatch,
+    GenerationMix,
+    DispatchabilityCapacity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AemoParseProvenance {
+    source: AemoArtifactProvenance,
+    parse_kind: AemoParseKind,
+}
+
+impl AemoParseProvenance {
+    const fn source_kind(&self) -> AemoArtifactKind {
+        self.source.kind()
+    }
+}
+
 fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
-    let provenance = match validate_parse_artifact(&artifact) {
+    let provenance = match validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
         Ok(provenance) => provenance,
         Err(err) => return Box::pin(stream::once(async move { Err(err) })),
     };
-    let kind = provenance.kind();
+    let source_kind = provenance.source_kind();
+    let parse_kind = provenance.parse_kind;
 
     let blob_store = ctx.blob_store.clone();
     let started_at = ctx.started_at;
@@ -637,7 +777,8 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
         }
 
         let result = parse_aemo_artifact(
-            kind,
+            source_kind,
+            parse_kind,
             blob_store,
             key,
             artifact,
@@ -657,7 +798,8 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
 }
 
 async fn parse_aemo_artifact(
-    kind: AemoArtifactKind,
+    source_kind: AemoArtifactKind,
+    parse_kind: AemoParseKind,
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
@@ -676,17 +818,17 @@ async fn parse_aemo_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
-    let csv_bytes = tokio::task::spawn_blocking(move || unzip_aemo_csv(bytes, kind))
+    let csv_bytes = tokio::task::spawn_blocking(move || unzip_aemo_csv(bytes, source_kind))
         .await
         .map_err(parse_worker_error)??;
     let records = parse_aemo_csv(csv_bytes, cancellation.clone()).await?;
 
-    let rows = match kind {
-        AemoArtifactKind::Dispatch => dispatch_observations(records, &artifact, ingested_at)?,
-        AemoArtifactKind::GenerationMix => {
+    let rows = match parse_kind {
+        AemoParseKind::Dispatch => dispatch_observations(records, &artifact, ingested_at)?,
+        AemoParseKind::GenerationMix => {
             generation_mix_observations(records, &artifact, ingested_at)?
         }
-        AemoArtifactKind::DispatchabilityCapacity => {
+        AemoParseKind::DispatchabilityCapacity => {
             dispatchability_capacity_observations(records, &artifact, ingested_at)?
         }
     };
@@ -814,6 +956,7 @@ fn generation_mix_observations(
     ingested_at: DateTime<Utc>,
 ) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
     let mut headers = BTreeMap::<(String, String), BTreeMap<String, usize>>::new();
+    let mut next_day_wind_mw_by_interval = BTreeMap::<DateTime<Utc>, f64>::new();
     let mut observations = Vec::new();
     for row in rows {
         if row.len() < 4 {
@@ -844,8 +987,31 @@ fn generation_mix_observations(
                     ingested_at,
                 )?);
             }
+            "D" if row[1] == "METER_DATA" && row[2] == "GEN_DUID" => {
+                let Some(header) = headers.get(&key) else {
+                    return Err(AdapterError::FormatDrift(
+                        "AEMO Next Day Actual Gen row appeared before its header".into(),
+                    ));
+                };
+                let duid = field(&row, header, "DUID")?;
+                if !is_wind_duid(duid) {
+                    continue;
+                }
+                let interval = parse_dispatch_time(field(&row, header, "INTERVAL_DATETIME")?)?;
+                let mwh_reading = parse_number(field(&row, header, "MWH_READING")?)?;
+                let generation_mw = mwh_reading.max(0.0) * 12.0;
+                *next_day_wind_mw_by_interval.entry(interval).or_default() += generation_mw;
+            }
             _ => {}
         }
+    }
+    for (time, value) in next_day_wind_mw_by_interval {
+        observations.push(generation_mix_proxy_observation(
+            time,
+            value,
+            artifact,
+            ingested_at,
+        ));
     }
     Ok(observations)
 }
@@ -893,13 +1059,44 @@ fn dispatchability_capacity_observations(
                         source_field: "NETINTERCHANGE",
                     },
                 ] {
-                    observations.push(dispatchability_capacity_observation(
+                    push_capacity_metric_if_present(
+                        &mut observations,
                         &row,
                         header,
                         metric,
+                        "CAPACITY",
+                        None,
                         artifact,
                         ingested_at,
-                    )?);
+                    )?;
+                }
+            }
+            "D" if row[1] == "DISPATCH" && row[2] == "REGIONSUM" => {
+                let Some(header) = headers.get(&key) else {
+                    return Err(AdapterError::FormatDrift(
+                        "AEMO DispatchIS REGIONSUM row appeared before its header".into(),
+                    ));
+                };
+                for metric in [
+                    CapacityMetric {
+                        id: "available_generation",
+                        source_field: "AVAILABLEGENERATION",
+                    },
+                    CapacityMetric {
+                        id: "net_interchange",
+                        source_field: "NETINTERCHANGE",
+                    },
+                ] {
+                    push_capacity_metric_if_present(
+                        &mut observations,
+                        &row,
+                        header,
+                        metric,
+                        "REGIONSUM",
+                        Some(DISPATCH_DATAFLOW_ID),
+                        artifact,
+                        ingested_at,
+                    )?;
                 }
             }
             _ => {}
@@ -920,6 +1117,31 @@ struct DispatchMetric {
 struct CapacityMetric {
     id: &'static str,
     source_field: &'static str,
+}
+
+fn push_capacity_metric_if_present(
+    observations: &mut Vec<(SeriesDescriptor, Observation)>,
+    row: &[String],
+    header: &BTreeMap<String, usize>,
+    metric: CapacityMetric,
+    table: &'static str,
+    proxy_source_dataflow: Option<&'static str>,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<(), AdapterError> {
+    if !header.contains_key(metric.source_field) {
+        return Ok(());
+    }
+    observations.push(dispatchability_capacity_observation(
+        row,
+        header,
+        metric,
+        table,
+        proxy_source_dataflow,
+        artifact,
+        ingested_at,
+    )?);
+    Ok(())
 }
 
 fn dispatch_observation(
@@ -1045,10 +1267,69 @@ fn generation_mix_observation(
     Ok((descriptor, observation))
 }
 
+fn generation_mix_proxy_observation(
+    time: DateTime<Utc>,
+    value: f64,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> (SeriesDescriptor, Observation) {
+    let dimensions = BTreeMap::from([
+        (
+            DimensionId::new("region").expect("static dimension id is valid"),
+            CodeId::new("NEM").expect("static code id is valid"),
+        ),
+        (
+            DimensionId::new("fuel_type").expect("static dimension id is valid"),
+            CodeId::new("wind").expect("static code id is valid"),
+        ),
+    ]);
+    let dataflow_id = dataflow_id(AemoArtifactKind::GenerationMix);
+    let measure_id = MeasureId::new("generation_mw").expect("static measure id is valid");
+    let series_key = SeriesKey::derive(
+        &dataflow_id,
+        &measure_id,
+        dimensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    let descriptor = SeriesDescriptor {
+        series_key,
+        dataflow_id,
+        measure_id,
+        dimensions,
+        unit: "MW".into(),
+    };
+    let attributes = BTreeMap::from([
+        ("source".into(), SOURCE_NAME.into()),
+        ("source_url".into(), artifact.source_url.clone()),
+        ("license".into(), LICENSE_NAME.into()),
+        ("license_url".into(), LICENSE_URL.into()),
+        ("aemo_table".into(), "GEN_DUID".into()),
+        ("aemo_field".into(), "MWH_READING".into()),
+        ("proxy_source_family".into(), "Next_Day_Actual_Gen".into()),
+        ("fuel_type_inference".into(), "DUID contains WF".into()),
+        ("unit_conversion".into(), "MWH_READING * 12".into()),
+    ]);
+    let observation = Observation {
+        series_key,
+        time,
+        time_precision: TimePrecision::Minute,
+        value: Some(value),
+        status: ObservationStatus::Normal,
+        revision_no: 0,
+        attributes,
+        ingested_at,
+        source_artifact_id: artifact.id,
+    };
+    (descriptor, observation)
+}
+
 fn dispatchability_capacity_observation(
     row: &[String],
     header: &BTreeMap<String, usize>,
     metric: CapacityMetric,
+    table: &'static str,
+    proxy_source_dataflow: Option<&'static str>,
     artifact: &ArtifactRef,
     ingested_at: DateTime<Utc>,
 ) -> Result<(SeriesDescriptor, Observation), AdapterError> {
@@ -1082,14 +1363,17 @@ fn dispatchability_capacity_observation(
         dimensions,
         unit: "MW".into(),
     };
-    let attributes = BTreeMap::from([
+    let mut attributes = BTreeMap::from([
         ("source".into(), SOURCE_NAME.into()),
         ("source_url".into(), artifact.source_url.clone()),
         ("license".into(), LICENSE_NAME.into()),
         ("license_url".into(), LICENSE_URL.into()),
-        ("aemo_table".into(), "CAPACITY".into()),
+        ("aemo_table".into(), table.into()),
         ("aemo_field".into(), metric.source_field.into()),
     ]);
+    if let Some(proxy_source_dataflow) = proxy_source_dataflow {
+        attributes.insert("proxy_source_dataflow".into(), proxy_source_dataflow.into());
+    }
     let observation = Observation {
         series_key,
         time,
@@ -1130,19 +1414,67 @@ fn parse_dispatch_time(value: &str) -> Result<DateTime<Utc>, AdapterError> {
     Ok(Utc.from_utc_datetime(&date_time))
 }
 
-fn validate_parse_artifact(artifact: &ArtifactRef) -> Result<AemoArtifactProvenance, AdapterError> {
+fn is_wind_duid(duid: &str) -> bool {
+    duid.to_ascii_uppercase().contains("WF")
+}
+
+fn validate_parse_artifact(
+    artifact: &ArtifactRef,
+    expected_dataflow_id: Option<&DataflowId>,
+) -> Result<AemoParseProvenance, AdapterError> {
     if artifact.source_id.as_str() != "aemo" {
         return Err(AdapterError::Validation(format!(
             "AEMO parse received artifact for source `{}`",
             artifact.source_id.as_str()
         )));
     }
-    aemo_url_provenance(&artifact.source_url).ok_or_else(|| {
+    let source = aemo_url_provenance(&artifact.source_url).ok_or_else(|| {
         AdapterError::Validation(format!(
             "AEMO parse artifact `{}` is missing supported AEMO provenance",
             artifact.source_url
         ))
-    })
+    })?;
+    let parse_kind = parse_kind_for_source(&source, expected_dataflow_id)?;
+    Ok(AemoParseProvenance { source, parse_kind })
+}
+
+fn parse_kind_for_source(
+    source: &AemoArtifactProvenance,
+    expected_dataflow_id: Option<&DataflowId>,
+) -> Result<AemoParseKind, AdapterError> {
+    let source_kind = source.kind();
+    match expected_dataflow_id.map(|id| id.as_str()) {
+        Some(DISPATCH_DATAFLOW_ID) if source_kind == AemoArtifactKind::Dispatch => {
+            Ok(AemoParseKind::Dispatch)
+        }
+        Some(GENERATION_MIX_DATAFLOW_ID) if source_kind == AemoArtifactKind::GenerationMix => {
+            Ok(AemoParseKind::GenerationMix)
+        }
+        Some(GENERATION_MIX_DATAFLOW_ID) if source_kind == AemoArtifactKind::NextDayActualGen => {
+            Ok(AemoParseKind::GenerationMix)
+        }
+        Some(DISPATCHABILITY_CAPACITY_DATAFLOW_ID)
+            if source_kind == AemoArtifactKind::DispatchabilityCapacity
+                || source_kind == AemoArtifactKind::Dispatch =>
+        {
+            Ok(AemoParseKind::DispatchabilityCapacity)
+        }
+        Some(expected) => Err(AdapterError::Validation(format!(
+            "AEMO parse artifact `{}` resolves to `{}` but parser expected `{expected}`",
+            match source {
+                AemoArtifactProvenance::Dispatch(artifact) => &artifact.source_url,
+                AemoArtifactProvenance::Energy(artifact) => &artifact.source_url,
+            },
+            source_kind.dataflow_id(),
+        ))),
+        None => match source_kind {
+            AemoArtifactKind::Dispatch => Ok(AemoParseKind::Dispatch),
+            AemoArtifactKind::GenerationMix | AemoArtifactKind::NextDayActualGen => {
+                Ok(AemoParseKind::GenerationMix)
+            }
+            AemoArtifactKind::DispatchabilityCapacity => Ok(AemoParseKind::DispatchabilityCapacity),
+        },
+    }
 }
 
 async fn verify_parse_artifact_identity(
@@ -1208,6 +1540,34 @@ async fn fetch_listing_body(ctx: &DiscoveryCtx, listing_url: &str) -> Result<Str
     Ok(response.text().await?)
 }
 
+async fn discover_generation_mix_artifacts(
+    ctx: &DiscoveryCtx,
+    body: &str,
+    base_url: &str,
+) -> Result<Vec<AemoEnergyArtifact>, AdapterError> {
+    let mut artifacts =
+        parse_energy_listing_with_base(body, base_url, AemoArtifactKind::GenerationMix)?;
+    artifacts.extend(parse_energy_listing_with_base(
+        body,
+        base_url,
+        AemoArtifactKind::NextDayActualGen,
+    )?);
+    if artifacts.is_empty() {
+        if let Some(next_day_url) =
+            listing_url_for_kind(body, base_url, AemoArtifactKind::NextDayActualGen)?
+        {
+            let next_day_body = fetch_listing_body(ctx, &next_day_url).await?;
+            artifacts.extend(parse_energy_listing_with_base(
+                &next_day_body,
+                &next_day_url,
+                AemoArtifactKind::NextDayActualGen,
+            )?);
+        }
+    }
+    sort_and_dedup_energy_artifacts(&mut artifacts);
+    Ok(artifacts)
+}
+
 fn parse_energy_listing_with_base(
     body: &str,
     base_url: &str,
@@ -1222,13 +1582,36 @@ fn parse_energy_listing_with_base(
             }
         }
     }
+    sort_and_dedup_energy_artifacts(&mut artifacts);
+    Ok(artifacts)
+}
+
+fn sort_and_dedup_energy_artifacts(artifacts: &mut Vec<AemoEnergyArtifact>) {
     artifacts.sort_by(|left, right| {
         left.interval
             .cmp(&right.interval)
             .then(left.file_name.cmp(&right.file_name))
     });
     artifacts.dedup_by(|left, right| left.source_url == right.source_url);
-    Ok(artifacts)
+}
+
+fn listing_url_for_kind(
+    body: &str,
+    base_url: &str,
+    kind: AemoArtifactKind,
+) -> Result<Option<String>, AdapterError> {
+    let path = kind.url_path().trim_end_matches('/').to_ascii_lowercase();
+    for href in extract_hrefs(body) {
+        let resolved_url = resolve_url(base_url, &href)?;
+        let lower = resolved_url.to_ascii_lowercase();
+        if lower.ends_with(".zip") {
+            continue;
+        }
+        if lower.trim_end_matches('/').ends_with(&path) || lower.contains(&format!("{path}/")) {
+            return Ok(Some(format!("{}/", resolved_url.trim_end_matches('/'))));
+        }
+    }
+    Ok(None)
 }
 
 fn extract_hrefs(body: &str) -> Vec<String> {
@@ -1270,6 +1653,7 @@ fn aemo_url_provenance(source_url: &str) -> Option<AemoArtifactProvenance> {
     }
     for kind in [
         AemoArtifactKind::GenerationMix,
+        AemoArtifactKind::NextDayActualGen,
         AemoArtifactKind::DispatchabilityCapacity,
     ] {
         if let Some(artifact) = energy_url_provenance(source_url, kind) {
@@ -1286,7 +1670,7 @@ fn dispatch_url_provenance(source_url: &str) -> Option<AemoDispatchArtifact> {
         .filter(|name| !name.is_empty())?
         .to_string();
     let dispatch_interval = interval_from_file_name(&file_name, AemoArtifactKind::Dispatch)?;
-    if !source_url.contains(AemoArtifactKind::Dispatch.url_path()) {
+    if !source_url_contains_path(source_url, AemoArtifactKind::Dispatch.url_path()) {
         return None;
     }
     Some(AemoDispatchArtifact {
@@ -1303,7 +1687,7 @@ fn energy_url_provenance(source_url: &str, kind: AemoArtifactKind) -> Option<Aem
         .filter(|name| !name.is_empty())?
         .to_string();
     let interval = interval_from_file_name(&file_name, kind)?;
-    if !source_url.contains(kind.url_path()) {
+    if !source_url_contains_path(source_url, kind.url_path()) {
         return None;
     }
     Some(AemoEnergyArtifact {
@@ -1314,6 +1698,12 @@ fn energy_url_provenance(source_url: &str, kind: AemoArtifactKind) -> Option<Aem
     })
 }
 
+fn source_url_contains_path(source_url: &str, path: &str) -> bool {
+    source_url
+        .to_ascii_lowercase()
+        .contains(&path.to_ascii_lowercase())
+}
+
 fn interval_from_file_name(file_name: &str, kind: AemoArtifactKind) -> Option<DateTime<Utc>> {
     let lower = file_name.to_ascii_lowercase();
     let prefix = kind.file_prefix();
@@ -1321,10 +1711,18 @@ fn interval_from_file_name(file_name: &str, kind: AemoArtifactKind) -> Option<Da
         return None;
     }
     let timestamp = file_name.get(prefix.len()..)?.split('_').next()?;
-    if timestamp.len() != 12 || !timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
+    if !timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    let date_time = NaiveDateTime::parse_from_str(timestamp, "%Y%m%d%H%M").ok()?;
+    let date_time = if kind == AemoArtifactKind::NextDayActualGen {
+        let date = chrono::NaiveDate::parse_from_str(timestamp, "%Y%m%d").ok()?;
+        date.and_hms_opt(0, 0, 0)?
+    } else {
+        if timestamp.len() != 12 {
+            return None;
+        }
+        NaiveDateTime::parse_from_str(timestamp, "%Y%m%d%H%M").ok()?
+    };
     Some(Utc.from_utc_datetime(&date_time))
 }
 

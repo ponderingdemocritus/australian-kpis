@@ -10,7 +10,7 @@ expression: rows
       "council": "all",
       "development_type": "all",
       "jurisdiction": "NSW",
-      "metric": "median_assessment_days"
+      "metric": "average_assessment_days"
     },
     "unit": "days",
     "time": "2026-03-31T00:00:00+00:00",
@@ -24,7 +24,7 @@ expression: rows
       "source": "State planning authorities",
       "source_url": "https://www.planning.nsw.gov.au/data/nsw-da-processing-2026.csv"
     },
-    "source_artifact_id": "5cbeb2b5221b371483b4f2b564585cb23c8790f0be48b5eac2ae51febe912df4"
+    "source_artifact_id": "f6f9d6e6ded521c9c7db61eafdaacf3dc412836462f26689921f15e2167bdf5e"
   },
   {
     "dataflow_id": "state_planning.nsw_da_processing",
@@ -47,7 +47,7 @@ expression: rows
       "source": "State planning authorities",
       "source_url": "https://www.planning.nsw.gov.au/data/nsw-da-processing-2026.csv"
     },
-    "source_artifact_id": "5cbeb2b5221b371483b4f2b564585cb23c8790f0be48b5eac2ae51febe912df4"
+    "source_artifact_id": "f6f9d6e6ded521c9c7db61eafdaacf3dc412836462f26689921f15e2167bdf5e"
   },
   {
     "dataflow_id": "state_planning.nsw_da_processing",
@@ -56,7 +56,7 @@ expression: rows
       "council": "all",
       "development_type": "residential",
       "jurisdiction": "NSW",
-      "metric": "median_assessment_days"
+      "metric": "average_assessment_days"
     },
     "unit": "days",
     "time": "2026-03-31T00:00:00+00:00",
@@ -70,6 +70,6 @@ expression: rows
       "source": "State planning authorities",
       "source_url": "https://www.planning.nsw.gov.au/data/nsw-da-processing-2026.csv"
     },
-    "source_artifact_id": "5cbeb2b5221b371483b4f2b564585cb23c8790f0be48b5eac2ae51febe912df4"
+    "source_artifact_id": "f6f9d6e6ded521c9c7db61eafdaacf3dc412836462f26689921f15e2167bdf5e"
   }
 ]

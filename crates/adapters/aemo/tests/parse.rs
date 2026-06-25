@@ -5,7 +5,7 @@ use std::{
 
 use au_kpis_adapter::{AdapterHttpClient, ArtifactRef, ParseCtx, SourceAdapter};
 use au_kpis_adapter_aemo::AemoAdapter;
-use au_kpis_domain::{ArtifactId, SourceId};
+use au_kpis_domain::{ArtifactId, DataflowId, SourceId};
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
@@ -27,6 +27,14 @@ const GENERATION_MIX_CSV: &str = r#"C,NEMWEB,FUELMIX,AEMO,PUBLIC,2026/06/19,17:0
 I,FUELMIX,FUELREGION,1,SETTLEMENTDATE,REGIONID,FUELTYPE,GENERATIONMW,LASTCHANGED
 D,FUELMIX,FUELREGION,1,"2026/06/19 17:05:00",NSW1,black_coal,4312.5,"2026/06/19 17:05:06"
 D,FUELMIX,FUELREGION,1,"2026/06/19 17:05:00",NSW1,wind,1234.25,"2026/06/19 17:05:06"
+"#;
+
+const NEXT_DAY_ACTUAL_GEN_CSV: &str = r#"C,NEMP.WORLD,METER_DATA,AEMO,PUBLIC,2026/06/19,17:05:11,0000000523261987,NEXTDAYACTUALGEN,0000000523261986
+I,METER_DATA,GEN_DUID,1,INTERVAL_DATETIME,DUID,MWH_READING,LASTCHANGED
+D,METER_DATA,GEN_DUID,1,"2026/06/19 17:05:00",CAPTL_WF,10,"2026/06/19 17:05:06"
+D,METER_DATA,GEN_DUID,1,"2026/06/19 17:05:00",BARCSF1,50,"2026/06/19 17:05:06"
+D,METER_DATA,GEN_DUID,1,"2026/06/19 17:10:00",CULLRGWF,-0.06,"2026/06/19 17:10:06"
+D,METER_DATA,GEN_DUID,1,"2026/06/19 17:10:00",WAUBRAWF,2.5,"2026/06/19 17:10:06"
 "#;
 
 const DISPATCHABILITY_CAPACITY_CSV: &str = r#"C,NEMWEB,DISPATCHCAPACITY,AEMO,PUBLIC,2026/06/19,17:05:11,0000000523261987,DISPATCHCAPACITY,0000000523261986
@@ -59,6 +67,13 @@ fn generation_mix_zip_fixture() -> Vec<u8> {
     zip_fixture_for(
         "PUBLIC_FUEL_MIX_202606191705_0000000523261987.CSV",
         GENERATION_MIX_CSV,
+    )
+}
+
+fn next_day_actual_gen_zip_fixture() -> Vec<u8> {
+    zip_fixture_for(
+        "PUBLIC_NEXT_DAY_ACTUAL_GEN_20260619_0000000523261987.CSV",
+        NEXT_DAY_ACTUAL_GEN_CSV,
     )
 }
 
@@ -155,6 +170,76 @@ async fn parses_aemo_dispatch_zip_fixture() {
 }
 
 #[tokio::test]
+async fn parses_dispatchis_available_generation_as_capacity_proxy() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(&blob_store, zip_fixture()).await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("aemo.dispatchability_capacity").unwrap(),
+        BTreeMap::new(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse AEMO DispatchIS capacity proxy fixture");
+
+    assert_eq!(rows.len(), 2);
+    let parsed = rows
+        .iter()
+        .map(|(series, observation)| {
+            let dimensions = series
+                .dimensions
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect::<BTreeMap<_, _>>();
+            (
+                series.dataflow_id.as_str(),
+                dimensions["region"],
+                dimensions["metric"],
+                observation.value,
+                observation.attributes["aemo_table"].as_str(),
+                observation.attributes["aemo_field"].as_str(),
+                observation.attributes["proxy_source_dataflow"].as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        parsed,
+        vec![
+            (
+                "aemo.dispatchability_capacity",
+                "NSW1",
+                "available_generation",
+                Some(14826.69812),
+                "REGIONSUM",
+                "AVAILABLEGENERATION",
+                "aemo.dispatch",
+            ),
+            (
+                "aemo.dispatchability_capacity",
+                "QLD1",
+                "available_generation",
+                Some(11696.77762),
+                "REGIONSUM",
+                "AVAILABLEGENERATION",
+                "aemo.dispatch",
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn parses_aemo_generation_mix_zip_fixture() {
     let blob_store = BlobStore::new(InMemory::new());
     let artifact = artifact_for_url(
@@ -200,6 +285,83 @@ async fn parses_aemo_generation_mix_zip_fixture() {
         .collect::<Vec<_>>();
 
     insta::assert_json_snapshot!(snapshot);
+}
+
+#[tokio::test]
+async fn parses_next_day_actual_gen_as_generation_mix_proxy() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for_url(
+        &blob_store,
+        next_day_actual_gen_zip_fixture(),
+        "https://www.nemweb.com.au/Reports/CURRENT/Next_Day_Actual_Gen/PUBLIC_NEXT_DAY_ACTUAL_GEN_20260619_0000000523261987.zip",
+    )
+    .await;
+    let adapter = AemoAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = ParseCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap(),
+    )
+    .with_expected_dataflow(
+        DataflowId::new("aemo.generation_mix").unwrap(),
+        BTreeMap::new(),
+    );
+
+    let rows = adapter
+        .parse(artifact, &ctx)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse AEMO Next Day Actual Gen proxy fixture");
+
+    let parsed = rows
+        .iter()
+        .map(|(series, observation)| {
+            let dimensions = series
+                .dimensions
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect::<BTreeMap<_, _>>();
+            (
+                series.dataflow_id.as_str(),
+                dimensions["region"],
+                dimensions["fuel_type"],
+                observation.time.to_rfc3339(),
+                observation.value,
+                observation.attributes["proxy_source_family"].as_str(),
+                observation.attributes["aemo_table"].as_str(),
+                observation.attributes["aemo_field"].as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        parsed,
+        vec![
+            (
+                "aemo.generation_mix",
+                "NEM",
+                "wind",
+                "2026-06-19T17:05:00+00:00".to_string(),
+                Some(120.0),
+                "Next_Day_Actual_Gen",
+                "GEN_DUID",
+                "MWH_READING",
+            ),
+            (
+                "aemo.generation_mix",
+                "NEM",
+                "wind",
+                "2026-06-19T17:10:00+00:00".to_string(),
+                Some(30.0),
+                "Next_Day_Actual_Gen",
+                "GEN_DUID",
+                "MWH_READING",
+            ),
+        ]
+    );
 }
 
 #[tokio::test]
