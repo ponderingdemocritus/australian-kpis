@@ -1793,3 +1793,529 @@ fn source_id() -> SourceId {
 fn dataflow_id(kind: AemoArtifactKind) -> DataflowId {
     DataflowId::new(kind.dataflow_id()).expect("static dataflow id is valid")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use au_kpis_domain::ArtifactId;
+
+    fn test_artifact(source_url: &str) -> ArtifactRef {
+        let id = ArtifactId::of_content(source_url.as_bytes());
+        ArtifactRef {
+            id,
+            fetch_id: None,
+            source_id: source_id(),
+            source_url: source_url.into(),
+            content_type: "application/zip".into(),
+            response_headers: BTreeMap::new(),
+            storage_key: StorageKey::canonical_for(&id).to_string(),
+            size_bytes: 1,
+            fetched_at: Utc.with_ymd_and_hms(2026, 6, 19, 7, 5, 0).unwrap(),
+        }
+    }
+
+    fn dispatch_url() -> &'static str {
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+    }
+
+    fn generation_mix_url() -> &'static str {
+        "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip"
+    }
+
+    fn next_day_actual_gen_url() -> &'static str {
+        "https://www.nemweb.com.au/Reports/CURRENT/Next_Day_Actual_Gen/PUBLIC_NEXT_DAY_ACTUAL_GEN_20260619_0000000523261987.zip"
+    }
+
+    fn dispatchability_capacity_url() -> &'static str {
+        "https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/PUBLIC_DISPATCHCAPACITY_202606191705_0000000523261987.zip"
+    }
+
+    fn rows(records: &[&[&str]]) -> Vec<Vec<String>> {
+        records
+            .iter()
+            .map(|record| record.iter().map(|cell| (*cell).into()).collect())
+            .collect()
+    }
+
+    fn assert_err_contains<T: std::fmt::Debug>(result: Result<T, AdapterError>, expected: &str) {
+        let err = result.expect_err("expected adapter error");
+        assert!(err.to_string().contains(expected), "{err}");
+    }
+
+    #[test]
+    fn parse_kind_matches_expected_dataflow_and_rejects_mismatches() {
+        let dispatch = aemo_url_provenance(dispatch_url()).expect("dispatch provenance");
+        let generation_mix =
+            aemo_url_provenance(generation_mix_url()).expect("generation provenance");
+        let next_day = aemo_url_provenance(next_day_actual_gen_url()).expect("next day provenance");
+        let capacity =
+            aemo_url_provenance(dispatchability_capacity_url()).expect("capacity provenance");
+
+        assert_eq!(
+            parse_kind_for_source(&dispatch, Some(&dataflow_id(AemoArtifactKind::Dispatch)))
+                .expect("dispatch expected"),
+            AemoParseKind::Dispatch
+        );
+        assert_eq!(
+            parse_kind_for_source(
+                &generation_mix,
+                Some(&dataflow_id(AemoArtifactKind::GenerationMix)),
+            )
+            .expect("generation expected"),
+            AemoParseKind::GenerationMix
+        );
+        assert_eq!(
+            parse_kind_for_source(
+                &next_day,
+                Some(&dataflow_id(AemoArtifactKind::GenerationMix)),
+            )
+            .expect("next day expected"),
+            AemoParseKind::GenerationMix
+        );
+        assert_eq!(
+            parse_kind_for_source(
+                &capacity,
+                Some(&dataflow_id(AemoArtifactKind::DispatchabilityCapacity)),
+            )
+            .expect("capacity expected"),
+            AemoParseKind::DispatchabilityCapacity
+        );
+        assert_eq!(
+            parse_kind_for_source(
+                &dispatch,
+                Some(&dataflow_id(AemoArtifactKind::DispatchabilityCapacity)),
+            )
+            .expect("dispatch capacity proxy"),
+            AemoParseKind::DispatchabilityCapacity
+        );
+        assert_eq!(
+            parse_kind_for_source(&dispatch, None).expect("dispatch inferred"),
+            AemoParseKind::Dispatch
+        );
+        assert_eq!(
+            parse_kind_for_source(&generation_mix, None).expect("generation inferred"),
+            AemoParseKind::GenerationMix
+        );
+        assert_eq!(
+            parse_kind_for_source(&capacity, None).expect("capacity inferred"),
+            AemoParseKind::DispatchabilityCapacity
+        );
+
+        let err = parse_kind_for_source(
+            &dispatch,
+            Some(&dataflow_id(AemoArtifactKind::GenerationMix)),
+        )
+        .expect_err("dispatch cannot satisfy generation mix");
+        assert!(err.to_string().contains("parser expected"), "{err}");
+    }
+
+    #[test]
+    fn validate_fetch_job_rejects_bad_source_dataflow_and_provenance() {
+        let adapter = AemoAdapter::default();
+        let started_at = Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap();
+        let artifact = match aemo_url_provenance(dispatch_url()).expect("dispatch provenance") {
+            AemoArtifactProvenance::Dispatch(artifact) => artifact,
+            AemoArtifactProvenance::Energy(_) => unreachable!("dispatch URL yields dispatch"),
+        };
+        let base_job = artifact.to_discovered_job(started_at, Some("00-trace"));
+
+        adapter
+            .validate_fetch_job(&base_job)
+            .expect("base dispatch job is valid");
+
+        let mut wrong_source = base_job.clone();
+        wrong_source.source_id = SourceId::new("abs").unwrap();
+        assert!(
+            adapter
+                .validate_fetch_job(&wrong_source)
+                .expect_err("wrong source")
+                .to_string()
+                .contains("source")
+        );
+
+        let mut unsupported_dataflow = base_job.clone();
+        unsupported_dataflow.dataflow_id = DataflowId::new("aemo.unsupported").unwrap();
+        assert!(
+            adapter
+                .validate_fetch_job(&unsupported_dataflow)
+                .expect_err("unsupported dataflow")
+                .to_string()
+                .contains("unsupported")
+        );
+
+        let mut provenance_mismatch = base_job;
+        provenance_mismatch.dataflow_id = dataflow_id(AemoArtifactKind::GenerationMix);
+        assert!(
+            adapter
+                .validate_fetch_job(&provenance_mismatch)
+                .expect_err("provenance mismatch")
+                .to_string()
+                .contains("resolves")
+        );
+    }
+
+    #[test]
+    fn discovered_job_metadata_and_match_helpers_cover_proxy_cases() {
+        let started_at = Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap();
+        let generation_mix =
+            match aemo_url_provenance(generation_mix_url()).expect("generation provenance") {
+                AemoArtifactProvenance::Energy(artifact) => artifact,
+                AemoArtifactProvenance::Dispatch(_) => unreachable!("fuel mix URL yields energy"),
+            };
+        let next_day =
+            match aemo_url_provenance(next_day_actual_gen_url()).expect("next day provenance") {
+                AemoArtifactProvenance::Energy(artifact) => artifact,
+                AemoArtifactProvenance::Dispatch(_) => unreachable!("next day URL yields energy"),
+            };
+
+        let generation_job = generation_mix.to_discovered_job(started_at, None);
+        assert!(!generation_job.metadata.contains_key("proxy_source_family"));
+
+        let next_day_job = next_day.to_discovered_job(started_at, None);
+        assert_eq!(
+            next_day_job
+                .metadata
+                .get("proxy_source_family")
+                .map(String::as_str),
+            Some("Next_Day_Actual_Gen")
+        );
+
+        assert!(should_discover_kind(None, AemoArtifactKind::Dispatch));
+        assert!(should_discover_kind(
+            Some(&dataflow_id(AemoArtifactKind::GenerationMix)),
+            AemoArtifactKind::NextDayActualGen
+        ));
+        assert!(!should_discover_kind(
+            Some(&dataflow_id(AemoArtifactKind::GenerationMix)),
+            AemoArtifactKind::Dispatch
+        ));
+        assert!(fetch_job_matches_provenance(
+            &dataflow_id(AemoArtifactKind::DispatchabilityCapacity),
+            AemoArtifactKind::Dispatch
+        ));
+        assert!(!fetch_job_matches_provenance(
+            &dataflow_id(AemoArtifactKind::GenerationMix),
+            AemoArtifactKind::Dispatch
+        ));
+    }
+
+    #[test]
+    fn observation_tables_reject_data_rows_before_headers() {
+        let artifact = test_artifact(dispatch_url());
+        let ingested_at = Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap();
+
+        assert!(
+            dispatch_observations(rows(&[&["D"]]), &artifact, ingested_at)
+                .expect("short dispatch rows are ignored")
+                .is_empty()
+        );
+        assert!(
+            generation_mix_observations(rows(&[&["D"]]), &artifact, ingested_at)
+                .expect("short generation rows are ignored")
+                .is_empty()
+        );
+        assert!(
+            dispatchability_capacity_observations(rows(&[&["D"]]), &artifact, ingested_at)
+                .expect("short capacity rows are ignored")
+                .is_empty()
+        );
+
+        assert_err_contains(
+            dispatch_observations(
+                rows(&[&["D", "DISPATCH", "PRICE", "9"]]),
+                &artifact,
+                ingested_at,
+            ),
+            "PRICE",
+        );
+
+        assert_err_contains(
+            dispatch_observations(
+                rows(&[&["D", "DISPATCH", "REGIONSUM", "9"]]),
+                &artifact,
+                ingested_at,
+            ),
+            "REGIONSUM",
+        );
+
+        assert_err_contains(
+            generation_mix_observations(
+                rows(&[&["D", "FUELMIX", "FUELREGION", "1"]]),
+                &artifact,
+                ingested_at,
+            ),
+            "FUELREGION",
+        );
+
+        assert_err_contains(
+            generation_mix_observations(
+                rows(&[&["D", "METER_DATA", "GEN_DUID", "1"]]),
+                &artifact,
+                ingested_at,
+            ),
+            "Next Day",
+        );
+
+        assert_err_contains(
+            dispatchability_capacity_observations(
+                rows(&[&["D", "DISPATCH", "CAPACITY", "1"]]),
+                &artifact,
+                ingested_at,
+            ),
+            "DispatchCapacity",
+        );
+
+        assert_err_contains(
+            dispatchability_capacity_observations(
+                rows(&[&["D", "DISPATCH", "REGIONSUM", "9"]]),
+                &artifact,
+                ingested_at,
+            ),
+            "REGIONSUM",
+        );
+    }
+
+    #[test]
+    fn observation_tables_emit_rows_for_optional_and_proxy_paths() {
+        let artifact = test_artifact(dispatch_url());
+        let ingested_at = Utc.with_ymd_and_hms(2026, 6, 19, 7, 6, 0).unwrap();
+
+        let dispatch = dispatch_observations(
+            rows(&[
+                &[
+                    "I",
+                    "DISPATCH",
+                    "PRICE",
+                    "4",
+                    "SETTLEMENTDATE",
+                    "REGIONID",
+                    "RRP",
+                ],
+                &[
+                    "D",
+                    "DISPATCH",
+                    "PRICE",
+                    "4",
+                    "2026/06/19 17:05:00",
+                    "NSW1",
+                    "123.4",
+                ],
+            ]),
+            &artifact,
+            ingested_at,
+        )
+        .expect("dispatch observation");
+        assert_eq!(dispatch.len(), 1);
+        assert!(!dispatch[0].1.attributes.contains_key("price_status"));
+
+        let fuel_mix = generation_mix_observations(
+            rows(&[
+                &[
+                    "I",
+                    "METER_DATA",
+                    "GEN_DUID",
+                    "1",
+                    "DUID",
+                    "INTERVAL_DATETIME",
+                    "MWH_READING",
+                ],
+                &[
+                    "D",
+                    "METER_DATA",
+                    "GEN_DUID",
+                    "1",
+                    "SOLAR1",
+                    "2026/06/19 17:05:00",
+                    "7",
+                ],
+                &[
+                    "D",
+                    "METER_DATA",
+                    "GEN_DUID",
+                    "1",
+                    "BLOWF1",
+                    "2026/06/19 17:05:00",
+                    "-2",
+                ],
+            ]),
+            &artifact,
+            ingested_at,
+        )
+        .expect("next day proxy observations");
+        assert_eq!(fuel_mix.len(), 1);
+        assert_eq!(fuel_mix[0].1.value, Some(0.0));
+
+        let capacity = dispatchability_capacity_observations(
+            rows(&[
+                &[
+                    "I",
+                    "DISPATCH",
+                    "REGIONSUM",
+                    "4",
+                    "SETTLEMENTDATE",
+                    "REGIONID",
+                    "AVAILABLEGENERATION",
+                ],
+                &[
+                    "D",
+                    "DISPATCH",
+                    "REGIONSUM",
+                    "4",
+                    "2026/06/19 17:05:00",
+                    "VIC1",
+                    "456",
+                ],
+            ]),
+            &artifact,
+            ingested_at,
+        )
+        .expect("capacity proxy observation");
+        assert_eq!(capacity.len(), 1);
+        assert_eq!(
+            capacity[0]
+                .1
+                .attributes
+                .get("proxy_source_dataflow")
+                .map(String::as_str),
+            Some(DISPATCH_DATAFLOW_ID)
+        );
+    }
+
+    #[test]
+    fn listing_and_url_helpers_cover_html_and_path_variants() {
+        let body = r#"
+            <a href='ignored.zip'>zip</a>
+            <a href='/Reports/Current/Next_Day_Actual_Gen'>next day</a>
+            <a href=no-quote>bad</a>
+            <a href="unterminated>
+        "#;
+        assert_eq!(
+            listing_url_for_kind(
+                body,
+                "https://www.nemweb.com.au/Reports/Current/",
+                AemoArtifactKind::NextDayActualGen,
+            )
+            .expect("listing URL"),
+            Some("https://www.nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/".into())
+        );
+        assert_eq!(
+            listing_url_for_kind(
+                "<a href='PUBLIC_NEXT_DAY_ACTUAL_GEN_20260619_0000000523261987.zip'>zip</a>",
+                "https://www.nemweb.com.au/Reports/Current/",
+                AemoArtifactKind::NextDayActualGen,
+            )
+            .expect("zip-only listing"),
+            None
+        );
+        assert_eq!(
+            listing_url_for_kind(
+                "<a href='/Reports/Current/Next_Day_Actual_Gen/archive/index.html'>nested</a>",
+                "https://www.nemweb.com.au/Reports/Current/",
+                AemoArtifactKind::NextDayActualGen,
+            )
+            .expect("nested listing URL"),
+            Some(
+                "https://www.nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/archive/index.html/"
+                    .into()
+            )
+        );
+        assert_eq!(
+            extract_hrefs(r#"<a href=  "A&amp;B"></a><a href='C&#39;D'></a>"#),
+            vec!["A&B".to_string(), "C'D".to_string()]
+        );
+        assert!(extract_hrefs("<a href=   ").is_empty());
+        assert_eq!(
+            resolve_url(
+                "https://example.test/base/index.html",
+                "https://other.test/file.zip"
+            )
+            .expect("absolute URL"),
+            "https://other.test/file.zip"
+        );
+        assert_eq!(
+            resolve_url("https://example.test/base/index.html", "/root/file.zip")
+                .expect("root-relative URL"),
+            "https://example.test/root/file.zip"
+        );
+        assert_eq!(
+            resolve_url("https://example.test/base/index.html", "child/file.zip")
+                .expect("relative URL"),
+            "https://example.test/base/index.html/child/file.zip"
+        );
+        assert!(resolve_url("not-a-url", "/root/file.zip").is_err());
+        assert!(origin_for_url("not-a-url").is_err());
+    }
+
+    #[test]
+    fn provenance_helpers_reject_wrong_paths_and_bad_timestamps() {
+        assert!(dispatch_url_provenance(generation_mix_url()).is_none());
+        assert!(energy_url_provenance(dispatch_url(), AemoArtifactKind::GenerationMix).is_none());
+        assert!(
+            dispatch_url_provenance(
+                "https://www.nemweb.com.au/Reports/CURRENT/FuelMix/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip"
+            )
+            .is_none()
+        );
+        assert!(
+            energy_url_provenance(
+                "https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/PUBLIC_FUEL_MIX_202606191705_0000000523261987.zip",
+                AemoArtifactKind::GenerationMix,
+            )
+            .is_none()
+        );
+        assert!(
+            interval_from_file_name("PUBLIC_DISPATCHIS_20260619.zip", AemoArtifactKind::Dispatch)
+                .is_none()
+        );
+        assert!(
+            interval_from_file_name(
+                "PUBLIC_DISPATCHIS_202606191705_0000000523261987.csv",
+                AemoArtifactKind::Dispatch,
+            )
+            .is_none()
+        );
+        assert!(
+            interval_from_file_name(
+                "PUBLIC_DISPATCHIS_20260619ABCD_0000000523261987.zip",
+                AemoArtifactKind::Dispatch,
+            )
+            .is_none()
+        );
+        assert!(
+            interval_from_file_name(
+                "PUBLIC_NEXT_DAY_ACTUAL_GEN_20260619_0000000523261987.zip",
+                AemoArtifactKind::NextDayActualGen,
+            )
+            .is_some()
+        );
+        assert_eq!(
+            decode_html_entities("&quot;x&#34;&apos;y&#39;&#38;"),
+            "\"x\"'y'&"
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_worker_error_distinguishes_panic_and_cancellation() {
+        let panic_err = tokio::task::spawn_blocking(|| panic!("worker panic"))
+            .await
+            .expect_err("worker panic");
+        assert!(
+            parse_worker_error(panic_err)
+                .to_string()
+                .contains("panicked"),
+            "panic worker errors should be classified as format drift"
+        );
+
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        handle.abort();
+        let cancel_err = handle.await.expect_err("worker cancellation");
+        assert!(
+            parse_worker_error(cancel_err)
+                .to_string()
+                .contains("cancelled"),
+            "cancelled worker errors should be classified as validation"
+        );
+    }
+}
