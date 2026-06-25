@@ -1309,15 +1309,13 @@ async fn insert_series<const N: usize>(
              series_key, dataflow_id, measure_id, dimensions, unit,
              first_observed, last_observed, active
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true)",
+         VALUES ($1, $2, $3, $4, $5, NULL, NULL, true)",
     )
     .bind(key.digest().as_bytes().as_slice())
     .bind(dataflow_id)
     .bind(measure_id)
     .bind(json!(dimensions))
     .bind(unit)
-    .bind(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
-    .bind(Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap())
     .execute(pool)
     .await
     .expect("insert series");
@@ -1351,6 +1349,17 @@ async fn insert_observation(
     .execute(pool)
     .await
     .expect("insert observation");
+    sqlx::query(
+        "UPDATE series
+         SET first_observed = LEAST(COALESCE(first_observed, $2), $2),
+             last_observed = GREATEST(COALESCE(last_observed, $2), $2)
+         WHERE series_key = $1",
+    )
+    .bind(series_key.digest().as_bytes().as_slice())
+    .bind(observed_at)
+    .execute(pool)
+    .await
+    .expect("update series observation bounds");
 }
 
 fn docker_available() -> bool {
