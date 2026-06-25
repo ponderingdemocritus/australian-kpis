@@ -14,7 +14,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { apiBaseUrl, client } from '@/lib/api'
-import { nationalRegion } from '@/lib/observations'
+import { nationalRegion, observationDimensions } from '@/lib/observations'
 import { useQuery } from '@tanstack/react-query'
 import { Play, RefreshCw, SquareTerminal } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
@@ -84,23 +84,37 @@ export function PlaygroundPage() {
   })
 
   const regions = regionsQuery.data?.codelist.codes ?? []
+  const observationDimensionIds = useMemo(
+    () => detailQuery.data?.dimensions.map((dimension) => dimension.id) ?? ['region'],
+    [detailQuery.data],
+  )
 
   const responseQuery = useQuery({
     enabled: submittedParams.dataflow.length > 0,
     queryFn: () =>
       client.observations.list({
         dataflow: submittedParams.dataflow,
-        dimensions: { region: submittedParams.region },
+        dimensions: observationDimensions(submittedParams.region, observationDimensionIds),
         limit: submittedParams.limit,
         since: submittedParams.since,
         until: submittedParams.until,
       }),
-    queryKey: ['playground-observations', submittedParams],
+    queryKey: ['playground-observations', submittedParams, observationDimensionIds],
   })
 
   const previewParams = useMemo(() => normalizeForm(form), [form])
-  const curlSnippet = useMemo(() => buildCurlSnippet(apiBaseUrl, previewParams), [previewParams])
-  const sdkSnippet = useMemo(() => buildSdkSnippet(previewParams), [previewParams])
+  const previewDimensions = useMemo(
+    () => observationDimensions(previewParams.region, observationDimensionIds),
+    [observationDimensionIds, previewParams.region],
+  )
+  const curlSnippet = useMemo(
+    () => buildCurlSnippet(apiBaseUrl, previewParams, previewDimensions),
+    [previewDimensions, previewParams],
+  )
+  const sdkSnippet = useMemo(
+    () => buildSdkSnippet(previewParams, previewDimensions),
+    [previewDimensions, previewParams],
+  )
   const responseText =
     responseQuery.data === undefined
       ? responseQuery.error instanceof Error
@@ -318,11 +332,17 @@ function normalizeLimit(value: string): number {
   return Math.min(10_000, Math.max(1, parsed))
 }
 
-function buildCurlSnippet(baseUrl: string, params: PlaygroundParams): string {
+function buildCurlSnippet(
+  baseUrl: string,
+  params: PlaygroundParams,
+  dimensions: Record<string, string>,
+): string {
   const lines = [
     `curl -sS --get '${baseUrl}/v1/observations'`,
     `  --data-urlencode 'dataflow=${params.dataflow}'`,
-    `  --data-urlencode 'dimensions[region]=${params.region}'`,
+    ...Object.entries(dimensions).map(
+      ([key, value]) => `  --data-urlencode 'dimensions[${key}]=${value}'`,
+    ),
     `  --data-urlencode 'limit=${params.limit}'`,
   ]
 
@@ -336,12 +356,12 @@ function buildCurlSnippet(baseUrl: string, params: PlaygroundParams): string {
   return lines.join(' \\\n')
 }
 
-function buildSdkSnippet(params: PlaygroundParams): string {
+function buildSdkSnippet(params: PlaygroundParams, dimensions: Record<string, string>): string {
   const lines = [
     'const response = await client.observations.list({',
     `  dataflow: '${escapeSnippet(params.dataflow)}',`,
     '  dimensions: {',
-    `    region: '${escapeSnippet(params.region)}',`,
+    ...Object.entries(dimensions).map(([key, value]) => `    ${key}: '${escapeSnippet(value)}',`),
     '  },',
     `  limit: ${params.limit},`,
   ]

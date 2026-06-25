@@ -1084,12 +1084,20 @@ fn table_url_provenance(source_url: &str) -> Option<TableUrlProvenance> {
         .strip_suffix(".csv")
         .or_else(|| filename.strip_suffix(".xls"))
         .or_else(|| filename.strip_suffix(".xlsx"))?;
+    if !is_data_table_stem(stem) {
+        return None;
+    }
     let table_id = table_id_from_slug(stem)?;
     Some(TableUrlProvenance {
         table_id,
         table_slug: stem.to_ascii_uppercase(),
         format,
     })
+}
+
+fn is_data_table_stem(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    !lower.contains("notes")
 }
 
 fn table_id_from_slug(stem: &str) -> Option<String> {

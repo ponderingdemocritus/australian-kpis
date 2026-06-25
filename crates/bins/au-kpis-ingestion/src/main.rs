@@ -9,6 +9,7 @@ use std::{
     env,
     ffi::OsString,
     future::Future,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -41,6 +42,7 @@ use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_ingestion_core::{IngestionPipeline, PipelineContexts, PipelineOptions, fetch_ctx};
 use au_kpis_pdf_client::PdfClient;
 use au_kpis_queue::{ApalisPgQueue, JobKind, LeasedJob, Nack, Queue, QueueStage, WorkerId};
+use au_kpis_scorecard::{CoverageStatus as ScorecardCoverageStatus, load_aps_v1_config};
 use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
@@ -48,6 +50,8 @@ use clap::{Parser, Subcommand};
 use object_store::aws::AmazonS3Builder;
 use tokio::{net::TcpListener, signal, time::Instant};
 use tokio_util::sync::CancellationToken;
+
+mod coverage_report;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
@@ -124,6 +128,10 @@ struct Cli {
     #[arg(long)]
     dataflow: Option<String>,
 
+    /// Allow a one-shot run to complete when discovery or load produces zero rows.
+    #[arg(long)]
+    allow_zero_jobs: bool,
+
     /// Worker id recorded on queue leases in `run` mode.
     #[arg(long, env = "AU_KPIS_WORKER_ID")]
     worker_id: Option<String>,
@@ -137,16 +145,40 @@ struct Cli {
 }
 
 /// Subcommands for long-running operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 enum Command {
     /// Start the long-running worker loop.
     Run,
+
+    /// Write a dataflow coverage report from catalog and load audit tables.
+    CoverageReport {
+        /// JSON report path. If omitted, JSON is written to stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Markdown report path.
+        #[arg(long)]
+        markdown: Option<PathBuf>,
+
+        /// Exit non-zero when any dataflow is not fully loaded.
+        #[arg(long)]
+        fail_on_gaps: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
-    Once { source: String, dataflow: String },
+    Once {
+        source: String,
+        dataflow: String,
+        allow_zero_jobs: bool,
+    },
     Run,
+    CoverageReport {
+        output: Option<PathBuf>,
+        markdown: Option<PathBuf>,
+        fail_on_gaps: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,7 +298,10 @@ impl ObjectStoreConfig {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mode = resolve_mode(&cli)?;
-    if let Mode::Once { source, dataflow } = &mode {
+    if let Mode::Once {
+        source, dataflow, ..
+    } = &mode
+    {
         validate_once_target(source, dataflow)?;
     }
     let config = Arc::new(load_ingestion(None).context("load config")?);
@@ -279,6 +314,15 @@ async fn main() -> anyhow::Result<()> {
     sync_adapter_catalog(&db, &adapters)
         .await
         .context("sync adapter catalog metadata")?;
+    if let Mode::CoverageReport {
+        output,
+        markdown,
+        fail_on_gaps,
+    } = mode
+    {
+        write_coverage_report(&db, output.as_ref(), markdown.as_ref(), fail_on_gaps).await?;
+        return Ok(());
+    }
 
     let drain_window = Duration::from_secs(config.http.shutdown_grace_period_secs);
     let shutdown = CancellationToken::new();
@@ -352,7 +396,11 @@ struct Runtime {
 #[cfg_attr(coverage_nightly, coverage(off))]
 async fn run_mode(mode: Mode, runtime: Runtime) -> anyhow::Result<()> {
     match mode {
-        Mode::Once { source, dataflow } => {
+        Mode::Once {
+            source,
+            dataflow,
+            allow_zero_jobs,
+        } => {
             let request = once_run_request(&source, &dataflow)?;
             let stats = match run_source_once(&runtime, &request, runtime.shutdown.clone()).await {
                 Ok(stats) => stats,
@@ -361,6 +409,7 @@ async fn run_mode(mode: Mode, runtime: Runtime) -> anyhow::Result<()> {
                     return Err(err.into());
                 }
             };
+            validate_once_run_stats(&request, &stats, allow_zero_jobs)?;
             runtime
                 .metrics
                 .once_runs_total
@@ -380,6 +429,237 @@ async fn run_mode(mode: Mode, runtime: Runtime) -> anyhow::Result<()> {
             Ok(())
         }
         Mode::Run => run_worker(runtime).await,
+        Mode::CoverageReport { .. } => unreachable!("coverage-report exits before runtime setup"),
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+async fn write_coverage_report(
+    pool: &au_kpis_db::PgPool,
+    output: Option<&PathBuf>,
+    markdown: Option<&PathBuf>,
+    fail_on_gaps: bool,
+) -> anyhow::Result<()> {
+    let report = load_coverage_report(pool).await?;
+    let json = serde_json::to_string_pretty(&report).context("serialize coverage report")?;
+    if let Some(path) = output {
+        tokio::fs::write(path, json)
+            .await
+            .with_context(|| format!("write coverage report JSON to {}", path.display()))?;
+    } else {
+        println!("{json}");
+    }
+    if let Some(path) = markdown {
+        tokio::fs::write(path, coverage_report::render_markdown(&report))
+            .await
+            .with_context(|| format!("write coverage report Markdown to {}", path.display()))?;
+    }
+    if fail_on_gaps {
+        let gap_count = report
+            .dataflows
+            .iter()
+            .filter(|dataflow| dataflow.status != coverage_report::CoverageStatus::Loaded)
+            .count();
+        if gap_count > 0 {
+            bail!("{gap_count} dataflows are not fully loaded; see coverage report");
+        }
+    }
+    Ok(())
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+async fn load_coverage_report(
+    pool: &au_kpis_db::PgPool,
+) -> anyhow::Result<coverage_report::CoverageReport> {
+    let expected_statuses = expected_coverage_statuses_by_dataflow()?;
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            i64,
+            i64,
+            i64,
+            i64,
+            Option<String>,
+        ),
+    >(
+        r#"
+        WITH series_counts AS (
+            SELECT dataflow_id, count(*)::BIGINT AS series_count
+            FROM series
+            GROUP BY dataflow_id
+        ),
+        latest_success AS (
+            SELECT dataflow_id, max(completed_at) AS completed_at
+            FROM artifact_loads
+            GROUP BY dataflow_id
+        ),
+        load_counts AS (
+            SELECT
+                dataflow_id,
+                count(*)::BIGINT AS loaded_artifacts,
+                coalesce(sum(observations_loaded), 0)::BIGINT AS observations_loaded,
+                to_char(
+                    max(completed_at) AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                ) AS latest_load
+            FROM artifact_loads
+            GROUP BY dataflow_id
+        ),
+        parse_counts AS (
+            SELECT
+                row_context->>'dataflow_id' AS dataflow_id,
+                count(*)::BIGINT AS parse_errors,
+                count(DISTINCT artifact_id)::BIGINT AS failed_artifacts
+            FROM parse_errors
+            LEFT JOIN latest_success ls
+                ON ls.dataflow_id = row_context->>'dataflow_id'
+            WHERE row_context ? 'dataflow_id'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM artifact_loads al
+                    WHERE al.dataflow_id = row_context->>'dataflow_id'
+                        AND al.artifact_id = parse_errors.artifact_id
+                        AND al.completed_at >= parse_errors.created_at
+                )
+                AND (ls.completed_at IS NULL OR parse_errors.created_at > ls.completed_at)
+            GROUP BY row_context->>'dataflow_id'
+        )
+        SELECT
+            d.source_id,
+            d.id AS dataflow_id,
+            d.name,
+            d.source_url,
+            coalesce(sc.series_count, 0)::BIGINT AS series_count,
+            (coalesce(lc.loaded_artifacts, 0) + coalesce(pc.failed_artifacts, 0))::BIGINT
+                AS artifact_count,
+            coalesce(lc.observations_loaded, 0)::BIGINT AS observations_loaded,
+            coalesce(pc.parse_errors, 0)::BIGINT AS parse_errors,
+            lc.latest_load
+        FROM dataflows d
+        LEFT JOIN series_counts sc ON sc.dataflow_id = d.id
+        LEFT JOIN load_counts lc ON lc.dataflow_id = d.id
+        LEFT JOIN parse_counts pc ON pc.dataflow_id = d.id
+        ORDER BY d.source_id, d.id
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .context("load dataflow coverage counters")?
+    .into_iter()
+    .map(
+        |(
+            source_id,
+            dataflow_id,
+            name,
+            source_url,
+            series_count,
+            artifact_count,
+            observations_loaded,
+            parse_errors,
+            latest_load,
+        )| {
+            let expected_status = expected_statuses.get(&dataflow_id).copied();
+            coverage_report::RawCoverageRow {
+                source_id,
+                dataflow_id,
+                name,
+                source_url,
+                series_count,
+                artifact_count,
+                observations_loaded,
+                parse_errors,
+                latest_load,
+                expected_status,
+            }
+        },
+    )
+    .collect();
+
+    Ok(coverage_report::build_report(rows))
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn expected_coverage_statuses_by_dataflow()
+-> anyhow::Result<BTreeMap<String, coverage_report::CoverageStatus>> {
+    let config = load_aps_v1_config().context("load APS scorecard config for coverage report")?;
+    let mut statuses = BTreeMap::new();
+    for indicator in config.indicators {
+        let Some(status) = coverage_report_status_for_scorecard(indicator.coverage_status) else {
+            continue;
+        };
+        insert_expected_coverage_status(&mut statuses, indicator.source_dataflow_id, status);
+    }
+    for (dataflow_id, status) in catalog_coverage_statuses() {
+        insert_expected_coverage_status(&mut statuses, dataflow_id, status);
+    }
+    Ok(statuses)
+}
+
+fn catalog_coverage_statuses() -> [(&'static str, coverage_report::CoverageStatus); 3] {
+    [
+        (
+            ASX_ANNOUNCEMENTS_DATAFLOW_ID,
+            coverage_report::CoverageStatus::CoverageGap,
+        ),
+        (
+            ASX_EOD_DATAFLOW_ID,
+            coverage_report::CoverageStatus::CoverageGap,
+        ),
+        (
+            STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID,
+            coverage_report::CoverageStatus::CoverageGap,
+        ),
+    ]
+}
+
+fn insert_expected_coverage_status(
+    statuses: &mut BTreeMap<String, coverage_report::CoverageStatus>,
+    dataflow_id: impl Into<String>,
+    status: coverage_report::CoverageStatus,
+) {
+    statuses
+        .entry(dataflow_id.into())
+        .and_modify(|existing| {
+            if coverage_report_status_priority(status) > coverage_report_status_priority(*existing)
+            {
+                *existing = status;
+            }
+        })
+        .or_insert(status);
+}
+
+fn coverage_report_status_for_scorecard(
+    status: ScorecardCoverageStatus,
+) -> Option<coverage_report::CoverageStatus> {
+    match status {
+        ScorecardCoverageStatus::MissingExpected => {
+            Some(coverage_report::CoverageStatus::MissingExpected)
+        }
+        ScorecardCoverageStatus::CoverageGap => Some(coverage_report::CoverageStatus::CoverageGap),
+        ScorecardCoverageStatus::ManualPending => {
+            Some(coverage_report::CoverageStatus::ManualPending)
+        }
+        ScorecardCoverageStatus::VisibleUnscored => {
+            Some(coverage_report::CoverageStatus::VisibleUnscored)
+        }
+        ScorecardCoverageStatus::Resolved | ScorecardCoverageStatus::Stale => None,
+    }
+}
+
+fn coverage_report_status_priority(status: coverage_report::CoverageStatus) -> u8 {
+    match status {
+        coverage_report::CoverageStatus::MissingExpected => 3,
+        coverage_report::CoverageStatus::ManualPending => 2,
+        coverage_report::CoverageStatus::CoverageGap => 1,
+        coverage_report::CoverageStatus::VisibleUnscored => 0,
+        coverage_report::CoverageStatus::Loaded
+        | coverage_report::CoverageStatus::Partial
+        | coverage_report::CoverageStatus::Failed
+        | coverage_report::CoverageStatus::ZeroRows => 4,
     }
 }
 
@@ -999,6 +1279,7 @@ fn durable_object_store_required(mode: &Mode) -> anyhow::Result<BlobStore> {
     let mode_name = match mode {
         Mode::Once { .. } => "once mode",
         Mode::Run => "run mode",
+        Mode::CoverageReport { .. } => "coverage-report mode",
     };
     bail!(
         "{mode_name} requires durable object store config: set AU_KPIS_OBJECT_STORE__ENDPOINT, AU_KPIS_OBJECT_STORE__BUCKET, AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID, and AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY"
@@ -1070,7 +1351,7 @@ where
 }
 
 fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
-    match (cli.once, cli.command) {
+    match (cli.once, cli.command.clone()) {
         (true, None) => {
             let source = cli
                 .source
@@ -1080,17 +1361,82 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
                 .dataflow
                 .clone()
                 .context("`--once` requires `--dataflow <id>`")?;
-            Ok(Mode::Once { source, dataflow })
+            Ok(Mode::Once {
+                source,
+                dataflow,
+                allow_zero_jobs: cli.allow_zero_jobs,
+            })
         }
         (false, Some(Command::Run)) => {
-            if cli.source.is_some() || cli.dataflow.is_some() {
-                bail!("`run` does not accept `--source` or `--dataflow`");
+            if cli.source.is_some() || cli.dataflow.is_some() || cli.allow_zero_jobs {
+                bail!("`run` does not accept `--source`, `--dataflow`, or `--allow-zero-jobs`");
             }
             Ok(Mode::Run)
         }
-        (false, None) => bail!("choose either `--once --source <id> --dataflow <id>` or `run`"),
+        (
+            false,
+            Some(Command::CoverageReport {
+                output,
+                markdown,
+                fail_on_gaps,
+            }),
+        ) => {
+            if cli.source.is_some() || cli.dataflow.is_some() || cli.allow_zero_jobs {
+                bail!(
+                    "`coverage-report` does not accept `--source`, `--dataflow`, or `--allow-zero-jobs`"
+                );
+            }
+            Ok(Mode::CoverageReport {
+                output,
+                markdown,
+                fail_on_gaps,
+            })
+        }
+        (false, None) => {
+            if cli.allow_zero_jobs {
+                bail!("`--allow-zero-jobs` requires `--once`");
+            }
+            bail!(
+                "choose either `--once --source <id> --dataflow <id>`, `coverage-report`, or `run`"
+            )
+        }
         (true, Some(Command::Run)) => bail!("`--once` cannot be combined with `run`"),
+        (true, Some(Command::CoverageReport { .. })) => {
+            bail!("`--once` cannot be combined with `coverage-report`")
+        }
     }
+}
+
+fn validate_once_run_stats(
+    request: &RunRequest,
+    stats: &au_kpis_ingestion_core::PipelineRunStats,
+    allow_zero_jobs: bool,
+) -> anyhow::Result<()> {
+    if allow_zero_jobs {
+        return Ok(());
+    }
+
+    let dataflow = request
+        .dataflow_id
+        .as_ref()
+        .map_or("<all>", DataflowId::as_str);
+    if stats.discovered == 0 {
+        bail!(
+            "one-shot ingestion discovered zero jobs for source `{}` dataflow `{}`; pass `--allow-zero-jobs` only for reviewed upstream gaps",
+            request.source_id.as_str(),
+            dataflow
+        );
+    }
+    if stats.loaded.observations_loaded == 0 {
+        bail!(
+            "one-shot ingestion loaded zero observations for source `{}` dataflow `{}` after discovering {} job(s); pass `--allow-zero-jobs` only for reviewed metadata-only or upstream-gap runs",
+            request.source_id.as_str(),
+            dataflow,
+            stats.discovered
+        );
+    }
+
+    Ok(())
 }
 
 fn validate_once_target(source: &str, dataflow: &str) -> anyhow::Result<()> {
@@ -1506,6 +1852,7 @@ fn default_worker_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
@@ -1536,7 +1883,28 @@ mod tests {
                 .expect("resolve once mode"),
             Mode::Once {
                 source: "abs".to_string(),
-                dataflow: "cpi".to_string()
+                dataflow: "cpi".to_string(),
+                allow_zero_jobs: false,
+            }
+        );
+    }
+
+    #[test]
+    fn once_mode_resolves_allow_zero_jobs() {
+        assert_eq!(
+            resolve_mode(&cli(&[
+                "--once",
+                "--source",
+                "ai-readiness",
+                "--dataflow",
+                "oxford-gari",
+                "--allow-zero-jobs"
+            ]))
+            .expect("resolve once mode with zero override"),
+            Mode::Once {
+                source: "ai-readiness".to_string(),
+                dataflow: "oxford-gari".to_string(),
+                allow_zero_jobs: true,
             }
         );
     }
@@ -1547,6 +1915,61 @@ mod tests {
             .expect_err("run source filter should fail")
             .to_string();
         assert!(err.contains("does not accept"));
+    }
+
+    #[test]
+    fn run_mode_rejects_allow_zero_jobs() {
+        let err = resolve_mode(&cli(&["--allow-zero-jobs", "run"]))
+            .expect_err("run zero-job override should fail")
+            .to_string();
+        assert!(err.contains("does not accept"));
+        assert!(err.contains("--allow-zero-jobs"));
+    }
+
+    #[test]
+    fn coverage_report_mode_resolves_output_paths() {
+        assert_eq!(
+            resolve_mode(&cli(&[
+                "coverage-report",
+                "--output",
+                "coverage.json",
+                "--markdown",
+                "coverage.md"
+            ]))
+            .expect("resolve coverage report mode"),
+            Mode::CoverageReport {
+                output: Some(PathBuf::from("coverage.json")),
+                markdown: Some(PathBuf::from("coverage.md")),
+                fail_on_gaps: false,
+            }
+        );
+    }
+
+    #[test]
+    fn coverage_report_mode_rejects_source_filter() {
+        let err = resolve_mode(&cli(&["--source", "abs", "coverage-report"]))
+            .expect_err("coverage report source filter should fail")
+            .to_string();
+        assert!(err.contains("does not accept"));
+    }
+
+    #[test]
+    fn coverage_report_marks_catalog_only_source_gaps() {
+        let statuses =
+            expected_coverage_statuses_by_dataflow().expect("load expected coverage statuses");
+
+        assert_eq!(
+            statuses.get(ASX_ANNOUNCEMENTS_DATAFLOW_ID),
+            Some(&coverage_report::CoverageStatus::CoverageGap)
+        );
+        assert_eq!(
+            statuses.get(ASX_EOD_DATAFLOW_ID),
+            Some(&coverage_report::CoverageStatus::CoverageGap)
+        );
+        assert_eq!(
+            statuses.get(STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID),
+            Some(&coverage_report::CoverageStatus::CoverageGap)
+        );
     }
 
     #[test]
@@ -1591,6 +2014,7 @@ mod tests {
             &Mode::Once {
                 source: "abs".to_string(),
                 dataflow: "cpi".to_string(),
+                allow_zero_jobs: false,
             },
             ObjectStoreConfig::default(),
         )
@@ -1598,6 +2022,61 @@ mod tests {
         .to_string();
 
         assert!(err.contains("durable object store config"));
+    }
+
+    #[test]
+    fn once_run_stats_reject_zero_discovery_without_override() {
+        let request = once_run_request("ai-readiness", "oxford-gari").unwrap();
+        let stats = au_kpis_ingestion_core::PipelineRunStats::default();
+
+        let err = validate_once_run_stats(&request, &stats, false)
+            .expect_err("zero discovered jobs should fail")
+            .to_string();
+
+        assert!(err.contains("discovered zero jobs"));
+        assert!(err.contains("ai-readiness"));
+        assert!(err.contains("oxford.gari"));
+    }
+
+    #[test]
+    fn once_run_stats_allow_zero_discovery_with_override() {
+        let request = once_run_request("ai-readiness", "oxford-gari").unwrap();
+        let stats = au_kpis_ingestion_core::PipelineRunStats::default();
+
+        validate_once_run_stats(&request, &stats, true).expect("zero override should pass");
+    }
+
+    #[test]
+    fn once_run_stats_reject_zero_loaded_observations_without_override() {
+        let request = once_run_request("aemo", "dispatch").unwrap();
+        let stats = au_kpis_ingestion_core::PipelineRunStats {
+            discovered: 1,
+            fetched: 1,
+            parsed: 0,
+            loaded: Default::default(),
+        };
+
+        let err = validate_once_run_stats(&request, &stats, false)
+            .expect_err("zero loaded observations should fail")
+            .to_string();
+
+        assert!(err.contains("loaded zero observations"));
+        assert!(err.contains("aemo"));
+        assert!(err.contains("aemo.dispatch"));
+    }
+
+    #[test]
+    fn once_run_stats_accept_loaded_observations() {
+        let request = once_run_request("aemo", "dispatch").unwrap();
+        let mut stats = au_kpis_ingestion_core::PipelineRunStats {
+            discovered: 1,
+            fetched: 1,
+            parsed: 1,
+            loaded: Default::default(),
+        };
+        stats.loaded.observations_loaded = 1;
+
+        validate_once_run_stats(&request, &stats, false).expect("loaded rows should pass");
     }
 
     #[test]

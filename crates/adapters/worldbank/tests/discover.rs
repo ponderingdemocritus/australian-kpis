@@ -21,6 +21,8 @@ const INDEX_FIXTURE: &str = r#"
 </main>
 "#;
 
+const API_FIXTURE: &str = include_str!("fixtures/bready_australia_api.json");
+
 async fn serve_index_once(body: &'static str) -> Option<String> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -56,6 +58,45 @@ async fn serve_index_once(body: &'static str) -> Option<String> {
     });
 
     Some(format!("http://{addr}/en/businessready"))
+}
+
+async fn serve_api_once(body: &'static str) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping local HTTP fixture: loopback bind denied by sandbox");
+            return None;
+        }
+        Err(err) => panic!("bind fixture server: {err}"),
+    };
+    let addr = listener.local_addr().expect("fixture server address");
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept request");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).await.expect("read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.starts_with("GET /v2/country/AUS/indicator/IC.BRE.BE.OS?"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: au-kpis-adapter-worldbank/")
+        );
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+
+    Some(format!(
+        "http://{addr}/v2/country/AUS/indicator/IC.BRE.BE.OS?format=json&source=2&per_page=100"
+    ))
 }
 
 #[test]
@@ -129,6 +170,32 @@ async fn discover_scrapes_business_ready_page_over_http() {
         format!("{index_url}/bready-australia-2025.csv")
     );
     assert_eq!(jobs[0].metadata["release_id"], "bready-australia-2025");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discover_uses_world_bank_indicator_api() {
+    let Some(api_url) = serve_api_once(API_FIXTURE).await else {
+        return;
+    };
+    let adapter = WorldbankAdapter::builder().api_url(&api_url).build();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap())
+        .with_trace_parent(TRACE_PARENT);
+
+    let jobs = adapter.discover(&ctx).await.expect("discover B-READY API");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].source_id.as_str(), "worldbank");
+    assert_eq!(jobs[0].dataflow_id.as_str(), "worldbank.bready");
+    assert_eq!(jobs[0].source_url, api_url);
+    assert_eq!(jobs[0].metadata["artifact_format"], "worldbank-json");
+    assert_eq!(jobs[0].metadata["release_id"], "bready-australia-api");
+    assert_eq!(
+        jobs[0].metadata["revision_key"],
+        "WORLDBANK:bready-australia-api"
+    );
+    assert_eq!(jobs[0].metadata["revision_version"], "2026-04-08");
+    assert_eq!(jobs[0].trace_parent.as_deref(), Some(TRACE_PARENT));
 }
 
 #[test]

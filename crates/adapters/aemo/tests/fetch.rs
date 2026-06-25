@@ -115,6 +115,16 @@ async fn fetch_preserves_retry_after_on_dispatchability_capacity_throttle() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_accepts_dispatchis_artifact_for_capacity_proxy() {
+    assert_fetch_throttle_for(
+        "aemo:dispatchability_capacity:PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+        "aemo.dispatchability_capacity",
+        "/Reports/CURRENT/DispatchIS_Reports/PUBLIC_DISPATCHIS_202606191705_0000000523261987.zip",
+    )
+    .await;
+}
+
 async fn assert_fetch_throttle_for(id: &str, dataflow_id: &str, expected_path: &'static str) {
     let Some(source_url) = serve_throttle_once(expected_path).await else {
         return;

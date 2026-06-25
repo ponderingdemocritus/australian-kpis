@@ -439,6 +439,30 @@ async fn discover_returns_hand_curated_qld_budget_publications() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_qld_discovery_uses_current_official_qld_budget_url() {
+    let adapter = QldBudgetAdapter::default();
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 25, 0, 0, 0).unwrap());
+
+    let jobs = adapter
+        .discover(&ctx)
+        .await
+        .expect("discover default QLD budget");
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(
+        jobs[0].source_url,
+        "https://budget.qld.gov.au/files/2026-27-budget-bp2-budget-strategy-outlook.pdf"
+    );
+    assert_eq!(
+        jobs[0].metadata["source_index_url"],
+        "https://budget.qld.gov.au/budget-papers/"
+    );
+    assert_eq!(jobs[0].metadata["artifact_date"], "2026-06-24");
+    assert_eq!(jobs[0].metadata["budget_year"], "2026-27");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn qld_discover_honours_requested_dataflow_scope() {
     let adapter = QldBudgetAdapter::builder()
         .publications(qld_fixture_publications())

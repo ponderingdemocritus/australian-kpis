@@ -1,4 +1,4 @@
-//! NHSAC adapter for Housing Accord progress CSV artifacts.
+//! NHSAC adapter for Housing Accord progress artifacts.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
@@ -53,7 +53,7 @@ impl NhsacAdapter {
         NhsacAdapterBuilder::default()
     }
 
-    /// Parse the NHSAC publications page for Housing Accord progress CSV links.
+    /// Parse the NHSAC publications page for Housing Accord progress links.
     pub fn parse_housing_accord_releases(
         body: &str,
     ) -> Result<Vec<NhsacHousingAccordRelease>, AdapterError> {
@@ -140,7 +140,7 @@ impl NhsacAdapter {
         }
         release_url_provenance(&job.source_url).ok_or_else(|| {
             AdapterError::Validation(format!(
-                "NHSAC fetch URL `{}` is not a Housing Accord progress CSV artifact",
+                "NHSAC fetch URL `{}` is not a Housing Accord progress artifact",
                 job.source_url
             ))
         })?;
@@ -222,7 +222,7 @@ impl SourceAdapter for NhsacAdapter {
                     .raw_artifact()
                     .get(&job.source_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", "text/csv"),
+                    .header("accept", "text/html,text/csv"),
             )
             .await?;
         let response_headers = capture_response_headers(response.headers());
@@ -267,9 +267,10 @@ impl SourceAdapter for NhsacAdapter {
 }
 
 fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
-    if let Err(err) = validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
-        return Box::pin(stream::once(async move { Err(err) }));
-    }
+    let provenance = match validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
+        Ok(provenance) => provenance,
+        Err(err) => return Box::pin(stream::once(async move { Err(err) })),
+    };
 
     let blob_store = ctx.blob_store.clone();
     let started_at = ctx.started_at;
@@ -287,10 +288,11 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        if let Err(err) = parse_csv_artifact(
+        if let Err(err) = parse_artifact(
             blob_store,
             key,
             artifact,
+            provenance.artifact_kind,
             started_at,
             cancellation,
             row_tx.clone(),
@@ -306,17 +308,40 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     }))
 }
 
-async fn parse_csv_artifact(
+async fn parse_artifact(
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
+    artifact_kind: HousingAccordArtifactKind,
     ingested_at: DateTime<Utc>,
     cancellation: CancellationToken,
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
+    let bytes = load_artifact_bytes(&blob_store, &key, &cancellation).await?;
+    let mut rows = match artifact_kind {
+        HousingAccordArtifactKind::Csv => parse_csv_rows(bytes, &cancellation).await?,
+        HousingAccordArtifactKind::QuarterlyHtml => parse_quarterly_report_rows(&bytes)?,
+    };
+    if matches!(artifact_kind, HousingAccordArtifactKind::QuarterlyHtml) {
+        mark_html_derivations(&mut rows);
+    }
+
+    for row in parse_housing_accord_rows(rows, &artifact, ingested_at)? {
+        if tx.send(Ok(row)).await.is_err() {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+async fn load_artifact_bytes(
+    blob_store: &BlobStore,
+    key: &StorageKey,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>, AdapterError> {
     let mut chunks = tokio::select! {
         () = cancellation.cancelled() => return Err(cancelled_parse_error()),
-        chunks = blob_store.get(&key) => chunks?,
+        chunks = blob_store.get(key) => chunks?,
     };
     let mut bytes = Vec::new();
     while let Some(chunk) = tokio::select! {
@@ -325,7 +350,13 @@ async fn parse_csv_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
+    Ok(bytes)
+}
 
+async fn parse_csv_rows(
+    bytes: Vec<u8>,
+    cancellation: &CancellationToken,
+) -> Result<Vec<Vec<String>>, AdapterError> {
     let mut csv = AsyncReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -339,13 +370,69 @@ async fn parse_csv_artifact(
         let record = record.map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
         rows.push(record.iter().map(|cell| cell.trim().to_string()).collect());
     }
+    Ok(rows)
+}
 
-    for row in parse_housing_accord_rows(rows, &artifact, ingested_at)? {
-        if tx.send(Ok(row)).await.is_err() {
-            return Ok(());
-        }
+fn parse_quarterly_report_rows(bytes: &[u8]) -> Result<Vec<Vec<String>>, AdapterError> {
+    let body = std::str::from_utf8(bytes).map_err(|err| {
+        AdapterError::FormatDrift(format!("NHSAC quarterly report HTML is not UTF-8: {err}"))
+    })?;
+    let text = clean_html_text(body)
+        .ok_or_else(|| AdapterError::FormatDrift("NHSAC quarterly report HTML is empty".into()))?;
+    let year = extract_report_year(body, &text)?;
+    let completed = number_before_phrase(&text, "new homes completed")?;
+    let target_total = number_before_phrase(&text, "million new homes")? * 1_000_000.0;
+    let years = number_before_phrase(&text, "years to")?;
+    if years <= 0.0 {
+        return Err(AdapterError::FormatDrift(
+            "NHSAC quarterly report target duration must be positive".into(),
+        ));
     }
-    Ok(())
+    let annual_target = target_total / years;
+    let progress_pct = aus_built_share_pct(body)?;
+
+    Ok(vec![
+        housing_accord_header(),
+        vec![
+            year.clone(),
+            "AUS".into(),
+            PROGRESS_TO_TARGET_PCT.into(),
+            "Housing Accord progress to target".into(),
+            format_metric_value(progress_pct),
+            "percent".into(),
+            "normal".into(),
+        ],
+        vec![
+            year.clone(),
+            "AUS".into(),
+            HOMES_COMPLETED.into(),
+            "Homes completed under Housing Accord".into(),
+            format_metric_value(completed),
+            "dwellings".into(),
+            "normal".into(),
+        ],
+        vec![
+            year,
+            "AUS".into(),
+            ANNUAL_TARGET.into(),
+            "Annual pro-rata Housing Accord target".into(),
+            format_metric_value(annual_target),
+            "dwellings".into(),
+            "normal".into(),
+        ],
+    ])
+}
+
+fn mark_html_derivations(rows: &mut [Vec<String>]) {
+    for row in rows.iter_mut().skip(1) {
+        row.push(
+            match row.get(2).map(String::as_str) {
+                Some(ANNUAL_TARGET) => "derived",
+                _ => "reported",
+            }
+            .into(),
+        );
+    }
 }
 
 fn parse_housing_accord_rows(
@@ -394,6 +481,18 @@ fn parse_housing_accord_rows(
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         );
+        let mut attributes = BTreeMap::from([
+            ("nhsac_measure_id".into(), measure_id.to_string()),
+            ("nhsac_measure_name".into(), measure_name.to_string()),
+            ("source_url".into(), artifact.source_url.clone()),
+        ]);
+        if let Some(value_derivation) = optional_cell(&row, 7) {
+            attributes.insert(
+                "nhsac_value_derivation".into(),
+                value_derivation.to_string(),
+            );
+        }
+
         let descriptor = SeriesDescriptor {
             series_key,
             dataflow_id,
@@ -412,11 +511,7 @@ fn parse_housing_accord_rows(
             } else {
                 0
             },
-            attributes: BTreeMap::from([
-                ("nhsac_measure_id".into(), measure_id.to_string()),
-                ("nhsac_measure_name".into(), measure_name.to_string()),
-                ("source_url".into(), artifact.source_url.clone()),
-            ]),
+            attributes,
             ingested_at,
             source_artifact_id: artifact.id,
         };
@@ -451,6 +546,22 @@ fn validate_housing_accord_header(header: &[String]) -> Result<(), AdapterError>
         )));
     }
     Ok(())
+}
+
+fn housing_accord_header() -> Vec<String> {
+    [
+        "period",
+        "region",
+        "measure_id",
+        "measure_name",
+        "value",
+        "unit",
+        "status",
+        "value_derivation",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn row_is_empty(row: &[String]) -> bool {
@@ -516,7 +627,7 @@ fn parse_value_and_status(
 fn validate_parse_artifact(
     artifact: &ArtifactRef,
     expected_dataflow_id: Option<&DataflowId>,
-) -> Result<(), AdapterError> {
+) -> Result<ReleaseUrlProvenance, AdapterError> {
     if artifact.source_id.as_str() != "nhsac" {
         return Err(AdapterError::Validation(format!(
             "NHSAC parse received artifact for source `{}`",
@@ -538,8 +649,7 @@ fn validate_parse_artifact(
             "NHSAC parse artifact `{}` is missing Housing Accord progress provenance",
             artifact.source_url
         ))
-    })?;
-    Ok(())
+    })
 }
 
 async fn verify_parse_artifact_identity(
@@ -632,12 +742,149 @@ fn clean_html_text(text: &str) -> Option<String> {
     let cleaned = out
         .replace("&amp;", "&")
         .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
         .replace("&ndash;", "-")
+        .replace("&mdash;", "-")
         .replace("&#8211;", "-")
+        .replace('\u{a0}', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn extract_report_year(body: &str, text: &str) -> Result<String, AdapterError> {
+    if let Some(datetime) = attr_value_after(body, "<time", "datetime") {
+        if let Some(year) = datetime.get(..4) {
+            if year.chars().all(|ch| ch.is_ascii_digit()) {
+                return Ok(year.to_string());
+            }
+        }
+    }
+    find_year(text).map(|year| year.to_string()).ok_or_else(|| {
+        AdapterError::FormatDrift("NHSAC quarterly report is missing a report year".into())
+    })
+}
+
+fn attr_value_after(haystack: &str, marker: &str, name: &str) -> Option<String> {
+    let start = haystack.find(marker)?;
+    let rest = &haystack[start..];
+    let open_end = rest.find('>')?;
+    attr_value(&rest[..open_end + 1], name)
+}
+
+fn find_year(text: &str) -> Option<i32> {
+    text.split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| part.len() == 4)
+        .find_map(|part| {
+            let year = part.parse::<i32>().ok()?;
+            (2000..=2100).contains(&year).then_some(year)
+        })
+}
+
+fn number_before_phrase(text: &str, phrase: &str) -> Result<f64, AdapterError> {
+    let lower = text.to_ascii_lowercase();
+    let index = lower.find(phrase).ok_or_else(|| {
+        AdapterError::FormatDrift(format!("NHSAC quarterly report is missing `{phrase}`"))
+    })?;
+    last_number(&text[..index]).ok_or_else(|| {
+        AdapterError::FormatDrift(format!(
+            "NHSAC quarterly report is missing a number before `{phrase}`"
+        ))
+    })
+}
+
+fn last_number(text: &str) -> Option<f64> {
+    text.split_whitespace().rev().find_map(parse_number_token)
+}
+
+fn parse_number_token(token: &str) -> Option<f64> {
+    let cleaned = token
+        .trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '.' && ch != '-' && ch != ',')
+        .replace(',', "");
+    if cleaned.is_empty() || cleaned == "-" {
+        return None;
+    }
+    cleaned.parse::<f64>().ok()
+}
+
+fn aus_built_share_pct(body: &str) -> Result<f64, AdapterError> {
+    let row = find_html_table_row(body, "AUS").ok_or_else(|| {
+        AdapterError::FormatDrift("NHSAC quarterly report is missing the AUS progress row".into())
+    })?;
+    let percent_values = html_table_cells(row)
+        .into_iter()
+        .filter_map(|cell| percent_cell_value(&cell))
+        .collect::<Vec<_>>();
+    percent_values.get(3).copied().ok_or_else(|| {
+        AdapterError::FormatDrift(
+            "NHSAC quarterly report AUS row is missing built-to-date percent".into(),
+        )
+    })
+}
+
+fn find_html_table_row<'a>(body: &'a str, required_cell: &str) -> Option<&'a str> {
+    let mut rest = body;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        let start = lower.find("<tr")?;
+        rest = &rest[start..];
+        let lower = rest.to_ascii_lowercase();
+        let end = lower.find("</tr>")? + "</tr>".len();
+        let row = &rest[..end];
+        if html_table_cells(row)
+            .iter()
+            .any(|cell| cell.eq_ignore_ascii_case(required_cell))
+        {
+            return Some(row);
+        }
+        rest = &rest[end..];
+    }
+}
+
+fn html_table_cells(row: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut rest = row;
+    while let Some((start, tag)) = next_cell_start(rest) {
+        rest = &rest[start..];
+        let Some(open_end) = rest.find('>') else {
+            break;
+        };
+        let close = format!("</{tag}>");
+        let lower = rest[open_end + 1..].to_ascii_lowercase();
+        let Some(close_start) = lower.find(&close) else {
+            break;
+        };
+        let text = &rest[open_end + 1..open_end + 1 + close_start];
+        if let Some(cleaned) = clean_html_text(text) {
+            cells.push(cleaned);
+        }
+        rest = &rest[open_end + 1 + close_start + close.len()..];
+    }
+    cells
+}
+
+fn next_cell_start(haystack: &str) -> Option<(usize, &'static str)> {
+    let lower = haystack.to_ascii_lowercase();
+    match (lower.find("<td"), lower.find("<th")) {
+        (Some(td), Some(th)) if td < th => Some((td, "td")),
+        (Some(_), Some(th)) => Some((th, "th")),
+        (Some(td), None) => Some((td, "td")),
+        (None, Some(th)) => Some((th, "th")),
+        (None, None) => None,
+    }
+}
+
+fn percent_cell_value(cell: &str) -> Option<f64> {
+    cell.strip_suffix('%').and_then(parse_number_token)
+}
+
+fn format_metric_value(value: f64) -> String {
+    if value.fract().abs() < f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn resolve_url(base_url: &str, href: &str) -> Result<String, AdapterError> {
@@ -664,25 +911,58 @@ fn resolve_url(base_url: &str, href: &str) -> Result<String, AdapterError> {
 #[derive(Debug, Clone)]
 struct ReleaseUrlProvenance {
     release_id: String,
+    artifact_kind: HousingAccordArtifactKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HousingAccordArtifactKind {
+    Csv,
+    QuarterlyHtml,
+}
+
+impl HousingAccordArtifactKind {
+    fn metadata_format(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::QuarterlyHtml => "html",
+        }
+    }
 }
 
 fn release_url_provenance(source_url: &str) -> Option<ReleaseUrlProvenance> {
-    let marker = "/publications/";
-    let (_, path) = source_url.split_once(marker)?;
-    let filename = path
-        .split('?')
+    if let Some((_, path)) = source_url.split_once("/publications/") {
+        let filename = last_clean_path_segment(path)?;
+        let stem = filename.strip_suffix(".csv")?;
+        if stem.starts_with("housing-accord-progress-") {
+            return Some(ReleaseUrlProvenance {
+                release_id: stem.to_string(),
+                artifact_kind: HousingAccordArtifactKind::Csv,
+            });
+        }
+    }
+    if let Some((_, path)) = source_url.split_once("/reports-and-submissions/") {
+        let slug = last_clean_path_segment(path)?
+            .strip_suffix(".html")
+            .unwrap_or_else(|| last_clean_path_segment(path).expect("path segment exists"));
+        if slug.starts_with("quarterly-report-") {
+            return Some(ReleaseUrlProvenance {
+                release_id: slug.to_string(),
+                artifact_kind: HousingAccordArtifactKind::QuarterlyHtml,
+            });
+        }
+    }
+    None
+}
+
+fn last_clean_path_segment(path: &str) -> Option<&str> {
+    path.split('?')
         .next()?
         .split('#')
         .next()?
+        .trim_end_matches('/')
         .rsplit('/')
-        .next()?;
-    let stem = filename.strip_suffix(".csv")?;
-    if !stem.starts_with("housing-accord-progress-") {
-        return None;
-    }
-    Some(ReleaseUrlProvenance {
-        release_id: stem.to_string(),
-    })
+        .next()
+        .filter(|segment| !segment.is_empty())
 }
 
 fn nhsac_code_id(field: &str, value: &str) -> Result<CodeId, AdapterError> {
@@ -787,6 +1067,9 @@ impl NhsacHousingAccordRelease {
         let revision = self.revision(started_at);
         let revision_version = revision.version().to_string();
         let revision_key = self.revision_key();
+        let artifact_format = release_url_provenance(&self.source_url)
+            .map(|provenance| provenance.artifact_kind.metadata_format())
+            .unwrap_or("csv");
         DiscoveredJob {
             id: format!("nhsac:{}:{revision_version}", self.release_id),
             source_id: source_id(),
@@ -795,7 +1078,7 @@ impl NhsacHousingAccordRelease {
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
                 ("adapter".into(), "nhsac".into()),
-                ("artifact_format".into(), "csv".into()),
+                ("artifact_format".into(), artifact_format.into()),
                 ("attribution".into(), ATTRIBUTION.into()),
                 ("release_id".into(), self.release_id.clone()),
                 ("cadence".into(), "annual".into()),

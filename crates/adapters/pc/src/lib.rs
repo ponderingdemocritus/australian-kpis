@@ -1,4 +1,4 @@
-//! Productivity Commission adapter for productivity bulletin CSV artifacts.
+//! Productivity Commission adapter for productivity bulletin artifacts.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
@@ -22,7 +22,7 @@ use csv_async::AsyncReaderBuilder;
 use futures::{StreamExt, stream};
 use tokio_util::sync::CancellationToken;
 
-const DEFAULT_INDEX_URL: &str = "https://www.pc.gov.au/ongoing/productivity-insights/";
+const DEFAULT_INDEX_URL: &str = "https://www.pc.gov.au/ongoing/productivity-insights/bulletins/";
 const DEFAULT_SOURCE_URL: &str = "https://www.pc.gov.au/ongoing/productivity-insights";
 const USER_AGENT: &str = concat!("au-kpis-adapter-pc/", env!("CARGO_PKG_VERSION"));
 const DATAFLOW_ID: &str = "pc.productivity_bulletin";
@@ -141,7 +141,7 @@ impl PcAdapter {
         }
         bulletin_url_provenance(&job.source_url).ok_or_else(|| {
             AdapterError::Validation(format!(
-                "PC fetch URL `{}` is not a productivity bulletin CSV artifact",
+                "PC fetch URL `{}` is not a productivity bulletin artifact",
                 job.source_url
             ))
         })?;
@@ -223,7 +223,7 @@ impl SourceAdapter for PcAdapter {
                     .raw_artifact()
                     .get(&job.source_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", "text/csv"),
+                    .header("accept", "text/html,text/csv"),
             )
             .await?;
         let response_headers = capture_response_headers(response.headers());
@@ -268,9 +268,10 @@ impl SourceAdapter for PcAdapter {
 }
 
 fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
-    if let Err(err) = validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
-        return Box::pin(stream::once(async move { Err(err) }));
-    }
+    let provenance = match validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
+        Ok(provenance) => provenance,
+        Err(err) => return Box::pin(stream::once(async move { Err(err) })),
+    };
 
     let blob_store = ctx.blob_store.clone();
     let started_at = ctx.started_at;
@@ -288,10 +289,11 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        if let Err(err) = parse_csv_artifact(
+        if let Err(err) = parse_artifact(
             blob_store,
             key,
             artifact,
+            provenance.artifact_kind,
             started_at,
             cancellation,
             row_tx.clone(),
@@ -307,17 +309,37 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     }))
 }
 
-async fn parse_csv_artifact(
+async fn parse_artifact(
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
+    artifact_kind: BulletinArtifactKind,
     ingested_at: DateTime<Utc>,
     cancellation: CancellationToken,
     tx: tokio::sync::mpsc::Sender<Result<(SeriesDescriptor, Observation), AdapterError>>,
 ) -> Result<(), AdapterError> {
+    let bytes = load_artifact_bytes(&blob_store, &key, &cancellation).await?;
+    let rows = match artifact_kind {
+        BulletinArtifactKind::Csv => parse_csv_rows(bytes, &cancellation).await?,
+        BulletinArtifactKind::AnnualHtml => parse_annual_bulletin_rows(&bytes)?,
+    };
+
+    for row in parse_productivity_rows(rows, &artifact, ingested_at)? {
+        if tx.send(Ok(row)).await.is_err() {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+async fn load_artifact_bytes(
+    blob_store: &BlobStore,
+    key: &StorageKey,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>, AdapterError> {
     let mut chunks = tokio::select! {
         () = cancellation.cancelled() => return Err(cancelled_parse_error()),
-        chunks = blob_store.get(&key) => chunks?,
+        chunks = blob_store.get(key) => chunks?,
     };
     let mut bytes = Vec::new();
     while let Some(chunk) = tokio::select! {
@@ -326,7 +348,13 @@ async fn parse_csv_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
+    Ok(bytes)
+}
 
+async fn parse_csv_rows(
+    bytes: Vec<u8>,
+    cancellation: &CancellationToken,
+) -> Result<Vec<Vec<String>>, AdapterError> {
     let mut csv = AsyncReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -340,13 +368,52 @@ async fn parse_csv_artifact(
         let record = record.map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
         rows.push(record.iter().map(|cell| cell.trim().to_string()).collect());
     }
+    Ok(rows)
+}
 
-    for row in parse_productivity_rows(rows, &artifact, ingested_at)? {
-        if tx.send(Ok(row)).await.is_err() {
-            return Ok(());
-        }
-    }
-    Ok(())
+fn parse_annual_bulletin_rows(bytes: &[u8]) -> Result<Vec<Vec<String>>, AdapterError> {
+    let body = std::str::from_utf8(bytes).map_err(|err| {
+        AdapterError::FormatDrift(format!(
+            "PC annual productivity bulletin HTML is not UTF-8: {err}"
+        ))
+    })?;
+    let text = clean_html_text(body).ok_or_else(|| {
+        AdapterError::FormatDrift("PC annual productivity bulletin HTML is empty".into())
+    })?;
+    let release_date = extract_release_date(&text)?;
+    let reference_period = extract_reference_period(&text)?;
+    let period_year = financial_year_end_year(&reference_period)?;
+    let mfp_growth = extract_mfp_growth(&text)?;
+
+    Ok(vec![
+        productivity_header(),
+        vec![
+            period_year.clone(),
+            "AUS".into(),
+            MARKET_SECTOR_GROWTH.into(),
+            "Market-sector productivity growth proxy".into(),
+            format_metric_value(mfp_growth),
+            "percent".into(),
+            "normal".into(),
+            release_date.clone(),
+            reference_period.clone(),
+            "multifactor productivity (MFP)".into(),
+            "mapped_from_mfp_annual_bulletin".into(),
+        ],
+        vec![
+            period_year,
+            "AUS".into(),
+            MULTIFACTOR_PRODUCTIVITY_GROWTH.into(),
+            "Multifactor productivity growth".into(),
+            format_metric_value(mfp_growth),
+            "percent".into(),
+            "normal".into(),
+            release_date,
+            reference_period,
+            "multifactor productivity (MFP)".into(),
+            "reported".into(),
+        ],
+    ])
 }
 
 fn parse_productivity_rows(
@@ -395,6 +462,24 @@ fn parse_productivity_rows(
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         );
+        let mut attributes = BTreeMap::from([
+            ("pc_measure_id".into(), measure_id.to_string()),
+            ("pc_measure_name".into(), measure_name.to_string()),
+            ("source_url".into(), artifact.source_url.clone()),
+        ]);
+        if let Some(release_date) = optional_cell(&row, 7) {
+            attributes.insert("pc_release_date".into(), release_date.to_string());
+        }
+        if let Some(reference_period) = optional_cell(&row, 8) {
+            attributes.insert("pc_reference_period".into(), reference_period.to_string());
+        }
+        if let Some(metric_label) = optional_cell(&row, 9) {
+            attributes.insert("pc_metric_label".into(), metric_label.to_string());
+        }
+        if let Some(value_derivation) = optional_cell(&row, 10) {
+            attributes.insert("pc_value_derivation".into(), value_derivation.to_string());
+        }
+
         let descriptor = SeriesDescriptor {
             series_key,
             dataflow_id,
@@ -413,11 +498,7 @@ fn parse_productivity_rows(
             } else {
                 0
             },
-            attributes: BTreeMap::from([
-                ("pc_measure_id".into(), measure_id.to_string()),
-                ("pc_measure_name".into(), measure_name.to_string()),
-                ("source_url".into(), artifact.source_url.clone()),
-            ]),
+            attributes,
             ingested_at,
             source_artifact_id: artifact.id,
         };
@@ -452,6 +533,25 @@ fn validate_productivity_header(header: &[String]) -> Result<(), AdapterError> {
         )));
     }
     Ok(())
+}
+
+fn productivity_header() -> Vec<String> {
+    [
+        "period",
+        "region",
+        "measure_id",
+        "measure_name",
+        "value",
+        "unit",
+        "status",
+        "release_date",
+        "reference_period",
+        "metric_label",
+        "value_derivation",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn row_is_empty(row: &[String]) -> bool {
@@ -516,7 +616,7 @@ fn parse_value_and_status(
 fn validate_parse_artifact(
     artifact: &ArtifactRef,
     expected_dataflow_id: Option<&DataflowId>,
-) -> Result<(), AdapterError> {
+) -> Result<BulletinUrlProvenance, AdapterError> {
     if artifact.source_id.as_str() != "pc" {
         return Err(AdapterError::Validation(format!(
             "PC parse received artifact for source `{}`",
@@ -538,8 +638,7 @@ fn validate_parse_artifact(
             "PC parse artifact `{}` is missing productivity bulletin provenance",
             artifact.source_url
         ))
-    })?;
-    Ok(())
+    })
 }
 
 async fn verify_parse_artifact_identity(
@@ -593,6 +692,7 @@ fn parse_productivity_bulletins_with_base(
         let Some(provenance) = bulletin_url_provenance(&source_url) else {
             continue;
         };
+        let source_url = canonical_bulletin_url(source_url, provenance.artifact_kind);
         let title = clean_html_text(text).unwrap_or_else(|| provenance.bulletin_id.clone());
         bulletins.push(PcProductivityBulletin {
             bulletin_id: provenance.bulletin_id,
@@ -603,7 +703,29 @@ fn parse_productivity_bulletins_with_base(
     }
     bulletins.sort_by(|left, right| left.bulletin_id.cmp(&right.bulletin_id));
     bulletins.dedup_by(|left, right| left.bulletin_id == right.bulletin_id);
+    retain_latest_annual_html_bulletin(&mut bulletins);
     Ok(bulletins)
+}
+
+fn retain_latest_annual_html_bulletin(bulletins: &mut Vec<PcProductivityBulletin>) {
+    let latest_annual = bulletins
+        .iter()
+        .filter(|bulletin| {
+            bulletin_url_provenance(&bulletin.source_url).is_some_and(|provenance| {
+                provenance.artifact_kind == BulletinArtifactKind::AnnualHtml
+            })
+        })
+        .map(|bulletin| bulletin.bulletin_id.clone())
+        .max();
+    let Some(latest_annual) = latest_annual else {
+        return;
+    };
+    bulletins.retain(|bulletin| {
+        bulletin_url_provenance(&bulletin.source_url).is_none_or(|provenance| {
+            provenance.artifact_kind != BulletinArtifactKind::AnnualHtml
+                || bulletin.bulletin_id == latest_annual
+        })
+    });
 }
 
 fn attr_value(attrs: &str, name: &str) -> Option<String> {
@@ -632,12 +754,164 @@ fn clean_html_text(text: &str) -> Option<String> {
     let cleaned = out
         .replace("&amp;", "&")
         .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
         .replace("&ndash;", "-")
+        .replace("&mdash;", "-")
         .replace("&#8211;", "-")
+        .replace('\u{a0}', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn extract_release_date(text: &str) -> Result<String, AdapterError> {
+    let lower = text.to_ascii_lowercase();
+    let released_at = lower.find("released").ok_or_else(|| {
+        AdapterError::FormatDrift("PC annual productivity bulletin missing release date".into())
+    })?;
+    let date_text = &text[released_at..text.len().min(released_at + 80)];
+    let numbers = date_text
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .take(3)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if numbers.len() != 3 {
+        return Err(AdapterError::FormatDrift(
+            "PC annual productivity bulletin release date is incomplete".into(),
+        ));
+    }
+    let day = numbers[0].parse::<u32>().map_err(|_| {
+        AdapterError::FormatDrift("PC annual productivity bulletin release day is invalid".into())
+    })?;
+    let month = numbers[1].parse::<u32>().map_err(|_| {
+        AdapterError::FormatDrift("PC annual productivity bulletin release month is invalid".into())
+    })?;
+    let year = numbers[2].parse::<i32>().map_err(|_| {
+        AdapterError::FormatDrift("PC annual productivity bulletin release year is invalid".into())
+    })?;
+    Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+        .single()
+        .ok_or_else(|| {
+            AdapterError::FormatDrift(
+                "PC annual productivity bulletin release date is invalid".into(),
+            )
+        })?;
+    Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn extract_reference_period(text: &str) -> Result<String, AdapterError> {
+    let lower = text.to_ascii_lowercase();
+    for marker in [" in ", " over ", " between "] {
+        let mut offset = 0;
+        while let Some(found) = lower[offset..].find(marker) {
+            let start = offset + found + marker.len();
+            if let Some(period) = financial_year_at(&text[start..]) {
+                return Ok(period.to_string());
+            }
+            offset = start;
+        }
+    }
+    Err(AdapterError::FormatDrift(
+        "PC annual productivity bulletin missing reference period".into(),
+    ))
+}
+
+fn financial_year_at(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 7 {
+        return None;
+    }
+    for start in 0..=bytes.len() - 7 {
+        let candidate = &text[start..start + 7];
+        let candidate_bytes = candidate.as_bytes();
+        if candidate_bytes[0..4].iter().all(u8::is_ascii_digit)
+            && candidate_bytes[4] == b'-'
+            && candidate_bytes[5..7].iter().all(u8::is_ascii_digit)
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn financial_year_end_year(period: &str) -> Result<String, AdapterError> {
+    let (start, end) = period.split_once('-').ok_or_else(|| {
+        AdapterError::FormatDrift(format!("invalid PC reference period `{period}`"))
+    })?;
+    let century = start.get(..2).ok_or_else(|| {
+        AdapterError::FormatDrift(format!("invalid PC reference period `{period}`"))
+    })?;
+    let year = format!("{century}{end}");
+    year.parse::<i32>().map_err(|_| {
+        AdapterError::FormatDrift(format!("invalid PC reference period `{period}`"))
+    })?;
+    Ok(year)
+}
+
+fn extract_mfp_growth(text: &str) -> Result<f64, AdapterError> {
+    let lower = text.to_ascii_lowercase();
+    let mfp_at = lower
+        .find("mfp")
+        .or_else(|| lower.find("multifactor productivity"))
+        .ok_or_else(|| {
+            AdapterError::FormatDrift("PC annual productivity bulletin missing MFP label".into())
+        })?;
+    let window = &text[mfp_at..text.len().min(mfp_at + 700)];
+    let window_lower = window.to_ascii_lowercase();
+    for (phrase, sign) in [
+        ("declined by", -1.0),
+        ("decreased by", -1.0),
+        ("fell by", -1.0),
+        ("rose by", 1.0),
+        ("increased by", 1.0),
+        ("grew by", 1.0),
+    ] {
+        if let Some(index) = window_lower.find(phrase) {
+            let after = &window[index + phrase.len()..];
+            let value = first_number(before_percent(after)?)?;
+            return Ok(sign * value);
+        }
+    }
+    Err(AdapterError::FormatDrift(
+        "PC annual productivity bulletin missing MFP growth value".into(),
+    ))
+}
+
+fn before_percent(text: &str) -> Result<&str, AdapterError> {
+    let percent = text.find('%').ok_or_else(|| {
+        AdapterError::FormatDrift(
+            "PC annual productivity bulletin MFP value missing percent".into(),
+        )
+    })?;
+    Ok(&text[..percent])
+}
+
+fn first_number(text: &str) -> Result<f64, AdapterError> {
+    text.split_whitespace()
+        .find_map(parse_number_token)
+        .ok_or_else(|| {
+            AdapterError::FormatDrift("PC annual productivity bulletin MFP value is missing".into())
+        })
+}
+
+fn parse_number_token(token: &str) -> Option<f64> {
+    let cleaned = token
+        .trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '.' && ch != '-' && ch != ',')
+        .replace(',', "");
+    if cleaned.is_empty() || cleaned == "-" {
+        return None;
+    }
+    cleaned.parse::<f64>().ok()
+}
+
+fn format_metric_value(value: f64) -> String {
+    if value.fract().abs() < f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn resolve_url(base_url: &str, href: &str) -> Result<String, AdapterError> {
@@ -664,25 +938,69 @@ fn resolve_url(base_url: &str, href: &str) -> Result<String, AdapterError> {
 #[derive(Debug, Clone)]
 struct BulletinUrlProvenance {
     bulletin_id: String,
+    artifact_kind: BulletinArtifactKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BulletinArtifactKind {
+    Csv,
+    AnnualHtml,
+}
+
+impl BulletinArtifactKind {
+    fn metadata_format(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::AnnualHtml => "html",
+        }
+    }
 }
 
 fn bulletin_url_provenance(source_url: &str) -> Option<BulletinUrlProvenance> {
     let marker = "/ongoing/productivity-insights/";
     let (_, path) = source_url.split_once(marker)?;
-    let filename = path
-        .split('?')
+    let segment = last_clean_path_segment(path)?;
+    if let Some(stem) = segment.strip_suffix(".csv") {
+        if stem.starts_with("productivity-bulletin-") {
+            return Some(BulletinUrlProvenance {
+                bulletin_id: stem.to_string(),
+                artifact_kind: BulletinArtifactKind::Csv,
+            });
+        }
+    }
+    if segment.starts_with("bulletin-")
+        && segment["bulletin-".len()..]
+            .chars()
+            .all(|ch| ch.is_ascii_digit())
+    {
+        return Some(BulletinUrlProvenance {
+            bulletin_id: segment.to_string(),
+            artifact_kind: BulletinArtifactKind::AnnualHtml,
+        });
+    }
+    None
+}
+
+fn last_clean_path_segment(path: &str) -> Option<&str> {
+    path.split('?')
         .next()?
         .split('#')
         .next()?
+        .trim_end_matches('/')
         .rsplit('/')
-        .next()?;
-    let stem = filename.strip_suffix(".csv")?;
-    if !stem.starts_with("productivity-bulletin-") {
-        return None;
+        .next()
+        .filter(|segment| !segment.is_empty())
+}
+
+fn canonical_bulletin_url(mut source_url: String, artifact_kind: BulletinArtifactKind) -> String {
+    if matches!(artifact_kind, BulletinArtifactKind::AnnualHtml)
+        && !source_url.ends_with('/')
+        && !source_url.contains('?')
+        && !source_url.contains('#')
+    {
+        source_url.push('/');
     }
-    Some(BulletinUrlProvenance {
-        bulletin_id: stem.to_string(),
-    })
+    source_url
 }
 
 fn pc_code_id(field: &str, value: &str) -> Result<CodeId, AdapterError> {
@@ -787,6 +1105,9 @@ impl PcProductivityBulletin {
         let revision = self.revision(started_at);
         let revision_version = revision.version().to_string();
         let revision_key = self.revision_key();
+        let artifact_format = bulletin_url_provenance(&self.source_url)
+            .map(|provenance| provenance.artifact_kind.metadata_format())
+            .unwrap_or("csv");
         DiscoveredJob {
             id: format!("pc:{}:{revision_version}", self.bulletin_id),
             source_id: source_id(),
@@ -795,7 +1116,7 @@ impl PcProductivityBulletin {
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
                 ("adapter".into(), "pc".into()),
-                ("artifact_format".into(), "csv".into()),
+                ("artifact_format".into(), artifact_format.into()),
                 ("attribution".into(), ATTRIBUTION.into()),
                 ("bulletin_id".into(), self.bulletin_id.clone()),
                 ("cadence".into(), "annual".into()),

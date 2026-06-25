@@ -25,8 +25,12 @@ use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 const DEFAULT_MARKET_STATISTICS_URL: &str =
     "https://www.asx.com.au/about/market-statistics/historical-market-statistics";
-const DEFAULT_ANNOUNCEMENTS_RSS_URL: &str = "https://www.asx.com.au/asx/rss/announcements.xml";
-const DEFAULT_EOD_CSV_URL: &str = "https://www.asx.com.au/data/eod/eod.csv";
+const DEFAULT_ANNOUNCEMENTS_RSS_URL: &str = "";
+const DEFAULT_EOD_CSV_URL: &str = "";
+const ANNOUNCEMENTS_PRODUCT_URL: &str =
+    "https://www.asx.com.au/connectivity-and-data/information-services/company-news";
+const EOD_PRODUCT_URL: &str =
+    "https://www.asx.com.au/connectivity-and-data/information-services/reference-data";
 const USER_AGENT: &str = concat!("au-kpis-adapter-asx/", env!("CARGO_PKG_VERSION"));
 const MARKET_STATISTICS_DATAFLOW_ID: &str = "asx.market_statistics";
 const ANNOUNCEMENTS_DATAFLOW_ID: &str = "asx.announcements";
@@ -117,7 +121,7 @@ impl AsxAdapter {
                 source_id: source_id(),
                 name: "ASX company announcements".into(),
                 description: Some(
-                    "Timestamped public ASX announcement feed represented as count observations with announcement provenance attributes."
+                    "Timestamped ASX announcement-feed observations when a licensed or otherwise configured feed URL is supplied."
                         .into(),
                 ),
                 dimensions: vec![
@@ -130,14 +134,14 @@ impl AsxAdapter {
                 frequency: Frequency::Irregular,
                 license: License::Other(LICENSE_NAME.into()),
                 attribution: ATTRIBUTION.into(),
-                source_url: DEFAULT_ANNOUNCEMENTS_RSS_URL.into(),
+                source_url: ANNOUNCEMENTS_PRODUCT_URL.into(),
             },
             Dataflow {
                 id: eod_dataflow_id(),
                 source_id: source_id(),
                 name: "ASX end-of-day prices".into(),
                 description: Some(
-                    "Daily ASX open, high, low, close, and volume observations from public EOD CSV exports."
+                    "Daily ASX open, high, low, close, and volume observations when a licensed or otherwise configured EOD CSV URL is supplied."
                         .into(),
                 ),
                 dimensions: vec![
@@ -148,7 +152,7 @@ impl AsxAdapter {
                 frequency: Frequency::Daily,
                 license: License::Other(LICENSE_NAME.into()),
                 attribution: ATTRIBUTION.into(),
-                source_url: DEFAULT_EOD_CSV_URL.into(),
+                source_url: EOD_PRODUCT_URL.into(),
             },
         ]
     }
@@ -462,21 +466,29 @@ fn current_jobs_for_urls(
     started_at: DateTime<Utc>,
     trace_parent: Option<&str>,
 ) -> Vec<DiscoveredJob> {
-    vec![
-        asx_job(
-            AsxArtifactKind::MarketStatistics,
-            market_statistics_url,
-            started_at,
-            trace_parent,
-        ),
-        asx_job(
+    let mut jobs = vec![asx_job(
+        AsxArtifactKind::MarketStatistics,
+        market_statistics_url,
+        started_at,
+        trace_parent,
+    )];
+    if !announcements_rss_url.trim().is_empty() {
+        jobs.push(asx_job(
             AsxArtifactKind::Announcements,
             announcements_rss_url,
             started_at,
             trace_parent,
-        ),
-        asx_job(AsxArtifactKind::Eod, eod_csv_url, started_at, trace_parent),
-    ]
+        ));
+    }
+    if !eod_csv_url.trim().is_empty() {
+        jobs.push(asx_job(
+            AsxArtifactKind::Eod,
+            eod_csv_url,
+            started_at,
+            trace_parent,
+        ));
+    }
+    jobs
 }
 
 fn discoverable_jobs_for_urls(

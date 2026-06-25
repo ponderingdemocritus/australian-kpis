@@ -26,7 +26,7 @@ export default defineConfig({
       NEXT_PUBLIC_AU_KPIS_API_BASE_URL:
         process.env.NEXT_PUBLIC_AU_KPIS_API_BASE_URL ??
         process.env.VITE_AU_KPIS_API_BASE_URL ??
-        'http://127.0.0.1:3000',
+        '/api/au-kpis',
     },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -112,7 +112,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
     );
     assert_eq!(
         dispatchable_capacity["dimension_selector"]["metric"],
-        "dispatchable_capacity"
+        "available_generation"
     );
     let nsw_planning = indicators
         .iter()
@@ -124,7 +124,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
     );
     assert_eq!(
         nsw_planning["dimension_selector"]["metric"],
-        "median_assessment_days"
+        "average_assessment_days"
     );
     let vic_planning = indicators
         .iter()
@@ -138,6 +138,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
         vic_planning["dimension_selector"]["metric"],
         "median_decision_days"
     );
+    assert_eq!(vic_planning["coverage_status"], "coverage_gap");
     let ai_adoption = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "ai.adoption")
@@ -165,6 +166,7 @@ async fn aps_config_endpoint_is_cacheable_and_documented() {
         ai_talent["dimension_selector"]["occupation_group"],
         "ai_related"
     );
+    assert_eq!(ai_talent["coverage_status"], "coverage_gap");
     let oversight = indicators
         .iter()
         .find(|indicator| indicator["indicator_id"] == "oversight.reviewed-strength")
@@ -231,15 +233,17 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshot["scorecard_id"], "aps");
     assert_eq!(snapshot["config_version"], "aps.v1");
     assert_eq!(snapshot["zone"], "green");
-    assert_eq!(snapshot["trend"], "up");
+    assert_eq!(snapshot["trend"], "unavailable");
     assert_eq!(snapshot["score"], 100.0);
-    assert!((snapshot["coverage_pct"].as_f64().unwrap() - 96.05263157894737).abs() < 1e-9);
+    let contributions = snapshot["contributions"].as_array().expect("contributions");
+    assert_eq!(contributions.len(), 21);
+    let expected_coverage = expected_coverage_pct(contributions);
+    assert!((snapshot["coverage_pct"].as_f64().unwrap() - expected_coverage).abs() < 1e-9);
+    assert!(expected_coverage > 90.0);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
     assert_eq!(snapshot["confidence"], "low");
 
-    let contributions = snapshot["contributions"].as_array().expect("contributions");
-    assert_eq!(contributions.len(), 21);
     let housing = contribution(contributions, "housing.approvals");
     assert_eq!(housing["raw_value"], 25000.0);
     assert_eq!(housing["normalized_value"], 1.0);
@@ -371,6 +375,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
         renewable_generation["source_dataflow_id"],
         "aemo.generation_mix"
     );
+    assert_eq!(renewable_generation["dimensions"]["region"], "NEM");
     assert_eq!(renewable_generation["dimensions"]["fuel_type"], "wind");
 
     let dispatchable_capacity = contribution(contributions, "energy.dispatchable-capacity");
@@ -383,7 +388,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     );
     assert_eq!(
         dispatchable_capacity["dimensions"]["metric"],
-        "dispatchable_capacity"
+        "available_generation"
     );
 
     let ai_readiness = contribution(contributions, "ai.readiness");
@@ -431,7 +436,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(nsw_planning["dimensions"]["jurisdiction"], "NSW");
     assert_eq!(
         nsw_planning["dimensions"]["metric"],
-        "median_assessment_days"
+        "average_assessment_days"
     );
 
     let vic_planning = contribution(contributions, "planning.vic-permit-activity");
@@ -489,6 +494,26 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(snapshots[1]["as_of"], "2024-02-01");
     assert_eq!(snapshots[1]["trend"], "up");
     assert_eq!(snapshots[1]["score"], 100.0);
+}
+
+fn expected_coverage_pct(contributions: &[Value]) -> f64 {
+    let mut expected_weight = 0.0;
+    let mut resolved_weight = 0.0;
+    for contribution in contributions {
+        if contribution["coverage_status"] == "visible_unscored" {
+            continue;
+        }
+        let weight = contribution["weight"].as_f64().expect("weight");
+        expected_weight += weight;
+        if !contribution["normalized_value"].is_null() {
+            resolved_weight += weight;
+        }
+    }
+    if expected_weight <= 0.0 {
+        100.0
+    } else {
+        (resolved_weight / expected_weight * 100.0).clamp(0.0, 100.0)
+    }
 }
 
 fn contribution<'a>(contributions: &'a [Value], indicator_id: &str) -> &'a Value {
@@ -667,19 +692,19 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
              'aemo.dispatch', 'aemo', 'NEM dispatch', NULL,
              ARRAY['region', 'metric'], ARRAY['value'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
              'Source: Australian Energy Market Operator',
-             'https://www.nemweb.com.au/Reports/CURRENT/DispatchIS_Reports/'
+             'https://nemweb.com.au/Reports/Current/DispatchIS_Reports/'
          ),
          (
              'aemo.generation_mix', 'aemo', 'NEM generation mix', NULL,
              ARRAY['region', 'fuel_type'], ARRAY['generation_mw'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
              'Source: Australian Energy Market Operator',
-             'https://www.nemweb.com.au/Reports/CURRENT/FuelMix/'
+             'https://nemweb.com.au/Reports/Current/'
          ),
          (
              'aemo.dispatchability_capacity', 'aemo', 'NEM dispatchability capacity', NULL,
              ARRAY['region', 'metric'], ARRAY['value'], 'irregular', 'AEMO Copyright and Disclaimer Notice',
              'Source: Australian Energy Market Operator',
-             'https://www.nemweb.com.au/Reports/CURRENT/DispatchCapacity/'
+             'https://nemweb.com.au/Reports/Current/DispatchIS_Reports/'
          ),
          (
              'oxford.gari', 'ai-readiness', 'Oxford Government AI Readiness Index', NULL,
@@ -851,7 +876,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "aemo.generation_mix",
         "generation_mw",
         "MW",
-        [("region", "NSW1"), ("fuel_type", "wind")],
+        [("region", "NEM"), ("fuel_type", "wind")],
     )
     .await;
     let dispatchable_capacity = insert_series(
@@ -859,7 +884,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
         "aemo.dispatchability_capacity",
         "value",
         "MW",
-        [("region", "NSW1"), ("metric", "dispatchable_capacity")],
+        [("region", "NSW1"), ("metric", "available_generation")],
     )
     .await;
     let ai_readiness = insert_series(
@@ -911,7 +936,7 @@ async fn seed_scorecard_inputs(pool: &PgPool) {
             ("jurisdiction", "NSW"),
             ("council", "all"),
             ("development_type", "all"),
-            ("metric", "median_assessment_days"),
+            ("metric", "average_assessment_days"),
         ],
     )
     .await;
@@ -1284,15 +1309,13 @@ async fn insert_series<const N: usize>(
              series_key, dataflow_id, measure_id, dimensions, unit,
              first_observed, last_observed, active
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true)",
+         VALUES ($1, $2, $3, $4, $5, NULL, NULL, true)",
     )
     .bind(key.digest().as_bytes().as_slice())
     .bind(dataflow_id)
     .bind(measure_id)
     .bind(json!(dimensions))
     .bind(unit)
-    .bind(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
-    .bind(Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap())
     .execute(pool)
     .await
     .expect("insert series");
@@ -1326,6 +1349,17 @@ async fn insert_observation(
     .execute(pool)
     .await
     .expect("insert observation");
+    sqlx::query(
+        "UPDATE series
+         SET first_observed = LEAST(COALESCE(first_observed, $2), $2),
+             last_observed = GREATEST(COALESCE(last_observed, $2), $2)
+         WHERE series_key = $1",
+    )
+    .bind(series_key.digest().as_bytes().as_slice())
+    .bind(observed_at)
+    .execute(pool)
+    .await
+    .expect("update series observation bounds");
 }
 
 fn docker_available() -> bool {

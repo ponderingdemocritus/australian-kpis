@@ -11,6 +11,33 @@ use object_store::memory::InMemory;
 use serde::Serialize;
 
 const HOUSING_ACCORD_CSV: &[u8] = include_bytes!("fixtures/housing_accord_progress.csv");
+const HOUSING_ACCORD_QUARTERLY_HTML: &[u8] = br#"
+<!doctype html>
+<main>
+  <h1>Quarterly Report &ndash; March 2026</h1>
+  <time datetime="2026-03-25T12:00:00Z">25 March 2026</time>
+  <p>Under the National Housing Accord, all levels of government agreed to an ambitious target to build 1.2 million new homes over 5 years to June 2029.</p>
+  <section>
+    <strong>219,000</strong>
+    <p>new homes completed over 5&nbsp;quarters since the Accord started</p>
+  </section>
+  <table>
+    <thead>
+      <tr>
+        <th>State or territory</th>
+        <th>Change on past 12 months (rolling)</th>
+        <th>Share of Accord target approved (to date)</th>
+        <th>Change on past 12 months (rolling)</th>
+        <th>Share of Accord target built (to date)</th>
+        <th>Quarter</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><th>AUS</th><td>9%</td><td>25%</td><td>-2%</td><td>18%</td><td>Jun 2030</td></tr>
+    </tbody>
+  </table>
+</main>
+"#;
 
 #[derive(Debug, Serialize)]
 struct SnapshotRow {
@@ -30,6 +57,7 @@ async fn artifact_for(
     blob_store: &BlobStore,
     bytes: &'static [u8],
     source_url: &str,
+    content_type: &str,
 ) -> ArtifactRef {
     let id = blob_store
         .put_artifact(Bytes::from_static(bytes))
@@ -40,7 +68,7 @@ async fn artifact_for(
         fetch_id: None,
         source_id: SourceId::new("nhsac").unwrap(),
         source_url: source_url.into(),
-        content_type: "text/csv".into(),
+        content_type: content_type.into(),
         response_headers: BTreeMap::new(),
         storage_key: StorageKey::canonical_for(&id).to_string(),
         size_bytes: bytes.len() as u64,
@@ -95,6 +123,7 @@ async fn parses_housing_accord_progress_fixture() {
         &blob_store,
         HOUSING_ACCORD_CSV,
         "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv",
+        "text/csv",
     )
     .await;
 
@@ -116,12 +145,48 @@ async fn parses_housing_accord_progress_fixture() {
 }
 
 #[tokio::test]
+async fn parses_quarterly_report_html_fixture() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        HOUSING_ACCORD_QUARTERLY_HTML,
+        "https://nhsac.gov.au/reports-and-submissions/quarterly-report-march-2026",
+        "text/html",
+    )
+    .await;
+
+    let rows = snapshot_rows(artifact, blob_store).await;
+
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().any(|row| {
+        row.measure_id == "progress_to_target_pct"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.time == "2026-01-01T00:00:00+00:00"
+            && row.value == Some(18.0)
+            && row
+                .attributes
+                .get("nhsac_value_derivation")
+                .map(String::as_str)
+                == Some("reported")
+    }));
+    assert!(
+        rows.iter()
+            .any(|row| row.measure_id == "homes_completed" && row.value == Some(219000.0))
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.measure_id == "annual_target" && row.value == Some(240000.0))
+    );
+}
+
+#[tokio::test]
 async fn parse_rejects_mismatched_nhsac_source_and_dataflow() {
     let blob_store = BlobStore::new(InMemory::new());
     let mut artifact = artifact_for(
         &blob_store,
         HOUSING_ACCORD_CSV,
         "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv",
+        "text/csv",
     )
     .await;
     artifact.source_id = SourceId::new("abs").unwrap();
@@ -157,6 +222,7 @@ async fn parse_rejects_expected_dataflow_mismatch() {
         &blob_store,
         HOUSING_ACCORD_CSV,
         "https://nhsac.gov.au/publications/housing-accord-progress-2026.csv",
+        "text/csv",
     )
     .await;
     let adapter = NhsacAdapter::default();

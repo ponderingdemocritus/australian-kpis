@@ -23,6 +23,12 @@ use futures::{StreamExt, stream};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 const DEFAULT_INDEX_URL: &str = "https://www.industry.gov.au/data-and-publications";
+const OXFORD_GARI_2025_URL: &str =
+    "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/";
+const NAIC_ADOPTION_DEC_2025_FEB_2026_URL: &str =
+    "https://www.ai.gov.au/news-and-insights/blog/ai-adoption-insights-december-2025-february-2026";
+const ABS_AI_RD_2023_24_URL: &str =
+    "https://www.abs.gov.au/media-centre/media-releases/ai-now-fastest-growing-area-business-rd";
 const SOURCE_ID: &str = "ai-readiness";
 const SOURCE_NAME: &str = "AI readiness sources";
 const USER_AGENT: &str = concat!("au-kpis-adapter-ai-readiness/", env!("CARGO_PKG_VERSION"));
@@ -104,13 +110,13 @@ impl AiReadinessAdapter {
                 frequency: Frequency::Annual,
                 license: License::Other("Oxford Insights terms".into()),
                 attribution: "Source: Oxford Insights Government AI Readiness Index".into(),
-                source_url: "https://oxfordinsights.com/ai-readiness/ai-readiness-index/".into(),
+                source_url: OXFORD_GARI_2025_URL.into(),
             },
             Dataflow {
                 id: naic_adoption_dataflow_id(),
                 source_id: source_id(),
                 name: "National AI Centre adoption tracker".into(),
-                description: Some("AI adoption tracker observations for Australian segments.".into()),
+                description: Some("National AI Centre SME AI adoption observations.".into()),
                 dimensions: vec![
                     DimensionId::new("country").expect("static dimension id is valid"),
                     DimensionId::new("segment").expect("static dimension id is valid"),
@@ -121,7 +127,7 @@ impl AiReadinessAdapter {
                 frequency: Frequency::Quarterly,
                 license: License::Other("National AI Centre terms".into()),
                 attribution: "Source: National AI Centre".into(),
-                source_url: "https://www.industry.gov.au/science-technology-and-innovation/technology/national-ai-centre".into(),
+                source_url: NAIC_ADOPTION_DEC_2025_FEB_2026_URL.into(),
             },
             Dataflow {
                 id: abs_ai_rd_dataflow_id(),
@@ -139,7 +145,7 @@ impl AiReadinessAdapter {
                 frequency: Frequency::Annual,
                 license: License::CcBy40,
                 attribution: "Source: Australian Bureau of Statistics".into(),
-                source_url: "https://www.abs.gov.au/statistics/research-and-development".into(),
+                source_url: ABS_AI_RD_2023_24_URL.into(),
             },
             Dataflow {
                 id: home_affairs_talent_dataflow_id(),
@@ -157,7 +163,7 @@ impl AiReadinessAdapter {
                 frequency: Frequency::Quarterly,
                 license: License::Other("Home Affairs publication terms".into()),
                 attribution: "Source: Department of Home Affairs".into(),
-                source_url: "https://immi.homeaffairs.gov.au/what-we-do/skilled-migration-program".into(),
+                source_url: "https://immi.homeaffairs.gov.au/visas/working-in-australia/skillselect/invitation-rounds".into(),
             },
         ]
     }
@@ -186,7 +192,7 @@ impl AiReadinessAdapter {
         }
         let provenance = publication_url_provenance(&job.source_url).ok_or_else(|| {
             AdapterError::Validation(format!(
-                "AI readiness fetch URL `{}` is not a target CSV artifact",
+                "AI readiness fetch URL `{}` is not a supported source artifact",
                 job.source_url
             ))
         })?;
@@ -253,7 +259,16 @@ impl SourceAdapter for AiReadinessAdapter {
             .await?
             .error_for_status()?;
         let body = response.text().await?;
-        let publications = parse_publications_with_base(&body, self.index_url())?;
+        let mut publications = parse_publications_with_base(&body, self.index_url())?;
+        if self.index_url() == DEFAULT_INDEX_URL {
+            publications.extend(official_html_publications());
+            publications.sort_by(|left, right| {
+                left.dataflow_id
+                    .cmp(&right.dataflow_id)
+                    .then(left.publication_id.cmp(&right.publication_id))
+            });
+            publications.dedup_by(|left, right| left.source_url == right.source_url);
+        }
         Ok(discoverable_jobs(
             &publications,
             ctx.known_revisions(),
@@ -266,6 +281,18 @@ impl SourceAdapter for AiReadinessAdapter {
     #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
         self.validate_fetch_job(&job)?;
+        let provenance = publication_url_provenance(&job.source_url).ok_or_else(|| {
+            AdapterError::Validation(format!(
+                "AI readiness fetch URL `{}` is not a supported source artifact",
+                job.source_url
+            ))
+        })?;
+        let accept = match provenance.kind {
+            AiPublicationKind::Csv => "text/csv,*/*",
+            AiPublicationKind::OxfordGariHtml
+            | AiPublicationKind::NaicAdoptionHtml
+            | AiPublicationKind::AbsAiRdHtml => "text/html,application/xhtml+xml,*/*",
+        };
         let response = ctx
             .http
             .execute(
@@ -273,7 +300,7 @@ impl SourceAdapter for AiReadinessAdapter {
                     .raw_artifact()
                     .get(&job.source_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", "text/csv,*/*"),
+                    .header("accept", accept),
             )
             .await?;
         let response_headers = capture_response_headers(response.headers());
@@ -392,6 +419,8 @@ impl AiReadinessPublication {
     }
 
     fn to_discovered_job(&self, trace_parent: Option<&str>) -> DiscoveredJob {
+        let artifact_format = publication_url_provenance(&self.source_url)
+            .map_or("unknown", |provenance| provenance.kind.artifact_format());
         DiscoveredJob {
             id: format!("ai-readiness:{}", self.publication_id),
             source_id: source_id(),
@@ -399,7 +428,7 @@ impl AiReadinessPublication {
             source_url: self.source_url.clone(),
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
-                ("artifact_format".into(), "csv".into()),
+                ("artifact_format".into(), artifact_format.into()),
                 ("publication_id".into(), self.publication_id.clone()),
                 ("title".into(), self.title.clone()),
                 ("revision_key".into(), self.revision_key()),
@@ -415,6 +444,24 @@ impl AiReadinessPublication {
 struct AiPublicationProvenance {
     dataflow_id: DataflowId,
     publication_id: String,
+    kind: AiPublicationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiPublicationKind {
+    Csv,
+    OxfordGariHtml,
+    NaicAdoptionHtml,
+    AbsAiRdHtml,
+}
+
+impl AiPublicationKind {
+    const fn artifact_format(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::OxfordGariHtml | Self::NaicAdoptionHtml | Self::AbsAiRdHtml => "html",
+        }
+    }
 }
 
 fn discoverable_jobs(
@@ -442,6 +489,32 @@ fn discoverable_jobs(
         .collect()
 }
 
+fn official_html_publications() -> Vec<AiReadinessPublication> {
+    vec![
+        AiReadinessPublication {
+            publication_id: "oxford-gari-2025".into(),
+            dataflow_id: oxford_gari_dataflow_id(),
+            title: "Oxford Government AI Readiness Index 2025".into(),
+            source_url: OXFORD_GARI_2025_URL.into(),
+            last_updated: Some("2025".into()),
+        },
+        AiReadinessPublication {
+            publication_id: "naic-ai-adoption-insights-dec-2025-feb-2026".into(),
+            dataflow_id: naic_adoption_dataflow_id(),
+            title: "National AI Centre AI adoption insights December 2025 to February 2026".into(),
+            source_url: NAIC_ADOPTION_DEC_2025_FEB_2026_URL.into(),
+            last_updated: Some("2026-06-03".into()),
+        },
+        AiReadinessPublication {
+            publication_id: "abs-ai-rd-2023-24".into(),
+            dataflow_id: abs_ai_rd_dataflow_id(),
+            title: "ABS AI now fastest growing area for business R&D".into(),
+            source_url: ABS_AI_RD_2023_24_URL.into(),
+            last_updated: Some("2025-08-22".into()),
+        },
+    ]
+}
+
 fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
     let provenance = match validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
         Ok(provenance) => provenance,
@@ -464,7 +537,7 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        let result = parse_csv_artifact(
+        let result = parse_ai_artifact(
             blob_store,
             key,
             artifact,
@@ -484,7 +557,7 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     }))
 }
 
-async fn parse_csv_artifact(
+async fn parse_ai_artifact(
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
@@ -504,13 +577,33 @@ async fn parse_csv_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
-    let rows = parse_ai_csv(Bytes::from(bytes), &provenance, &artifact, ingested_at).await?;
+    let rows = parse_ai_bytes(Bytes::from(bytes), &provenance, &artifact, ingested_at).await?;
     for row in rows {
         if tx.send(Ok(row)).await.is_err() {
             return Ok(());
         }
     }
     Ok(())
+}
+
+async fn parse_ai_bytes(
+    bytes: Bytes,
+    provenance: &AiPublicationProvenance,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    match provenance.kind {
+        AiPublicationKind::Csv => parse_ai_csv(bytes, provenance, artifact, ingested_at).await,
+        AiPublicationKind::OxfordGariHtml => {
+            parse_oxford_gari_html(&bytes, provenance, artifact, ingested_at)
+        }
+        AiPublicationKind::NaicAdoptionHtml => {
+            parse_naic_adoption_html(&bytes, provenance, artifact, ingested_at)
+        }
+        AiPublicationKind::AbsAiRdHtml => {
+            parse_abs_ai_rd_html(&bytes, provenance, artifact, ingested_at)
+        }
+    }
 }
 
 async fn parse_ai_csv(
@@ -560,6 +653,104 @@ async fn parse_ai_csv(
         observations.push(ai_observation(row, provenance, artifact, ingested_at)?);
     }
     Ok(observations)
+}
+
+fn parse_oxford_gari_html(
+    bytes: &[u8],
+    provenance: &AiPublicationProvenance,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let html = std::str::from_utf8(bytes).map_err(|err| {
+        AdapterError::FormatDrift(format!("Oxford GARI HTML is not UTF-8: {err}"))
+    })?;
+    let marker = "\"name\":\"Australia\"";
+    let marker_index = html.find(marker).ok_or_else(|| {
+        AdapterError::FormatDrift("Oxford GARI HTML missing Australia index record".into())
+    })?;
+    let object_start = html[..marker_index].rfind('{').ok_or_else(|| {
+        AdapterError::FormatDrift("Oxford GARI Australia record has no object start".into())
+    })?;
+    let object_end = html[marker_index..]
+        .find('}')
+        .map(|offset| marker_index + offset + 1)
+        .ok_or_else(|| {
+            AdapterError::FormatDrift("Oxford GARI Australia record has no object end".into())
+        })?;
+    let australia = &html[object_start..object_end];
+    let total = extract_json_number_field(australia, "total").ok_or_else(|| {
+        AdapterError::FormatDrift("Oxford GARI Australia record missing total score".into())
+    })?;
+
+    let row = AiCsvRow {
+        period: "2025-12-31".into(),
+        country: "AUS".into(),
+        segment: None,
+        sector: None,
+        occupation_group: None,
+        metric: None,
+        measure_id: AI_READINESS_SCORE.into(),
+        value: round_to_decimal_places(total, 2),
+        unit: "index".into(),
+    };
+    ai_observation(row, provenance, artifact, ingested_at).map(|row| vec![row])
+}
+
+fn parse_naic_adoption_html(
+    bytes: &[u8],
+    provenance: &AiPublicationProvenance,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let html = std::str::from_utf8(bytes).map_err(|err| {
+        AdapterError::FormatDrift(format!("NAIC adoption HTML is not UTF-8: {err}"))
+    })?;
+    let text = clean_html_text(html);
+    let value = extract_percentage_after(&text, "Across the December to February quarter")
+        .ok_or_else(|| {
+            AdapterError::FormatDrift(
+                "NAIC adoption HTML missing December to February adoption percentage".into(),
+            )
+        })?;
+    let row = AiCsvRow {
+        period: "2026-02-28".into(),
+        country: "AUS".into(),
+        segment: Some("all".into()),
+        sector: None,
+        occupation_group: None,
+        metric: None,
+        measure_id: ADOPTION_RATE_PCT.into(),
+        value,
+        unit: "percent".into(),
+    };
+    ai_observation(row, provenance, artifact, ingested_at).map(|row| vec![row])
+}
+
+fn parse_abs_ai_rd_html(
+    bytes: &[u8],
+    provenance: &AiPublicationProvenance,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let html = std::str::from_utf8(bytes)
+        .map_err(|err| AdapterError::FormatDrift(format!("ABS AI R&D HTML is not UTF-8: {err}")))?;
+    let text = clean_html_text(html);
+    let value =
+        extract_number_between(&text, "putting $", " million into AI R&D").ok_or_else(|| {
+            AdapterError::FormatDrift("ABS AI R&D HTML missing 2023-24 AI R&D spend amount".into())
+        })?;
+    let row = AiCsvRow {
+        period: "2024-06-30".into(),
+        country: "AUS".into(),
+        segment: None,
+        sector: Some("all".into()),
+        occupation_group: None,
+        metric: Some("ai_rd_spend_m".into()),
+        measure_id: VALUE.into(),
+        value,
+        unit: "$ million".into(),
+    };
+    ai_observation(row, provenance, artifact, ingested_at).map(|row| vec![row])
 }
 
 #[derive(Debug)]
@@ -860,6 +1051,33 @@ fn attr_value(tag: &str, name: &str) -> Option<String> {
 }
 
 fn publication_url_provenance(source_url: &str) -> Option<AiPublicationProvenance> {
+    if source_url == OXFORD_GARI_2025_URL
+        || (source_url.trim_end_matches('/') == OXFORD_GARI_2025_URL.trim_end_matches('/')
+            && trusted_host_for(source_url, "oxfordinsights.com"))
+    {
+        return Some(AiPublicationProvenance {
+            dataflow_id: oxford_gari_dataflow_id(),
+            publication_id: "oxford-gari-2025".into(),
+            kind: AiPublicationKind::OxfordGariHtml,
+        });
+    }
+    if source_url == NAIC_ADOPTION_DEC_2025_FEB_2026_URL
+        && trusted_host_for(source_url, "ai.gov.au")
+    {
+        return Some(AiPublicationProvenance {
+            dataflow_id: naic_adoption_dataflow_id(),
+            publication_id: "naic-ai-adoption-insights-dec-2025-feb-2026".into(),
+            kind: AiPublicationKind::NaicAdoptionHtml,
+        });
+    }
+    if source_url == ABS_AI_RD_2023_24_URL && trusted_host_for(source_url, "abs.gov.au") {
+        return Some(AiPublicationProvenance {
+            dataflow_id: abs_ai_rd_dataflow_id(),
+            publication_id: "abs-ai-rd-2023-24".into(),
+            kind: AiPublicationKind::AbsAiRdHtml,
+        });
+    }
+
     let file_name = source_url
         .rsplit('/')
         .next()
@@ -884,6 +1102,7 @@ fn publication_url_provenance(source_url: &str) -> Option<AiPublicationProvenanc
     Some(AiPublicationProvenance {
         dataflow_id,
         publication_id: stem.to_string(),
+        kind: AiPublicationKind::Csv,
     })
 }
 
@@ -920,6 +1139,59 @@ fn clean_text(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn clean_html_text(value: &str) -> String {
+    let mut text = String::with_capacity(value.len());
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                text.push(' ');
+            }
+            '>' => {
+                in_tag = false;
+                text.push(' ');
+            }
+            _ if !in_tag => text.push(ch),
+            _ => {}
+        }
+    }
+    clean_text(&text)
+}
+
+fn extract_json_number_field(object: &str, field: &str) -> Option<f64> {
+    let key = format!("\"{field}\":");
+    let start = object.find(&key)? + key.len();
+    let rest = &object[start..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | 'e' | 'E')))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn extract_percentage_after(text: &str, marker: &str) -> Option<f64> {
+    let start = text.find(marker)?;
+    let rest = &text[start..];
+    let percent = rest.find('%')?;
+    let before_percent = &rest[..percent];
+    let number_start = before_percent
+        .rfind(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .map_or(0, |offset| offset + 1);
+    before_percent[number_start..].parse().ok()
+}
+
+fn extract_number_between(text: &str, prefix: &str, suffix: &str) -> Option<f64> {
+    let start = text.find(prefix)? + prefix.len();
+    let rest = &text[start..];
+    let end = rest.find(suffix)?;
+    rest[..end].trim().replace(',', "").parse().ok()
+}
+
+fn round_to_decimal_places(value: f64, places: i32) -> f64 {
+    let factor = 10_f64.powi(places);
+    (value * factor).round() / factor
 }
 
 fn decode_html_entities(value: &str) -> String {

@@ -393,8 +393,8 @@ async fn qld_snapshot_fixture(blob_store: BlobStore, cells: &[&[&str]]) -> Fixtu
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         "2025-06-24",
-        113,
-        113,
+        107,
+        107,
         sidecar_response(&artifact.storage_key, cells),
     )
     .await;
@@ -818,6 +818,39 @@ async fn parses_current_qld_budget_split_title_operating_statement_shape() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parses_current_qld_budget_wrapped_pdfplumber_operating_statement_shape() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let cells: &[&[&str]] = &[
+        &[concat!(
+            "2024–25 2025–26 2025–26 2026–27 2027–28 2028–29 2029–30\n",
+            "Outcome Budget Est.Actual Budget Projection Projection Projection\n",
+            "$ million $ million $ million $ million $ million $ million $ million"
+        )][..],
+        &[concat!(
+            "Revenue from Transactions\n",
+            "Taxation revenue 25,033 26,907 28,474 29,676 31,775 33,924 35,966\n",
+            "Grants revenue 41,258 40,990 41,864 45,747 49,081 51,162 53,607\n",
+            "Sales of goods and services 7,590 8,057 7,899 8,116 8,664 8,257 8,365"
+        )][..],
+        &["EqualsNet Operating Balance (4,428) (8,581) (8,845) (6,176) (3,291) (1,996) 619"][..],
+    ];
+
+    let snapshot = qld_snapshot_fixture(blob_store, cells).await;
+
+    assert_eq!(snapshot.observation_count, 24);
+    assert_eq!(snapshot.series_count, 4);
+    assert_eq!(
+        snapshot.first_rows[0].attributes["qld_period_label"],
+        "2024-25"
+    );
+    assert_eq!(
+        snapshot.first_rows[1].attributes["qld_period_label"],
+        "2025-26"
+    );
+    assert_eq!(snapshot.first_rows[1].status, "Estimated");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parse_rejects_nsw_schema_hash_drift() {
     let blob_store = BlobStore::new(InMemory::new());
     let case = FixtureCase {
@@ -955,8 +988,8 @@ async fn parse_rejects_qld_schema_hash_drift() {
     let sidecar_url = serve_sidecar_once(
         artifact.storage_key.clone(),
         "2025-06-24",
-        113,
-        113,
+        107,
+        107,
         sidecar_response(&artifact.storage_key, cells),
     )
     .await;

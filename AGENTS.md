@@ -1,417 +1,203 @@
 # AGENTS.md
 
-Operating manual for AI coding agents (and humans) contributing to **australian-kpis**.
+Concise operating guide for AI coding agents working on **australian-kpis**.
 
-This file complements:
-- [`Spec.md`](./Spec.md) — architecture, data model, testing strategy (ground truth)
-- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — human-oriented workflow
+## Authority
 
-If anything here conflicts with `Spec.md`, **`Spec.md` wins** — file a PR to fix this doc.
+- `Spec.md` is the source of truth for architecture, data model, APIs, CI, and
+  testing. If this file conflicts with `Spec.md`, follow `Spec.md` and fix this
+  file.
+- `CONTRIBUTING.md` covers the human workflow. This file keeps the agent
+  execution rules short.
+- If the spec is silent on architecture or behavior, do not guess. Add or
+  propose a `Spec.md` amendment with the implementation.
 
----
+## Project Map
 
-## 1. Orientation (read this first)
+- `crates/` - Rust workspace: domain, db, queue, loader, API, ingestion, config.
+- `crates/adapters/` - source adapters for ABS, RBA, APRA, ASX, AEMO, Treasury,
+  state sources, and related inputs.
+- `crates/bins/` - runnable Rust binaries: API, ingestion, scheduler, CLI.
+- `apps/web/` - Next.js reference client.
+- `apps/pdf-extractor/` - Python FastAPI PDF sidecar.
+- `apps/bench/` - k6 load tests.
+- `packages/sdk/` and `packages/sdk-generated/` - TypeScript SDK packages.
+- `infra/` - compose stack, Dockerfiles, migrations, deploy config.
+- `tests/`, `fuzz/`, `benches/` - cross-cutting validation.
 
-- **Project**: unified Rust API + TypeScript SDK + Python PDF sidecar for Australian economic data (ABS, RBA, APRA, Treasury, ASX, AEMO, state govts).
-- **Status**: pre-implementation. Work is scoped into 65 GitHub issues across milestones **M1–M5**.
-- **Ground truth**: [`Spec.md`](./Spec.md) (~1300 lines). Skim the TOC; jump to the section relevant to your task. Don't invent architecture — if the spec is silent, propose an amendment PR to `Spec.md` alongside the change.
+## Before Coding
 
-## 2. Repo layout
+1. Read the relevant `Spec.md` anchors and the issue pass requirements.
+2. Respect `Depends on:` in GitHub issues. Do not start blocked work.
+3. Keep one issue per branch/PR unless the user explicitly approves grouping.
+4. Prefer the smallest change that satisfies the contract. No drive-by refactors.
+5. Preserve existing user changes. Never revert unrelated dirty files.
 
-See `Spec.md § Monorepo layout`. In short:
-
-```
-crates/            Rust workspace (domain, db, adapter, api-http, loader, ...)
-crates/adapters/   One crate per source (ABS, RBA, APRA, ...)
-crates/bins/       Binaries: au-kpis-api, au-kpis-ingestion, au-kpis-scheduler, au-kpis-cli
-apps/web/          TypeScript reference client (Vite + React)
-apps/pdf-extractor/  Python sidecar (FastAPI + pdfplumber + camelot)
-apps/bench/        k6 load-test scripts
-packages/sdk/      TypeScript SDK (@au-kpis/sdk)
-packages/sdk-generated/  OpenAPI-generated client + types
-tools/             Codegen + admin scripts
-infra/             docker-compose, Dockerfiles, sqlx migrations
-tests/             Cross-crate e2e, chaos, contract tests
-```
-
-## 3. Finding work
-
-1. **Check the issue board first**: [milestones](https://github.com/ponderingdemocritus/australian-kpis/milestones). Pick an issue with no unmet dependencies.
-2. **Respect `Depends on:` lines** in issue bodies. Do not start a blocked issue.
-3. **Claim it** by assigning yourself (or linking the branch you create).
-4. Each issue's **Pass requirements** checklist is the contract. Every box must be ticked before merge.
-
-### Writing good GitHub issues
-
-If you're creating or rewriting an issue, write it as an **execution contract**, not a brainstorm. A good issue should let an agent or human implement the change without guessing architecture, hidden requirements, or where the code belongs.
-
-**Every implementation issue should contain these sections:**
-
-| Section | What it must say |
-|---|---|
-| **Context** | One short paragraph: what problem this solves and why it matters |
-| **Spec anchors** | Exact `Spec.md` sections that govern the work |
-| **Scope** | What this issue implements in this PR-sized slice |
-| **Out of scope** | Explicitly list nearby work that is **not** part of this issue |
-| **Pass requirements** | Flat checklist of verifiable outcomes; this is the merge contract |
-| **Files/modules likely touched** | Expected crates, apps, workflows, docs, or migrations |
-| **Dependencies** | `Blocked by:` and `Blocks:` lines that reflect actual sequencing |
-| **Test requirements** | The exact test layers required by `Spec.md § Testing strategy` |
-| **Estimated effort** | `S`, `M`, `L`, or `XL`; if `XL`, split before implementation |
-
-**Rules for writing pass requirements:**
-
-1. Anchor each requirement to the spec. If a requirement extends the spec, amend `Spec.md` in the same PR or issue rewrite.
-2. Write outcomes, not implementation trivia. Prefer "returns 429 with `Retry-After`" over "use crate X".
-3. Keep the issue PR-sized. Target one crate, one workflow, one adapter, or one user-visible feature slice.
-4. Do not bundle unrelated surfaces. Backend API + dashboard UI + ops automation is usually too much for one issue.
-5. Do not require live-upstream tests unless the spec explicitly calls for them; prefer fixtures, `wiremock`, and `testcontainers`.
-6. State performance budgets, response formats, and error semantics explicitly when they matter.
-7. Name migrations, OpenAPI changes, docs updates, or fixture additions when they are part of the contract.
-8. If an issue changes architecture or introduces a new endpoint not already in `Spec.md`, the issue must say so and require a spec amendment.
-9. If an issue is a tracker or umbrella, say that clearly in the title/body and do **not** assign it to a coding agent as if it were an implementation ticket.
-
-**Template**
-
-```md
-## Context
-
-<1 short paragraph>
-
-## Spec anchors
-
-- `Spec.md § ...`
-- `Spec.md § ...`
-
-## Scope
-
-- ...
-
-## Out of scope
-
-- ...
-
-## Pass requirements
-
-- [ ] ...
-- [ ] ...
-
-## Files/modules likely touched
-
-- `crates/...`
-- `apps/...`
-
-## Dependencies
-
-- Blocked by: #...
-- Blocks: #...
-
-## Test requirements
-
-- Unit: ...
-- Integration: ...
-- Contract/E2E/bench: ...
-
-## Estimated effort
-
-M (≤3d)
-```
-
-**Anti-patterns to avoid:**
-
-- Vague goals like "support X" without naming endpoints, crates, fixtures, or tests
-- "And also" scope creep into dashboards, docs sites, alerts, and deployment wiring
-- Issue bodies that contradict `Spec.md`
-- `XL` issues assigned directly to an implementer instead of being split first
-- Pass requirements that depend on flaky external systems when local fixtures would do
-- Checklists that mention outputs but not the tests needed to prove them
-
-## 4. Setup (one-time)
+Branch convention:
 
 ```bash
-# Rust toolchain is pinned in rust-toolchain.toml
-rustup show      # installs the pinned version
-
-# Tooling
-cargo install sqlx-cli cargo-nextest cargo-deny cargo-audit cargo-llvm-cov critcmp
-
-# TS
-corepack enable && pnpm install
-
-# Pre-commit hooks
-brew install lefthook && lefthook install
-
-# Local infra
-docker compose -f infra/compose/docker-compose.yml up -d
-sqlx migrate run
+git switch -c ponderingdemocritus/<issue-number>-<short-slug>
 ```
 
-If any of these fail on first run — don't paper over it; fix the underlying setup issue and update this doc if needed.
+Use lowercase kebab-case and keep the branch short.
 
-## 5. Development loop
-
-```
-1. git switch -c <github-handle>/<issue-number>-<short-slug>
-2. cargo check + cargo test (fast feedback in the affected crate)
-3. Implement smallest change that satisfies the issue's Pass requirements
-4. Run local pre-flight checks (see § 6)
-5. Push and open a PR (see § 7)
-6. Wait for CI; fix gates; get review
-7. Merge via merge queue
-```
-
-### Branch naming
-
-- `<handle>/<issue>-<slug>` (e.g., `ponderingdemocritus/27-loader-copy-upsert`)
-- Lowercase, kebab-case, under 50 chars total
-- One issue per branch
-
-## 6. Pre-flight checks (before pushing)
-
-**Run this block every time.** If any fail, fix before pushing — CI will reject them anyway.
+## Local Setup
 
 ```bash
-# Rust
+rustup show
+corepack enable
+pnpm install
+
+docker compose -f infra/compose/docker-compose.yml up -d --build --wait
+
+DATABASE_URL=postgres://au_kpis:au_kpis@127.0.0.1:54320/au_kpis \
+  sqlx migrate run --source infra/migrations
+```
+
+Run the API locally against compose services:
+
+```bash
+AU_KPIS_DATABASE__URL=postgres://au_kpis:au_kpis@127.0.0.1:54320/au_kpis \
+AU_KPIS_CACHE__URL=redis://127.0.0.1:63790 \
+  cargo run --bin au-kpis-api
+```
+
+Run the web app:
+
+```bash
+NEXT_PUBLIC_AU_KPIS_API_BASE_URL=http://127.0.0.1:3000 \
+  pnpm --filter @au-kpis/web exec next dev --hostname 127.0.0.1 --port 4173
+```
+
+For ingestion one-shot runs, set durable object-store env vars for MinIO/R2.
+One-shot mode intentionally requires a real object store.
+
+## Verification
+
+Run focused checks while developing, then the relevant pre-flight subset before
+handoff. Do not claim completion without running the checks you cite.
+
+Rust:
+
+```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
-cargo sqlx prepare --workspace        # if queries changed
+cargo sqlx prepare --workspace        # when SQL queries changed
+```
 
-# TypeScript
+TypeScript:
+
+```bash
 pnpm run lint
 pnpm turbo run typecheck test
+```
 
-# Supply chain (catches bad deps before CI)
+Supply chain and secrets:
+
+```bash
 cargo deny check
 cargo audit
-gitleaks protect --staged             # pre-commit runs this too
+gitleaks protect --staged
+```
 
-# OpenAPI drift (if you touched handlers or schemas)
+OpenAPI, when handlers or schemas changed:
+
+```bash
 cargo run -p au-kpis-openapi > openapi.json
-oasdiff breaking openapi-main.json openapi.json    # must be empty
+oasdiff breaking openapi-main.json openapi.json
 ```
 
-**Lefthook** runs `cargo fmt --check`, `biome format --check`, `gitleaks protect`, and a >5 MB file block on every commit. Don't disable it.
+If local Docker, network, registry, or platform limits block a check, document
+the exact blocked command and why.
 
-### Commit checklist
+## Test Expectations
 
-Before creating any commit, tick this checklist locally or document why a box is not applicable:
+- Pure logic: unit tests.
+- Parsers/adapters: golden fixtures, `insta` snapshots, malformed-input tests,
+  and property tests where shape variation matters.
+- SQL/loader/API behavior: integration tests against real Postgres/Timescale
+  via compose or testcontainers.
+- API endpoints: handler/integration coverage plus OpenAPI drift checks.
+- SDK changes: generated package builds and runtime checks.
+- UI changes: Playwright and accessibility checks.
+- Performance-sensitive paths: criterion/k6 coverage and baseline updates.
 
-- [ ] Confirm the branch maps to one issue, or to an explicitly approved grouped PR scope.
-- [ ] Re-read the relevant `Spec.md` anchors and the issue's Pass requirements.
-- [ ] Verify every touched requirement is satisfied, or leave the PR in draft with the unmet boxes unticked.
-- [ ] Run the affected checks plus the § 6 pre-flight block where practical; record any checks blocked by local network, Docker, registry, or sandbox limits.
-- [ ] Regenerate committed artifacts when their source changed, including `openapi.json`, generated SDK files, fixtures, snapshots, or migrations.
-- [ ] For CI, merge-queue, or branch-protection changes, update the repository settings notes in `docs/ops/merge-queue.md`.
-- [ ] Review `git diff` and `git status` for unrelated edits, secrets, production data, large files, and generated drift before staging.
-- [ ] For CI-follow-up fixes, complete the CI-fix checklist below before committing.
+Coverage target is 80% line and 70% branch across shipped crates. CI has a
+zero-flake policy.
 
-### CI-fix checklist before committing
+## Coding Rules
 
-When committing a CI-only or CI-follow-up fix, tick this checklist locally or document what could not run:
+Rust:
 
-- [ ] Re-read the failing job logs and tie each edit to a named failing check.
-- [ ] If API handlers, schemas, or OpenAPI docs changed, regenerate `openapi.json` and run the OpenAPI drift check.
-- [ ] If `openapi.json` or generated SDK files changed, run Biome formatting/checks on those files.
-- [ ] If SDK package imports, validation, or runtime exports changed, run the SDK runtime checks for Node and Deno at minimum.
-- [ ] If a RustSec advisory failed CI, prefer a dependency or lockfile update over adding an ignore; record the advisory id and fixed version in the PR notes.
-- [ ] If local network, Docker, or registry access blocks a check, say so in the PR and verify the same check in GitHub Actions after pushing.
+- Use `thiserror` in libraries and `anyhow` in binaries.
+- No `.unwrap()` in non-test code.
+- Do not hold locks across `.await`.
+- Prefer compile-checked `sqlx::query!` where practical.
+- Use streams for large data; avoid collecting hot-path datasets into `Vec`.
 
-## 7. PR rules
+TypeScript:
 
-### Required
+- Biome is authoritative.
+- Avoid `any`; use `unknown` and narrow at boundaries.
+- Runtime validation belongs at API/SDK/process boundaries.
 
-| Rule | Detail |
-|---|---|
-| **One issue per PR** | Title prefixed with issue number: `fix(loader): revision chain tiebreak (#27)` |
-| **Closes keyword** | Body contains `Closes #N` so the issue auto-closes on merge |
-| **Pass requirements checklist** | Copy the issue's checklist into the PR body; tick what you did |
-| **Test plan** | Concrete steps to verify; unit + integration |
-| **Spec impact** | Confirm "No Spec changes required" OR link amendment PR |
-| **Signed commits** | `git config commit.gpgsign true` — required on `main` |
-| **Conventional commit title** | `type(scope): subject` where type ∈ `feat`, `fix`, `refactor`, `test`, `ci`, `docs`, `chore`, `security` |
+Python:
 
-### Size + scope
+- Use `ruff` and strict `mypy`.
+- Prefer `httpx`; every network call needs an explicit timeout.
 
-- **Target ≤400 lines changed.** Bigger → split.
-- **No drive-by refactors.** Unrelated cleanup goes in its own PR.
-- **No new dependencies** without a comment explaining why an existing dep doesn't work. `cargo deny` rejects GPL-incompatible licenses.
+Migrations:
 
-### What reviewers look for
+- Add numbered `.up.sql` and `.down.sql` files where possible.
+- Test migrate, revert, migrate for schema-sensitive changes.
+- No destructive migration without a deprecation plan and `Spec.md` note.
 
-- The diff delivers exactly the issue's pass requirements — no more, no less
-- Tests added for new behaviour; property/snapshot tests where applicable
-- Error paths handled with `thiserror` (libs) / `anyhow` (bins) — no `.unwrap()` in non-test code
-- No lock held across `.await` (clippy catches it; don't silence the lint)
-- No secrets or real production data in fixtures
+Comments:
 
-### Automated review guidance
+- Add comments only for non-obvious why/invariants/workarounds.
 
-- Prioritise correctness, security, data integrity, CI regressions, and spec drift over style commentary
-- Flag missing tests for behaviour changes, migrations, API changes, or workflow logic as at least P1
-- Flag missing `Spec.md` updates when a PR changes the CI contract or other architecture-level behaviour
-- Ignore formatting-only nits unless they block understanding of the diff
+## Data And Ingestion Invariants
 
-## 8. CI rules (what must pass)
+- Preserve provenance through every stage: discovery job id, trace context,
+  source id, dataflow id, artifact id, storage key, and parsed bytes.
+- Parsers must reject ambiguous source/dataflow provenance. Do not infer a
+  dataflow only from payload shape or mirrored filenames.
+- If observations carry `source_artifact_id`, validate the artifact id, storage
+  key, and bytes are consistent before emitting rows.
+- Keep streaming fixes on the hot path; do not add full-artifact scans unless
+  the issue explicitly accepts that cost.
+- Cancellation stops admitting new work but must drain already produced
+  artifacts, observations, and audit records until the shutdown grace expires.
+- Make large/performance fixtures production-shaped with valid content-addressed
+  artifact ids and storage keys.
+- Preserve idempotency, ordering, backpressure, auditability, and retry semantics
+  in loader, queue, parser, ingestion, and API changes.
 
-Full details in `Spec.md § CI/CD pipeline`. Summary:
+## Generated Artifacts
 
-### PR flow (blocking — all 14 gates)
+- Handler/schema changes must regenerate `openapi.json` in the same change.
+- SDK output changes must update generated files and run SDK checks.
+- Snapshot changes must be intentional and reviewed.
+- Do not commit secrets, `.env`, production data, or files over 5 MB. Large
+  fixtures belong in object storage with an in-repo reference.
 
-| # | Gate | Tool | Fail condition |
-|---|---|---|---|
-| 1 | Compile | `cargo check --workspace` | error |
-| 2 | Lint | `cargo clippy -D warnings` + `pnpm run lint` | any warning |
-| 3 | Format | `cargo fmt --check` + `biome format --check` | diff |
-| 4 | Tests | `nextest` + `vitest` + Playwright | fail or flake (retry >0) |
-| 5 | Coverage | `cargo-llvm-cov` | <80% line or <70% branch |
-| 6 | Snapshots | `insta` | drift without review commit |
-| 7 | OpenAPI diff | `oasdiff breaking` | any breaking change without `/v2` |
-| 8 | Contract | `schemathesis` | violation |
-| 9 | Supply chain | `cargo audit`, `cargo deny`, `pnpm audit` | critical CVE or banned license |
-| 10 | Container | `trivy` | HIGH/CRITICAL |
-| 11 | Secrets | `gitleaks` | any finding |
-| 12 | Bench | `critcmp` | >5% regression |
-| 13 | Smoke | `k6 smoke.js` | threshold miss |
-| 14 | Accessibility | `axe-core` | any WCAG AA violation |
+## PR Contract
 
-**Target wall time: <5 min on warm cache.** If your PR slows CI materially, surface it in the PR description.
+- One issue per PR.
+- Title: conventional commit style, preferably including the issue number.
+- Body: `Closes #N`, pass-requirements checklist, test plan, and spec impact.
+- Target small diffs, roughly <=400 changed lines. Split larger work.
+- No new dependency without explaining why existing dependencies are inadequate.
+- Signed commits are required on `main`.
 
-### Merge queue (blocking, runs once per batch)
+CI gates include compile, lint, format, tests, coverage, snapshots, OpenAPI
+breaking diff, contract fuzzing, supply-chain scans, container scan, secrets,
+bench regression, k6 smoke, and accessibility. See `Spec.md` for details.
 
-- Full PR flow through `.github/workflows/pr.yml`
-- Playwright full suite
-- k6 `smoke.js` against staging
-- `schemathesis` deep fuzz
-- Bench regression (no longer advisory)
+## When Stuck
 
-Merge queue **ejects the entire batch** on failure. Respect the queue — don't force-push to bypass.
-
-Before committing merge-queue or branch-protection work, tick this checklist locally or document the blocked item in the PR:
-
-- [ ] `.github/workflows/merge.yml` triggers on `merge_group`.
-- [ ] `merge.yml` runs the full PR flow, staging k6 smoke, deep Schemathesis, blocking bench regression, and the currently available full Playwright suite.
-- [ ] `docs/ops/merge-queue.md` lists the exact `main` branch settings, including required `CI OK`, CODEOWNERS review, signed commits, and merge queue.
-- [ ] Repository variables/secrets needed by staging smoke and contract fuzzing are named in the ops note.
-- [ ] The PR or follow-up settings proof shows that a failed merge group is ejected without partially landing.
-
-### Scheduled (non-blocking, but watch for alerts)
-
-- k6 `sustained.js` + `burst.js` nightly in staging
-- `cargo fuzz run` 30 min/target nightly
-- `cargo mutants` weekly
-- Renovate weekly dependency PRs
-
-## 9. Commit style
-
-```
-type(scope): short imperative subject (≤72 chars)
-
-Optional body explaining *why*. Wrap at 72 cols.
-
-Optional footer:
-Closes #N
-```
-
-- Types: `feat`, `fix`, `refactor`, `test`, `ci`, `docs`, `chore`, `security`
-- Scope: crate name or directory (`loader`, `adapter-abs`, `sdk`, `infra`)
-- Never attribute to Claude / Copilot / any tool — commits are authored by the human or machine identity that runs them. See `.claude/rules/git-commits.md` if you use the repo's `/commit` skill.
-
-## 10. Code style
-
-### Rust
-
-- `rustfmt` defaults + `clippy::pedantic` aspirations (not enforced today; `clippy::all -D warnings` is)
-- `#[tracing::instrument]` on public async functions
-- `async-trait` only for dyn-dispatched traits (adapters); otherwise native async-fn
-- Errors: `thiserror` in libraries, `anyhow` in binaries. No `Box<dyn Error>`.
-- **Never** hold a lock across `.await`. `clippy::await_holding_lock` is denied.
-- Prefer `sqlx::query!` (compile-checked) over `query()` (runtime-checked).
-- Streams over `Vec` for anything over ~1000 items.
-
-### TypeScript
-
-- Biome defaults
-- `type` > `interface` for unions; `interface` for extensible object shapes
-- No default exports from barrel files
-- No `any`; `unknown` if truly unknown, then narrow
-- Runtime validation only at process boundaries (SDK ↔ server); trust internal TS types
-
-### Python (PDF sidecar)
-
-- `ruff` + `mypy --strict`
-- `httpx` over `requests`
-- Explicit timeouts on every network call
-
-### Migrations
-
-- One SQL file per change, numbered (`0007_add_series_updated_at.sql`)
-- **Reversible where possible** — `.up.sql` + `.down.sql` pair
-- Test: `sqlx migrate run` → `sqlx migrate revert` → `sqlx migrate run` leaves schema identical
-- No destructive changes without a deprecation window and explicit `Spec.md` note
-
-## 11. Testing expectations (see `Spec.md § Testing strategy`)
-
-Every PR must add/update tests at the appropriate layer:
-
-| Change type | Required test |
-|---|---|
-| New pure fn | Unit test |
-| New parser | Snapshot test + property test |
-| New API endpoint | Integration test via testcontainers + schemathesis coverage |
-| New SQL query | Integration test hitting real PG+Timescale |
-| New SDK method | SDK integration test against compose stack |
-| New adapter | Golden-file `insta` snapshot + `wiremock`-based integration |
-| UI change | Playwright E2E + axe-core pass |
-| Performance-sensitive path | Criterion bench + committed baseline |
-
-**Coverage floor**: 80% line / 70% branch across shipped crates. PR bot comments with the diff.
-
-**Zero-flake policy**: any CI retry auto-files a `flaky`-labelled issue. Fix within 48h or delete the test.
-
-## 12. Agent-specific pitfalls (avoid these)
-
-1. **Don't regenerate `openapi.json` without proposing the handler change.** The order is: change handler → regen → commit both. Drift between them fails CI.
-2. **Don't mock what you can testcontainer.** We have working testcontainers for PG+Timescale, Redis, MinIO. Use them.
-3. **Don't add comments that narrate what the code does.** Only write a comment if the *why* is non-obvious (workaround, hidden invariant, surprising behaviour).
-4. **Don't introduce backward-compat shims.** We're pre-`v1`. Just change the code.
-5. **Don't batch unrelated changes.** The loader upsert fix and the API pagination bug are two PRs.
-6. **Don't claim completion without ticking every pass-requirement box.** If you can't finish a box, leave it unticked, add a note explaining why, and leave the PR in draft.
-7. **Don't silence clippy/biome lints** with `#[allow(...)]` without a comment naming the reason. CI flags bare allows in review.
-8. **Don't bypass pre-commit hooks** with `--no-verify`. If a hook fails, fix the underlying issue.
-9. **Don't commit secrets, `.env`, production fixtures, or large binaries.** Fixtures >5 MB go to R2 with a reference in-repo.
-10. **When unsure about architecture**, open a draft PR with a `Spec.md` amendment — don't guess.
-11. **Turn spec-heavy work into invariant tests before implementation.** For ingestion, loader, queue, parser, database, API, and CI changes, extract the relevant `Spec.md` guarantees into a short checklist and tests before coding. Cover failure paths, backpressure, cancellation, provenance, idempotency, ordering, and auditability as applicable; do not stop at the happy-path shape.
-12. **Validate artifact provenance in parsers.** If parsed observations carry `source_artifact_id`, verify the artifact id, persisted storage key, and parsed bytes are consistent before emitting rows. Do not trust an `ArtifactRef` whose fields could point at different blobs.
-13. **Reject ambiguous source/dataflow provenance.** Source-specific parsers must fail fast when the artifact cannot be tied to the expected upstream dataflow. Do not infer CPI/WPI/etc. only from payload shape or a mirrored filename.
-14. **Keep streaming fixes on the hot path.** Handling harmless format variations, such as JSON key reordering, should not introduce extra full-artifact scans unless the issue explicitly accepts that cost and tests cover it.
-15. **Make performance fixtures production-shaped.** Large-memory and streaming tests should use valid content-addressed artifact ids and storage keys so they exercise the same validation path as production parsing.
-16. **Do not confuse cancellation with permission to drop produced work.** In bounded pipelines, cancellation should stop admitting new work and bound shutdown, but already-produced artifacts, observations, and audit records must drain through downstream handoffs unless the configured shutdown grace expires. Add backpressure tests where a full channel is cancelled after the item is produced.
-17. **Preserve job correlation across every stage.** Discovery job id, trace context, source id, dataflow id, and artifact id are part of the work item contract. Carry them through fetch, parse, load, logs/spans, and `parse_errors`; do not collapse them to only the fields needed for the next happy-path function call.
-
-## 13. When stuck
-
-1. **Re-read the relevant `Spec.md` section** — it's usually already answered there
-2. **Search closed issues + merged PRs** for similar precedent
-3. **Open a draft PR** with your best attempt and `@`-mention CODEOWNERS
-4. **Amend `Spec.md`** if the spec genuinely doesn't cover your case
-
-## 14. Release process (M5+)
-
-- **API**: additive changes auto-deploy on merge to `main`. Breaking changes require a new `/v2` path + 6-month `/v1` deprecation window with `Deprecation` + `Sunset` headers (RFC 8594).
-- **SDK**: semver via `@changesets/cli`. Every PR touching `packages/sdk` requires a changeset file. Release workflow publishes on merge.
-- **Monorepo tags**: `api-vX.Y.Z`, `sdk-vX.Y.Z`, `ingestion-vX.Y.Z` — tagged independently.
-
-Rollback on prod smoke failure is **automatic**. If you need a manual rollback: one-click Slack action or `fly releases rollback <app>`.
-
----
-
-**TL;DR for an agent starting fresh:**
-
-1. Read the relevant `Spec.md` section for your task
-2. Pick an unblocked GitHub issue; respect dependencies
-3. Branch, implement the smallest change that ticks every pass-requirement box
-4. Run the § 6 pre-flight block locally
-5. PR with `Closes #N`, checklist ticked, test plan
-6. Wait for 14 CI gates to go green; fix what's red
-7. Merge via queue
+1. Re-read the relevant `Spec.md` section.
+2. Search existing issues, tests, and merged PRs for precedent.
+3. Prefer a draft PR with a spec amendment over an architectural guess.
+4. Leave incomplete pass requirements unticked and explain the blocker.

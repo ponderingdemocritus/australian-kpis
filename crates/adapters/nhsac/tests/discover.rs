@@ -21,6 +21,15 @@ const INDEX_FIXTURE: &str = r#"
 </main>
 "#;
 
+const REPORTS_FIXTURE: &str = r#"
+<!doctype html>
+<main>
+  <h1>Reports and submissions</h1>
+  <a href="/reports-and-submissions/quarterly-report-march-2026" data-updated="2026-03-25">Quarterly Report &ndash; March 2026</a>
+  <a href="/reports-and-submissions/other-report">Report ignored</a>
+</main>
+"#;
+
 async fn serve_index_once(body: &'static str) -> Option<String> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -109,6 +118,32 @@ fn discoverable_jobs_apply_revisions_and_source_metadata() {
         "NHSAC:housing-accord-progress-2026"
     );
     assert_eq!(jobs[0].metadata["revision_version"], "2026-03-25");
+}
+
+#[test]
+fn parse_reports_discovers_quarterly_housing_accord_html() {
+    let releases =
+        NhsacAdapter::parse_housing_accord_releases(REPORTS_FIXTURE).expect("parse NHSAC reports");
+
+    assert_eq!(releases.len(), 1);
+    assert_eq!(releases[0].release_id, "quarterly-report-march-2026");
+    assert_eq!(releases[0].title, "Quarterly Report - March 2026");
+    assert_eq!(
+        releases[0].source_url,
+        "https://nhsac.gov.au/reports-and-submissions/quarterly-report-march-2026"
+    );
+
+    let jobs = NhsacAdapter::current_jobs_with_started_at(
+        &releases,
+        Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].metadata["artifact_format"], "html");
+    assert_eq!(
+        jobs[0].metadata["revision_key"],
+        "NHSAC:quarterly-report-march-2026"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

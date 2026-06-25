@@ -3,7 +3,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{collections::BTreeMap, io, time::Duration};
+use std::{
+    collections::BTreeMap,
+    io::{self, Cursor},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use au_kpis_adapter::{
@@ -17,12 +21,14 @@ use au_kpis_domain::{
 };
 use au_kpis_storage::{BlobStore, StorageKey};
 use bytes::Bytes;
+use calamine::{Data, DataType, Reader, open_workbook_auto_from_rs};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use csv_async::AsyncReaderBuilder;
 use futures::{StreamExt, stream};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 const DEFAULT_INDEX_URL: &str = "https://www.planning.nsw.gov.au/data-and-insights";
+const NSW_DA_AVERAGE_DAYS_XLSX_URL: &str = "https://data.nsw.gov.au/data/dataset/505fbf06-2901-4d52-af09-a7d9f2db0f0a/resource/4f1ba430-15f8-4793-a217-46ba5fa6674a/download/average-days-to-determine-a-development-application-da.xlsx";
 const NSW_SOURCE_URL: &str = "https://www.planning.nsw.gov.au/data-and-insights";
 const VIC_SOURCE_URL: &str =
     "https://www.planning.vic.gov.au/guides-and-resources/data-and-insights";
@@ -217,7 +223,16 @@ impl SourceAdapter for StatePlanningAdapter {
             .await?
             .error_for_status()?;
         let body = response.text().await?;
-        let publications = parse_publications_with_base(&body, self.index_url())?;
+        let mut publications = parse_publications_with_base(&body, self.index_url())?;
+        if self.index_url() == DEFAULT_INDEX_URL {
+            publications.extend(official_publications());
+            publications.sort_by(|left, right| {
+                left.dataflow_id
+                    .cmp(&right.dataflow_id)
+                    .then(left.publication_id.cmp(&right.publication_id))
+            });
+            publications.dedup_by(|left, right| left.source_url == right.source_url);
+        }
         Ok(discoverable_jobs(
             &publications,
             ctx.known_revisions(),
@@ -230,6 +245,18 @@ impl SourceAdapter for StatePlanningAdapter {
     #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
         self.validate_fetch_job(&job)?;
+        let provenance = publication_url_provenance(&job.source_url).ok_or_else(|| {
+            AdapterError::Validation(format!(
+                "state planning fetch URL `{}` is not a target artifact",
+                job.source_url
+            ))
+        })?;
+        let accept = match provenance.kind {
+            PlanningArtifactKind::Csv => "text/csv,*/*",
+            PlanningArtifactKind::NswAverageDaysXlsx => {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*"
+            }
+        };
         let response = ctx
             .http
             .execute(
@@ -237,7 +264,7 @@ impl SourceAdapter for StatePlanningAdapter {
                     .raw_artifact()
                     .get(&job.source_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", "text/csv,*/*"),
+                    .header("accept", accept),
             )
             .await?;
         let response_headers = capture_response_headers(response.headers());
@@ -355,6 +382,8 @@ impl StatePlanningPublication {
     }
 
     fn to_discovered_job(&self, trace_parent: Option<&str>) -> DiscoveredJob {
+        let artifact_format = publication_url_provenance(&self.source_url)
+            .map_or("unknown", |provenance| provenance.kind.artifact_format());
         DiscoveredJob {
             id: format!("state-planning:{}", self.publication_id),
             source_id: source_id(),
@@ -362,7 +391,7 @@ impl StatePlanningPublication {
             source_url: self.source_url.clone(),
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
-                ("artifact_format".into(), "csv".into()),
+                ("artifact_format".into(), artifact_format.into()),
                 ("publication_id".into(), self.publication_id.clone()),
                 ("title".into(), self.title.clone()),
                 ("jurisdiction".into(), self.jurisdiction.into()),
@@ -380,6 +409,22 @@ struct PlanningProvenance {
     dataflow_id: DataflowId,
     jurisdiction: &'static str,
     publication_id: String,
+    kind: PlanningArtifactKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanningArtifactKind {
+    Csv,
+    NswAverageDaysXlsx,
+}
+
+impl PlanningArtifactKind {
+    const fn artifact_format(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::NswAverageDaysXlsx => "xlsx",
+        }
+    }
 }
 
 fn discoverable_jobs(
@@ -407,6 +452,17 @@ fn discoverable_jobs(
         .collect()
 }
 
+fn official_publications() -> Vec<StatePlanningPublication> {
+    vec![StatePlanningPublication {
+        publication_id: "nsw-da-average-days-2025".into(),
+        dataflow_id: nsw_da_processing_dataflow_id(),
+        title: "Average number of days to determine a development application (DA)".into(),
+        source_url: NSW_DA_AVERAGE_DAYS_XLSX_URL.into(),
+        last_updated: Some("2025-07-17".into()),
+        jurisdiction: "NSW",
+    }]
+}
+
 fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationStream<'_> {
     let provenance = match validate_parse_artifact(&artifact, ctx.expected_dataflow_id()) {
         Ok(provenance) => provenance,
@@ -429,7 +485,7 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        let result = parse_csv_artifact(
+        let result = parse_planning_artifact(
             blob_store,
             key,
             artifact,
@@ -449,7 +505,7 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     }))
 }
 
-async fn parse_csv_artifact(
+async fn parse_planning_artifact(
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
@@ -469,7 +525,14 @@ async fn parse_csv_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
-    let rows = parse_planning_csv(Bytes::from(bytes), &provenance, &artifact, ingested_at).await?;
+    let rows = match provenance.kind {
+        PlanningArtifactKind::Csv => {
+            parse_planning_csv(Bytes::from(bytes), &provenance, &artifact, ingested_at).await?
+        }
+        PlanningArtifactKind::NswAverageDaysXlsx => {
+            parse_nsw_average_days_xlsx(bytes, &provenance, &artifact, ingested_at)?
+        }
+    };
     for row in rows {
         if tx.send(Ok(row)).await.is_err() {
             return Ok(());
@@ -537,6 +600,70 @@ async fn parse_planning_csv(
     Ok(observations)
 }
 
+fn parse_nsw_average_days_xlsx(
+    bytes: Vec<u8>,
+    provenance: &PlanningProvenance,
+    artifact: &ArtifactRef,
+    ingested_at: DateTime<Utc>,
+) -> Result<Vec<(SeriesDescriptor, Observation)>, AdapterError> {
+    let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes))
+        .map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
+    let sheet_name = workbook.sheet_names().first().cloned().ok_or_else(|| {
+        AdapterError::FormatDrift("NSW planning workbook has no worksheets".into())
+    })?;
+    let range = workbook
+        .worksheet_range(&sheet_name)
+        .map_err(|err| AdapterError::FormatDrift(err.to_string()))?;
+    let rows = range.rows().collect::<Vec<_>>();
+    let date_row = rows.get(1).ok_or_else(|| {
+        AdapterError::FormatDrift("NSW planning workbook missing date row".into())
+    })?;
+    let value_row = rows
+        .iter()
+        .find(|row| {
+            row.first()
+                .and_then(cell_string)
+                .is_some_and(|label| label.contains("Local Government to determine a DA"))
+        })
+        .ok_or_else(|| {
+            AdapterError::FormatDrift(
+                "NSW planning workbook missing Local Government DA row".into(),
+            )
+        })?;
+
+    let mut latest = None;
+    for column in 1..date_row.len().min(value_row.len()) {
+        let Some(period) = cell_excel_date(&date_row[column]) else {
+            continue;
+        };
+        let Some(value) = cell_number(&value_row[column]) else {
+            continue;
+        };
+        if latest
+            .as_ref()
+            .is_none_or(|(latest_period, _)| period > *latest_period)
+        {
+            latest = Some((period, value));
+        }
+    }
+    let Some((period, value)) = latest else {
+        return Err(AdapterError::FormatDrift(
+            "NSW planning workbook has no dated Local Government DA values".into(),
+        ));
+    };
+    let row = PlanningCsvRow {
+        period: period.to_string(),
+        jurisdiction: "NSW".into(),
+        council: Some("all".into()),
+        development_type: Some("all".into()),
+        permit_type: None,
+        metric: "average_assessment_days".into(),
+        value,
+        unit: "days".into(),
+    };
+    planning_observation(row, provenance, artifact, ingested_at).map(|row| vec![row])
+}
+
 #[derive(Debug)]
 struct PlanningCsvRow {
     period: String,
@@ -574,6 +701,33 @@ fn optional_csv_field<'a>(
         .and_then(|index| record.get(*index))
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn cell_string(cell: &Data) -> Option<&str> {
+    match cell {
+        Data::String(value) => Some(value.trim()).filter(|value| !value.is_empty()),
+        _ => None,
+    }
+}
+
+fn cell_number(cell: &Data) -> Option<f64> {
+    match cell {
+        Data::Float(value) => Some(*value),
+        Data::Int(value) => Some(*value as f64),
+        _ => None,
+    }
+}
+
+fn cell_excel_date(cell: &Data) -> Option<NaiveDate> {
+    if let Some(datetime) = cell.as_datetime() {
+        return Some(datetime.date());
+    }
+    let serial = cell_number(cell)?;
+    if !serial.is_finite() || serial < 1.0 {
+        return None;
+    }
+    NaiveDate::from_ymd_opt(1899, 12, 30)
+        .and_then(|base| base.checked_add_signed(chrono::Duration::days(serial.trunc() as i64)))
 }
 
 fn planning_observation(
@@ -806,6 +960,16 @@ fn attr_value(tag: &str, name: &str) -> Option<String> {
 }
 
 fn publication_url_provenance(source_url: &str) -> Option<PlanningProvenance> {
+    if source_url == NSW_DA_AVERAGE_DAYS_XLSX_URL && trusted_host_for(source_url, "data.nsw.gov.au")
+    {
+        return Some(PlanningProvenance {
+            dataflow_id: nsw_da_processing_dataflow_id(),
+            jurisdiction: "NSW",
+            publication_id: "nsw-da-average-days-2025".into(),
+            kind: PlanningArtifactKind::NswAverageDaysXlsx,
+        });
+    }
+
     let file_name = source_url
         .rsplit('/')
         .next()
@@ -816,6 +980,7 @@ fn publication_url_provenance(source_url: &str) -> Option<PlanningProvenance> {
             dataflow_id: nsw_da_processing_dataflow_id(),
             jurisdiction: "NSW",
             publication_id: stem.to_string(),
+            kind: PlanningArtifactKind::Csv,
         });
     }
     if stem.contains("vic-permit-activity") && trusted_host_for(source_url, "planning.vic.gov.au") {
@@ -823,6 +988,7 @@ fn publication_url_provenance(source_url: &str) -> Option<PlanningProvenance> {
             dataflow_id: vic_permit_activity_dataflow_id(),
             jurisdiction: "VIC",
             publication_id: stem.to_string(),
+            kind: PlanningArtifactKind::Csv,
         });
     }
     None

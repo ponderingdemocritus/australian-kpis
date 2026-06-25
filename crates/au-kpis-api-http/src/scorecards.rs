@@ -46,6 +46,12 @@ struct ResolvedIndicatorRow {
     source_artifact_id: ArtifactId,
 }
 
+#[derive(Debug, Clone)]
+struct IndicatorSeriesRef {
+    series_key: Vec<u8>,
+    last_observed: DateTime<Utc>,
+}
+
 /// `GET /v1/scorecards/aps/config`.
 #[utoipa::path(
     get,
@@ -121,12 +127,11 @@ pub async fn aps_latest(
 ) -> Result<Response, ApiError> {
     let config = load_config()?;
     let resolved = resolve_scorecard_inputs(&state.db, &config, None).await?;
-    let previous_score = previous_score(&state.db, &config, resolved.latest_time).await?;
     let as_of = resolved
         .latest_time
         .map(format_snapshot_date)
         .unwrap_or_else(|| Utc::now().date_naive().to_string());
-    let snapshot = score_snapshot(&config, &resolved.observations, as_of, previous_score)?;
+    let snapshot = score_snapshot(&config, &resolved.observations, as_of, None)?;
     json_cache_response(&headers, &snapshot, APS_LATEST_CACHE_CONTROL)
 }
 
@@ -323,28 +328,124 @@ async fn load_indicator_observation(
     indicator: &IndicatorConfig,
     as_of: Option<DateTime<Utc>>,
 ) -> Result<Option<ResolvedIndicatorRow>, ApiError> {
+    if as_of.is_none() {
+        return load_latest_indicator_observation(pool, indicator).await;
+    }
+
+    let series_keys = load_indicator_series_keys(pool, indicator).await?;
+    if series_keys.is_empty() {
+        return Ok(None);
+    }
+
     let row = sqlx::query(
-        "SELECT o.value,
-                o.time,
-                o.series_key,
-                o.source_artifact_id
-         FROM observations_latest o
-         JOIN series s ON s.series_key = o.series_key
-         WHERE s.dataflow_id = $1
-           AND s.measure_id = $2
-           AND s.dimensions = $3::jsonb
-           AND ($4::timestamptz IS NULL OR o.time <= $4)
-         ORDER BY o.time DESC, o.revision_no DESC, o.series_key ASC
+        "SELECT latest.value,
+                latest.time,
+                latest.series_key,
+                latest.source_artifact_id
+         FROM unnest($1::bytea[]) AS keys(series_key)
+         CROSS JOIN LATERAL (
+             SELECT o.value,
+                    o.time,
+                    o.series_key,
+                    o.source_artifact_id,
+                    o.revision_no
+             FROM observations o
+             WHERE o.series_key = keys.series_key
+               AND ($2::timestamptz IS NULL OR o.time <= $2)
+             ORDER BY o.time DESC, o.revision_no DESC
+             LIMIT 1
+         ) AS latest
+         ORDER BY latest.time DESC, latest.revision_no DESC, latest.series_key ASC
          LIMIT 1",
     )
-    .bind(&indicator.source_dataflow_id)
-    .bind(&indicator.measure_id)
-    .bind(serde_json::json!(indicator.dimension_selector))
+    .bind(series_keys)
     .bind(as_of)
     .fetch_optional(pool)
     .await?;
 
     row.map(row_to_resolved_indicator).transpose()
+}
+
+async fn load_latest_indicator_observation(
+    pool: &PgPool,
+    indicator: &IndicatorConfig,
+) -> Result<Option<ResolvedIndicatorRow>, ApiError> {
+    let series_refs = load_indicator_latest_series_refs(pool, indicator).await?;
+    for series_ref in series_refs {
+        let row = sqlx::query(
+            "SELECT o.value,
+                    o.time,
+                    o.series_key,
+                    o.source_artifact_id
+             FROM observations o
+             WHERE o.series_key = $1
+               AND o.time = $2
+             ORDER BY o.revision_no DESC
+             LIMIT 1",
+        )
+        .bind(series_ref.series_key)
+        .bind(series_ref.last_observed)
+        .fetch_optional(pool)
+        .await?;
+        if let Some(row) = row {
+            return row_to_resolved_indicator(row).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+async fn load_indicator_latest_series_refs(
+    pool: &PgPool,
+    indicator: &IndicatorConfig,
+) -> Result<Vec<IndicatorSeriesRef>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT series_key, last_observed
+         FROM series
+         WHERE dataflow_id = $1
+           AND measure_id = $2
+           AND dimensions = $3::jsonb
+           AND active
+           AND last_observed IS NOT NULL
+         ORDER BY last_observed DESC, series_key ASC",
+    )
+    .bind(&indicator.source_dataflow_id)
+    .bind(&indicator.measure_id)
+    .bind(serde_json::json!(indicator.dimension_selector))
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(IndicatorSeriesRef {
+                series_key: row.try_get("series_key")?,
+                last_observed: row.try_get("last_observed")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_indicator_series_keys(
+    pool: &PgPool,
+    indicator: &IndicatorConfig,
+) -> Result<Vec<Vec<u8>>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT series_key
+         FROM series
+         WHERE dataflow_id = $1
+           AND measure_id = $2
+           AND dimensions = $3::jsonb
+           AND active
+         ORDER BY series_key ASC",
+    )
+    .bind(&indicator.source_dataflow_id)
+    .bind(&indicator.measure_id)
+    .bind(serde_json::json!(indicator.dimension_selector))
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| row.try_get("series_key").map_err(ApiError::from))
+        .collect()
 }
 
 fn row_to_resolved_indicator(row: PgRow) -> Result<ResolvedIndicatorRow, ApiError> {
@@ -356,36 +457,6 @@ fn row_to_resolved_indicator(row: PgRow) -> Result<ResolvedIndicatorRow, ApiErro
     })
 }
 
-async fn previous_score(
-    pool: &PgPool,
-    config: &ScorecardConfig,
-    latest_time: Option<DateTime<Utc>>,
-) -> Result<Option<f64>, ApiError> {
-    let Some(latest_time) = latest_time else {
-        return Ok(None);
-    };
-    let Some(previous_time) = load_previous_snapshot_time(pool, config, latest_time).await? else {
-        return Ok(None);
-    };
-    let previous = resolve_scorecard_inputs(pool, config, Some(previous_time)).await?;
-    let snapshot = score_snapshot(
-        config,
-        &previous.observations,
-        format_snapshot_date(previous_time),
-        None,
-    )?;
-    Ok(Some(snapshot.score))
-}
-
-async fn load_previous_snapshot_time(
-    pool: &PgPool,
-    config: &ScorecardConfig,
-    latest_time: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>, ApiError> {
-    let times = load_snapshot_times(pool, config, None, Some(latest_time)).await?;
-    Ok(times.into_iter().rev().find(|time| *time < latest_time))
-}
-
 async fn load_snapshot_times(
     pool: &PgPool,
     config: &ScorecardConfig,
@@ -394,20 +465,20 @@ async fn load_snapshot_times(
 ) -> Result<Vec<DateTime<Utc>>, ApiError> {
     let mut times = BTreeSet::new();
     for indicator in &config.indicators {
+        let series_keys = load_indicator_series_keys(pool, indicator).await?;
+        if series_keys.is_empty() {
+            continue;
+        }
+
         let rows = sqlx::query(
             "SELECT DISTINCT o.time
-             FROM observations_latest o
-             JOIN series s ON s.series_key = o.series_key
-             WHERE s.dataflow_id = $1
-               AND s.measure_id = $2
-               AND s.dimensions = $3::jsonb
-               AND ($4::timestamptz IS NULL OR o.time >= $4)
-               AND ($5::timestamptz IS NULL OR o.time <= $5)
+             FROM unnest($1::bytea[]) AS keys(series_key)
+             JOIN observations o ON o.series_key = keys.series_key
+             WHERE ($2::timestamptz IS NULL OR o.time >= $2)
+               AND ($3::timestamptz IS NULL OR o.time <= $3)
              ORDER BY o.time ASC",
         )
-        .bind(&indicator.source_dataflow_id)
-        .bind(&indicator.measure_id)
-        .bind(serde_json::json!(indicator.dimension_selector))
+        .bind(series_keys)
         .bind(since)
         .bind(until)
         .fetch_all(pool)
@@ -528,8 +599,8 @@ mod tests {
     use super::{
         ResolvedIndicatorRow, ScorecardHistoryQuery, aps_history, artifact_id_from_bytes,
         digest_from_bytes, format_snapshot_date, if_none_match_fresh, is_stale_for_cadence,
-        json_cache_response, load_config, max_lag_for_cadence, parse_history_date, previous_score,
-        resolved_indicator_status, series_key_from_bytes,
+        json_cache_response, max_lag_for_cadence, parse_history_date, resolved_indicator_status,
+        series_key_from_bytes,
     };
     use crate::{AppState, error::ApiError};
 
@@ -610,27 +681,6 @@ mod tests {
         )
         .await;
         assert!(open_ended.is_err());
-    }
-
-    #[tokio::test]
-    async fn previous_score_skips_database_when_latest_time_is_absent() {
-        let pool = lazy_pool();
-        let config = load_config().expect("scorecard config");
-
-        assert_eq!(
-            previous_score(&pool, &config, None)
-                .await
-                .expect("no latest snapshot skips lookup"),
-            None
-        );
-
-        let with_latest = previous_score(
-            &pool,
-            &config,
-            Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
-        )
-        .await;
-        assert!(with_latest.is_err());
     }
 
     #[test]

@@ -105,7 +105,7 @@ async fn parses_nsw_da_processing_fixture() {
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().any(|row| {
         row.dimensions.get("development_type").map(String::as_str) == Some("all")
-            && row.dimensions.get("metric").map(String::as_str) == Some("median_assessment_days")
+            && row.dimensions.get("metric").map(String::as_str) == Some("average_assessment_days")
             && row.value == Some(54.0)
     }));
     insta::assert_json_snapshot!(rows);

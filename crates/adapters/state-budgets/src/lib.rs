@@ -84,7 +84,7 @@ const QLD_LICENSE_NAME: &str = "Queensland Treasury copyright";
 const QLD_LICENSE_URL: &str = "https://www.treasury.qld.gov.au/legal/copyright/";
 const QLD_SOURCE_INDEX_URL: &str = "https://budget.qld.gov.au/budget-papers/";
 const QLD_BUDGET_PDF_URL: &str =
-    "https://budget.qld.gov.au/files/Budget-2025-26-BP2-Budget-Strategy-Outlook.pdf";
+    "https://budget.qld.gov.au/files/2026-27-budget-bp2-budget-strategy-outlook.pdf";
 const QLD_PAPER: &str = "Budget Paper No. 2";
 const QLD_PAPER_SLUG: &str = "bp2-budget-strategy-outlook";
 const QLD_TARGET_TITLE: &str = "Budget Strategy and Outlook";
@@ -189,14 +189,14 @@ const QLD_CONFIG: BudgetConfig = BudgetConfig {
     license_url: QLD_LICENSE_URL,
     source_index_url: QLD_SOURCE_INDEX_URL,
     default_budget_pdf_url: QLD_BUDGET_PDF_URL,
-    default_last_updated: "2025-06-24",
+    default_last_updated: "2026-06-24",
     paper: QLD_PAPER,
     paper_slug: QLD_PAPER_SLUG,
     target_title: QLD_TARGET_TITLE,
     schema_key: QLD_KEY_AGGREGATES_SCHEMA_KEY,
     schema_hash: QLD_KEY_AGGREGATES_SCHEMA_HASH,
-    extract_first_page: 113,
-    extract_last_page: 113,
+    extract_first_page: 107,
+    extract_last_page: 107,
     official_parse_hosts: &["budget.qld.gov.au", "www.budget.qld.gov.au"],
 };
 
@@ -997,7 +997,11 @@ fn parse_state_budget_table(
     let rows = table
         .cells
         .iter()
-        .map(|row| row.iter().map(|cell| clean_cell(cell)).collect::<Vec<_>>())
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.trim().to_string())
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
     let rows = normalize_state_budget_rows(config, rows);
     let Some(periods) = find_budget_period_columns(&rows)? else {
@@ -1385,6 +1389,15 @@ fn schema_hash_for_key(config: &BudgetConfig, schema_key: &str) -> Option<&'stat
 }
 
 fn normalize_state_budget_rows(config: &BudgetConfig, rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let rows = if config.jurisdiction == QLD_JURISDICTION {
+        expand_qld_wrapped_operating_statement_rows(rows)
+    } else {
+        rows
+    };
+    let rows = rows
+        .into_iter()
+        .map(|row| row.into_iter().map(|cell| clean_cell(&cell)).collect())
+        .collect();
     let rows = if config.jurisdiction == JURISDICTION {
         trim_rows_before_table_title(rows)
     } else {
@@ -1397,6 +1410,94 @@ fn normalize_state_budget_rows(config: &BudgetConfig, rows: Vec<Vec<String>>) ->
     } else {
         rows
     }
+}
+
+fn expand_qld_wrapped_operating_statement_rows(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    if rows.is_empty() || rows.iter().any(|row| row.len() != 1) {
+        return rows;
+    }
+
+    let lines = rows
+        .iter()
+        .filter_map(|row| row.first())
+        .flat_map(|cell| cell.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let Some(header_line) = lines.first() else {
+        return rows;
+    };
+    let years = fiscal_years_in(header_line);
+    if years.len() < 2
+        || !lines
+            .iter()
+            .any(|line| normalize_header(line).contains("taxation revenue"))
+    {
+        return rows;
+    }
+
+    let status_tokens = lines
+        .get(1)
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default();
+    if status_tokens.len() != years.len() {
+        return rows;
+    }
+
+    let mut expanded = Vec::new();
+    expanded.push(vec![
+        "Table 8.1".into(),
+        "General Government Sector Operating Statement1".into(),
+    ]);
+    expanded.push(
+        std::iter::once(String::new())
+            .chain(
+                years
+                    .iter()
+                    .zip(status_tokens.iter())
+                    .map(|(year, status)| format!("{year} {status}")),
+            )
+            .collect(),
+    );
+
+    if lines
+        .get(2)
+        .is_some_and(|line| normalize_header(line).contains("$ million"))
+    {
+        expanded.push(
+            std::iter::once(String::new())
+                .chain((0..years.len()).map(|_| "$ million".to_string()))
+                .collect(),
+        );
+    }
+
+    for line in lines.into_iter().skip(3) {
+        expanded.push(split_wrapped_budget_line(line, years.len()));
+    }
+
+    expanded
+}
+
+fn split_wrapped_budget_line(line: &str, value_count: usize) -> Vec<String> {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() <= value_count {
+        return vec![line.to_string()];
+    }
+    let value_start = tokens.len() - value_count;
+    if !tokens[value_start..]
+        .iter()
+        .all(|token| parse_value(token).is_ok())
+    {
+        return vec![line.to_string()];
+    }
+
+    std::iter::once(tokens[..value_start].join(" "))
+        .chain(
+            tokens[value_start..]
+                .iter()
+                .map(|token| (*token).to_string()),
+        )
+        .collect()
 }
 
 fn trim_rows_before_table_title(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
@@ -1650,30 +1751,42 @@ fn parse_budget_period(value: &str) -> Result<Option<BudgetPeriod>, AdapterError
 }
 
 fn find_fiscal_year(value: &str) -> Option<String> {
+    fiscal_years_in(value).into_iter().next()
+}
+
+fn fiscal_years_in(value: &str) -> Vec<String> {
+    let value = clean_cell(value);
     let bytes = value.as_bytes();
-    for index in 0..bytes.len().saturating_sub(6) {
+    let mut years = Vec::new();
+    let mut index = 0;
+    while index < bytes.len().saturating_sub(6) {
         if !(bytes[index].is_ascii_digit()
             && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
             && bytes.get(index + 2).is_some_and(u8::is_ascii_digit)
             && bytes.get(index + 3).is_some_and(u8::is_ascii_digit))
         {
+            index += 1;
             continue;
         }
-        let separator = *bytes.get(index + 4)?;
+        let separator = bytes[index + 4];
         if separator != b'-' && separator != b'_' {
+            index += 1;
             continue;
         }
         if bytes.get(index + 5).is_some_and(u8::is_ascii_digit)
             && bytes.get(index + 6).is_some_and(u8::is_ascii_digit)
         {
-            return Some(format!(
+            years.push(format!(
                 "{}-{}",
                 &value[index..index + 4],
                 &value[index + 5..index + 7]
             ));
+            index += 7;
+        } else {
+            index += 1;
         }
     }
-    None
+    years
 }
 
 fn label_before(row: &[String], first_period_col: usize) -> Option<String> {

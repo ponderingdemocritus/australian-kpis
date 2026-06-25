@@ -14,6 +14,8 @@ use tokio::{
 };
 
 const CSV_FIXTURE: &[u8] = include_bytes!("fixtures/productivity_bulletin.csv");
+const HTML_FIXTURE: &[u8] =
+    b"<!doctype html><main><h1>Annual productivity bulletin 2026</h1></main>";
 
 #[derive(Debug, Default)]
 struct RecordingArtifactRecorder {
@@ -50,7 +52,11 @@ fn recording_recorder() -> Arc<RecordingArtifactRecorder> {
     Arc::new(RecordingArtifactRecorder::default())
 }
 
-async fn serve_artifact_once(body: &'static [u8]) -> Option<(String, String)> {
+async fn serve_artifact_once(
+    request_path: &'static str,
+    content_type: &'static str,
+    body: &'static [u8],
+) -> Option<(String, String)> {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -66,9 +72,7 @@ async fn serve_artifact_once(body: &'static [u8]) -> Option<(String, String)> {
         let mut request = [0_u8; 4096];
         let read = stream.read(&mut request).await.expect("read request");
         let request = String::from_utf8_lossy(&request[..read]);
-        assert!(request.starts_with(
-            "GET /ongoing/productivity-insights/productivity-bulletin-2026.csv HTTP/1.1"
-        ));
+        assert!(request.starts_with(&format!("GET {request_path} HTTP/1.1")));
         assert!(
             request
                 .to_ascii_lowercase()
@@ -76,8 +80,8 @@ async fn serve_artifact_once(body: &'static [u8]) -> Option<(String, String)> {
         );
 
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/csv\r\nx-pc-fixture: productivity\r\ncontent-length: {}\r\n\r\n",
-            body.len(),
+            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\nx-pc-fixture: productivity\r\ncontent-length: {}\r\n\r\n",
+            body.len()
         );
         stream
             .write_all(response.as_bytes())
@@ -86,14 +90,21 @@ async fn serve_artifact_once(body: &'static [u8]) -> Option<(String, String)> {
         stream.write_all(body).await.expect("write response body");
     });
 
-    let base_url = format!("http://{addr}/ongoing/productivity-insights/");
-    let source_url = format!("{base_url}productivity-bulletin-2026.csv");
-    Some((base_url, source_url))
+    let origin = format!("http://{addr}");
+    let index_url = format!("{origin}/ongoing/productivity-insights/bulletins/");
+    let source_url = format!("{origin}{request_path}");
+    Some((index_url, source_url))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_persists_raw_productivity_bulletin_artifact() {
-    let Some((index_url, source_url)) = serve_artifact_once(CSV_FIXTURE).await else {
+    let Some((index_url, source_url)) = serve_artifact_once(
+        "/ongoing/productivity-insights/productivity-bulletin-2026.csv",
+        "text/csv",
+        CSV_FIXTURE,
+    )
+    .await
+    else {
         return;
     };
     let adapter = PcAdapter::builder().index_url(index_url).build();
@@ -150,4 +161,49 @@ async fn fetch_persists_raw_productivity_bulletin_artifact() {
         .expect("artifact bytes");
     assert_eq!(stored, Bytes::from_static(CSV_FIXTURE));
     assert_eq!(recorder.artifacts.lock().await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_persists_raw_annual_bulletin_html_artifact() {
+    let Some((index_url, source_url)) = serve_artifact_once(
+        "/ongoing/productivity-insights/bulletins/bulletin-2026/",
+        "text/html",
+        HTML_FIXTURE,
+    )
+    .await
+    else {
+        return;
+    };
+    let adapter = PcAdapter::builder().index_url(index_url).build();
+    let bulletin = PcAdapter::parse_productivity_bulletins(&format!(
+        r#"<a href="{source_url}">Annual productivity bulletin 2026</a>"#
+    ))
+    .expect("parse bulletin link")
+    .into_iter()
+    .next()
+    .expect("bulletin discovered");
+    let job = PcAdapter::current_jobs_with_started_at(
+        &[bulletin],
+        Utc.with_ymd_and_hms(2026, 6, 22, 0, 0, 0).unwrap(),
+    )
+    .into_iter()
+    .next()
+    .expect("job emitted");
+    let recorder = recording_recorder();
+    let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let blob_store = BlobStore::from_arc(object_store);
+    let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
+    let ctx = FetchCtx::new(
+        http,
+        blob_store,
+        Utc.with_ymd_and_hms(2026, 6, 22, 1, 0, 0).unwrap(),
+        recorder,
+    );
+
+    let artifact = adapter.fetch(job.clone(), &ctx).await.expect("fetch HTML");
+
+    assert_eq!(job.metadata["artifact_format"], "html");
+    assert_eq!(artifact.source_url, job.source_url);
+    assert_eq!(artifact.content_type, "text/html");
+    assert_eq!(artifact.size_bytes, HTML_FIXTURE.len() as u64);
 }

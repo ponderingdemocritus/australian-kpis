@@ -16,19 +16,26 @@ use au_kpis_domain::{
     Observation, ObservationStatus, SeriesDescriptor, SeriesKey, Source, SourceId, TimePrecision,
 };
 use au_kpis_error::CoreError;
-use au_kpis_storage::{BlobStore, StorageKey};
+use au_kpis_storage::{BlobStore, StorageError, StorageKey};
+use bytes::Bytes;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use csv_async::AsyncReaderBuilder;
 use futures::{StreamExt, stream};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_INDEX_URL: &str = "https://www.worldbank.org/en/businessready";
+const DEFAULT_API_URL: &str = "https://api.worldbank.org/v2/country/AUS/indicator/IC.BRE.BE.OS?format=json&source=2&per_page=100";
 const DEFAULT_SOURCE_URL: &str = "https://www.worldbank.org/en/businessready";
 const USER_AGENT: &str = concat!("au-kpis-adapter-worldbank/", env!("CARGO_PKG_VERSION"));
 const DATAFLOW_ID: &str = "worldbank.bready";
 const ATTRIBUTION: &str = "Source: World Bank B-READY";
 const LICENSE_NAME: &str = "World Bank terms";
 const LICENSE_URL: &str = "https://www.worldbank.org/en/about/legal/terms-and-conditions";
+const BREADY_API_RELEASE_ID: &str = "bready-australia-api";
+const BUSINESS_ENTRY_INDICATOR: &str = "IC.BRE.BE.OS";
+const BUSINESS_LOCATION_INDICATOR: &str = "IC.BRE.BL.OS";
+const PUBLIC_SERVICES_INDICATOR: &str = "IC.BRE.BE.P2";
 const BUSINESS_ENTRY_SCORE: &str = "business_entry_score";
 const PUBLIC_SERVICES_SCORE: &str = "public_services_score";
 const BUSINESS_LOCATION_SCORE: &str = "business_location_score";
@@ -38,6 +45,7 @@ const BUSINESS_LOCATION_SCORE: &str = "business_location_score";
 pub struct WorldbankAdapter {
     manifest: AdapterManifest,
     index_url: String,
+    api_url: String,
 }
 
 impl Default for WorldbankAdapter {
@@ -118,6 +126,10 @@ impl WorldbankAdapter {
         &self.index_url
     }
 
+    fn api_url(&self) -> &str {
+        &self.api_url
+    }
+
     fn validate_fetch_job(&self, job: &DiscoveredJob) -> Result<(), AdapterError> {
         if job.source_id != self.manifest.source_id {
             return Err(AdapterError::Validation(format!(
@@ -138,7 +150,7 @@ impl WorldbankAdapter {
         }
         release_url_provenance(&job.source_url).ok_or_else(|| {
             AdapterError::Validation(format!(
-                "World Bank fetch URL `{}` is not a B-READY CSV artifact",
+                "World Bank fetch URL `{}` is not a B-READY artifact",
                 job.source_url
             ))
         })?;
@@ -176,6 +188,42 @@ impl SourceAdapter for WorldbankAdapter {
                 return Ok(Vec::new());
             }
         }
+        if self.api_url() != DEFAULT_API_URL || self.index_url() == DEFAULT_INDEX_URL {
+            let response = ctx
+                .http
+                .execute(
+                    ctx.http
+                        .raw()
+                        .get(self.api_url())
+                        .header("user-agent", USER_AGENT)
+                        .header("accept", "application/json"),
+                )
+                .await?
+                .error_for_status()?;
+            let body = response.text().await?;
+            let current = [parse_bready_api_release(
+                &body,
+                self.api_url(),
+                ctx.started_at,
+            )?];
+            return Ok(current
+                .iter()
+                .filter_map(|release| {
+                    let revision = release.revision(ctx.started_at);
+                    ctx.known_revisions()
+                        .get(&release.revision_key())
+                        .is_none_or(|known| known != &revision)
+                        .then(|| {
+                            release.to_discovered_job(
+                                ctx.started_at,
+                                ctx.trace_parent(),
+                                self.api_url(),
+                            )
+                        })
+                })
+                .collect());
+        }
+
         let response = ctx
             .http
             .execute(
@@ -210,6 +258,7 @@ impl SourceAdapter for WorldbankAdapter {
     #[tracing::instrument(skip(self, ctx), fields(source = self.id(), job_id = %job.id))]
     async fn fetch(&self, job: DiscoveredJob, ctx: &FetchCtx) -> Result<ArtifactRef, AdapterError> {
         self.validate_fetch_job(&job)?;
+        let is_api_artifact = is_worldbank_indicator_api_url(&job.source_url);
         let response = ctx
             .http
             .execute(
@@ -217,7 +266,14 @@ impl SourceAdapter for WorldbankAdapter {
                     .raw_artifact()
                     .get(&job.source_url)
                     .header("user-agent", USER_AGENT)
-                    .header("accept", "text/csv"),
+                    .header(
+                        "accept",
+                        if is_api_artifact {
+                            "application/json"
+                        } else {
+                            "text/csv"
+                        },
+                    ),
             )
             .await?;
         let response_headers = capture_response_headers(response.headers());
@@ -229,16 +285,20 @@ impl SourceAdapter for WorldbankAdapter {
                 response_headers,
             });
         }
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .map_or_else(|| "text/csv".to_string(), str::to_string);
-
-        let staged = ctx
-            .blob_store
-            .stage_artifact_stream(response.bytes_stream().boxed())
-            .await?;
+        let staged = if is_api_artifact {
+            let bytes = response.bytes().await?;
+            let csv = bready_api_json_to_csv(&bytes)?;
+            ctx.blob_store
+                .stage_artifact_stream(
+                    stream::once(async move { Ok::<Bytes, StorageError>(Bytes::from(csv)) })
+                        .boxed(),
+                )
+                .await?
+        } else {
+            ctx.blob_store
+                .stage_artifact_stream(response.bytes_stream().boxed())
+                .await?
+        };
         let id = staged.id();
         let storage_key = StorageKey::canonical_for(&id).to_string();
         let artifact = Artifact {
@@ -246,7 +306,7 @@ impl SourceAdapter for WorldbankAdapter {
             fetch_id: None,
             source_id: job.source_id,
             source_url: job.source_url,
-            content_type,
+            content_type: "text/csv".into(),
             response_headers,
             storage_key,
             size_bytes: staged.size_bytes(),
@@ -536,6 +596,179 @@ fn validate_parse_artifact(
     Ok(())
 }
 
+fn parse_bready_api_release(
+    body: &str,
+    api_url: &str,
+    started_at: DateTime<Utc>,
+) -> Result<WorldbankBreadyRelease, AdapterError> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|err| AdapterError::FormatDrift(format!("invalid World Bank API JSON: {err}")))?;
+    let metadata = value
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(Value::as_object)
+        .ok_or_else(|| AdapterError::FormatDrift("World Bank API metadata is missing".into()))?;
+    let last_updated = metadata
+        .get("lastupdated")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.is_empty());
+    let version = last_updated
+        .clone()
+        .unwrap_or_else(|| iso_week_version(started_at));
+    Ok(WorldbankBreadyRelease {
+        release_id: BREADY_API_RELEASE_ID.into(),
+        title: "B-READY Australia indicator API".into(),
+        source_url: api_url.to_string(),
+        last_updated: Some(version),
+    })
+}
+
+fn bready_api_json_to_csv(bytes: &[u8]) -> Result<Vec<u8>, AdapterError> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| AdapterError::FormatDrift(format!("invalid World Bank API JSON: {err}")))?;
+    let rows = value
+        .as_array()
+        .and_then(|items| items.get(1))
+        .and_then(Value::as_array)
+        .ok_or_else(|| AdapterError::FormatDrift("World Bank API rows are missing".into()))?;
+
+    let mut csv = String::from("period,country,measure_id,measure_name,value,unit,status\n");
+    let mut emitted = 0usize;
+    for row in rows {
+        let indicator = row
+            .get("indicator")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                AdapterError::FormatDrift("World Bank API row missing indicator".into())
+            })?;
+        let indicator_id = required_json_str(indicator.get("id"), "indicator.id")?;
+        let Some(measure_id) = measure_id_for_indicator(indicator_id) else {
+            continue;
+        };
+        let measure_name = required_json_str(indicator.get("value"), "indicator.value")?;
+        let country = row
+            .get("countryiso3code")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                row.get("country")
+                    .and_then(Value::as_object)
+                    .and_then(|country| country.get("id"))
+                    .and_then(Value::as_str)
+            })
+            .ok_or_else(|| {
+                AdapterError::FormatDrift("World Bank API row missing country code".into())
+            })?;
+        let period = required_json_str(row.get("date"), "date")?;
+        let value = row
+            .get("value")
+            .and_then(|value| {
+                if value.is_null() {
+                    None
+                } else {
+                    Some(json_scalar_to_string(value))
+                }
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let unit = row
+            .get("unit")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("index");
+        let status = normalize_api_status(row.get("obs_status").and_then(Value::as_str));
+        push_csv_record(
+            &mut csv,
+            &[
+                period,
+                country,
+                measure_id,
+                measure_name,
+                &value,
+                unit,
+                status,
+            ],
+        );
+        emitted += 1;
+    }
+    if emitted == 0 {
+        return Err(AdapterError::FormatDrift(
+            "World Bank API response contained no B-READY rows".into(),
+        ));
+    }
+    Ok(csv.into_bytes())
+}
+
+fn required_json_str<'a>(value: Option<&'a Value>, field: &str) -> Result<&'a str, AdapterError> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AdapterError::FormatDrift(format!("World Bank API row missing `{field}`")))
+}
+
+fn json_scalar_to_string(value: &Value) -> Result<String, AdapterError> {
+    if let Some(value) = value.as_f64() {
+        return Ok(value.to_string());
+    }
+    if let Some(value) = value.as_i64() {
+        return Ok(value.to_string());
+    }
+    if let Some(value) = value.as_u64() {
+        return Ok(value.to_string());
+    }
+    if let Some(value) = value.as_str() {
+        return Ok(value.to_string());
+    }
+    Err(AdapterError::FormatDrift(
+        "World Bank API value is not a scalar".into(),
+    ))
+}
+
+fn normalize_api_status(status: Option<&str>) -> &'static str {
+    match status.map(str::trim).filter(|value| !value.is_empty()) {
+        None => "normal",
+        Some("E") | Some("e") => "estimated",
+        Some("P") | Some("p") => "provisional",
+        Some("R") | Some("r") => "revised",
+        Some(_) => "normal",
+    }
+}
+
+fn measure_id_for_indicator(indicator_id: &str) -> Option<&'static str> {
+    match indicator_id {
+        BUSINESS_ENTRY_INDICATOR => Some(BUSINESS_ENTRY_SCORE),
+        PUBLIC_SERVICES_INDICATOR => Some(PUBLIC_SERVICES_SCORE),
+        BUSINESS_LOCATION_INDICATOR => Some(BUSINESS_LOCATION_SCORE),
+        _ => None,
+    }
+}
+
+fn push_csv_record(out: &mut String, fields: &[&str]) {
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_csv_field(out, field);
+    }
+    out.push('\n');
+}
+
+fn push_csv_field(out: &mut String, field: &str) {
+    if field.contains([',', '"', '\n', '\r']) {
+        out.push('"');
+        for ch in field.chars() {
+            if ch == '"' {
+                out.push('"');
+            }
+            out.push(ch);
+        }
+        out.push('"');
+    } else {
+        out.push_str(field);
+    }
+}
+
 async fn verify_parse_artifact_identity(
     blob_store: &BlobStore,
     key: &StorageKey,
@@ -661,6 +894,12 @@ struct ReleaseUrlProvenance {
 }
 
 fn release_url_provenance(source_url: &str) -> Option<ReleaseUrlProvenance> {
+    if is_worldbank_indicator_api_url(source_url) {
+        return Some(ReleaseUrlProvenance {
+            release_id: BREADY_API_RELEASE_ID.into(),
+        });
+    }
+
     let marker = "/en/businessready/";
     let (_, path) = source_url.split_once(marker)?;
     let filename = path
@@ -677,6 +916,11 @@ fn release_url_provenance(source_url: &str) -> Option<ReleaseUrlProvenance> {
     Some(ReleaseUrlProvenance {
         release_id: stem.to_string(),
     })
+}
+
+fn is_worldbank_indicator_api_url(source_url: &str) -> bool {
+    source_url.contains("/v2/country/AUS/indicator/IC.BRE.")
+        || source_url.contains("/v2/country/AU/indicator/IC.BRE.")
 }
 
 fn worldbank_code_id(field: &str, value: &str) -> Result<CodeId, AdapterError> {
@@ -705,12 +949,14 @@ fn cancelled_parse_error() -> AdapterError {
 #[derive(Debug, Clone)]
 pub struct WorldbankAdapterBuilder {
     index_url: String,
+    api_url: String,
 }
 
 impl Default for WorldbankAdapterBuilder {
     fn default() -> Self {
         Self {
             index_url: DEFAULT_INDEX_URL.into(),
+            api_url: DEFAULT_API_URL.into(),
         }
     }
 }
@@ -720,6 +966,13 @@ impl WorldbankAdapterBuilder {
     #[must_use]
     pub fn index_url(mut self, index_url: impl Into<String>) -> Self {
         self.index_url = index_url.into();
+        self
+    }
+
+    /// Override the World Bank indicator API URL, usually for fixture tests.
+    #[must_use]
+    pub fn api_url(mut self, api_url: impl Into<String>) -> Self {
+        self.api_url = api_url.into();
         self
     }
 
@@ -736,6 +989,7 @@ impl WorldbankAdapterBuilder {
                 dataflows: vec![dataflow_id()],
             },
             index_url: self.index_url,
+            api_url: self.api_url,
         }
     }
 }
@@ -781,6 +1035,11 @@ impl WorldbankBreadyRelease {
         let revision = self.revision(started_at);
         let revision_version = revision.version().to_string();
         let revision_key = self.revision_key();
+        let artifact_format = if is_worldbank_indicator_api_url(&self.source_url) {
+            "worldbank-json"
+        } else {
+            "csv"
+        };
         DiscoveredJob {
             id: format!("worldbank:{}:{revision_version}", self.release_id),
             source_id: source_id(),
@@ -789,7 +1048,7 @@ impl WorldbankBreadyRelease {
             trace_parent: trace_parent.map(str::to_owned),
             metadata: BTreeMap::from([
                 ("adapter".into(), "worldbank".into()),
-                ("artifact_format".into(), "csv".into()),
+                ("artifact_format".into(), artifact_format.into()),
                 ("attribution".into(), ATTRIBUTION.into()),
                 ("release_id".into(), self.release_id.clone()),
                 ("cadence".into(), "annual".into()),

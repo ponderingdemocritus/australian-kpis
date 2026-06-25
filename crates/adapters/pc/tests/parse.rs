@@ -11,6 +11,16 @@ use object_store::memory::InMemory;
 use serde::Serialize;
 
 const PRODUCTIVITY_CSV: &[u8] = include_bytes!("fixtures/productivity_bulletin.csv");
+const PRODUCTIVITY_HTML: &[u8] = br#"
+<!doctype html>
+<main>
+  <h1>Annual productivity bulletin 2026</h1>
+  <p>Released 19 / 02 / 2026</p>
+  <p>This year's annual productivity bulletin shows that Australia's multifactor productivity (MFP), which measures how well labour and capital combine to produce outputs, declined by 0.5% in 2024-25, falling below the 20-year average.</p>
+  <h3>Media release</h3>
+  <p>MFP decreased by&nbsp;0.5% over 2024-25, below the 20-year average of 0.4% growth per year.</p>
+</main>
+"#;
 
 #[derive(Debug, Serialize)]
 struct SnapshotRow {
@@ -30,6 +40,7 @@ async fn artifact_for(
     blob_store: &BlobStore,
     bytes: &'static [u8],
     source_url: &str,
+    content_type: &str,
 ) -> ArtifactRef {
     let id = blob_store
         .put_artifact(Bytes::from_static(bytes))
@@ -40,7 +51,7 @@ async fn artifact_for(
         fetch_id: None,
         source_id: SourceId::new("pc").unwrap(),
         source_url: source_url.into(),
-        content_type: "text/csv".into(),
+        content_type: content_type.into(),
         response_headers: BTreeMap::new(),
         storage_key: StorageKey::canonical_for(&id).to_string(),
         size_bytes: bytes.len() as u64,
@@ -95,6 +106,7 @@ async fn parses_productivity_bulletin_fixture() {
         &blob_store,
         PRODUCTIVITY_CSV,
         "https://www.pc.gov.au/ongoing/productivity-insights/productivity-bulletin-2026.csv",
+        "text/csv",
     )
     .await;
 
@@ -117,12 +129,44 @@ async fn parses_productivity_bulletin_fixture() {
 }
 
 #[tokio::test]
+async fn parses_current_annual_bulletin_html_fixture() {
+    let blob_store = BlobStore::new(InMemory::new());
+    let artifact = artifact_for(
+        &blob_store,
+        PRODUCTIVITY_HTML,
+        "https://www.pc.gov.au/ongoing/productivity-insights/bulletins/bulletin-2026",
+        "text/html",
+    )
+    .await;
+
+    let rows = snapshot_rows(artifact, blob_store).await;
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| {
+        row.measure_id == "market_sector_growth"
+            && row.dimensions.get("region").map(String::as_str) == Some("AUS")
+            && row.time == "2025-01-01T00:00:00+00:00"
+            && row.value == Some(-0.5)
+            && row
+                .attributes
+                .get("pc_reference_period")
+                .map(String::as_str)
+                == Some("2024-25")
+            && row.attributes.get("pc_release_date").map(String::as_str) == Some("2026-02-19")
+    }));
+    assert!(rows.iter().any(|row| {
+        row.measure_id == "multifactor_productivity_growth" && row.value == Some(-0.5)
+    }));
+}
+
+#[tokio::test]
 async fn parse_rejects_mismatched_pc_source_and_dataflow() {
     let blob_store = BlobStore::new(InMemory::new());
     let mut artifact = artifact_for(
         &blob_store,
         PRODUCTIVITY_CSV,
         "https://www.pc.gov.au/ongoing/productivity-insights/productivity-bulletin-2026.csv",
+        "text/csv",
     )
     .await;
     artifact.source_id = SourceId::new("abs").unwrap();
@@ -158,6 +202,7 @@ async fn parse_rejects_expected_dataflow_mismatch() {
         &blob_store,
         PRODUCTIVITY_CSV,
         "https://www.pc.gov.au/ongoing/productivity-insights/productivity-bulletin-2026.csv",
+        "text/csv",
     )
     .await;
     let adapter = PcAdapter::default();
