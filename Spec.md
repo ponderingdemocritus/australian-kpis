@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.6` |
+| **Version** | `v0.1.7` |
 | **Status** | Approved |
-| **Last updated** | 2026-06-23 |
+| **Last updated** | 2026-06-26 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -1397,6 +1397,17 @@ Most Australian sources publish under open licenses but require attribution. Eac
 - **S3** — Cloudflare R2 (egress-free).
 - **Single Rust binary per service** — Dockerfile uses `cargo chef` for layered caching. Images <100MB.
 
+**Railway option:** The repo also supports Railway as a single-project
+deployment path for environments that should be bootstrapped from source.
+Project-level Railway Infrastructure as Code lives in `.railway/railway.ts`
+and provisions TimescaleDB as a stateful image service with a persistent volume,
+Redis, a private artifact bucket, `pdf-extractor`, `ingestion`, `scheduler`,
+`api`, and `web`. Operators must run `railway config plan` before
+`railway config apply`; generated public domains remain a post-apply dashboard
+step for `web` and optional external `api` access. The per-service
+`infra/railway/*.toml` files remain the manual fallback and config-as-code
+reference for individual Railway services.
+
 ---
 
 ## Phased rollout
@@ -1625,11 +1636,16 @@ All confirmed 2026-04-23:
 - **Docling** — `docling.ai`
 - **Granite Docling** — `huggingface.co/ibm-granite/granite-docling-258M`
 - **Table Transformer** — `huggingface.co/microsoft/table-transformer-structure-recognition`
+- **Railway Infrastructure as Code** — `docs.railway.com/infrastructure-as-code`
+- **Railway Config as Code** — `docs.railway.com/config-as-code`
 
 ---
 
 ## Changelog
 
+- **v0.1.7 (2026-06-26)** — Added Railway as a supported single-project
+  deployment option with project-level Infrastructure as Code and retained the
+  existing per-service Railway config files as manual fallback references.
 - **v0.1.6 (2026-06-23)** — Integrated APS scorecard/source work with
   measure-aware series keys, artifact fetch provenance, loader-assigned
   revisions, latest-revision rollups, and bulk Parquet export semantics.

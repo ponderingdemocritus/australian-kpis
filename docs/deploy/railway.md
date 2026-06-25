@@ -4,6 +4,36 @@ This project deploys to Railway as a multi-service project. Keep the web app,
 API, workers, databases, and object storage in the same Railway project and
 environment so services can use private networking.
 
+## New project bootstrap
+
+Use Railway Infrastructure as Code for new projects:
+
+```bash
+pnpm install
+railway login
+railway --version  # must be 5.2.0 or newer for IaC commands
+railway init
+pnpm railway:plan
+pnpm railway:apply
+```
+
+The Railway TypeScript SDK in this repo requires Node.js 22 or newer for IaC
+authoring. The wider application still supports the Node.js version used by CI.
+
+The project-level definition lives in `/.railway/railway.ts`. It creates the
+TimescaleDB image service with a persistent volume, Redis, the artifact bucket,
+the PDF extractor, ingestion worker, scheduler, API, and web dashboard. It also
+wires service variables with Railway reference variables so new environments do
+not need the per-service settings recreated by hand.
+
+Railway-generated public domains are not included in `.railway/railway.ts`.
+After `pnpm railway:apply`, generate public domains for `web` and, if external
+SDK/API users need it, `api`. The web service talks to the API over Railway
+private networking, so only `web` needs a public domain for the dashboard.
+
+Use `railway config plan` before applying changes to an existing project. The
+IaC API is still beta, and destructive changes require explicit confirmation.
+
 ## Services
 
 | Service | Railway config file | Public domain | Health check |
@@ -16,6 +46,10 @@ environment so services can use private networking.
 | TimescaleDB | Railway TimescaleDB template or custom image | No | Railway-managed |
 | Redis | Railway Redis database | No | Railway-managed |
 | Object storage | Railway Storage Bucket | No | Railway-managed |
+
+The `infra/railway/*.toml` files remain useful as per-service config-as-code and
+as a manual fallback. For a new project, prefer `/.railway/railway.ts` so the
+whole project graph is created consistently.
 
 For each code service, create a Railway service from this GitHub repository and
 set the service's config file path to the file listed above. The code services
