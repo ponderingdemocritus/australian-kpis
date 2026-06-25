@@ -201,7 +201,7 @@ impl SourceAdapter for WorldbankAdapter {
                 .await?
                 .error_for_status()?;
             let body = response.text().await?;
-            let current = vec![parse_bready_api_release(
+            let current = [parse_bready_api_release(
                 &body,
                 self.api_url(),
                 ctx.started_at,

@@ -776,9 +776,12 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
             return;
         }
 
-        let result = parse_aemo_artifact(
+        let plan = AemoArtifactPlan {
             source_kind,
             parse_kind,
+        };
+        let result = parse_aemo_artifact(
+            plan,
             blob_store,
             key,
             artifact,
@@ -797,9 +800,14 @@ fn parse_artifact_stream(artifact: ArtifactRef, ctx: &ParseCtx) -> ObservationSt
     }))
 }
 
-async fn parse_aemo_artifact(
+#[derive(Debug, Clone, Copy)]
+struct AemoArtifactPlan {
     source_kind: AemoArtifactKind,
     parse_kind: AemoParseKind,
+}
+
+async fn parse_aemo_artifact(
+    plan: AemoArtifactPlan,
     blob_store: BlobStore,
     key: StorageKey,
     artifact: ArtifactRef,
@@ -818,12 +826,12 @@ async fn parse_aemo_artifact(
     } {
         bytes.extend_from_slice(&chunk?);
     }
-    let csv_bytes = tokio::task::spawn_blocking(move || unzip_aemo_csv(bytes, source_kind))
+    let csv_bytes = tokio::task::spawn_blocking(move || unzip_aemo_csv(bytes, plan.source_kind))
         .await
         .map_err(parse_worker_error)??;
     let records = parse_aemo_csv(csv_bytes, cancellation.clone()).await?;
 
-    let rows = match parse_kind {
+    let rows = match plan.parse_kind {
         AemoParseKind::Dispatch => dispatch_observations(records, &artifact, ingested_at)?,
         AemoParseKind::GenerationMix => {
             generation_mix_observations(records, &artifact, ingested_at)?
@@ -1049,14 +1057,20 @@ fn dispatchability_capacity_observations(
                     CapacityMetric {
                         id: "available_generation",
                         source_field: "AVAILABLEGENERATION",
+                        table: "CAPACITY",
+                        proxy_source_dataflow: None,
                     },
                     CapacityMetric {
                         id: "dispatchable_capacity",
                         source_field: "DISPATCHABLECAPACITY",
+                        table: "CAPACITY",
+                        proxy_source_dataflow: None,
                     },
                     CapacityMetric {
                         id: "net_interchange",
                         source_field: "NETINTERCHANGE",
+                        table: "CAPACITY",
+                        proxy_source_dataflow: None,
                     },
                 ] {
                     push_capacity_metric_if_present(
@@ -1064,8 +1078,6 @@ fn dispatchability_capacity_observations(
                         &row,
                         header,
                         metric,
-                        "CAPACITY",
-                        None,
                         artifact,
                         ingested_at,
                     )?;
@@ -1081,10 +1093,14 @@ fn dispatchability_capacity_observations(
                     CapacityMetric {
                         id: "available_generation",
                         source_field: "AVAILABLEGENERATION",
+                        table: "REGIONSUM",
+                        proxy_source_dataflow: Some(DISPATCH_DATAFLOW_ID),
                     },
                     CapacityMetric {
                         id: "net_interchange",
                         source_field: "NETINTERCHANGE",
+                        table: "REGIONSUM",
+                        proxy_source_dataflow: Some(DISPATCH_DATAFLOW_ID),
                     },
                 ] {
                     push_capacity_metric_if_present(
@@ -1092,8 +1108,6 @@ fn dispatchability_capacity_observations(
                         &row,
                         header,
                         metric,
-                        "REGIONSUM",
-                        Some(DISPATCH_DATAFLOW_ID),
                         artifact,
                         ingested_at,
                     )?;
@@ -1117,6 +1131,8 @@ struct DispatchMetric {
 struct CapacityMetric {
     id: &'static str,
     source_field: &'static str,
+    table: &'static str,
+    proxy_source_dataflow: Option<&'static str>,
 }
 
 fn push_capacity_metric_if_present(
@@ -1124,8 +1140,6 @@ fn push_capacity_metric_if_present(
     row: &[String],
     header: &BTreeMap<String, usize>,
     metric: CapacityMetric,
-    table: &'static str,
-    proxy_source_dataflow: Option<&'static str>,
     artifact: &ArtifactRef,
     ingested_at: DateTime<Utc>,
 ) -> Result<(), AdapterError> {
@@ -1136,8 +1150,6 @@ fn push_capacity_metric_if_present(
         row,
         header,
         metric,
-        table,
-        proxy_source_dataflow,
         artifact,
         ingested_at,
     )?);
@@ -1328,8 +1340,6 @@ fn dispatchability_capacity_observation(
     row: &[String],
     header: &BTreeMap<String, usize>,
     metric: CapacityMetric,
-    table: &'static str,
-    proxy_source_dataflow: Option<&'static str>,
     artifact: &ArtifactRef,
     ingested_at: DateTime<Utc>,
 ) -> Result<(SeriesDescriptor, Observation), AdapterError> {
@@ -1368,10 +1378,10 @@ fn dispatchability_capacity_observation(
         ("source_url".into(), artifact.source_url.clone()),
         ("license".into(), LICENSE_NAME.into()),
         ("license_url".into(), LICENSE_URL.into()),
-        ("aemo_table".into(), table.into()),
+        ("aemo_table".into(), metric.table.into()),
         ("aemo_field".into(), metric.source_field.into()),
     ]);
-    if let Some(proxy_source_dataflow) = proxy_source_dataflow {
+    if let Some(proxy_source_dataflow) = metric.proxy_source_dataflow {
         attributes.insert("proxy_source_dataflow".into(), proxy_source_dataflow.into());
     }
     let observation = Observation {

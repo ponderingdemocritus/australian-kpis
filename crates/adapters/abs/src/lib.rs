@@ -53,6 +53,8 @@ const DEFAULT_DWELLING_COMPLETION_TIMES_URL: &str =
 const ABS_ATTRIBUTION: &str = "Source: Australian Bureau of Statistics";
 const USER_AGENT: &str = concat!("au-kpis-adapter-abs/", env!("CARGO_PKG_VERSION"));
 
+type PeriodValueRows = Vec<(DateTime<Utc>, f64)>;
+
 /// ABS SDMX adapter.
 #[derive(Debug, Clone)]
 pub struct AbsAdapter {
@@ -987,9 +989,7 @@ fn parse_building_approvals_html(
     Ok(rows)
 }
 
-fn parse_building_approvals_chart_rows(
-    lines: &[String],
-) -> Result<Vec<(DateTime<Utc>, f64)>, AdapterError> {
+fn parse_building_approvals_chart_rows(lines: &[String]) -> Result<PeriodValueRows, AdapterError> {
     let mut in_dwelling_section = false;
     for line in lines {
         let lower = line.to_ascii_lowercase();
@@ -1010,9 +1010,7 @@ fn parse_building_approvals_chart_rows(
     Ok(Vec::new())
 }
 
-fn parse_abs_period_value_matrix(
-    line: &str,
-) -> Result<Option<Vec<(DateTime<Utc>, f64)>>, AdapterError> {
+fn parse_abs_period_value_matrix(line: &str) -> Result<Option<PeriodValueRows>, AdapterError> {
     let value = serde_json::from_str::<serde_json::Value>(line).map_err(|err| {
         AdapterError::FormatDrift(format!("ABS chart data JSON is invalid: {err}"))
     })?;

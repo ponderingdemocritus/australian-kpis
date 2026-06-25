@@ -341,7 +341,7 @@ async fn load_artifact_bytes(
 ) -> Result<Vec<u8>, AdapterError> {
     let mut chunks = tokio::select! {
         () = cancellation.cancelled() => return Err(cancelled_parse_error()),
-        chunks = blob_store.get(&key) => chunks?,
+        chunks = blob_store.get(key) => chunks?,
     };
     let mut bytes = Vec::new();
     while let Some(chunk) = tokio::select! {

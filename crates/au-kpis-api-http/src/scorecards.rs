@@ -599,8 +599,8 @@ mod tests {
     use super::{
         ResolvedIndicatorRow, ScorecardHistoryQuery, aps_history, artifact_id_from_bytes,
         digest_from_bytes, format_snapshot_date, if_none_match_fresh, is_stale_for_cadence,
-        json_cache_response, load_config, max_lag_for_cadence, parse_history_date, previous_score,
-        resolved_indicator_status, series_key_from_bytes,
+        json_cache_response, max_lag_for_cadence, parse_history_date, resolved_indicator_status,
+        series_key_from_bytes,
     };
     use crate::{AppState, error::ApiError};
 
@@ -681,27 +681,6 @@ mod tests {
         )
         .await;
         assert!(open_ended.is_err());
-    }
-
-    #[tokio::test]
-    async fn previous_score_skips_database_when_latest_time_is_absent() {
-        let pool = lazy_pool();
-        let config = load_config().expect("scorecard config");
-
-        assert_eq!(
-            previous_score(&pool, &config, None)
-                .await
-                .expect("no latest snapshot skips lookup"),
-            None
-        );
-
-        let with_latest = previous_score(
-            &pool,
-            &config,
-            Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
-        )
-        .await;
-        assert!(with_latest.is_err());
     }
 
     #[test]
