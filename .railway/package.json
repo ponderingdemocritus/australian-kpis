@@ -1,3 +1,9 @@
 {
-  "type": "module"
+  "name": "@au-kpis/railway-iac",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@railway/cli": "5.23.1",
+    "railway": "3.4.1"
+  }
 }
