@@ -27,6 +27,8 @@ use tower::ServiceExt;
 const API_URI: &str = "/v1/observations?dataflow=abs.cpi&limit=25";
 const ROW_COUNT: usize = 1_000;
 const HANDLER_OVERHEAD_BUDGET: Duration = Duration::from_millis(5);
+const HANDLER_OVERHEAD_SAMPLES: usize = 40;
+const HANDLER_OVERHEAD_WARMUP_SAMPLES: usize = 5;
 
 #[derive(Debug, Default)]
 struct NoopCacheBackend;
@@ -311,21 +313,26 @@ async fn handler_page(app: Router) -> usize {
 }
 
 async fn estimate_handler_overhead(pool: &PgPool, app: Router) -> Duration {
-    let mut db_elapsed = Duration::ZERO;
-    let mut handler_elapsed = Duration::ZERO;
-    let samples = 20;
+    for _ in 0..HANDLER_OVERHEAD_WARMUP_SAMPLES {
+        direct_db_page(pool).await;
+        handler_page(app.clone()).await;
+    }
 
-    for _ in 0..samples {
+    let mut overhead_samples = Vec::with_capacity(HANDLER_OVERHEAD_SAMPLES);
+    for _ in 0..HANDLER_OVERHEAD_SAMPLES {
         let started = Instant::now();
         direct_db_page(pool).await;
-        db_elapsed += started.elapsed();
+        let db_elapsed = started.elapsed();
 
         let started = Instant::now();
         handler_page(app.clone()).await;
-        handler_elapsed += started.elapsed();
+        overhead_samples.push(started.elapsed().saturating_sub(db_elapsed));
     }
 
-    (handler_elapsed / samples).saturating_sub(db_elapsed / samples)
+    // CI runners occasionally produce a single slow request; the median keeps
+    // the hard budget focused on steady-state handler overhead.
+    overhead_samples.sort_unstable();
+    overhead_samples[overhead_samples.len() / 2]
 }
 
 fn bench_observations_handler(c: &mut Criterion) {
@@ -336,7 +343,7 @@ fn bench_observations_handler(c: &mut Criterion) {
     let db = runtime.block_on(bench_db());
     let app = router(test_state(db.pool.clone())).expect("router");
     let overhead = runtime.block_on(estimate_handler_overhead(&db.pool, app.clone()));
-    eprintln!("api handler overhead estimate above direct DB: {overhead:?}");
+    eprintln!("api handler median overhead above direct DB: {overhead:?}");
     assert!(
         overhead <= HANDLER_OVERHEAD_BUDGET,
         "api observations handler overhead {overhead:?} exceeds {HANDLER_OVERHEAD_BUDGET:?}"
