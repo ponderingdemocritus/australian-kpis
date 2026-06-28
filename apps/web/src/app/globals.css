@@ -3,6 +3,23 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Build Australia brand faces (files under /public/fonts). */
+@font-face {
+  font-family: "RJ Schema";
+  src: url("/fonts/RJSchemaVariable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "RJ Afilador";
+  src: url("/fonts/RJAfiladorBold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -40,8 +57,9 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --shadow-panel: 2px 3px 5px 0 rgb(55 51 47 / 0.08);
-  /* Build Australia type system. RJ Schema / RJ Afilador are the brand's
-     proprietary faces; system fallbacks render until those files are added. */
+  /* Build Australia type system. RJ Schema / RJ Afilador load from
+     /public/fonts (see @font-face above); Martian Mono falls back to a
+     system monospace stack until that file is added. */
   --font-sans: "RJ Schema", Georgia, "Times New Roman", serif;
   --font-heading: "RJ Afilador", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Martian Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
@@ -92,7 +110,8 @@
   --sidebar-accent-foreground: var(--bark);
   --sidebar-border: var(--khaki);
   --sidebar-ring: var(--coast);
-  --radius: 0.5rem;
+  /* Build Australia uses square corners. */
+  --radius: 0rem;
 }
 
 .dark {
