@@ -95,6 +95,12 @@ export function sourceLabel(contribution: ApsContribution): string {
 
 export function sortedContributions(contributions: ApsContribution[]): ApsContribution[] {
   return [...contributions].sort((left, right) => {
+    // Surface resolved rows first so missing/pending inputs cluster at the bottom.
+    const leftResolved = left.coverage_status === 'resolved' ? 0 : 1
+    const rightResolved = right.coverage_status === 'resolved' ? 0 : 1
+    if (leftResolved !== rightResolved) {
+      return leftResolved - rightResolved
+    }
     if (left.axis !== right.axis) {
       return left.axis.localeCompare(right.axis)
     }
@@ -103,4 +109,92 @@ export function sortedContributions(contributions: ApsContribution[]): ApsContri
     }
     return left.label.localeCompare(right.label)
   })
+}
+
+/**
+ * One-line plain-language definitions for each APS zone, used by the score
+ * explainer so a first-time reader knows how to read the headline number.
+ */
+export function zoneDescription(zone: ScorecardSnapshot['zone']): string {
+  if (zone === 'green') {
+    return 'Abundance — the nation is positioned closer to abundance than scarcity.'
+  }
+  if (zone === 'yellow') {
+    return 'Mixed — abundance and scarcity signals are roughly balanced.'
+  }
+  return 'Scarcity — the nation is positioned closer to scarcity than abundance.'
+}
+
+/** Solid zone color + white text for the zone badge and score marker pill. */
+export function zoneSolidClass(zone: ScorecardSnapshot['zone']): string {
+  if (zone === 'green') {
+    return 'bg-emerald-700 text-white'
+  }
+  if (zone === 'yellow') {
+    return 'bg-amber-700 text-white'
+  }
+  return 'bg-red-700 text-white'
+}
+
+/** Vivid zone color for the marker dot icon (icon, not text — contrast rule N/A). */
+export function zoneDotClass(zone: ScorecardSnapshot['zone']): string {
+  if (zone === 'green') {
+    return 'text-emerald-600'
+  }
+  if (zone === 'yellow') {
+    return 'text-amber-600'
+  }
+  return 'text-red-600'
+}
+
+/** Directional tone for trend, used to pick an arrow color (paired with text). */
+export function trendTone(trend: ScorecardSnapshot['trend']): 'positive' | 'negative' | 'neutral' {
+  if (trend === 'up') {
+    return 'positive'
+  }
+  if (trend === 'down') {
+    return 'negative'
+  }
+  return 'neutral'
+}
+
+/**
+ * One-line definition per coverage status so the provenance table is decodable
+ * without prior knowledge of the internal enum.
+ */
+export function coverageStatusDescription(status: ApsContribution['coverage_status']): string {
+  switch (status) {
+    case 'resolved':
+      return 'Resolved — a current observation was found and contributes to the score.'
+    case 'visible_unscored':
+      return 'Visible Unscored — indicator displayed but not yet contributing to the score.'
+    case 'manual_pending':
+      return 'Manual Pending — awaiting a curated/manual value before it can be scored.'
+    case 'coverage_gap':
+      return 'Coverage Gap — expected data is missing for this period.'
+    case 'stale':
+      return 'Stale — the latest observation is older than the expected cadence.'
+    case 'missing_expected':
+      return 'Missing Expected — a required input is absent from the source.'
+    default:
+      return coverageStatusLabel(status)
+  }
+}
+
+/** Semantic color grouping for coverage badges (collapses arbitrary hues). */
+export function coverageBadgeClass(status: ApsContribution['coverage_status']): string {
+  switch (status) {
+    case 'manual_pending':
+      // Pending action — neutral blue.
+      return 'bg-sky-700 text-white'
+    case 'coverage_gap':
+    case 'stale':
+      // Needs attention — amber (collapsed amber/orange into one).
+      return 'bg-amber-700 text-white'
+    case 'missing_expected':
+      // Blocking absence — red.
+      return 'bg-red-700 text-white'
+    default:
+      return ''
+  }
 }

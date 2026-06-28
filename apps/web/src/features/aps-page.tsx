@@ -13,12 +13,12 @@ export function ApsPage() {
   const configQuery = useQuery({
     queryFn: () => client.scorecards.aps.config(),
     queryKey: ['aps', 'config'],
-    retry: false,
+    retry: 1,
   })
   const latestQuery = useQuery({
     queryFn: () => client.scorecards.aps.latest(),
     queryKey: ['aps', 'latest'],
-    retry: false,
+    retry: 1,
   })
 
   if (configQuery.isLoading || latestQuery.isLoading) {
@@ -27,7 +27,15 @@ export function ApsPage() {
 
   const error = configQuery.error ?? latestQuery.error
   if (error instanceof Error) {
-    return <ApsErrorState message={error.message} />
+    return (
+      <ApsErrorState
+        message={error.message}
+        onRetry={() => {
+          void configQuery.refetch()
+          void latestQuery.refetch()
+        }}
+      />
+    )
   }
 
   if (configQuery.data === undefined || latestQuery.data === undefined) {

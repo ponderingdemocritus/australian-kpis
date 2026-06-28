@@ -79,10 +79,46 @@ test('APS homepage renders latest scorecard data first', async ({ page }) => {
   const drilldowns = page.getByTestId('aps-source-drilldowns')
   await expect(drilldowns).toContainText('Housing approvals')
   await expect(drilldowns).toContainText('abs.building_approvals')
-  await expect(drilldowns).toContainText('aaaaaaaa')
   await expect(drilldowns).toContainText('Resolved')
   await expect(drilldowns).toContainText('Manual Pending')
   await expect(drilldowns).toContainText('Visible Unscored')
+
+  // Provenance (source link, license, unit, fingerprints) lives behind an expandable row.
+  await drilldowns.getByRole('button', { name: 'Expand Housing approvals provenance' }).click()
+  await expect(drilldowns).toContainText('https://example.test/source')
+  await expect(drilldowns).toContainText('CC-BY-4.0')
+  await expect(drilldowns).toContainText('index')
+  await expect(drilldowns).toContainText('aaaaaaaa')
+})
+
+test('APS homepage surfaces methodology and source link', async ({ page }) => {
+  await mockApsApi(page)
+  await page.goto('/')
+  await expect(page.getByTestId('aps-score-card')).toBeVisible()
+
+  await page.getByText('Methodology & sources').click()
+  await expect(page.getByText('APS = 100 * T * (0.5 + 0.5 * O)')).toBeVisible()
+})
+
+test('APS homepage recovers from a transient error via Retry', async ({ page }) => {
+  let failConfig = true
+  await page.route('**/v1/scorecards/aps/config', async (route) => {
+    if (failConfig) {
+      await route.fulfill({ body: 'scorecard unavailable', status: 503 })
+      return
+    }
+    await route.fulfill({ json: apsConfig })
+  })
+  await page.route('**/v1/scorecards/aps/latest', async (route) => {
+    await route.fulfill({ json: apsSnapshot })
+  })
+
+  await page.goto('/')
+  await expect(page.getByTestId('aps-error')).toBeVisible()
+
+  failConfig = false
+  await page.getByRole('button', { name: 'Retry' }).click()
+  await expect(page.getByTestId('aps-score-card')).toBeVisible()
 })
 
 test('APS config panel shows indicator weights and scoring direction', async ({ page }) => {
@@ -106,6 +142,9 @@ test('APS homepage mobile layout avoids horizontal overflow', async ({ page }) =
   await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible()
   await expect(page.getByTestId('aps-score-card')).toBeVisible()
   await expect(page.getByTestId('aps-source-drilldowns')).toBeVisible()
+
+  // On phones the wide table is replaced by stacked cards (no in-card horizontal scroll).
+  await expect(page.locator('table[aria-label="APS source drilldowns"]')).toBeHidden()
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth,
@@ -174,14 +213,22 @@ test('APS navigation keeps Explorer, Compare, and Playground available as data t
   await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible()
 })
 
-test('APS homepage has no WCAG AA accessibility violations', async ({ page }) => {
+test('APS homepage has no WCAG AA accessibility violations (light and dark)', async ({ page }) => {
   await mockApsApi(page)
   await page.goto('/')
   await expect(page.getByTestId('aps-score-card')).toBeVisible()
 
-  const results = await new AxeBuilder({ page }).analyze()
+  // Expand the legend so every coverage-status badge variant is contrast-checked.
+  await page.getByText('What do these statuses mean?').click()
 
-  expect(results.violations).toEqual([])
+  const light = await new AxeBuilder({ page }).analyze()
+  expect(light.violations).toEqual([])
+
+  await page.getByRole('button', { name: 'Switch to dark theme' }).click()
+  await expect(page.locator('html')).toHaveClass(/dark/)
+
+  const dark = await new AxeBuilder({ page }).analyze()
+  expect(dark.violations).toEqual([])
 })
 
 async function mockApsApi(page: Page) {
