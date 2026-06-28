@@ -126,7 +126,9 @@
   --secondary: #584b3a;
   --secondary-foreground: var(--sand);
   --muted: #584b3a;
-  --muted-foreground: var(--khaki);
+  /* Lightened from --khaki (#c3be92) so muted text clears WCAG AA 4.5:1 on
+     the #584b3a dark surface (khaki was 4.47:1). Now 4.88:1. */
+  --muted-foreground: #cbc69d;
   --accent: var(--coast);
   --accent-foreground: #fff;
   --destructive: var(--clay);
