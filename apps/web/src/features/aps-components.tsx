@@ -162,7 +162,7 @@ export function ApsDashboard({
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:py-6">
       <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-normal">Abundance Position Score</h1>
+          <h1 className="font-display text-3xl">Abundance Position Score</h1>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             APS is a 0–100 index of national economic abundance: higher means the nation is
             positioned closer to abundance than scarcity. It blends a throughput axis (T, how much
@@ -238,8 +238,8 @@ function ApsScoreCard({
     <Card className="min-w-0" data-testid="aps-score-card">
       <CardHeader>
         <div>
-          <CardDescription>{config.label}</CardDescription>
-          <CardTitle className="mt-2 text-5xl tabular-nums sm:text-6xl">
+          <p className="text-eyebrow">{config.label}</p>
+          <CardTitle className="mt-2 text-stat text-5xl sm:text-6xl">
             {formatApsScore(snapshot.score)}
           </CardTitle>
         </div>
@@ -315,7 +315,7 @@ function ApsConfidenceCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
         <CardAction>
           <ShieldCheck aria-hidden="true" className="text-muted-foreground" />
         </CardAction>
-        <CardTitle>Confidence</CardTitle>
+        <CardTitle className="font-display">Confidence</CardTitle>
         <CardDescription>Coverage-aware band from the API snapshot.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -375,14 +375,14 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
         <CardAction>
           <Gauge aria-hidden="true" className="text-muted-foreground" />
         </CardAction>
-        <CardTitle>{tokenLabel(subIndex.axis)}</CardTitle>
+        <CardTitle className="font-display">{tokenLabel(subIndex.axis)}</CardTitle>
         <CardDescription>{axisHelp}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-end justify-between gap-4">
-          <span className="font-semibold text-4xl tabular-nums">
+          <span className="text-stat text-4xl">
             {formatApsScore(subIndex.score * 100)}
-            <span className="ml-1 align-baseline font-normal text-muted-foreground text-sm">
+            <span className="ml-1 align-baseline font-sans font-normal text-muted-foreground text-sm">
               /100
             </span>
           </span>
@@ -719,7 +719,7 @@ function CoverageBadge({ status }: { status: ApsContribution['coverage_status'] 
 function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="p-3">
-      <p className="text-muted-foreground text-xs">{label}</p>
+      <p className="text-eyebrow">{label}</p>
       <div className="mt-1 break-words font-semibold tabular-nums">{value}</div>
     </div>
   )

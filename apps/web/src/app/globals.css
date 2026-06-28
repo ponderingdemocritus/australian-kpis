@@ -178,3 +178,32 @@ button:not(:disabled),
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  /* Display face (RJ Afilador 700) for prominent, short headings. */
+  .font-display {
+    font-family: var(--font-heading);
+    letter-spacing: -0.02em;
+  }
+
+  /* Big tabular stat numbers — the hero score and sub-index values. */
+  .text-stat {
+    font-family: var(--font-heading);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em;
+    line-height: 0.95;
+  }
+
+  /* Editorial uppercase micro-label sitting above a value. RJ Schema 600.
+     Uses full muted-foreground (not /70) to stay above WCAG AA on tinted
+     surfaces. */
+  .text-eyebrow {
+    font-family: var(--font-sans);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+}
