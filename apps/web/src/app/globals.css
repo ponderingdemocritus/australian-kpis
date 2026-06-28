@@ -83,7 +83,9 @@
   --chart-4: var(--bush);
   --chart-5: var(--clay);
   --sidebar: var(--sand);
-  --sidebar-foreground: var(--bark);
+  /* Deeper than --bark so muted labels (text-sidebar-foreground/70) still
+     clear WCAG AA 4.5:1 on the sand sidebar surface. */
+  --sidebar-foreground: #2a241b;
   --sidebar-primary: var(--bark);
   --sidebar-primary-foreground: var(--mist);
   --sidebar-accent: var(--khaki);
