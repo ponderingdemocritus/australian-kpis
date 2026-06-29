@@ -44,6 +44,7 @@ jobs:
           retention-days: 30
 
       - name: Update source drift todo issue
+        if: github.ref == 'refs/heads/main'
         uses: actions/github-script@v8
         with:
           script: |

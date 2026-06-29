@@ -57,6 +57,9 @@ The workflow:
 5. Opens, updates, or closes the tracked source drift todo issue.
 
 Drift does not fail the workflow. The GitHub issue is the operational signal.
+Manual `workflow_dispatch` runs from non-`main` refs only produce retained
+report artifacts; they do not create, update, or close the singleton tracked
+issue.
 
 ## Issue Lifecycle
 

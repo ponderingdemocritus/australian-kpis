@@ -488,6 +488,18 @@ fn evaluate_reachable(
         );
     }
 
+    if snapshot.status == 0 {
+        return finding_evaluation(
+            rule,
+            Some(snapshot),
+            SourceAuditStatus::Error,
+            SourceAuditSeverity::Error,
+            Some(snapshot.effective_url.clone()),
+            "URL request failed before an HTTP response was received.".to_string(),
+            recommendation.to_string(),
+        );
+    }
+
     if is_soft_access_status(snapshot.status) {
         return finding_evaluation(
             rule,
@@ -775,11 +787,10 @@ fn is_success(status: u16) -> bool {
 }
 
 fn is_soft_access_status(status: u16) -> bool {
-    status == 0
-        || matches!(
-            StatusCode::from_u16(status),
-            Ok(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS)
-        )
+    matches!(
+        StatusCode::from_u16(status),
+        Ok(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS)
+    )
 }
 
 fn discover_latest_year_url(snapshot: &SourceUrlSnapshot, latest_year: &str) -> Option<String> {
@@ -799,21 +810,14 @@ fn discover_newer_budget_year(body: &str, configured_year: &str) -> Option<Strin
     let bytes = body.as_bytes();
     let mut newest: Option<(u16, String)> = None;
 
-    for window in bytes.windows(7) {
-        if !(window[0] == b'2'
-            && window[1] == b'0'
-            && window[2].is_ascii_digit()
-            && window[3].is_ascii_digit()
-            && window[4] == b'-'
-            && window[5].is_ascii_digit()
-            && window[6].is_ascii_digit())
-        {
-            continue;
-        }
+    for (index, window) in bytes.windows(7).enumerate() {
         let Ok(candidate) = std::str::from_utf8(window) else {
             continue;
         };
-        let Some(candidate_start) = budget_year_start(candidate) else {
+        let Some(candidate_start) = parse_budget_year_start(candidate) else {
+            continue;
+        };
+        if !is_budget_year_boundary(bytes, index) {
             continue;
         };
         if candidate_start > configured_start
@@ -829,7 +833,32 @@ fn discover_newer_budget_year(body: &str, configured_year: &str) -> Option<Strin
 }
 
 fn budget_year_start(year: &str) -> Option<u16> {
-    year.get(0..4)?.parse().ok()
+    parse_budget_year_start(year)
+}
+
+fn parse_budget_year_start(year: &str) -> Option<u16> {
+    let bytes = year.as_bytes();
+    if bytes.len() != 7
+        || bytes[0] != b'2'
+        || bytes[1] != b'0'
+        || !bytes[2].is_ascii_digit()
+        || !bytes[3].is_ascii_digit()
+        || bytes[4] != b'-'
+        || !bytes[5].is_ascii_digit()
+        || !bytes[6].is_ascii_digit()
+    {
+        return None;
+    }
+    let start = year.get(0..4)?.parse::<u16>().ok()?;
+    let suffix = year.get(5..7)?.parse::<u16>().ok()?;
+    (suffix == (start + 1) % 100).then_some(start)
+}
+
+fn is_budget_year_boundary(bytes: &[u8], index: usize) -> bool {
+    let before_ok = index == 0 || !bytes[index - 1].is_ascii_alphanumeric();
+    let after_index = index + 7;
+    let after_ok = after_index >= bytes.len() || !bytes[after_index].is_ascii_alphanumeric();
+    before_ok && after_ok
 }
 
 fn resolve_url(base: &str, href: &str) -> Option<String> {
@@ -1111,7 +1140,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
         },
     ),
     SourceLocationRule::new(
-        "oxford",
+        "ai-readiness",
         "oxford.gari",
         "https://oxfordinsights.com/ai-readiness/ai-readiness-index/",
         SourceLocationCheck::ContainsAny {
@@ -1120,7 +1149,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
         },
     ),
     SourceLocationRule::new(
-        "naic",
+        "ai-readiness",
         "naic.ai_adoption_tracker",
         "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker",
         SourceLocationCheck::ContainsAny {
@@ -1129,7 +1158,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
         },
     ),
     SourceLocationRule::new(
-        "abs",
+        "ai-readiness",
         "abs.ai_rd",
         "https://www.abs.gov.au/statistics/research",
         SourceLocationCheck::ContainsAny {
@@ -1138,7 +1167,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
         },
     ),
     SourceLocationRule::new(
-        "home-affairs",
+        "ai-readiness",
         "home_affairs.skillselect_talent_proxy",
         "https://immi.homeaffairs.gov.au/visas/working-in-australia/skillselect/invitation-rounds",
         SourceLocationCheck::ContainsAny {
@@ -1147,7 +1176,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
         },
     ),
     SourceLocationRule::new(
-        "state-capital",
+        "state_capital",
         "state_capital.vic_major_projects",
         "https://bigbuild.vic.gov.au/projects",
         SourceLocationCheck::ContainsAny {
@@ -1156,7 +1185,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
         },
     ),
     SourceLocationRule::new(
-        "state-capital",
+        "state_capital",
         "state_capital.budget_capital_papers",
         "https://budget.gov.au/",
         SourceLocationCheck::ContainsAny {

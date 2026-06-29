@@ -1,6 +1,6 @@
 use au_kpis_scheduler::source_location_audit::{
     SourceAuditSeverity, SourceAuditStatus, SourceLocationCheck, SourceLocationRule,
-    SourceUrlSnapshot, evaluate_source_location_snapshots,
+    SourceUrlSnapshot, default_source_location_rules, evaluate_source_location_snapshots,
 };
 use chrono::{TimeZone, Utc};
 
@@ -334,6 +334,31 @@ fn source_location_budget_year_unconfirmed_latest_is_manual_review() {
 }
 
 #[test]
+fn source_location_budget_year_ignores_iso_dates_when_current_year_is_present() {
+    let rules = [SourceLocationRule::new(
+        "treasury",
+        "treasury.budget_papers",
+        "https://budget.gov.au/content/bp4/index.htm",
+        SourceLocationCheck::BudgetYear {
+            configured_year: "2026-27",
+            latest_year: "2026-27",
+            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://budget.gov.au/content/bp4/index.htm",
+        "https://budget.gov.au/content/bp4/index.htm",
+        200,
+        r#"<time datetime="2027-06-15">15 June 2027</time><title>Budget 2026-27</title>"#,
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Ok);
+    assert!(report.findings.is_empty());
+}
+
+#[test]
 fn source_location_reachable_soft_access_is_manual_review() {
     let rules = [SourceLocationRule::new(
         "rba",
@@ -358,6 +383,30 @@ fn source_location_reachable_soft_access_is_manual_review() {
         SourceAuditSeverity::ManualReview
     );
     assert!(report.findings[0].evidence.contains("bot-filtered"));
+}
+
+#[test]
+fn source_location_request_failure_is_tool_error() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::Reachable {
+            recommendation: "Review the RBA statistical tables index and table URLs.",
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        0,
+        "request error: dns error",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Error);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Error);
+    assert!(report.findings[0].evidence.contains("request failed"));
 }
 
 #[test]
@@ -531,4 +580,33 @@ fn source_location_passing_report_markdown_says_no_findings() {
 
     assert_eq!(report.status, SourceAuditStatus::Ok);
     assert!(markdown.contains("No source-location findings detected."));
+}
+
+#[test]
+fn source_location_default_rules_use_registered_source_ids() {
+    const REGISTERED_SOURCE_IDS: &[&str] = &[
+        "abs",
+        "aemo",
+        "ai-readiness",
+        "apra",
+        "asx",
+        "compute",
+        "nhsac",
+        "pc",
+        "rba",
+        "state-budgets",
+        "state-planning",
+        "state_capital",
+        "treasury",
+        "worldbank",
+    ];
+
+    for rule in default_source_location_rules() {
+        assert!(
+            REGISTERED_SOURCE_IDS.contains(&rule.source_id),
+            "unregistered source id {} for {}",
+            rule.source_id,
+            rule.dataflow_id
+        );
+    }
 }
