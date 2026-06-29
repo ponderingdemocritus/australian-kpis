@@ -153,6 +153,30 @@ fn source_location_world_bank_bready_non_null_australia_values_pass() {
 }
 
 #[test]
+fn source_location_world_bank_bready_ignores_older_null_australia_values() {
+    let rules = [SourceLocationRule::new(
+        "worldbank",
+        "worldbank.bready",
+        "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
+        SourceLocationCheck::WorldBankBreadyApi {
+            recommendation: "Review World Bank B-READY Australia availability before scoring this source.",
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
+        "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
+        200,
+        r#"[{"page":1,"pages":1},[{"countryiso3code":"AUS","date":"2024","value":null},{"countryiso3code":"AUS","date":"2025","value":77.5}]]"#,
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Ok);
+    assert!(report.findings.is_empty());
+    assert!(report.results[0].evidence.contains("latest period 2025"));
+}
+
+#[test]
 fn source_location_aemo_directory_with_expected_zip_patterns_passes() {
     let rules = [SourceLocationRule::new(
         "aemo",
@@ -252,6 +276,32 @@ fn source_location_federal_budget_2026_27_bp4_is_current() {
 
     assert_eq!(report.status, SourceAuditStatus::Ok);
     assert!(report.findings.is_empty());
+}
+
+#[test]
+fn source_location_current_budget_rule_flags_newer_budget_year() {
+    let rules = [SourceLocationRule::new(
+        "treasury",
+        "treasury.budget_papers",
+        "https://budget.gov.au/content/bp4/index.htm",
+        SourceLocationCheck::BudgetYear {
+            configured_year: "2026-27",
+            latest_year: "2026-27",
+            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://budget.gov.au/content/bp4/index.htm",
+        "https://budget.gov.au/content/bp4/index.htm",
+        200,
+        r#"<a href="/content/bp4/index.htm">Budget Paper No. 4 2027-28</a>"#,
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Drift);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Warning);
+    assert!(report.findings[0].evidence.contains("2027-28"));
 }
 
 #[test]

@@ -47,6 +47,10 @@ export function scoreOffset(score: number): number {
   return Math.min(100, Math.max(0, score))
 }
 
+export function apsAxisDisplayScore(axis: ApsSubIndex['axis'], score: number): number {
+  return axis === 'orientation' ? 100 * (0.5 + 0.5 * score) : score * 100
+}
+
 export function zoneLabel(zone: ScorecardSnapshot['zone']): string {
   if (zone === 'green') {
     return 'abundance'

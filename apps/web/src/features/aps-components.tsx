@@ -22,6 +22,7 @@ import {
   type ApsContribution,
   type ApsIndicatorConfig,
   type ApsSubIndex,
+  apsAxisDisplayScore,
   coverageStatusLabel,
   directionLabel,
   formatApsDate,
@@ -256,6 +257,10 @@ function ApsConfidenceCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
 }
 
 function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
+  const displayScore = apsAxisDisplayScore(subIndex.axis, subIndex.score)
+  const displayLow = apsAxisDisplayScore(subIndex.axis, subIndex.confidence_band.low)
+  const displayHigh = apsAxisDisplayScore(subIndex.axis, subIndex.confidence_band.high)
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -271,28 +276,30 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
       <CardContent className="space-y-4">
         <div className="flex items-end justify-between gap-4">
           <span className="text-4xl font-semibold tabular-nums">
-            {formatApsScore(subIndex.score * 100)}
+            {formatApsScore(displayScore)}
           </span>
           <span className="text-sm text-muted-foreground">
-            {formatApsScore(subIndex.confidence_band.low * 100)}-
-            {formatApsScore(subIndex.confidence_band.high * 100)}
+            {formatApsScore(displayLow)}-{formatApsScore(displayHigh)}
           </span>
         </div>
         <div className="space-y-2">
-          {subIndex.components.map((component) => (
-            <div className="grid gap-1" key={component.component}>
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="truncate">{tokenLabel(component.component)}</span>
-                <span className="font-mono">{formatApsScore(component.score * 100)}</span>
+          {subIndex.components.map((component) => {
+            const componentDisplayScore = apsAxisDisplayScore(subIndex.axis, component.score)
+            return (
+              <div className="grid gap-1" key={component.component}>
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="truncate">{tokenLabel(component.component)}</span>
+                  <span className="font-mono">{formatApsScore(componentDisplayScore)}</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${scoreOffset(componentDisplayScore)}%` }}
+                  />
+                </div>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary"
-                  style={{ width: `${scoreOffset(component.score * 100)}%` }}
-                />
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </CardContent>
     </Card>
@@ -310,50 +317,63 @@ function ApsSourceDrilldowns({ contributions }: { contributions: ApsContribution
         <CardDescription>Contribution rows expose coverage state and provenance.</CardDescription>
       </CardHeader>
       <CardContent>
-        <Table aria-label="APS source drilldowns" className="min-w-[640px] table-fixed">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[22%]">Indicator</TableHead>
-              <TableHead className="w-[34%]">Source</TableHead>
-              <TableHead className="w-[15%]">Latest period</TableHead>
-              <TableHead className="w-[18%]">Status</TableHead>
-              <TableHead className="w-[11%] text-right">Value</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {contributions.map((contribution) => (
-              <TableRow key={contribution.indicator_id}>
-                <TableCell className="whitespace-normal">
-                  <div className="font-medium">{contribution.label}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {tokenLabel(contribution.component)}
-                  </div>
-                </TableCell>
-                <TableCell className="whitespace-normal">
-                  <div className="font-medium">{sourceLabel(contribution)}</div>
-                  <div className="break-all font-mono text-xs text-muted-foreground">
-                    {contribution.source_dataflow_id}
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 font-mono text-xs text-muted-foreground">
-                    <span title={contribution.series_key ?? undefined}>
-                      series {shortFingerprint(contribution.series_key)}
-                    </span>
-                    <span title={contribution.source_artifact_id ?? undefined}>
-                      artifact {shortFingerprint(contribution.source_artifact_id)}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell>{formatApsDate(contribution.latest_period)}</TableCell>
-                <TableCell>
-                  <CoverageBadge status={contribution.coverage_status} />
-                </TableCell>
-                <TableCell className="text-right font-mono">
-                  {formatApsRawValue(contribution.raw_value)}
-                </TableCell>
+        <div className="overflow-x-auto">
+          <Table aria-label="APS source drilldowns" className="min-w-[860px] table-fixed">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[20%]">Indicator</TableHead>
+                <TableHead className="w-[42%]">Source</TableHead>
+                <TableHead className="w-[14%]">Latest period</TableHead>
+                <TableHead className="w-[14%]">Status</TableHead>
+                <TableHead className="w-[10%] text-right">Value</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {contributions.map((contribution) => (
+                <TableRow key={contribution.indicator_id}>
+                  <TableCell className="whitespace-normal">
+                    <div className="font-medium">{contribution.label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {tokenLabel(contribution.component)}
+                    </div>
+                  </TableCell>
+                  <TableCell className="whitespace-normal">
+                    <div className="font-medium">{sourceLabel(contribution)}</div>
+                    <div className="break-all font-mono text-xs text-muted-foreground">
+                      {contribution.source_dataflow_id}
+                    </div>
+                    <a
+                      className="mt-1 block break-all text-xs text-primary underline-offset-2 hover:underline"
+                      href={contribution.source_url}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      {contribution.source_url}
+                    </a>
+                    <div className="mt-1 text-xs text-muted-foreground">{contribution.license}</div>
+                    <div className="text-xs text-muted-foreground">{contribution.attribution}</div>
+                    <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 font-mono text-xs text-muted-foreground">
+                      <span title={contribution.series_key ?? undefined}>
+                        series {shortFingerprint(contribution.series_key)}
+                      </span>
+                      <span title={contribution.source_artifact_id ?? undefined}>
+                        artifact {shortFingerprint(contribution.source_artifact_id)}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>{formatApsDate(contribution.latest_period)}</TableCell>
+                  <TableCell>
+                    <CoverageBadge status={contribution.coverage_status} />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="font-mono">{formatApsRawValue(contribution.raw_value)}</div>
+                    <div className="text-xs text-muted-foreground">{contribution.unit}</div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   )

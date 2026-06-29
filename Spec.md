@@ -1244,6 +1244,7 @@ Triggered on merge to `main`.
 | `0 3 * * *` | Nightly `cargo fuzz run` (30min/target) | Parser robustness |
 | `0 4 * * *` | `schemathesis` against staging (deep fuzz) | Contract robustness |
 | `0 6 * * 0` | `cargo mutants` weekly | Test quality |
+| `0 6 * * 1` | Source-location audit + tracked drift issue | Data source drift |
 | `0 7 * * 0` | Renovate dependency PRs | Hygiene |
 
 ### Release cadence + versioning

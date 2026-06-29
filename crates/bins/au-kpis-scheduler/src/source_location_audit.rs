@@ -555,15 +555,8 @@ fn evaluate_budget_year(
     if !is_success(snapshot.status) {
         return evaluate_reachable(rule, snapshot, recommendation);
     }
-    if configured_year == latest_year {
-        return ok_evaluation(
-            rule,
-            snapshot,
-            format!("Configured budget year {configured_year} is current."),
-        );
-    }
-    if snapshot.body.contains(latest_year) {
-        let latest_url = discover_latest_year_url(snapshot, latest_year);
+    if let Some(newer_year) = discover_newer_budget_year(&snapshot.body, configured_year) {
+        let latest_url = discover_latest_year_url(snapshot, &newer_year);
         return finding_evaluation(
             rule,
             Some(snapshot),
@@ -571,20 +564,41 @@ fn evaluate_budget_year(
             SourceAuditSeverity::Warning,
             latest_url,
             format!(
-                "Official index references budget year {latest_year}, while configured URL uses {configured_year}."
+                "Official index references newer budget year {newer_year}, while configured URL uses {configured_year}."
             ),
             recommendation.to_string(),
         );
     }
-
+    let latest_year_observed = snapshot.body.contains(latest_year);
+    if !latest_year_observed {
+        return finding_evaluation(
+            rule,
+            Some(snapshot),
+            SourceAuditStatus::ManualReview,
+            SourceAuditSeverity::ManualReview,
+            Some(snapshot.effective_url.clone()),
+            format!(
+                "Could not confirm latest budget year {latest_year} from reachable page; configured year is {configured_year}."
+            ),
+            recommendation.to_string(),
+        );
+    }
+    if configured_year == latest_year {
+        return ok_evaluation(
+            rule,
+            snapshot,
+            format!("Configured budget year {configured_year} is current."),
+        );
+    }
+    let latest_url = discover_latest_year_url(snapshot, latest_year);
     finding_evaluation(
         rule,
         Some(snapshot),
-        SourceAuditStatus::ManualReview,
-        SourceAuditSeverity::ManualReview,
-        Some(snapshot.effective_url.clone()),
+        SourceAuditStatus::Drift,
+        SourceAuditSeverity::Warning,
+        latest_url,
         format!(
-            "Could not confirm latest budget year {latest_year} from reachable page; configured year is {configured_year}."
+            "Official index references budget year {latest_year}, while configured URL uses {configured_year}."
         ),
         recommendation.to_string(),
     )
@@ -648,15 +662,29 @@ fn evaluate_world_bank_bready(
         );
     };
 
-    let null_australia_values = count_null_australia_values(&value);
-    if null_australia_values > 0 {
+    let Some(latest) = latest_australia_bready_values(&value) else {
         return finding_evaluation(
             rule,
             Some(snapshot),
             SourceAuditStatus::ManualReview,
             SourceAuditSeverity::ManualReview,
             Some(snapshot.effective_url.clone()),
-            format!("Observed {null_australia_values} recent null Australia B-READY values."),
+            "World Bank B-READY API response did not include Australia values.".to_string(),
+            recommendation.to_string(),
+        );
+    };
+
+    if latest.null_count > 0 {
+        return finding_evaluation(
+            rule,
+            Some(snapshot),
+            SourceAuditStatus::ManualReview,
+            SourceAuditSeverity::ManualReview,
+            Some(snapshot.effective_url.clone()),
+            format!(
+                "Observed {} null Australia B-READY values in latest period {}.",
+                latest.null_count, latest.period
+            ),
             recommendation.to_string(),
         );
     }
@@ -664,7 +692,10 @@ fn evaluate_world_bank_bready(
     ok_evaluation(
         rule,
         snapshot,
-        "World Bank B-READY API returned non-null Australia values.".to_string(),
+        format!(
+            "World Bank B-READY API returned {} non-null Australia values in latest period {}.",
+            latest.value_count, latest.period
+        ),
     )
 }
 
@@ -763,24 +794,103 @@ fn discover_latest_year_url(snapshot: &SourceUrlSnapshot, latest_year: &str) -> 
     resolve_url(&snapshot.effective_url, href).or_else(|| Some(href.to_string()))
 }
 
+fn discover_newer_budget_year(body: &str, configured_year: &str) -> Option<String> {
+    let configured_start = budget_year_start(configured_year)?;
+    let bytes = body.as_bytes();
+    let mut newest: Option<(u16, String)> = None;
+
+    for window in bytes.windows(7) {
+        if !(window[0] == b'2'
+            && window[1] == b'0'
+            && window[2].is_ascii_digit()
+            && window[3].is_ascii_digit()
+            && window[4] == b'-'
+            && window[5].is_ascii_digit()
+            && window[6].is_ascii_digit())
+        {
+            continue;
+        }
+        let Ok(candidate) = std::str::from_utf8(window) else {
+            continue;
+        };
+        let Some(candidate_start) = budget_year_start(candidate) else {
+            continue;
+        };
+        if candidate_start > configured_start
+            && newest
+                .as_ref()
+                .is_none_or(|(newest_start, _)| candidate_start > *newest_start)
+        {
+            newest = Some((candidate_start, candidate.to_string()));
+        }
+    }
+
+    newest.map(|(_, year)| year)
+}
+
+fn budget_year_start(year: &str) -> Option<u16> {
+    year.get(0..4)?.parse().ok()
+}
+
 fn resolve_url(base: &str, href: &str) -> Option<String> {
     let base = reqwest::Url::parse(base).ok()?;
     base.join(href).ok().map(|url| url.to_string())
 }
 
-fn count_null_australia_values(value: &Value) -> usize {
+#[derive(Debug, PartialEq, Eq)]
+struct LatestAustraliaBreadyValues {
+    period: String,
+    value_count: usize,
+    null_count: usize,
+}
+
+fn latest_australia_bready_values(value: &Value) -> Option<LatestAustraliaBreadyValues> {
+    let mut values = Vec::new();
+    collect_australia_bready_values(value, &mut values);
+    let latest_period = values.iter().map(|(period, _)| period).max()?.clone();
+    let latest_values = values
+        .iter()
+        .filter(|(period, _)| period == &latest_period)
+        .collect::<Vec<_>>();
+    let null_count = latest_values.iter().filter(|(_, is_null)| *is_null).count();
+
+    Some(LatestAustraliaBreadyValues {
+        period: latest_period,
+        value_count: latest_values.len(),
+        null_count,
+    })
+}
+
+fn collect_australia_bready_values(value: &Value, values: &mut Vec<(String, bool)>) {
     match value {
-        Value::Array(values) => values.iter().map(count_null_australia_values).sum(),
+        Value::Array(items) => {
+            for item in items {
+                collect_australia_bready_values(item, values);
+            }
+        }
         Value::Object(map) => {
             let is_aus = map
                 .get("countryiso3code")
                 .and_then(Value::as_str)
                 .is_some_and(|code| code == "AUS");
-            let is_null = map.get("value").is_some_and(Value::is_null);
-            usize::from(is_aus && is_null)
-                + map.values().map(count_null_australia_values).sum::<usize>()
+            if is_aus {
+                if let Some(period) = map.get("date").and_then(period_string) {
+                    values.push((period, map.get("value").is_none_or(Value::is_null)));
+                }
+            }
+            for item in map.values() {
+                collect_australia_bready_values(item, values);
+            }
         }
-        _ => 0,
+        _ => {}
+    }
+}
+
+fn period_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
     }
 }
 
