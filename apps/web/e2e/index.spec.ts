@@ -71,10 +71,20 @@ test('APS homepage renders latest scorecard data first', async ({ page }) => {
   await expect(scoreCard).toContainText('3/5')
   await expect(page.getByTestId('aps-score-spectrum')).toContainText('APS 72.4')
 
-  const subIndexes = page.getByTestId('aps-sub-indexes')
-  await expect(subIndexes).toContainText('Throughput')
-  await expect(subIndexes).toContainText('Orientation')
-  await expect(subIndexes).toContainText('Housing')
+  const throughputOrientation = page.getByTestId('aps-throughput-orientation')
+  await expect(throughputOrientation).toContainText('Throughput')
+  await expect(throughputOrientation).toContainText('Orientation')
+  await expect(page.getByTestId('aps-systems-radar')).toBeVisible()
+
+  // Constraints rank by drag (planning highest); uplift by APS gain (AI highest).
+  // Long axis labels wrap into tspans, so assert on a non-wrapping substring.
+  await expect(page.getByTestId('aps-constraints')).toContainText('Planning')
+  await expect(page.getByTestId('aps-uplift')).toContainText('AI adoption')
+
+  const donut = page.getByTestId('aps-coverage-donut')
+  await expect(donut).toContainText('5')
+  await expect(donut).toContainText('indicators')
+  await expect(donut).toContainText('Resolved')
 
   const drilldowns = page.getByTestId('aps-source-drilldowns')
   await expect(drilldowns).toContainText('Housing approvals')
@@ -112,6 +122,9 @@ test('APS homepage recovers from a transient error via Retry', async ({ page }) 
   await page.route('**/v1/scorecards/aps/latest', async (route) => {
     await route.fulfill({ json: apsSnapshot })
   })
+  await page.route('**/v1/scorecards/aps/history*', async (route) => {
+    await route.fulfill({ json: [] })
+  })
 
   await page.goto('/')
   await expect(page.getByTestId('aps-error')).toBeVisible()
@@ -121,17 +134,18 @@ test('APS homepage recovers from a transient error via Retry', async ({ page }) 
   await expect(page.getByTestId('aps-score-card')).toBeVisible()
 })
 
-test('APS config panel shows indicator weights and scoring direction', async ({ page }) => {
-  await mockApsApi(page)
+test('APS throughput-vs-orientation card renders with a historical trail', async ({ page }) => {
+  await mockApsApi(page, [
+    { ...apsSnapshot, as_of: '2026-03-01', score: 40 },
+    { ...apsSnapshot, as_of: '2026-05-01', score: 55 },
+  ])
   await page.goto('/')
 
-  const configPanel = page.getByTestId('aps-config-panel')
-  await expect(configPanel).toBeVisible()
-  await expect(configPanel).toContainText('Housing approvals')
-  await expect(configPanel).toContainText('35%')
-  await expect(configPanel).toContainText('Higher is better')
-  await expect(configPanel).toContainText('Planning approval time')
-  await expect(configPanel).toContainText('Lower is better')
+  const throughputOrientation = page.getByTestId('aps-throughput-orientation')
+  await expect(throughputOrientation).toBeVisible()
+  await expect(throughputOrientation).toContainText('Throughput')
+  // The scatter renders an SVG surface once the (non-gating) history resolves.
+  await expect(throughputOrientation.locator('.recharts-surface').first()).toBeVisible()
 })
 
 test('APS homepage mobile layout avoids horizontal overflow', async ({ page }) => {
@@ -164,6 +178,9 @@ test('APS homepage exposes loading, empty, and error states', async ({ page }) =
   })
   await page.route('**/v1/scorecards/aps/latest', async (route) => {
     await route.fulfill({ json: apsSnapshot })
+  })
+  await page.route('**/v1/scorecards/aps/history*', async (route) => {
+    await route.fulfill({ json: [] })
   })
 
   await page.goto('/')
@@ -231,12 +248,17 @@ test('APS homepage has no WCAG AA accessibility violations (light and dark)', as
   expect(dark.violations).toEqual([])
 })
 
-async function mockApsApi(page: Page) {
+async function mockApsApi(page: Page, history: unknown[] = []) {
   await page.route('**/v1/scorecards/aps/config', async (route) => {
     await route.fulfill({ json: apsConfig })
   })
   await page.route('**/v1/scorecards/aps/latest', async (route) => {
     await route.fulfill({ json: apsSnapshot })
+  })
+  // History powers the scatter trail and is a non-gating query — mock it so
+  // tests stay hermetic and never reach the upstream proxy.
+  await page.route('**/v1/scorecards/aps/history*', async (route) => {
+    await route.fulfill({ json: history })
   })
 }
 
@@ -302,9 +324,11 @@ const apsSnapshot = {
     contribution({
       indicator_id: 'housing.approvals',
       label: 'Housing approvals',
+      normalized_value: 0.8,
       raw_value: 25000,
       source_artifact_id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       source_dataflow_id: 'abs.building_approvals',
+      weight: 0.35,
     }),
     contribution({
       component: 'planning',
@@ -312,40 +336,50 @@ const apsSnapshot = {
       indicator_id: 'planning.nsw-da-processing',
       label: 'Planning approval time',
       latest_period: '2026-04-01',
+      normalized_value: 0.5,
       raw_value: 48,
       series_key: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
       source_artifact_id: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
       source_dataflow_id: 'state_planning.nsw_da_processing',
+      weight: 0.2,
     }),
     contribution({
+      axis: 'orientation',
       component: 'governance',
       coverage_status: 'manual_pending',
       indicator_id: 'oversight.reviewed-strength',
       label: 'Oversight strength',
       latest_period: null,
+      normalized_value: null,
       raw_value: null,
       series_key: null,
       source_artifact_id: null,
       source_dataflow_id: 'curated.oversight_strength',
     }),
     contribution({
+      axis: 'orientation',
       component: 'ai',
       indicator_id: 'ai.adoption',
       label: 'AI adoption',
       latest_period: '2026-01-01',
+      normalized_value: 0.4,
       raw_value: 62,
       source_dataflow_id: 'naic.ai_adoption_tracker',
+      weight: 0.2,
     }),
     contribution({
+      axis: 'orientation',
       component: 'spend',
       coverage_status: 'visible_unscored',
       indicator_id: 'spend.control-vs-enable',
       label: 'Control vs enable spend ratio',
       latest_period: null,
+      normalized_value: null,
       raw_value: null,
       series_key: null,
       source_artifact_id: null,
       source_dataflow_id: 'curated.control_enable_spend',
+      weight: 0,
     }),
   ],
   coverage_pct: 84,

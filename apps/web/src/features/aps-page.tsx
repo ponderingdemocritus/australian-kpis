@@ -20,6 +20,13 @@ export function ApsPage() {
     queryKey: ['aps', 'latest'],
     retry: 1,
   })
+  // History powers the scatter trail. It must not gate loading or error — the
+  // dashboard renders as soon as config + latest resolve and the trail fills in.
+  const historyQuery = useQuery({
+    queryFn: () => client.scorecards.aps.history(),
+    queryKey: ['aps', 'history'],
+    retry: 1,
+  })
 
   if (configQuery.isLoading || latestQuery.isLoading) {
     return <ApsLoadingState />
@@ -46,5 +53,11 @@ export function ApsPage() {
     return <ApsEmptyState />
   }
 
-  return <ApsDashboard config={configQuery.data} snapshot={latestQuery.data} />
+  return (
+    <ApsDashboard
+      config={configQuery.data}
+      history={historyQuery.data ?? []}
+      snapshot={latestQuery.data}
+    />
+  )
 }

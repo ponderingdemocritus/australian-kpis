@@ -20,13 +20,18 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  ApsContributionBars,
+  ApsCoverageDonut,
+  ApsRadarChart,
+  ApsScatterChart,
+} from '@/features/aps-charts'
+import {
+  ALL_COVERAGE_STATUSES,
   type ApsContribution,
-  type ApsIndicatorConfig,
   type ApsSubIndex,
   coverageBadgeClass,
   coverageStatusDescription,
   coverageStatusLabel,
-  directionLabel,
   formatApsDate,
   formatApsPercent,
   formatApsRawValue,
@@ -42,6 +47,13 @@ import {
   zoneLabel,
   zoneSolidClass,
 } from '@/features/aps-data'
+import {
+  deriveApsConstraints,
+  deriveApsCoverageDonut,
+  deriveApsRadar,
+  deriveApsScatter,
+  deriveApsUplift,
+} from '@/features/aps-derive'
 import { cn } from '@/lib/utils'
 import type { ScorecardConfig, ScorecardSnapshot } from '@au-kpis/sdk'
 import {
@@ -52,27 +64,22 @@ import {
   CalendarDays,
   ChevronDown,
   CircleDot,
+  Crosshair,
   ExternalLink,
   Gauge,
   Info,
   Layers3,
-  Scale,
+  PieChart,
+  Radar,
   ShieldCheck,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react'
 import { useState } from 'react'
 import type * as React from 'react'
 
 // Shared column template for both two-up rows so their right rails align.
 const SPLIT_GRID = 'lg:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.7fr)]'
-
-const ALL_COVERAGE_STATUSES: ApsContribution['coverage_status'][] = [
-  'resolved',
-  'visible_unscored',
-  'manual_pending',
-  'coverage_gap',
-  'stale',
-  'missing_expected',
-]
 
 export function ApsLoadingState() {
   return (
@@ -90,12 +97,16 @@ export function ApsLoadingState() {
         <Skeleton className="h-80" />
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <Skeleton className="h-56" />
-        <Skeleton className="h-56" />
+        <Skeleton className="h-80" />
+        <Skeleton className="h-80" />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Skeleton className="h-64" />
+        <Skeleton className="h-64" />
       </div>
       <div className={cn('grid gap-6', SPLIT_GRID)}>
-        <Skeleton className="h-72" />
-        <Skeleton className="h-72" />
+        <Skeleton className="h-80" />
+        <Skeleton className="h-80" />
       </div>
     </div>
   )
@@ -148,9 +159,11 @@ export function ApsEmptyState() {
 
 export function ApsDashboard({
   config,
+  history = [],
   snapshot,
 }: {
   config: ScorecardConfig
+  history?: ScorecardSnapshot[]
   snapshot: ScorecardSnapshot
 }) {
   const contributions = sortedContributions(snapshot.contributions)
@@ -185,17 +198,189 @@ export function ApsDashboard({
         <ApsConfidenceCard snapshot={snapshot} />
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-2" data-testid="aps-sub-indexes">
-        {snapshot.sub_indexes.map((subIndex) => (
-          <ApsSubIndexCard key={subIndex.axis} subIndex={subIndex} />
-        ))}
+      <section className="grid gap-6 lg:grid-cols-2">
+        <ApsThroughputOrientationCard history={history} snapshot={snapshot} />
+        <ApsSystemsRadarCard snapshot={snapshot} />
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-2">
+        <ApsConstraintsCard snapshot={snapshot} />
+        <ApsUpliftCard snapshot={snapshot} />
       </section>
 
       <section className={cn('grid gap-6', SPLIT_GRID)}>
         <ApsSourceDrilldowns contributions={contributions} />
-        <ApsConfigPanel indicators={config.indicators} />
+        <ApsCoverageDonutCard snapshot={snapshot} />
       </section>
     </div>
+  )
+}
+
+function ApsThroughputOrientationCard({
+  history,
+  snapshot,
+}: {
+  history: ScorecardSnapshot[]
+  snapshot: ScorecardSnapshot
+}) {
+  const scatter = deriveApsScatter(snapshot, history)
+  const throughput = snapshot.sub_indexes.find((sub) => sub.axis === 'throughput')
+  const orientation = snapshot.sub_indexes.find((sub) => sub.axis === 'orientation')
+
+  return (
+    <Card className="min-w-0" data-testid="aps-throughput-orientation">
+      <CardHeader>
+        <CardAction>
+          <Crosshair aria-hidden="true" className="text-muted-foreground" />
+        </CardAction>
+        <CardTitle className="font-display">Throughput vs orientation</CardTitle>
+        <CardDescription>
+          Delivery (T) against policy direction (O) on a 0–100 plane, with the recent path.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <AxisStat
+            label="Throughput"
+            value={throughput ? formatApsScore(throughput.score * 100) : 'n/a'}
+          />
+          <AxisStat
+            label="Orientation"
+            value={orientation ? formatApsScore((0.5 + 0.5 * orientation.score) * 100) : 'n/a'}
+          />
+        </div>
+        <ApsScatterChart current={scatter.current} data={scatter.trail} />
+      </CardContent>
+    </Card>
+  )
+}
+
+function AxisStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3">
+      <p className="text-eyebrow">{label}</p>
+      <p className="mt-1 text-stat text-3xl">
+        {value}
+        <span className="ml-1 align-baseline font-normal font-sans text-muted-foreground text-sm">
+          /100
+        </span>
+      </p>
+    </div>
+  )
+}
+
+function ApsSystemsRadarCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
+  const radar = deriveApsRadar(snapshot)
+
+  return (
+    <Card className="min-w-0" data-testid="aps-systems-radar">
+      <CardHeader>
+        <CardAction>
+          <Radar aria-hidden="true" className="text-muted-foreground" />
+        </CardAction>
+        <CardTitle className="font-display">Abundance systems</CardTitle>
+        <CardDescription>
+          Component scores across the throughput and orientation axes (0–100).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {radar.length < 3 ? (
+          <div className="space-y-4">
+            {snapshot.sub_indexes.map((subIndex) => (
+              <ApsSubIndexCard key={subIndex.axis} subIndex={subIndex} />
+            ))}
+          </div>
+        ) : (
+          <ApsRadarChart data={radar} />
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ApsConstraintsCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
+  const constraints = deriveApsConstraints(snapshot)
+
+  return (
+    <Card className="min-w-0" data-testid="aps-constraints">
+      <CardHeader>
+        <CardAction>
+          <TrendingDown aria-hidden="true" className="text-muted-foreground" />
+        </CardAction>
+        <CardTitle className="font-display">Biggest constraints on abundance</CardTitle>
+        <CardDescription>Scored indicators dragging the score furthest below best.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ApsContributionBars
+          color="var(--chart-5)"
+          data={constraints}
+          dataKey="drag"
+          label="Biggest constraints on abundance"
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+function ApsUpliftCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
+  const uplift = deriveApsUplift(snapshot)
+
+  return (
+    <Card className="min-w-0" data-testid="aps-uplift">
+      <CardHeader>
+        <CardAction>
+          <TrendingUp aria-hidden="true" className="text-muted-foreground" />
+        </CardAction>
+        <CardTitle className="font-display">What would move APS?</CardTitle>
+        <CardDescription>
+          Estimated APS-point gain from closing each indicator&apos;s gap to best.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ApsContributionBars
+          color="var(--chart-2)"
+          data={uplift}
+          dataKey="upliftScore"
+          label="What would move APS"
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+function ApsCoverageDonutCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
+  const donut = deriveApsCoverageDonut(snapshot)
+
+  return (
+    <Card className="min-w-0" data-testid="aps-coverage-donut">
+      <CardHeader>
+        <CardAction>
+          <PieChart aria-hidden="true" className="text-muted-foreground" />
+        </CardAction>
+        <CardTitle className="font-display">Coverage</CardTitle>
+        <CardDescription>
+          How many indicators are resolved versus missing, stale, or pending.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ApsCoverageDonut slices={donut.slices} total={donut.total} />
+        <ul className="space-y-2">
+          {donut.slices.map((slice) => (
+            <li className="flex items-center justify-between gap-3 text-sm" key={slice.status}>
+              <span className="flex min-w-0 items-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className="size-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: slice.colorVar }}
+                />
+                <span className="truncate text-muted-foreground">{slice.label}</span>
+              </span>
+              <span className="font-mono tabular-nums">{slice.count}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -315,14 +500,17 @@ function ApsConfidenceCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
         <CardAction>
           <ShieldCheck aria-hidden="true" className="text-muted-foreground" />
         </CardAction>
-        <CardTitle className="font-display">Confidence</CardTitle>
+        <CardTitle className="font-display">Confidence &amp; coverage</CardTitle>
         <CardDescription>Coverage-aware band from the API snapshot.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Metric
-          label="Confidence rating"
-          value={<span className="capitalize">{snapshot.confidence}</span>}
-        />
+        <div className="grid grid-cols-1 divide-y overflow-hidden rounded-lg border bg-muted/30 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <Metric
+            label="Confidence rating"
+            value={<span className="capitalize">{snapshot.confidence}</span>}
+          />
+          <Metric label="Coverage" value={formatApsPercent(snapshot.coverage_pct)} />
+        </div>
         <div className="rounded-lg border bg-muted/30 p-3">
           <div className="flex items-center justify-between gap-3 text-sm">
             <span className="text-muted-foreground">Likely range (0–100)</span>
@@ -670,41 +858,6 @@ function CoverageLegend() {
   )
 }
 
-function ApsConfigPanel({ indicators }: { indicators: ApsIndicatorConfig[] }) {
-  return (
-    <Card className="min-w-0" data-testid="aps-config-panel">
-      <CardHeader>
-        <CardAction>
-          <Scale aria-hidden="true" className="text-muted-foreground" />
-        </CardAction>
-        <CardTitle>Indicator register</CardTitle>
-        <CardDescription>Weights and scoring direction come from APS config.</CardDescription>
-      </CardHeader>
-      <CardContent className="divide-y">
-        {indicators.map((indicator) => (
-          <div
-            className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"
-            key={indicator.indicator_id}
-          >
-            <div className="min-w-0">
-              <p className="font-medium">{indicator.display_label}</p>
-              <p className="text-muted-foreground text-xs">{indicator.source_dataflow_id}</p>
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs">
-                <span>{directionLabel(indicator.direction)}</span>
-                <span aria-hidden="true">·</span>
-                <span>{indicator.confidence} confidence</span>
-                <span aria-hidden="true">·</span>
-                <span>{coverageStatusLabel(indicator.coverage_status)}</span>
-              </div>
-            </div>
-            <Badge variant="outline">{formatApsPercent(indicator.weight * 100)}</Badge>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
-
 function CoverageBadge({ status }: { status: ApsContribution['coverage_status'] }) {
   const variant =
     status === 'resolved' ? 'secondary' : status === 'visible_unscored' ? 'outline' : 'default'
@@ -729,9 +882,9 @@ function TrendValue({ trend }: { trend: ScorecardSnapshot['trend'] }) {
   const tone = trendTone(trend)
   const color =
     tone === 'positive'
-      ? 'text-emerald-700 dark:text-emerald-400'
+      ? 'text-emerald-700 dark:text-emerald-300'
       : tone === 'negative'
-        ? 'text-red-700 dark:text-red-400'
+        ? 'text-red-700 dark:text-red-300'
         : 'text-muted-foreground'
 
   return (

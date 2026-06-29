@@ -198,3 +198,39 @@ export function coverageBadgeClass(status: ApsContribution['coverage_status']): 
       return ''
   }
 }
+
+/**
+ * Canonical ordering of coverage statuses (healthy → blocking), shared by the
+ * provenance legend and the coverage donut so both read in the same order.
+ */
+export const ALL_COVERAGE_STATUSES: ApsContribution['coverage_status'][] = [
+  'resolved',
+  'visible_unscored',
+  'manual_pending',
+  'coverage_gap',
+  'stale',
+  'missing_expected',
+]
+
+/**
+ * Chart color (CSS var) per coverage status for the donut. Kept aligned with the
+ * badge color semantics in {@link coverageBadgeClass}: green = healthy, gold =
+ * needs attention, blue = pending, red = blocking, olive = neutral context.
+ */
+export function coverageChartColorVar(status: ApsContribution['coverage_status']): string {
+  switch (status) {
+    case 'resolved':
+      return 'var(--chart-2)' // gumleaf green — healthy
+    case 'visible_unscored':
+      return 'var(--chart-4)' // bush olive — neutral context
+    case 'manual_pending':
+      return 'var(--chart-1)' // coast blue — pending action
+    case 'coverage_gap':
+    case 'stale':
+      return 'var(--chart-3)' // wattle gold — needs attention
+    case 'missing_expected':
+      return 'var(--chart-5)' // clay red — blocking absence
+    default:
+      return 'var(--muted)'
+  }
+}
