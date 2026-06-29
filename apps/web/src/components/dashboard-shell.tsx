@@ -23,11 +23,15 @@ import {
   Database,
   GitCompareArrows,
   LayoutDashboard,
+  Moon,
   SquareTerminal,
+  Sun,
 } from 'lucide-react'
+import { useTheme } from 'next-themes'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type React from 'react'
+import { useEffect, useState } from 'react'
 
 const navItems = [
   { href: '/', icon: LayoutDashboard, label: 'APS' },
@@ -89,14 +93,48 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 <p className="truncate text-xs text-muted-foreground">APS scorecard dashboard</p>
               </div>
             </div>
-            <Button asChild size="sm" variant="outline">
-              <a href="https://github.com/ponderingdemocritus/australian-kpis">GitHub</a>
-            </Button>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <Button asChild size="sm" variant="outline">
+                <a href="https://github.com/ponderingdemocritus/australian-kpis">GitHub</a>
+              </Button>
+            </div>
           </div>
         </header>
         {children}
       </SidebarInset>
     </SidebarProvider>
+  )
+}
+
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Render a stable placeholder until mounted so the server/client markup matches.
+  if (!mounted) {
+    return (
+      <Button aria-hidden="true" disabled size="icon-sm" tabIndex={-1} variant="outline">
+        <Sun aria-hidden="true" />
+      </Button>
+    )
+  }
+
+  const isDark = resolvedTheme === 'dark'
+
+  return (
+    <Button
+      aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+      onClick={() => setTheme(isDark ? 'light' : 'dark')}
+      size="icon-sm"
+      variant="outline"
+    >
+      {isDark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+    </Button>
   )
 }
 

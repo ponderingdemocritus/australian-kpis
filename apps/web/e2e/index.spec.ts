@@ -71,36 +71,83 @@ test('APS homepage renders latest scorecard data first', async ({ page }) => {
   await expect(scoreCard).toContainText('3/5')
   await expect(page.getByTestId('aps-score-spectrum')).toContainText('APS 72.4')
 
-  const subIndexes = page.getByTestId('aps-sub-indexes')
-  await expect(subIndexes).toContainText('Throughput')
-  await expect(subIndexes).toContainText('Orientation')
-  await expect(subIndexes).toContainText('Housing')
-  await expect(subIndexes).toContainText('79.5')
+  const throughputOrientation = page.getByTestId('aps-throughput-orientation')
+  await expect(throughputOrientation).toContainText('Throughput')
+  await expect(throughputOrientation).toContainText('Orientation')
+  await expect(throughputOrientation).toContainText('79.5')
+  await expect(page.getByTestId('aps-systems-radar')).toBeVisible()
+
+  // Constraints rank by drag (planning highest); uplift by APS gain (AI highest).
+  // Long axis labels wrap into tspans, so assert on a non-wrapping substring.
+  await expect(page.getByTestId('aps-constraints')).toContainText('Planning')
+  await expect(page.getByTestId('aps-uplift')).toContainText('AI adoption')
+
+  const donut = page.getByTestId('aps-coverage-donut')
+  await expect(donut).toContainText('5')
+  await expect(donut).toContainText('indicators')
+  await expect(donut).toContainText('Resolved')
 
   const drilldowns = page.getByTestId('aps-source-drilldowns')
   await expect(drilldowns).toContainText('Housing approvals')
   await expect(drilldowns).toContainText('abs.building_approvals')
+  await expect(drilldowns).toContainText('Resolved')
+  await expect(drilldowns).toContainText('Manual Pending')
+  await expect(drilldowns).toContainText('Visible Unscored')
+
+  // Provenance (source link, license, unit, fingerprints) lives behind an expandable row.
+  await drilldowns.getByRole('button', { name: 'Expand Housing approvals provenance' }).click()
   await expect(drilldowns).toContainText('https://example.test/source')
   await expect(drilldowns).toContainText('CC-BY-4.0')
   await expect(drilldowns).toContainText('Source attribution')
   await expect(drilldowns).toContainText('index')
   await expect(drilldowns).toContainText('aaaaaaaa')
-  await expect(drilldowns).toContainText('Resolved')
-  await expect(drilldowns).toContainText('Manual Pending')
-  await expect(drilldowns).toContainText('Visible Unscored')
 })
 
-test('APS config panel shows indicator weights and scoring direction', async ({ page }) => {
+test('APS homepage surfaces methodology and source link', async ({ page }) => {
   await mockApsApi(page)
   await page.goto('/')
+  await expect(page.getByTestId('aps-score-card')).toBeVisible()
 
-  const configPanel = page.getByTestId('aps-config-panel')
-  await expect(configPanel).toBeVisible()
-  await expect(configPanel).toContainText('Housing approvals')
-  await expect(configPanel).toContainText('35%')
-  await expect(configPanel).toContainText('Higher is better')
-  await expect(configPanel).toContainText('Planning approval time')
-  await expect(configPanel).toContainText('Lower is better')
+  await page.getByText('Methodology & sources').click()
+  await expect(page.getByText('APS = 100 * T * (0.5 + 0.5 * O)')).toBeVisible()
+})
+
+test('APS homepage recovers from a transient error via Retry', async ({ page }) => {
+  let failConfig = true
+  await page.route('**/v1/scorecards/aps/config', async (route) => {
+    if (failConfig) {
+      await route.fulfill({ body: 'scorecard unavailable', status: 503 })
+      return
+    }
+    await route.fulfill({ json: apsConfig })
+  })
+  await page.route('**/v1/scorecards/aps/latest', async (route) => {
+    await route.fulfill({ json: apsSnapshot })
+  })
+  await page.route('**/v1/scorecards/aps/history*', async (route) => {
+    await route.fulfill({ json: [] })
+  })
+
+  await page.goto('/')
+  await expect(page.getByTestId('aps-error')).toBeVisible()
+
+  failConfig = false
+  await page.getByRole('button', { name: 'Retry' }).click()
+  await expect(page.getByTestId('aps-score-card')).toBeVisible()
+})
+
+test('APS throughput-vs-orientation card renders with a historical trail', async ({ page }) => {
+  await mockApsApi(page, [
+    { ...apsSnapshot, as_of: '2026-03-01', score: 40 },
+    { ...apsSnapshot, as_of: '2026-05-01', score: 55 },
+  ])
+  await page.goto('/')
+
+  const throughputOrientation = page.getByTestId('aps-throughput-orientation')
+  await expect(throughputOrientation).toBeVisible()
+  await expect(throughputOrientation).toContainText('Throughput')
+  // The scatter renders an SVG surface once the (non-gating) history resolves.
+  await expect(throughputOrientation.locator('.recharts-surface').first()).toBeVisible()
 })
 
 test('APS homepage mobile layout avoids horizontal overflow', async ({ page }) => {
@@ -111,6 +158,9 @@ test('APS homepage mobile layout avoids horizontal overflow', async ({ page }) =
   await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible()
   await expect(page.getByTestId('aps-score-card')).toBeVisible()
   await expect(page.getByTestId('aps-source-drilldowns')).toBeVisible()
+
+  // On phones the wide table is replaced by stacked cards (no in-card horizontal scroll).
+  await expect(page.locator('table[aria-label="APS source drilldowns"]')).toBeHidden()
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth,
@@ -130,6 +180,9 @@ test('APS homepage exposes loading, empty, and error states', async ({ page }) =
   })
   await page.route('**/v1/scorecards/aps/latest', async (route) => {
     await route.fulfill({ json: apsSnapshot })
+  })
+  await page.route('**/v1/scorecards/aps/history*', async (route) => {
+    await route.fulfill({ json: [] })
   })
 
   await page.goto('/')
@@ -179,22 +232,35 @@ test('APS navigation keeps Explorer, Compare, and Playground available as data t
   await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible()
 })
 
-test('APS homepage has no WCAG AA accessibility violations', async ({ page }) => {
+test('APS homepage has no WCAG AA accessibility violations (light and dark)', async ({ page }) => {
   await mockApsApi(page)
   await page.goto('/')
   await expect(page.getByTestId('aps-score-card')).toBeVisible()
 
-  const results = await new AxeBuilder({ page }).analyze()
+  // Expand the legend so every coverage-status badge variant is contrast-checked.
+  await page.getByText('What do these statuses mean?').click()
 
-  expect(results.violations).toEqual([])
+  const light = await new AxeBuilder({ page }).analyze()
+  expect(light.violations).toEqual([])
+
+  await page.getByRole('button', { name: 'Switch to dark theme' }).click()
+  await expect(page.locator('html')).toHaveClass(/dark/)
+
+  const dark = await new AxeBuilder({ page }).analyze()
+  expect(dark.violations).toEqual([])
 })
 
-async function mockApsApi(page: Page) {
+async function mockApsApi(page: Page, history: unknown[] = []) {
   await page.route('**/v1/scorecards/aps/config', async (route) => {
     await route.fulfill({ json: apsConfig })
   })
   await page.route('**/v1/scorecards/aps/latest', async (route) => {
     await route.fulfill({ json: apsSnapshot })
+  })
+  // History powers the scatter trail and is a non-gating query — mock it so
+  // tests stay hermetic and never reach the upstream proxy.
+  await page.route('**/v1/scorecards/aps/history*', async (route) => {
+    await route.fulfill({ json: history })
   })
 }
 
@@ -260,9 +326,11 @@ const apsSnapshot = {
     contribution({
       indicator_id: 'housing.approvals',
       label: 'Housing approvals',
+      normalized_value: 0.8,
       raw_value: 25000,
       source_artifact_id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       source_dataflow_id: 'abs.building_approvals',
+      weight: 0.35,
     }),
     contribution({
       component: 'planning',
@@ -270,40 +338,50 @@ const apsSnapshot = {
       indicator_id: 'planning.nsw-da-processing',
       label: 'Planning approval time',
       latest_period: '2026-04-01',
+      normalized_value: 0.5,
       raw_value: 48,
       series_key: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
       source_artifact_id: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
       source_dataflow_id: 'state_planning.nsw_da_processing',
+      weight: 0.2,
     }),
     contribution({
+      axis: 'orientation',
       component: 'governance',
       coverage_status: 'manual_pending',
       indicator_id: 'oversight.reviewed-strength',
       label: 'Oversight strength',
       latest_period: null,
+      normalized_value: null,
       raw_value: null,
       series_key: null,
       source_artifact_id: null,
       source_dataflow_id: 'curated.oversight_strength',
     }),
     contribution({
+      axis: 'orientation',
       component: 'ai',
       indicator_id: 'ai.adoption',
       label: 'AI adoption',
       latest_period: '2026-01-01',
+      normalized_value: 0.4,
       raw_value: 62,
       source_dataflow_id: 'naic.ai_adoption_tracker',
+      weight: 0.2,
     }),
     contribution({
+      axis: 'orientation',
       component: 'spend',
       coverage_status: 'visible_unscored',
       indicator_id: 'spend.control-vs-enable',
       label: 'Control vs enable spend ratio',
       latest_period: null,
+      normalized_value: null,
       raw_value: null,
       series_key: null,
       source_artifact_id: null,
       source_dataflow_id: 'curated.control_enable_spend',
+      weight: 0,
     }),
   ],
   coverage_pct: 84,

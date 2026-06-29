@@ -153,7 +153,7 @@ export function ComparePage() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:py-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-normal">Compare</h1>
+          <h1 className="font-display text-3xl">Compare</h1>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Overlay regional CPI series to see which areas moved together and which diverged.
           </p>
