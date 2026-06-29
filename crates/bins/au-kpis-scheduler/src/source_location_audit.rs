@@ -1,8 +1,12 @@
 //! Source-location audit rule evaluation and reporting.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
 
 use anyhow::Context;
+use au_kpis_source_register::{
+    AuditPolicy as RegisterAuditPolicy, SOURCE_REGISTER_VERSION, SourceRegisterError,
+    load_source_register,
+};
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use serde::Serialize;
@@ -10,6 +14,7 @@ use serde_json::Value;
 
 const USER_AGENT: &str = concat!("au-kpis-source-location-audit/", env!("CARGO_PKG_VERSION"));
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+static SOURCE_REGISTER_RULES: OnceLock<Vec<SourceLocationRule>> = OnceLock::new();
 
 /// One source-specific location audit rule.
 #[derive(Debug, Clone)]
@@ -22,6 +27,10 @@ pub struct SourceLocationRule {
     pub current_url: &'static str,
     /// Source-specific semantic check.
     pub check: SourceLocationCheck,
+    /// Register source status when this rule is register-derived.
+    pub source_status: Option<&'static str>,
+    /// Register audit policy kind when this rule is register-derived.
+    pub audit_policy_kind: Option<&'static str>,
 }
 
 impl SourceLocationRule {
@@ -38,7 +47,21 @@ impl SourceLocationRule {
             dataflow_id,
             current_url,
             check,
+            source_status: None,
+            audit_policy_kind: None,
         }
+    }
+
+    /// Attach source-register metadata to an audit rule.
+    #[must_use]
+    pub const fn with_register_metadata(
+        mut self,
+        source_status: &'static str,
+        audit_policy_kind: &'static str,
+    ) -> Self {
+        self.source_status = Some(source_status);
+        self.audit_policy_kind = Some(audit_policy_kind);
+        self
     }
 }
 
@@ -83,6 +106,13 @@ pub enum SourceLocationCheck {
     /// Licensed feed dataflow where the public product page is the auditable URL.
     LicensedProduct {
         /// Human recommendation when the product page is unreachable.
+        recommendation: &'static str,
+    },
+    /// Official source that is known to block or challenge automated requests.
+    BotFiltered {
+        /// HTTP statuses accepted as evidence of bot filtering.
+        expected_statuses: &'static [u16],
+        /// Human recommendation for preserving auditability.
         recommendation: &'static str,
     },
     /// World Bank B-READY API semantics for Australia availability.
@@ -135,6 +165,8 @@ pub enum SourceAuditStatus {
     Drift,
     /// At least one configured source needs human review but is not proven stale.
     ManualReview,
+    /// At least one configured source appears reachable only through challenged access.
+    BotFiltered,
     /// At least one configured rule failed due to tooling or HTTP errors.
     Error,
 }
@@ -149,6 +181,8 @@ pub enum SourceAuditSeverity {
     Warning,
     /// Human review is needed before scoring or source replacement.
     ManualReview,
+    /// Public source appears protected by bot filtering or access challenge.
+    BotFiltered,
     /// Tooling or source access failed.
     Error,
 }
@@ -181,6 +215,12 @@ pub struct SourceAuditResult {
     pub dataflow_id: String,
     /// Rule status.
     pub status: SourceAuditStatus,
+    /// Register source status when the rule is register-derived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_status: Option<String>,
+    /// Register audit policy kind when the rule is register-derived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_policy_kind: Option<String>,
     /// Current URL checked by the rule.
     pub current_url: String,
     /// Final URL observed after redirects.
@@ -196,6 +236,8 @@ pub struct SourceAuditResult {
 pub struct SourceLocationAuditReport {
     /// Report generation timestamp.
     pub generated_at: DateTime<Utc>,
+    /// Source register version used by the scheduler audit.
+    pub register_version: String,
     /// Overall report status.
     pub status: SourceAuditStatus,
     /// Number of rules checked.
@@ -221,6 +263,7 @@ impl SourceLocationAuditReport {
         let mut markdown = String::new();
         markdown.push_str("# Source Location Audit Report\n\n");
         markdown.push_str(&format!("- Generated at: `{}`\n", self.generated_at));
+        markdown.push_str(&format!("- Source register: `{}`\n", self.register_version));
         markdown.push_str(&format!("- Status: `{}`\n", self.status.as_str()));
         markdown.push_str(&format!("- Rules checked: `{}`\n", self.checked_total));
         markdown.push_str(&format!("- Findings: `{}`\n\n", self.findings_total));
@@ -277,6 +320,7 @@ impl SourceAuditStatus {
             Self::Ok => "ok",
             Self::Drift => "drift",
             Self::ManualReview => "manual_review",
+            Self::BotFiltered => "bot_filtered",
             Self::Error => "error",
         }
     }
@@ -288,15 +332,166 @@ impl SourceAuditSeverity {
             Self::Info => "info",
             Self::Warning => "warning",
             Self::ManualReview => "manual_review",
+            Self::BotFiltered => "bot_filtered",
             Self::Error => "error",
         }
     }
 }
 
-/// Built-in rule catalog for implemented and APS-scoped source dataflows.
+/// Register-backed rule catalog for implemented and APS-scoped source dataflows.
 #[must_use]
 pub fn default_source_location_rules() -> &'static [SourceLocationRule] {
-    &DEFAULT_RULES
+    SOURCE_REGISTER_RULES
+        .get_or_init(|| {
+            source_register_location_rules()
+                .unwrap_or_else(|err| panic!("load source-register-backed audit rules: {err}"))
+        })
+        .as_slice()
+}
+
+fn source_register_location_rules() -> Result<Vec<SourceLocationRule>, SourceRegisterError> {
+    let register = load_source_register()?;
+    let mut rules = Vec::new();
+
+    for dataflow in register.dataflows {
+        let source_status = source_status_name(dataflow.status);
+        if let Some(rule) = source_register_rule(
+            &dataflow.source_id,
+            &dataflow.dataflow_id,
+            &dataflow.canonical_url,
+            &dataflow.audit_policy,
+            source_status,
+        ) {
+            rules.push(rule);
+        }
+        for additional in &dataflow.additional_audit_policies {
+            if let Some(rule) = source_register_rule(
+                &dataflow.source_id,
+                &dataflow.dataflow_id,
+                &additional.url,
+                &additional.policy,
+                source_status,
+            ) {
+                rules.push(rule);
+            }
+        }
+    }
+
+    Ok(rules)
+}
+
+fn source_register_rule(
+    source_id: &str,
+    dataflow_id: &str,
+    current_url: &str,
+    policy: &RegisterAuditPolicy,
+    source_status: &'static str,
+) -> Option<SourceLocationRule> {
+    let audit_policy_kind = audit_policy_kind(policy);
+    let check = match policy {
+        RegisterAuditPolicy::ContainsAny {
+            needles,
+            recommendation,
+        } => SourceLocationCheck::ContainsAny {
+            needles: leak_str_slice(needles),
+            recommendation: leak_str(recommendation),
+        },
+        RegisterAuditPolicy::DirectoryListing {
+            required_patterns,
+            recommendation,
+        } => SourceLocationCheck::DirectoryListing {
+            required_patterns: leak_str_slice(required_patterns),
+            recommendation: leak_str(recommendation),
+        },
+        RegisterAuditPolicy::BudgetYear {
+            configured_year,
+            latest_year,
+            recommendation,
+        } => SourceLocationCheck::BudgetYear {
+            configured_year: leak_str(configured_year),
+            latest_year: leak_str(latest_year),
+            recommendation: leak_str(recommendation),
+        },
+        RegisterAuditPolicy::LicensedProduct { recommendation } => {
+            SourceLocationCheck::LicensedProduct {
+                recommendation: leak_str(recommendation),
+            }
+        }
+        RegisterAuditPolicy::WorldBankBreadyApi { recommendation } => {
+            SourceLocationCheck::WorldBankBreadyApi {
+                recommendation: leak_str(recommendation),
+            }
+        }
+        RegisterAuditPolicy::ManualPlaceholder {
+            reason,
+            recommendation,
+        } => SourceLocationCheck::ManualPlaceholder {
+            reason: leak_str(reason),
+            recommendation: leak_str(recommendation),
+        },
+        RegisterAuditPolicy::ManualRegisterOnly { .. } => return None,
+        RegisterAuditPolicy::BotFiltered {
+            expected_statuses,
+            recommendation,
+            ..
+        } => SourceLocationCheck::BotFiltered {
+            expected_statuses: leak_u16_slice(expected_statuses),
+            recommendation: leak_str(recommendation),
+        },
+    };
+
+    Some(
+        SourceLocationRule::new(
+            leak_str(source_id),
+            leak_str(dataflow_id),
+            leak_str(current_url),
+            check,
+        )
+        .with_register_metadata(source_status, audit_policy_kind),
+    )
+}
+
+fn source_status_name(status: au_kpis_source_register::SourceStatus) -> &'static str {
+    match status {
+        au_kpis_source_register::SourceStatus::Active => "active",
+        au_kpis_source_register::SourceStatus::ManualPending => "manual_pending",
+        au_kpis_source_register::SourceStatus::VisibleUnscored => "visible_unscored",
+        au_kpis_source_register::SourceStatus::CoverageGap => "coverage_gap",
+        au_kpis_source_register::SourceStatus::LicensedFeed => "licensed_feed",
+        au_kpis_source_register::SourceStatus::Placeholder => "placeholder",
+        au_kpis_source_register::SourceStatus::Retired => "retired",
+    }
+}
+
+fn audit_policy_kind(policy: &RegisterAuditPolicy) -> &'static str {
+    match policy {
+        RegisterAuditPolicy::ContainsAny { .. } => "contains_any",
+        RegisterAuditPolicy::DirectoryListing { .. } => "directory_listing",
+        RegisterAuditPolicy::BudgetYear { .. } => "budget_year",
+        RegisterAuditPolicy::LicensedProduct { .. } => "licensed_product",
+        RegisterAuditPolicy::WorldBankBreadyApi { .. } => "world_bank_bready_api",
+        RegisterAuditPolicy::ManualPlaceholder { .. } => "manual_placeholder",
+        RegisterAuditPolicy::ManualRegisterOnly { .. } => "manual_register_only",
+        RegisterAuditPolicy::BotFiltered { .. } => "bot_filtered",
+    }
+}
+
+fn leak_str(value: &str) -> &'static str {
+    Box::leak(value.to_string().into_boxed_str())
+}
+
+fn leak_str_slice(values: &[String]) -> &'static [&'static str] {
+    Box::leak(
+        values
+            .iter()
+            .map(|value| leak_str(value))
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
+}
+
+fn leak_u16_slice(values: &[u16]) -> &'static [u16] {
+    Box::leak(values.to_vec().into_boxed_slice())
 }
 
 /// Run the source-location audit against live external URLs.
@@ -344,6 +539,7 @@ pub fn evaluate_source_location_snapshots(
     let findings_total = findings.len();
     SourceLocationAuditReport {
         generated_at,
+        register_version: SOURCE_REGISTER_VERSION.to_string(),
         status,
         checked_total: rules.len(),
         findings_total,
@@ -427,6 +623,10 @@ fn evaluate_rule(
         | SourceLocationCheck::LicensedProduct { recommendation } => {
             evaluate_reachable(rule, snapshot, recommendation)
         }
+        SourceLocationCheck::BotFiltered {
+            expected_statuses,
+            recommendation,
+        } => evaluate_bot_filtered(rule, snapshot, expected_statuses, recommendation),
         SourceLocationCheck::ContainsAny {
             needles,
             recommendation,
@@ -522,6 +722,64 @@ fn evaluate_reachable(
         SourceAuditSeverity::Warning,
         Some(snapshot.effective_url.clone()),
         format!("URL returned HTTP {}.", snapshot.status),
+        recommendation.to_string(),
+    )
+}
+
+fn evaluate_bot_filtered(
+    rule: &SourceLocationRule,
+    snapshot: &SourceUrlSnapshot,
+    expected_statuses: &[u16],
+    recommendation: &str,
+) -> RuleEvaluation {
+    if is_success(snapshot.status) {
+        return ok_evaluation(
+            rule,
+            snapshot,
+            format!(
+                "URL reachable with HTTP {} despite bot-filter policy.",
+                snapshot.status
+            ),
+        );
+    }
+
+    if snapshot.status == 0 {
+        return finding_evaluation(
+            rule,
+            Some(snapshot),
+            SourceAuditStatus::Error,
+            SourceAuditSeverity::Error,
+            Some(snapshot.effective_url.clone()),
+            "URL request failed before an HTTP response was received.".to_string(),
+            recommendation.to_string(),
+        );
+    }
+
+    if expected_statuses.contains(&snapshot.status) || is_soft_access_status(snapshot.status) {
+        return finding_evaluation(
+            rule,
+            Some(snapshot),
+            SourceAuditStatus::BotFiltered,
+            SourceAuditSeverity::BotFiltered,
+            Some(snapshot.effective_url.clone()),
+            format!(
+                "URL returned HTTP {}; source appears bot-filtered or access-challenged.",
+                snapshot.status
+            ),
+            recommendation.to_string(),
+        );
+    }
+
+    finding_evaluation(
+        rule,
+        Some(snapshot),
+        SourceAuditStatus::Drift,
+        SourceAuditSeverity::Warning,
+        Some(snapshot.effective_url.clone()),
+        format!(
+            "URL returned HTTP {}, which is outside expected bot-filter statuses.",
+            snapshot.status
+        ),
         recommendation.to_string(),
     )
 }
@@ -722,6 +980,8 @@ fn ok_evaluation(
             source_id: rule.source_id.to_string(),
             dataflow_id: rule.dataflow_id.to_string(),
             status: SourceAuditStatus::Ok,
+            source_status: rule.source_status.map(str::to_string),
+            audit_policy_kind: rule.audit_policy_kind.map(str::to_string),
             current_url: rule.current_url.to_string(),
             effective_url: Some(snapshot.effective_url.clone()),
             http_status: Some(snapshot.status),
@@ -745,6 +1005,8 @@ fn finding_evaluation(
             source_id: rule.source_id.to_string(),
             dataflow_id: rule.dataflow_id.to_string(),
             status,
+            source_status: rule.source_status.map(str::to_string),
+            audit_policy_kind: rule.audit_policy_kind.map(str::to_string),
             current_url: rule.current_url.to_string(),
             effective_url: snapshot.map(|snapshot| snapshot.effective_url.clone()),
             http_status: snapshot.map(|snapshot| snapshot.status),
@@ -773,6 +1035,11 @@ fn aggregate_status(results: &[SourceAuditResult]) -> SourceAuditStatus {
         .any(|result| result.status == SourceAuditStatus::Drift)
     {
         SourceAuditStatus::Drift
+    } else if results
+        .iter()
+        .any(|result| result.status == SourceAuditStatus::BotFiltered)
+    {
+        SourceAuditStatus::BotFiltered
     } else if results
         .iter()
         .any(|result| result.status == SourceAuditStatus::ManualReview)
@@ -958,280 +1225,3 @@ fn period_string(value: &Value) -> Option<String> {
 fn markdown_escape(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
-
-const DEFAULT_RULES: [SourceLocationRule; 30] = [
-    SourceLocationRule::new(
-        "abs",
-        "abs.cpi",
-        "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
-        SourceLocationCheck::ContainsAny {
-            needles: &["CPI", "Consumer Price Index"],
-            recommendation: "Review the ABS CPI dataflow endpoint and update the ABS adapter source URL if it moved.",
-        },
-    ),
-    SourceLocationRule::new(
-        "abs",
-        "abs.building_approvals",
-        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Building Approvals", "latest-release"],
-            recommendation: "Review the ABS Building Approvals latest-release page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "abs",
-        "abs.building_activity",
-        "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Building Activity", "latest-release"],
-            recommendation: "Review the ABS Building Activity latest-release page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "abs",
-        "abs.dwelling_completion_times",
-        "https://www.abs.gov.au/articles/average-dwelling-completion-times",
-        SourceLocationCheck::ContainsAny {
-            needles: &["dwelling completion", "Average dwelling completion times"],
-            recommendation: "Review the ABS dwelling completion times article location.",
-        },
-    ),
-    SourceLocationRule::new(
-        "rba",
-        "rba.statistical_tables",
-        "https://www.rba.gov.au/statistics/tables/",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Statistical Tables", "csv"],
-            recommendation: "Review the RBA statistical tables index and table URLs.",
-        },
-    ),
-    SourceLocationRule::new(
-        "apra",
-        "apra.quarterly_statistics",
-        "https://apra.gov.au/news-and-publications/quarterly-authorised-deposit-taking-institution-statistics",
-        SourceLocationCheck::ContainsAny {
-            needles: &[
-                "Quarterly authorised deposit-taking institution statistics",
-                "xlsx",
-            ],
-            recommendation: "Review the APRA quarterly ADI statistics release page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "apra",
-        "apra.super_asset_allocation",
-        "https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Quarterly superannuation statistics", "superannuation"],
-            recommendation: "Review the APRA superannuation release semantics before scoring this dataflow.",
-        },
-    ),
-    SourceLocationRule::new(
-        "aemo",
-        "aemo.dispatch",
-        "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/",
-        SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_DISPATCHIS_", ".zip"],
-            recommendation: "Review the AEMO NEMWeb DispatchIS directory if current ZIP reports disappear.",
-        },
-    ),
-    SourceLocationRule::new(
-        "aemo",
-        "aemo.generation_mix",
-        "https://nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/",
-        SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_NEXT_DAY_ACTUAL_GEN_", ".zip"],
-            recommendation: "Review AEMO NEMWeb Next Day Actual Gen directory if current ZIP reports disappear.",
-        },
-    ),
-    SourceLocationRule::new(
-        "aemo",
-        "aemo.dispatchability_capacity",
-        "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/",
-        SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_DISPATCHIS_", ".zip"],
-            recommendation: "Review AEMO dispatchability-capacity proxy source semantics.",
-        },
-    ),
-    SourceLocationRule::new(
-        "asx",
-        "asx.market_statistics",
-        "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Historical market statistics", "market statistics"],
-            recommendation: "Review the ASX historical market statistics page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "asx",
-        "asx.market_statistics",
-        "https://www.asx.com.au/legals/terms-of-use",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Terms of Use", "ASX"],
-            recommendation: "Review the ASX Terms of Use location used for license attribution.",
-        },
-    ),
-    SourceLocationRule::new(
-        "asx",
-        "asx.announcements",
-        "https://www.asx.com.au/connectivity-and-data/information-services/company-news",
-        SourceLocationCheck::LicensedProduct {
-            recommendation: "Review the ASX company announcements product page; configured licensed feed URLs may remain empty.",
-        },
-    ),
-    SourceLocationRule::new(
-        "asx",
-        "asx.eod",
-        "https://www.asx.com.au/connectivity-and-data/information-services/reference-data",
-        SourceLocationCheck::LicensedProduct {
-            recommendation: "Review the ASX reference-data product page; configured licensed EOD feed URLs may remain empty.",
-        },
-    ),
-    SourceLocationRule::new(
-        "nhsac",
-        "nhsac.housing_accord_progress",
-        "https://nhsac.gov.au/publications",
-        SourceLocationCheck::ContainsAny {
-            needles: &["publications", "Housing Accord"],
-            recommendation: "Review the NHSAC publications page for housing accord progress inputs.",
-        },
-    ),
-    SourceLocationRule::new(
-        "pc",
-        "pc.productivity_bulletin",
-        "https://www.pc.gov.au/ongoing/productivity-insights",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Productivity", "Insights"],
-            recommendation: "Review the Productivity Commission productivity insights page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "worldbank",
-        "worldbank.bready",
-        "https://api.worldbank.org/v2/country/AUS/indicator/IC.BRE.BE.OS?format=json&source=2&per_page=100",
-        SourceLocationCheck::WorldBankBreadyApi {
-            recommendation: "Review World Bank B-READY Australia values before scoring this source.",
-        },
-    ),
-    SourceLocationRule::new(
-        "treasury",
-        "treasury.budget_papers",
-        "https://budget.gov.au/content/bp4/index.htm",
-        SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state-budgets",
-        "state_budgets.nsw_budget",
-        "https://www.nsw.gov.au/business-and-economy/nsw-budget",
-        SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the NSW budget source when a newer budget year appears.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state-budgets",
-        "state_budgets.vic_budget",
-        "https://www.budget.vic.gov.au/budget-papers",
-        SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Victorian budget papers index when a newer budget appears.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state-budgets",
-        "state_budgets.qld_budget",
-        "https://budget.qld.gov.au/budget-papers/",
-        SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Queensland budget papers index when a newer budget appears.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state-planning",
-        "state_planning.nsw_da_processing",
-        "https://www.planning.nsw.gov.au/data-and-insights",
-        SourceLocationCheck::ContainsAny {
-            needles: &["data", "insights"],
-            recommendation: "Review NSW Planning data-and-insights links for DA processing inputs.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state-planning",
-        "state_planning.vic_permit_activity",
-        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
-        SourceLocationCheck::ContainsAny {
-            needles: &["planning permit", "activity"],
-            recommendation: "Review Victoria Planning permit activity source links.",
-        },
-    ),
-    SourceLocationRule::new(
-        "ai-readiness",
-        "oxford.gari",
-        "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Government AI Readiness", "2025"],
-            recommendation: "Review the Oxford Insights Government AI Readiness Index source page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "ai-readiness",
-        "naic.ai_adoption_tracker",
-        "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker",
-        SourceLocationCheck::ContainsAny {
-            needles: &["AI adoption", "tracker"],
-            recommendation: "Review the NAIC/industry AI adoption tracker source page.",
-        },
-    ),
-    SourceLocationRule::new(
-        "ai-readiness",
-        "abs.ai_rd",
-        "https://www.abs.gov.au/media-centre/media-releases/ai-now-fastest-growing-area-business-rd",
-        SourceLocationCheck::ContainsAny {
-            needles: &["AI", "business R&D"],
-            recommendation: "Review ABS R&D and AI-related data source pages.",
-        },
-    ),
-    SourceLocationRule::new(
-        "ai-readiness",
-        "home_affairs.skillselect_talent_proxy",
-        "https://immi.homeaffairs.gov.au/visas/working-in-australia/skillselect/invitation-rounds",
-        SourceLocationCheck::ContainsAny {
-            needles: &["SkillSelect", "skilled"],
-            recommendation: "Review the Home Affairs SkillSelect invitation-rounds source link.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state_capital",
-        "state_capital.vic_major_projects",
-        "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Major Projects", "performance reporting"],
-            recommendation: "Review the state_capital adapter index for VAGO major projects source links.",
-        },
-    ),
-    SourceLocationRule::new(
-        "state_capital",
-        "state_capital.budget_capital_papers",
-        "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025",
-        SourceLocationCheck::ContainsAny {
-            needles: &["Major Projects", "performance reporting"],
-            recommendation: "Review the state_capital adapter index for Victorian budget capital publication links.",
-        },
-    ),
-    SourceLocationRule::new(
-        "compute",
-        "compute.au_datacentre_capacity_mw",
-        "https://example.test/compute-capacity",
-        SourceLocationCheck::ManualPlaceholder {
-            reason: "example.test is a placeholder source.",
-            recommendation: "Replace compute.au_datacentre_capacity_mw with reviewed aemo.data_centre_demand IASR/ESOO demand-proxy semantics.",
-        },
-    ),
-];

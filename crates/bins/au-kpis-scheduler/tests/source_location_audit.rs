@@ -411,6 +411,65 @@ fn source_location_reachable_soft_access_is_manual_review() {
 }
 
 #[test]
+fn source_location_bot_filtered_expected_status_is_not_drift() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: &[403],
+            recommendation: "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+        },
+    )
+    .with_register_metadata("active", "bot_filtered")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        403,
+        "forbidden",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::BotFiltered);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::BotFiltered
+    );
+    assert_eq!(report.results[0].source_status.as_deref(), Some("active"));
+    assert_eq!(
+        report.results[0].audit_policy_kind.as_deref(),
+        Some("bot_filtered")
+    );
+    assert!(report.findings[0].evidence.contains("access-challenged"));
+}
+
+#[test]
+fn source_location_bot_filtered_unexpected_status_is_drift() {
+    let rules = [SourceLocationRule::new(
+        "state-planning",
+        "state_planning.vic_permit_activity",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: &[403],
+            recommendation: "Review Victoria Planning permit activity source links.",
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        404,
+        "not found",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Drift);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Warning);
+    assert!(report.findings[0].evidence.contains("outside expected"));
+}
+
+#[test]
 fn source_location_request_failure_is_tool_error() {
     let rules = [SourceLocationRule::new(
         "rba",
@@ -576,7 +635,9 @@ fn source_location_report_markdown_and_json_expose_stable_fields() {
     let json = serde_json::to_value(&report).expect("serialize report");
 
     assert!(markdown.contains("# Source Location Audit Report"));
+    assert!(markdown.contains("Source register: `source-register.v1`"));
     assert!(markdown.contains("compute.au_datacentre_capacity_mw"));
+    assert_eq!(json["register_version"], "source-register.v1");
     assert_eq!(json["status"], "manual_review");
     assert_eq!(json["findings_total"], 1);
     assert!(json["findings"][0]["recommendation"].is_string());

@@ -783,6 +783,7 @@ mod tests {
         let now = Utc::now();
         let report = SourceLocationAuditReport {
             generated_at: now,
+            register_version: "source-register.v1".into(),
             status: SourceAuditStatus::ManualReview,
             checked_total: 1,
             findings_total: 1,

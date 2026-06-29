@@ -1,0 +1,16 @@
+[package]
+name = "au-kpis-source-register"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Versioned source governance register for australian-kpis."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+
+[lints]
+workspace = true

@@ -47,6 +47,35 @@ jobs:
       - name: Compile workspace
         run: cargo check --workspace --locked
 
+  source-governance:
+    name: Source Governance Contracts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run source register unit tests
+        run: cargo test -p au-kpis-source-register -- --nocapture
+
+      - name: Validate source register and scheduler contracts
+        run: cargo test -p au-kpis-scheduler --test source_register_contract -- --nocapture
+
+      - name: Run source-location audit fixture tests
+        run: cargo test -p au-kpis-scheduler --test source_location_audit -- --nocapture
+
+      - name: Run source research schema tests
+        run: python -m unittest discover tests/source_research
+
   typescript:
     name: TypeScript Typecheck and Tests
     runs-on: ubuntu-latest

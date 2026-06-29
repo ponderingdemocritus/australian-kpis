@@ -953,6 +953,8 @@ dependencies = [
  "au-kpis-db",
  "au-kpis-domain",
  "au-kpis-queue",
+ "au-kpis-scorecard",
+ "au-kpis-source-register",
  "au-kpis-telemetry",
  "au-kpis-testing",
  "axum 0.7.9",
@@ -981,6 +983,15 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "utoipa",
+]
+
+[[package]]
+name = "au-kpis-source-register"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
 ]
 
 [[package]]

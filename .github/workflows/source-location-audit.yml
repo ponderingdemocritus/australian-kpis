@@ -141,6 +141,7 @@ jobs:
               '',
               '## Summary',
               '',
+              `- Source register: \`${report.register_version}\``,
               `- Status: \`${report.status}\``,
               `- Rules checked: \`${report.checked_total}\``,
               `- Findings: \`${report.findings_total}\``,

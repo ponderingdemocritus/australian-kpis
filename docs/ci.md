@@ -90,9 +90,19 @@ database access, uploads Markdown and JSON reports, and manages one deduplicated
 `data: review source location drift` issue when configured data source
 locations drift or need manual review.
 
-Drift does not fail the workflow. The tracked GitHub issue is the operational
-todo. See `docs/source-location-audit.md` for the command, report schema, issue
-lifecycle, and rule-catalog maintenance notes.
+Drift, bot-filtered, and manual-review findings do not fail the workflow. The
+tracked GitHub issue is the operational todo. The companion
+`.github/workflows/source-research-review.yml` workflow runs at `0 7 * * 1`,
+regenerates deterministic audit artifacts, writes schema-validated
+`target/source-research/` packets for actionable findings, uploads them for 30
+days, and appends a summary to the tracked issue on `main`.
+
+Pull requests also run the `Source Governance Contracts` job in
+`.github/workflows/pr.yml`. It blocks on the source-register contract test,
+source-location fixture tests, and source-research schema tests.
+
+See `docs/source-location-audit.md` for the command, report schema, issue
+lifecycle, source-register maintenance notes, and research artifact contract.
 
 ## Weekly chaos suite
 
