@@ -359,6 +359,31 @@ fn source_location_budget_year_ignores_iso_dates_when_current_year_is_present() 
 }
 
 #[test]
+fn source_location_budget_year_ignores_forward_estimate_years_when_current_year_is_present() {
+    let rules = [SourceLocationRule::new(
+        "treasury",
+        "treasury.budget_papers",
+        "https://budget.gov.au/content/bp4/index.htm",
+        SourceLocationCheck::BudgetYear {
+            configured_year: "2026-27",
+            latest_year: "2026-27",
+            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://budget.gov.au/content/bp4/index.htm",
+        "https://budget.gov.au/content/bp4/index.htm",
+        200,
+        r#"<title>Budget 2026-27</title><p>Forward estimates include 2027-28 and 2028-29.</p>"#,
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Ok);
+    assert!(report.findings.is_empty());
+}
+
+#[test]
 fn source_location_reachable_soft_access_is_manual_review() {
     let rules = [SourceLocationRule::new(
         "rba",
@@ -608,5 +633,21 @@ fn source_location_default_rules_use_registered_source_ids() {
             rule.source_id,
             rule.dataflow_id
         );
+    }
+}
+
+#[test]
+fn source_location_state_capital_rules_use_adapter_index_url() {
+    const STATE_CAPITAL_INDEX_URL: &str =
+        "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025";
+
+    let state_capital_rules = default_source_location_rules()
+        .iter()
+        .filter(|rule| rule.source_id == "state_capital")
+        .collect::<Vec<_>>();
+
+    assert_eq!(state_capital_rules.len(), 2);
+    for rule in state_capital_rules {
+        assert_eq!(rule.current_url, STATE_CAPITAL_INDEX_URL);
     }
 }

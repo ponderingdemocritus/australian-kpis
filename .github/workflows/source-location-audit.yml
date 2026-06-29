@@ -179,3 +179,20 @@ jobs:
               })
               core.info(`Created tracked source drift issue #${created.data.number}.`)
             }
+
+      - name: Fail on source-location audit errors
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          report_path = pathlib.Path("target/source-location-audit/source-location-audit.json")
+          if not report_path.exists():
+              sys.exit(0)
+
+          report = json.loads(report_path.read_text())
+          if report.get("status") == "error":
+              sys.exit("source-location audit reported error status")
+          PY

@@ -56,7 +56,10 @@ The workflow:
    artifact.
 5. Opens, updates, or closes the tracked source drift todo issue.
 
-Drift does not fail the workflow. The GitHub issue is the operational signal.
+Drift and manual-review findings do not fail the workflow. The GitHub issue is
+the operational signal for source review. Report status `error` fails the
+workflow after artifacts are uploaded because the audit could not reliably
+verify sources.
 Manual `workflow_dispatch` runs from non-`main` refs only produce retained
 report artifacts; they do not create, update, or close the singleton tracked
 issue.

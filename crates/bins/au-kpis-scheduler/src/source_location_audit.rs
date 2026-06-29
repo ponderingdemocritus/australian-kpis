@@ -567,8 +567,9 @@ fn evaluate_budget_year(
     if !is_success(snapshot.status) {
         return evaluate_reachable(rule, snapshot, recommendation);
     }
-    if let Some(newer_year) = discover_newer_budget_year(&snapshot.body, configured_year) {
-        let latest_url = discover_latest_year_url(snapshot, &newer_year);
+    if let Some((newer_year, latest_url)) =
+        discover_newer_budget_year_link(snapshot, configured_year)
+    {
         return finding_evaluation(
             rule,
             Some(snapshot),
@@ -805,10 +806,13 @@ fn discover_latest_year_url(snapshot: &SourceUrlSnapshot, latest_year: &str) -> 
     resolve_url(&snapshot.effective_url, href).or_else(|| Some(href.to_string()))
 }
 
-fn discover_newer_budget_year(body: &str, configured_year: &str) -> Option<String> {
+fn discover_newer_budget_year_link(
+    snapshot: &SourceUrlSnapshot,
+    configured_year: &str,
+) -> Option<(String, Option<String>)> {
     let configured_start = budget_year_start(configured_year)?;
-    let bytes = body.as_bytes();
-    let mut newest: Option<(u16, String)> = None;
+    let bytes = snapshot.body.as_bytes();
+    let mut newest: Option<(u16, String, Option<String>)> = None;
 
     for (index, window) in bytes.windows(7).enumerate() {
         let Ok(candidate) = std::str::from_utf8(window) else {
@@ -820,16 +824,44 @@ fn discover_newer_budget_year(body: &str, configured_year: &str) -> Option<Strin
         if !is_budget_year_boundary(bytes, index) {
             continue;
         };
+        let Some(latest_url) =
+            discover_anchor_url_containing(&snapshot.effective_url, &snapshot.body, index)
+        else {
+            continue;
+        };
         if candidate_start > configured_start
             && newest
                 .as_ref()
-                .is_none_or(|(newest_start, _)| candidate_start > *newest_start)
+                .is_none_or(|(newest_start, _, _)| candidate_start > *newest_start)
         {
-            newest = Some((candidate_start, candidate.to_string()));
+            newest = Some((candidate_start, candidate.to_string(), latest_url));
         }
     }
 
-    newest.map(|(_, year)| year)
+    newest.map(|(_, year, latest_url)| (year, latest_url))
+}
+
+fn discover_anchor_url_containing(
+    base_url: &str,
+    body: &str,
+    index: usize,
+) -> Option<Option<String>> {
+    let prefix = body.get(..index)?;
+    let suffix = body.get(index..)?;
+    let open_anchor = prefix.rfind("<a ")?;
+    let close_before = prefix.rfind("</a>");
+    if close_before.is_some_and(|close| close > open_anchor) {
+        return None;
+    }
+    suffix.find("</a>")?;
+    let anchor_prefix = &body[open_anchor..index];
+    let href_start = anchor_prefix
+        .find("href=\"")
+        .map(|href_index| open_anchor + href_index + "href=\"".len())?;
+    let href_suffix = &body[href_start..];
+    let href_end = href_suffix.find('"')?;
+    let href = &href_suffix[..href_end];
+    Some(resolve_url(base_url, href).or_else(|| Some(href.to_string())))
 }
 
 fn budget_year_start(year: &str) -> Option<u16> {
@@ -1178,19 +1210,19 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
     SourceLocationRule::new(
         "state_capital",
         "state_capital.vic_major_projects",
-        "https://bigbuild.vic.gov.au/projects",
+        "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025",
         SourceLocationCheck::ContainsAny {
-            needles: &["projects", "Big Build"],
-            recommendation: "Review Victoria Big Build major projects source links.",
+            needles: &["Major Projects", "performance reporting"],
+            recommendation: "Review the state_capital adapter index for VAGO major projects source links.",
         },
     ),
     SourceLocationRule::new(
         "state_capital",
         "state_capital.budget_capital_papers",
-        "https://budget.gov.au/",
+        "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025",
         SourceLocationCheck::ContainsAny {
-            needles: &["Budget", "capital"],
-            recommendation: "Review federal/state budget capital papers source semantics.",
+            needles: &["Major Projects", "performance reporting"],
+            recommendation: "Review the state_capital adapter index for Victorian budget capital publication links.",
         },
     ),
     SourceLocationRule::new(
