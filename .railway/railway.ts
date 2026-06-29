@@ -118,10 +118,11 @@ export default defineRailway(() => {
   const web = service('web', {
     source: github(repo),
     build: {
-      builder: 'RAILPACK',
-      buildCommand: 'pnpm --filter @au-kpis/web build',
+      builder: 'DOCKERFILE',
+      dockerfilePath: 'infra/docker/au-kpis-web.Dockerfile',
       watchPatterns: [
         '/apps/web/**',
+        '/infra/docker/au-kpis-web.Dockerfile',
         '/package.json',
         '/packages/sdk/**',
         '/packages/sdk-generated/**',
@@ -136,7 +137,6 @@ export default defineRailway(() => {
       AU_KPIS_API_BASE_URL: 'http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}',
     },
     deploy: {
-      startCommand: 'node apps/web/.next/standalone/apps/web/server.js',
       healthcheckPath: '/',
       healthcheckTimeout: 300,
       ...restartPolicy,

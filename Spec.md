@@ -1407,7 +1407,8 @@ Redis, a private artifact bucket, `pdf-extractor`, `ingestion`, `scheduler`,
 `railway config apply`; generated public domains remain a post-apply dashboard
 step for `web` and optional external `api` access. The per-service
 `infra/railway/*.toml` files remain the manual fallback and config-as-code
-reference for individual Railway services.
+reference for individual Railway services, but must not be configured as active
+service config files for services managed by `.railway/railway.ts`.
 
 ---
 
