@@ -110,8 +110,7 @@ pub fn score_aps_snapshot(
         };
         let raw_value = observation.and_then(|value| value.raw_value);
         let normalized = normalized_value(indicator, raw_value, status)?;
-        let scored =
-            !status.is_visible_unscored() && !indicator.coverage_status.is_visible_unscored();
+        let scored = status_affects_score_model(status);
 
         if scored {
             if normalized.is_some() {
@@ -332,6 +331,13 @@ fn config_status_blocks_scoring(status: CoverageStatus) -> bool {
         CoverageStatus::CoverageGap
             | CoverageStatus::ManualPending
             | CoverageStatus::VisibleUnscored
+    )
+}
+
+fn status_affects_score_model(status: CoverageStatus) -> bool {
+    matches!(
+        status,
+        CoverageStatus::Resolved | CoverageStatus::Stale | CoverageStatus::MissingExpected
     )
 }
 

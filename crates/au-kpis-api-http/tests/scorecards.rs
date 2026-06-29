@@ -240,7 +240,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     let expected_coverage = expected_coverage_pct(contributions);
     assert!((snapshot["coverage_pct"].as_f64().unwrap() - expected_coverage).abs() < 1e-9);
     assert!(expected_coverage > 90.0);
-    assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
+    assert_eq!(snapshot["confidence_band"]["low"], 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
     assert_eq!(snapshot["confidence"], "low");
 
@@ -339,8 +339,11 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     let productive_infrastructure =
         contribution(contributions, "capital.super-productive-infrastructure");
     assert_eq!(productive_infrastructure["raw_value"], 30000.0);
-    assert_eq!(productive_infrastructure["normalized_value"], 1.0);
-    assert_eq!(productive_infrastructure["coverage_status"], "resolved");
+    assert!(productive_infrastructure["normalized_value"].is_null());
+    assert_eq!(
+        productive_infrastructure["coverage_status"],
+        "manual_pending"
+    );
     assert_eq!(productive_infrastructure["latest_period"], "2024-02-01");
     assert_eq!(
         productive_infrastructure["dimensions"]["mapping"],
@@ -417,8 +420,8 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let ai_talent = contribution(contributions, "ai.talent");
     assert_eq!(ai_talent["raw_value"], 10000.0);
-    assert_eq!(ai_talent["normalized_value"], 1.0);
-    assert_eq!(ai_talent["coverage_status"], "resolved");
+    assert!(ai_talent["normalized_value"].is_null());
+    assert_eq!(ai_talent["coverage_status"], "coverage_gap");
     assert_eq!(
         ai_talent["source_dataflow_id"],
         "home_affairs.skillselect_talent_proxy"
@@ -441,8 +444,8 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let vic_planning = contribution(contributions, "planning.vic-permit-activity");
     assert_eq!(vic_planning["raw_value"], 30.0);
-    assert_eq!(vic_planning["normalized_value"], 1.0);
-    assert_eq!(vic_planning["coverage_status"], "resolved");
+    assert!(vic_planning["normalized_value"].is_null());
+    assert_eq!(vic_planning["coverage_status"], "coverage_gap");
     assert_eq!(
         vic_planning["source_dataflow_id"],
         "state_planning.vic_permit_activity"
@@ -457,14 +460,14 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let oversight = contribution(contributions, "oversight.reviewed-strength");
     assert_eq!(oversight["raw_value"], 100.0);
-    assert_eq!(oversight["normalized_value"], 1.0);
-    assert_eq!(oversight["coverage_status"], "stale");
+    assert!(oversight["normalized_value"].is_null());
+    assert_eq!(oversight["coverage_status"], "manual_pending");
     assert_eq!(oversight["confidence"], "medium");
 
     let compute = contribution(contributions, "compute.datacentre-capacity");
     assert_eq!(compute["raw_value"], 1000.0);
-    assert_eq!(compute["normalized_value"], 1.0);
-    assert_eq!(compute["coverage_status"], "resolved");
+    assert!(compute["normalized_value"].is_null());
+    assert_eq!(compute["coverage_status"], "manual_pending");
     assert_eq!(compute["confidence"], "low");
 
     let surveillance = contribution(contributions, "surveillance.intensity");
@@ -500,7 +503,10 @@ fn expected_coverage_pct(contributions: &[Value]) -> f64 {
     let mut expected_weight = 0.0;
     let mut resolved_weight = 0.0;
     for contribution in contributions {
-        if contribution["coverage_status"] == "visible_unscored" {
+        if matches!(
+            contribution["coverage_status"].as_str(),
+            Some("coverage_gap" | "manual_pending" | "visible_unscored")
+        ) {
             continue;
         }
         let weight = contribution["weight"].as_f64().expect("weight");
