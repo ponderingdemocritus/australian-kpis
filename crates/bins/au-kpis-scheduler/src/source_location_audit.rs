@@ -1126,7 +1126,7 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
     SourceLocationRule::new(
         "state-budgets",
         "state_budgets.nsw_budget",
-        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2026-27-budget-papers",
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget",
         SourceLocationCheck::BudgetYear {
             configured_year: "2026-27",
             latest_year: "2026-27",

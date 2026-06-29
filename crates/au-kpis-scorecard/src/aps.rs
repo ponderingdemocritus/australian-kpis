@@ -101,7 +101,13 @@ pub fn score_aps_snapshot(
 
     for indicator in &config.indicators {
         let observation = by_id.get(indicator.indicator_id.as_str()).copied();
-        let status = observation.map_or(indicator.coverage_status, |value| value.coverage_status);
+        let runtime_status =
+            observation.map_or(indicator.coverage_status, |value| value.coverage_status);
+        let status = if config_status_blocks_scoring(indicator.coverage_status) {
+            indicator.coverage_status
+        } else {
+            runtime_status
+        };
         let raw_value = observation.and_then(|value| value.raw_value);
         let normalized = normalized_value(indicator, raw_value, status)?;
         let scored =
@@ -318,6 +324,15 @@ fn normalized_value(
         Axis::Throughput => unit_value,
         Axis::Orientation => unit_value.mul_add(2.0, -1.0),
     }))
+}
+
+fn config_status_blocks_scoring(status: CoverageStatus) -> bool {
+    matches!(
+        status,
+        CoverageStatus::CoverageGap
+            | CoverageStatus::ManualPending
+            | CoverageStatus::VisibleUnscored
+    )
 }
 
 fn normalize_unit_interval(
@@ -1154,6 +1169,34 @@ mod tests {
         assert_eq!(pending.raw_value, Some(90.0));
         assert_eq!(pending.normalized_value, None);
         assert_eq!(pending.notes.as_deref(), Some("awaiting review"));
+    }
+
+    #[test]
+    fn config_manual_pending_overrides_resolved_runtime_observation() {
+        let mut config = test_config();
+        config.indicators[0].coverage_status = CoverageStatus::ManualPending;
+
+        let snapshot = score_aps_snapshot(
+            &config,
+            &[
+                resolved("throughput.fast", 100.0),
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                resolved("orientation.low_confidence", 75.0),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("config manual-pending input");
+
+        let pending = snapshot
+            .contributions
+            .iter()
+            .find(|row| row.indicator_id == "throughput.fast")
+            .expect("pending contribution");
+        assert_eq!(pending.raw_value, Some(100.0));
+        assert_eq!(pending.coverage_status, CoverageStatus::ManualPending);
+        assert_eq!(pending.normalized_value, None);
     }
 
     #[test]

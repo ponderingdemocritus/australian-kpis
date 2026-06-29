@@ -651,3 +651,16 @@ fn source_location_state_capital_rules_use_adapter_index_url() {
         assert_eq!(rule.current_url, STATE_CAPITAL_INDEX_URL);
     }
 }
+
+#[test]
+fn source_location_nsw_budget_rule_uses_unversioned_landing_page() {
+    let nsw_rule = default_source_location_rules()
+        .iter()
+        .find(|rule| rule.dataflow_id == "state_budgets.nsw_budget")
+        .expect("nsw budget rule");
+
+    assert_eq!(
+        nsw_rule.current_url,
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget"
+    );
+}
