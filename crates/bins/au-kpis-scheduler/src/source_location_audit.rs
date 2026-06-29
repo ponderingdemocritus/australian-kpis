@@ -1174,9 +1174,9 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
     SourceLocationRule::new(
         "ai-readiness",
         "oxford.gari",
-        "https://oxfordinsights.com/ai-readiness/ai-readiness-index/",
+        "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/",
         SourceLocationCheck::ContainsAny {
-            needles: &["Government AI Readiness", "AI Readiness"],
+            needles: &["Government AI Readiness", "2025"],
             recommendation: "Review the Oxford Insights Government AI Readiness Index source page.",
         },
     ),
@@ -1192,9 +1192,9 @@ const DEFAULT_RULES: [SourceLocationRule; 30] = [
     SourceLocationRule::new(
         "ai-readiness",
         "abs.ai_rd",
-        "https://www.abs.gov.au/statistics/research",
+        "https://www.abs.gov.au/media-centre/media-releases/ai-now-fastest-growing-area-business-rd",
         SourceLocationCheck::ContainsAny {
-            needles: &["Research and Development", "business"],
+            needles: &["AI", "business R&D"],
             recommendation: "Review ABS R&D and AI-related data source pages.",
         },
     ),

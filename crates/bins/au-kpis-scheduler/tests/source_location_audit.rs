@@ -637,6 +637,28 @@ fn source_location_default_rules_use_registered_source_ids() {
 }
 
 #[test]
+fn source_location_ai_rules_use_published_aps_provenance_urls() {
+    let rules = default_source_location_rules();
+    let oxford = rules
+        .iter()
+        .find(|rule| rule.dataflow_id == "oxford.gari")
+        .expect("oxford.gari rule");
+    let abs_ai_rd = rules
+        .iter()
+        .find(|rule| rule.dataflow_id == "abs.ai_rd")
+        .expect("abs.ai_rd rule");
+
+    assert_eq!(
+        oxford.current_url,
+        "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/"
+    );
+    assert_eq!(
+        abs_ai_rd.current_url,
+        "https://www.abs.gov.au/media-centre/media-releases/ai-now-fastest-growing-area-business-rd"
+    );
+}
+
+#[test]
 fn source_location_state_capital_rules_use_adapter_index_url() {
     const STATE_CAPITAL_INDEX_URL: &str =
         "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025";

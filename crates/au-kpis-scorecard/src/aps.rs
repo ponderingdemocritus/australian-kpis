@@ -103,12 +103,19 @@ pub fn score_aps_snapshot(
         let observation = by_id.get(indicator.indicator_id.as_str()).copied();
         let runtime_status =
             observation.map_or(indicator.coverage_status, |value| value.coverage_status);
-        let status = if config_status_blocks_scoring(indicator.coverage_status) {
+        let config_blocks_scoring = config_status_blocks_scoring(indicator.coverage_status);
+        let status = if config_blocks_scoring {
             indicator.coverage_status
         } else {
             runtime_status
         };
-        let raw_value = observation.and_then(|value| value.raw_value);
+        let suppress_observation = config_status_suppresses_observation(indicator.coverage_status);
+        let observation_for_scoring = if suppress_observation {
+            None
+        } else {
+            observation
+        };
+        let raw_value = observation_for_scoring.and_then(|value| value.raw_value);
         let normalized = normalized_value(indicator, raw_value, status)?;
         let scored = status_affects_score_model(status);
 
@@ -135,13 +142,14 @@ pub fn score_aps_snapshot(
             );
         }
 
-        if let Some(period) = observation.and_then(|value| value.latest_period.clone()) {
+        if let Some(period) = observation_for_scoring.and_then(|value| value.latest_period.clone())
+        {
             latest_period = latest_period.max(Some(period));
         }
 
         contributions.push(contribution_row(
             indicator,
-            observation,
+            observation_for_scoring,
             status,
             raw_value,
             normalized,
@@ -334,11 +342,15 @@ fn config_status_blocks_scoring(status: CoverageStatus) -> bool {
     )
 }
 
-fn status_affects_score_model(status: CoverageStatus) -> bool {
+fn config_status_suppresses_observation(status: CoverageStatus) -> bool {
     matches!(
         status,
-        CoverageStatus::Resolved | CoverageStatus::Stale | CoverageStatus::MissingExpected
+        CoverageStatus::CoverageGap | CoverageStatus::ManualPending
     )
+}
+
+fn status_affects_score_model(status: CoverageStatus) -> bool {
+    !status.is_visible_unscored()
 }
 
 fn normalize_unit_interval(
@@ -909,6 +921,9 @@ mod tests {
 
         assert_eq!(snapshot.score, 56.25);
         assert_eq!(snapshot.score, baseline.score);
+        assert_eq!(snapshot.coverage_pct, 50.0);
+        assert!(snapshot.confidence_band.low < snapshot.score);
+        assert!(snapshot.confidence_band.high > snapshot.score);
         assert_eq!(
             snapshot
                 .contributions
@@ -926,6 +941,15 @@ mod tests {
                 .expect("coverage-gap row")
                 .normalized_value,
             None
+        );
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "context.unscored")
+                .expect("visible-unscored row")
+                .raw_value,
+            Some(100.0)
         );
     }
 
@@ -1200,9 +1224,15 @@ mod tests {
             .iter()
             .find(|row| row.indicator_id == "throughput.fast")
             .expect("pending contribution");
-        assert_eq!(pending.raw_value, Some(100.0));
+        assert_eq!(pending.raw_value, None);
+        assert_eq!(pending.series_key, None);
+        assert_eq!(pending.source_artifact_id, None);
+        assert_eq!(pending.latest_period, None);
         assert_eq!(pending.coverage_status, CoverageStatus::ManualPending);
         assert_eq!(pending.normalized_value, None);
+        assert_eq!(snapshot.coverage_pct, 75.0);
+        assert!(snapshot.confidence_band.low < snapshot.score);
+        assert!(snapshot.confidence_band.high >= snapshot.score);
     }
 
     #[test]
