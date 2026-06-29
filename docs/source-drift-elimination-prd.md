@@ -4,7 +4,8 @@ Status: Draft
 Owner: Data platform / ingestion  
 Created: 2026-06-30  
 Related docs: `Spec.md`, `docs/source-location-audit.md`,
-`docs/data-quality.md`, `.context/data-source-review-2026-06-30.md`
+`docs/agentic-source-research-prd.md`, `docs/data-quality.md`,
+`.context/data-source-review-2026-06-30.md`
 
 ## Summary
 
