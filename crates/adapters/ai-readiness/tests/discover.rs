@@ -156,6 +156,10 @@ fn manifest_declares_ai_readiness_dataflows() {
     assert_eq!(dataflows.len(), 4);
     assert_eq!(dataflows[0].id.as_str(), "oxford.gari");
     assert_eq!(dataflows[1].id.as_str(), "naic.ai_adoption_tracker");
+    assert_eq!(
+        dataflows[1].source_url,
+        "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker"
+    );
     assert_eq!(dataflows[2].id.as_str(), "abs.ai_rd");
     assert_eq!(
         dataflows[3].id.as_str(),

@@ -335,7 +335,7 @@ display_label = "Business entry readiness"
 description = "National permitting and business-entry proxy."
 unit = "index"
 confidence = "medium"
-coverage_status = "missing_expected"
+coverage_status = "manual_pending"
 cadence = "annual"
 
 [indicators.dimension_selector]
@@ -350,6 +350,10 @@ best = 100.0
 source_url = "https://www.worldbank.org/en/businessready"
 license = "World Bank terms"
 attribution = "Source: World Bank B-READY"
+retrieved_at = "2026-06-29"
+reviewed_by = "source-relevance-review"
+reviewed_at = "2026-06-29"
+notes = "Manual pending: keep unscored until Australia B-READY values are non-null and mapped to the intended measures."
 
 [[indicators]]
 indicator_id = "capital.super-productive-infrastructure"
@@ -363,7 +367,7 @@ display_label = "Super productive infrastructure"
 description = "APRA superannuation asset allocation mapped to reviewed onshore productive-infrastructure exposure."
 unit = "$ million"
 confidence = "medium"
-coverage_status = "missing_expected"
+coverage_status = "manual_pending"
 cadence = "quarterly"
 
 [indicators.dimension_selector]
@@ -379,7 +383,10 @@ best = 30000.0
 source_url = "https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics"
 license = "Creative Commons Attribution 3.0 Australia Licence"
 attribution = "Source: Australian Prudential Regulation Authority"
-notes = "Scored only from reviewed mappings that explicitly identify onshore infrastructure."
+retrieved_at = "2026-06-29"
+reviewed_by = "source-relevance-review"
+reviewed_at = "2026-06-29"
+notes = "Manual pending until reviewed mappings explicitly identify productive/onshore infrastructure exposure."
 
 [[indicators]]
 indicator_id = "ai.readiness"
@@ -433,10 +440,10 @@ worst = 0.0
 best = 100.0
 
 [indicators.provenance]
-source_url = "https://www.ai.gov.au/news-and-insights/blog/ai-adoption-insights-december-2025-february-2026"
+source_url = "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker"
 license = "National AI Centre terms"
 attribution = "Source: National AI Centre"
-notes = "Low-confidence proxy from the December 2025 to February 2026 SME AI Pulse summary."
+notes = "Low-confidence proxy from the National AI Centre AI Adoption Tracker landing page and SME AI Pulse summaries."
 
 [[indicators]]
 indicator_id = "ai.rd"
@@ -620,4 +627,4 @@ attribution = "Curated datacentre capacity register"
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"
-notes = "Low-confidence curated proxy; replace with licensed machine-readable capacity data when available."
+notes = "Low-confidence curated proxy; replacement candidate is aemo.data_centre_demand from AEMO IASR/ESOO data-centre electricity-demand forecasts."

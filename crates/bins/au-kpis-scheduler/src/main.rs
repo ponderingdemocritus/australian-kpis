@@ -24,6 +24,9 @@ use au_kpis_scheduler::data_quality::{
     PagerDutyConfig, PagerDutyOutcome, default_data_quality_rules, notify_pagerduty,
     run_data_quality_checks,
 };
+use au_kpis_scheduler::source_location_audit::{
+    default_source_location_rules, run_source_location_audit,
+};
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
 use chrono::Utc;
@@ -43,6 +46,8 @@ const APRA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const RBA_DISCOVERY_CRON: &str = "0 0 * * 1";
 const TREASURY_DISCOVERY_CRON: &str = "0 0 * * *";
 const DEFAULT_DATA_QUALITY_REPORT_PATH: &str = "target/data-quality/data-quality-report.md";
+const DEFAULT_SOURCE_LOCATION_AUDIT_REPORT_PATH: &str =
+    "target/source-location-audit/source-location-audit.md";
 const DEFAULT_PAGERDUTY_EVENTS_URL: &str = "https://events.pagerduty.com/v2/enqueue";
 
 /// Command-line arguments for `au-kpis-scheduler`.
@@ -119,6 +124,16 @@ enum Command {
             default_value = DEFAULT_PAGERDUTY_EVENTS_URL
         )]
         pagerduty_events_url: String,
+    },
+    /// Run source-location checks once and write the weekly report artifacts.
+    SourceLocationAudit {
+        /// Markdown report path for the generated source-location audit.
+        #[arg(
+            long,
+            env = "AU_KPIS_SOURCE_LOCATION_AUDIT_REPORT_PATH",
+            default_value = DEFAULT_SOURCE_LOCATION_AUDIT_REPORT_PATH
+        )]
+        report_path: PathBuf,
     },
 }
 
@@ -222,6 +237,10 @@ impl Drop for LeaderGuard {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command = resolve_command(&cli)?;
+
+    if let Command::SourceLocationAudit { report_path } = command {
+        return run_source_location_audit_command(&report_path).await;
+    }
 
     let config = Arc::new(load_ingestion(None).context("load config")?);
     let _telemetry = init_or_disabled(&config.telemetry)?;
@@ -352,6 +371,32 @@ async fn run_data_quality_command(
     Ok(())
 }
 
+async fn run_source_location_audit_command(report_path: &Path) -> anyhow::Result<()> {
+    let report = run_source_location_audit(default_source_location_rules(), Utc::now())
+        .await
+        .context("run source-location audit")?;
+    write_source_location_audit_reports(report_path, &report)
+        .await
+        .with_context(|| {
+            format!(
+                "write source-location audit report to {}",
+                report_path.display()
+            )
+        })?;
+
+    if report.has_findings() {
+        tracing::warn!(
+            findings = report.findings_total,
+            status = ?report.status,
+            "source-location audit produced findings"
+        );
+    } else {
+        tracing::info!("source-location audit passed without findings");
+    }
+
+    Ok(())
+}
+
 async fn write_data_quality_reports(
     report_path: &Path,
     report: &au_kpis_scheduler::data_quality::DataQualityReport,
@@ -370,6 +415,32 @@ async fn write_data_quality_reports(
         .with_context(|| format!("write {}", report_path.display()))?;
     let json_path = report_path.with_extension("json");
     let json = serde_json::to_vec_pretty(report).context("serialize data-quality report JSON")?;
+    tokio::fs::write(&json_path, json)
+        .await
+        .with_context(|| format!("write {}", json_path.display()))?;
+
+    Ok(())
+}
+
+async fn write_source_location_audit_reports(
+    report_path: &Path,
+    report: &au_kpis_scheduler::source_location_audit::SourceLocationAuditReport,
+) -> anyhow::Result<()> {
+    if let Some(parent) = report_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    tokio::fs::write(report_path, report.render_markdown())
+        .await
+        .with_context(|| format!("write {}", report_path.display()))?;
+    let json_path = report_path.with_extension("json");
+    let json =
+        serde_json::to_vec_pretty(report).context("serialize source-location audit report JSON")?;
     tokio::fs::write(&json_path, json)
         .await
         .with_context(|| format!("write {}", json_path.display()))?;
@@ -607,6 +678,9 @@ mod tests {
 
     use au_kpis_queue::JobKind;
     use au_kpis_scheduler::data_quality::DataQualityReport;
+    use au_kpis_scheduler::source_location_audit::{
+        SourceAuditFinding, SourceAuditSeverity, SourceAuditStatus, SourceLocationAuditReport,
+    };
     use chrono::Utc;
 
     use super::*;
@@ -699,6 +773,45 @@ mod tests {
         let json = std::fs::read_to_string(path.with_extension("json")).expect("read json report");
         assert!(markdown.contains("# Data Quality Report"));
         assert!(json.contains("\"results\""));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("json"));
+    }
+
+    #[tokio::test]
+    async fn write_source_location_audit_reports_writes_markdown_and_json() {
+        let now = Utc::now();
+        let report = SourceLocationAuditReport {
+            generated_at: now,
+            status: SourceAuditStatus::ManualReview,
+            checked_total: 1,
+            findings_total: 1,
+            results: Vec::new(),
+            findings: vec![SourceAuditFinding {
+                source_id: "compute".into(),
+                dataflow_id: "compute.au_datacentre_capacity_mw".into(),
+                severity: SourceAuditSeverity::ManualReview,
+                current_url: "https://example.test/compute-capacity".into(),
+                latest_url: None,
+                evidence: "example.test is a placeholder source.".into(),
+                recommendation: "Replace placeholder source.".into(),
+            }],
+        };
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "au-kpis-source-location-audit-{}-{}.md",
+            std::process::id(),
+            now.timestamp_nanos_opt().expect("timestamp nanos")
+        ));
+
+        write_source_location_audit_reports(&path, &report)
+            .await
+            .expect("write reports");
+
+        let markdown = std::fs::read_to_string(&path).expect("read markdown report");
+        let json = std::fs::read_to_string(path.with_extension("json")).expect("read json report");
+        assert!(markdown.contains("# Source Location Audit Report"));
+        assert!(json.contains("\"findings_total\": 1"));
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("json"));

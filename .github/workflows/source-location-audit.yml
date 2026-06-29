@@ -1,0 +1,198 @@
+name: Source Location Audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: source-location-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+  AU_KPIS_SOURCE_LOCATION_AUDIT_REPORT_PATH: target/source-location-audit/source-location-audit.md
+
+jobs:
+  source-location-audit:
+    name: Run source-location audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Run source-location audit
+        run: |
+          cargo run --locked -p au-kpis-scheduler -- source-location-audit \
+            --report-path "${AU_KPIS_SOURCE_LOCATION_AUDIT_REPORT_PATH}"
+
+      - name: Upload source-location audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-location-audit
+          path: target/source-location-audit/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Update source drift todo issue
+        if: github.ref == 'refs/heads/main'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs')
+
+            const marker = '<!-- source-location-audit:tracked -->'
+            const title = 'data: review source location drift'
+            const reportPath = 'target/source-location-audit/source-location-audit.json'
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const { owner, repo } = context.repo
+
+            const labels = [
+              {
+                name: 'type:data',
+                color: '1d76db',
+                description: 'Data source, catalog, or ingestion data follow-up',
+              },
+              {
+                name: 'area:ingestion',
+                color: '5319e7',
+                description: 'Ingestion pipeline or source adapter area',
+              },
+              {
+                name: 'source-drift',
+                color: 'fbca04',
+                description: 'Source location audit drift or manual review',
+              },
+            ]
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, ...label })
+              } catch (error) {
+                if (error.status !== 422) throw error
+              }
+            }
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'all',
+              labels: 'source-drift',
+              per_page: 100,
+            })
+            const trackedIssue = issues.find((issue) => {
+              return !issue.pull_request && issue.body && issue.body.includes(marker)
+            })
+            const openTrackedIssue = trackedIssue && trackedIssue.state === 'open'
+
+            if (report.findings_total === 0) {
+              if (openTrackedIssue) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: trackedIssue.number,
+                  body: `Source-location audit passed in ${runUrl}. Closing the tracked todo.`,
+                })
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: trackedIssue.number,
+                  state: 'closed',
+                  labels: labels.map((label) => label.name),
+                })
+              }
+              core.info('No source-location findings detected.')
+              return
+            }
+
+            const severityCounts = report.findings.reduce((counts, finding) => {
+              counts[finding.severity] = (counts[finding.severity] || 0) + 1
+              return counts
+            }, {})
+            const tableCell = (value) => String(value || 'n/a').replaceAll('|', '\\|').replaceAll('\n', ' ')
+            const summary = Object.entries(severityCounts)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([severity, count]) => `${severity}: ${count}`)
+              .join(', ')
+
+            const tableRows = report.findings.map((finding) => {
+              const latest = finding.latest_url || 'n/a'
+              return `| \`${finding.severity}\` | \`${finding.source_id}\` | \`${finding.dataflow_id}\` | ${tableCell(finding.current_url)} | ${tableCell(latest)} | ${tableCell(finding.evidence)} |`
+            })
+            const checklist = report.findings.map((finding) => {
+              return `- [ ] \`${finding.dataflow_id}\`: ${finding.recommendation}`
+            })
+            const body = [
+              marker,
+              '# Source Location Drift Todo',
+              '',
+              `Latest run: ${runUrl}`,
+              `Report artifact: \`source-location-audit\` from workflow run ${context.runId}`,
+              '',
+              '## Summary',
+              '',
+              `- Status: \`${report.status}\``,
+              `- Rules checked: \`${report.checked_total}\``,
+              `- Findings: \`${report.findings_total}\``,
+              `- Severity counts: ${summary}`,
+              '',
+              '## Findings',
+              '',
+              '| Severity | Source | Dataflow | Current URL | Latest/effective URL | Evidence |',
+              '|---:|---|---|---|---|---|',
+              ...tableRows,
+              '',
+              '## Checklist',
+              '',
+              ...checklist,
+              '',
+            ].join('\n')
+
+            if (trackedIssue) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: trackedIssue.number,
+                title,
+                body,
+                state: 'open',
+                labels: labels.map((label) => label.name),
+              })
+              core.info(`Updated tracked source drift issue #${trackedIssue.number}.`)
+            } else {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: labels.map((label) => label.name),
+              })
+              core.info(`Created tracked source drift issue #${created.data.number}.`)
+            }
+
+      - name: Fail on source-location audit errors
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          report_path = pathlib.Path("target/source-location-audit/source-location-audit.json")
+          if not report_path.exists():
+              sys.exit(0)
+
+          report = json.loads(report_path.read_text())
+          if report.get("status") == "error":
+              sys.exit("source-location audit reported error status")
+          PY

@@ -897,7 +897,7 @@ reported as expected coverage gaps until their adapter issue lands.
 | Housing approvals/activity/completion time | `abs.building_approvals`, `abs.building_activity`, `abs.dwelling_completion_times` | Scored when resolved |
 | Housing Accord progress | `nhsac.housing_accord_progress` | Scored when resolved |
 | Planning approval throughput | `state_planning.nsw_da_processing`, `state_planning.vic_permit_activity` | Scored with explicit jurisdiction coverage |
-| Permitting/public-services proxy | `worldbank.bready` | Scored when resolved |
+| Permitting/public-services proxy | `worldbank.bready` | Manual pending until Australia values are non-null and mapped to intended B-READY measures |
 | Productivity | `pc.productivity_bulletin`; optional later `abs.industry_mfp` | Scored when resolved |
 | Energy price/demand/generation/capacity | `aemo.dispatch`, `aemo.generation_mix`, `aemo.dispatchability_capacity` | Scored when resolved |
 | Infrastructure delivery | `state_capital.vic_major_projects`, `state_capital.budget_capital_papers` | Pilot/experimental unless coverage broadens |
@@ -906,7 +906,7 @@ reported as expected coverage gaps until their adapter issue lands.
 | Oversight strength | curated OAIC, ANAO, FOI, and audit-office statutory/funding inputs | Manual/low cadence |
 | Surveillance intensity | Carnegie AIGS-derived input | Low confidence/manual |
 | Compute capacity | `compute.au_datacentre_capacity_mw` | Low confidence/manual unless licensed machine-readable data exists |
-| Super productive infrastructure | `apra.super_asset_allocation` | Scored when reviewed category mapping exists |
+| Super productive infrastructure | `apra.super_asset_allocation` | Manual pending until productive/onshore infrastructure category mapping is reviewed |
 | AI readiness/adoption/talent | `oxford.gari`, `naic.ai_adoption_tracker`, `abs.ai_rd`, `home_affairs.skillselect_talent_proxy` | Scored or low-confidence according to source quality |
 
 ---
@@ -1244,6 +1244,7 @@ Triggered on merge to `main`.
 | `0 3 * * *` | Nightly `cargo fuzz run` (30min/target) | Parser robustness |
 | `0 4 * * *` | `schemathesis` against staging (deep fuzz) | Contract robustness |
 | `0 6 * * 0` | `cargo mutants` weekly | Test quality |
+| `0 6 * * 1` | Source-location audit + tracked drift issue | Data source drift |
 | `0 7 * * 0` | Renovate dependency PRs | Hygiene |
 
 ### Release cadence + versioning

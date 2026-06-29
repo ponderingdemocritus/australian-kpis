@@ -239,7 +239,7 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(contributions.len(), 21);
     let expected_coverage = expected_coverage_pct(contributions);
     assert!((snapshot["coverage_pct"].as_f64().unwrap() - expected_coverage).abs() < 1e-9);
-    assert!(expected_coverage > 90.0);
+    assert!(expected_coverage < 100.0);
     assert!(snapshot["confidence_band"]["low"].as_f64().unwrap() < 100.0);
     assert_eq!(snapshot["confidence_band"]["high"], 100.0);
     assert_eq!(snapshot["confidence"], "low");
@@ -338,10 +338,15 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let productive_infrastructure =
         contribution(contributions, "capital.super-productive-infrastructure");
-    assert_eq!(productive_infrastructure["raw_value"], 30000.0);
-    assert_eq!(productive_infrastructure["normalized_value"], 1.0);
-    assert_eq!(productive_infrastructure["coverage_status"], "resolved");
-    assert_eq!(productive_infrastructure["latest_period"], "2024-02-01");
+    assert!(productive_infrastructure["raw_value"].is_null());
+    assert!(productive_infrastructure["normalized_value"].is_null());
+    assert_eq!(
+        productive_infrastructure["coverage_status"],
+        "manual_pending"
+    );
+    assert!(productive_infrastructure["series_key"].is_null());
+    assert!(productive_infrastructure["source_artifact_id"].is_null());
+    assert!(productive_infrastructure["latest_period"].is_null());
     assert_eq!(
         productive_infrastructure["dimensions"]["mapping"],
         "productive_infrastructure_onshore"
@@ -416,9 +421,11 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert_eq!(ai_rd["dimensions"]["metric"], "ai_rd_spend_m");
 
     let ai_talent = contribution(contributions, "ai.talent");
-    assert_eq!(ai_talent["raw_value"], 10000.0);
-    assert_eq!(ai_talent["normalized_value"], 1.0);
-    assert_eq!(ai_talent["coverage_status"], "resolved");
+    assert!(ai_talent["raw_value"].is_null());
+    assert!(ai_talent["normalized_value"].is_null());
+    assert_eq!(ai_talent["coverage_status"], "coverage_gap");
+    assert!(ai_talent["series_key"].is_null());
+    assert!(ai_talent["source_artifact_id"].is_null());
     assert_eq!(
         ai_talent["source_dataflow_id"],
         "home_affairs.skillselect_talent_proxy"
@@ -440,9 +447,11 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     );
 
     let vic_planning = contribution(contributions, "planning.vic-permit-activity");
-    assert_eq!(vic_planning["raw_value"], 30.0);
-    assert_eq!(vic_planning["normalized_value"], 1.0);
-    assert_eq!(vic_planning["coverage_status"], "resolved");
+    assert!(vic_planning["raw_value"].is_null());
+    assert!(vic_planning["normalized_value"].is_null());
+    assert_eq!(vic_planning["coverage_status"], "coverage_gap");
+    assert!(vic_planning["series_key"].is_null());
+    assert!(vic_planning["source_artifact_id"].is_null());
     assert_eq!(
         vic_planning["source_dataflow_id"],
         "state_planning.vic_permit_activity"
@@ -456,15 +465,19 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert!(visible["normalized_value"].is_null());
 
     let oversight = contribution(contributions, "oversight.reviewed-strength");
-    assert_eq!(oversight["raw_value"], 100.0);
-    assert_eq!(oversight["normalized_value"], 1.0);
-    assert_eq!(oversight["coverage_status"], "stale");
+    assert!(oversight["raw_value"].is_null());
+    assert!(oversight["normalized_value"].is_null());
+    assert_eq!(oversight["coverage_status"], "manual_pending");
+    assert!(oversight["series_key"].is_null());
+    assert!(oversight["source_artifact_id"].is_null());
     assert_eq!(oversight["confidence"], "medium");
 
     let compute = contribution(contributions, "compute.datacentre-capacity");
-    assert_eq!(compute["raw_value"], 1000.0);
-    assert_eq!(compute["normalized_value"], 1.0);
-    assert_eq!(compute["coverage_status"], "resolved");
+    assert!(compute["raw_value"].is_null());
+    assert!(compute["normalized_value"].is_null());
+    assert_eq!(compute["coverage_status"], "manual_pending");
+    assert!(compute["series_key"].is_null());
+    assert!(compute["source_artifact_id"].is_null());
     assert_eq!(compute["confidence"], "low");
 
     let surveillance = contribution(contributions, "surveillance.intensity");

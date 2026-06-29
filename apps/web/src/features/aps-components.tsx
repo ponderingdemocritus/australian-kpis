@@ -29,6 +29,7 @@ import {
   ALL_COVERAGE_STATUSES,
   type ApsContribution,
   type ApsSubIndex,
+  apsAxisDisplayScore,
   coverageBadgeClass,
   coverageStatusDescription,
   coverageStatusLabel,
@@ -550,8 +551,11 @@ function ApsConfidenceCard({ snapshot }: { snapshot: ScorecardSnapshot }) {
 }
 
 function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
-  const bandLow = scoreOffset(subIndex.confidence_band.low * 100)
-  const bandHigh = scoreOffset(subIndex.confidence_band.high * 100)
+  const displayScore = apsAxisDisplayScore(subIndex.axis, subIndex.score)
+  const displayLow = apsAxisDisplayScore(subIndex.axis, subIndex.confidence_band.low)
+  const displayHigh = apsAxisDisplayScore(subIndex.axis, subIndex.confidence_band.high)
+  const bandLow = scoreOffset(displayLow)
+  const bandHigh = scoreOffset(displayHigh)
   const axisHelp =
     subIndex.axis === 'throughput'
       ? 'Throughput (T): how much the economy is producing and approving.'
@@ -569,7 +573,7 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
       <CardContent className="space-y-4">
         <div className="flex items-end justify-between gap-4">
           <span className="text-stat text-4xl">
-            {formatApsScore(subIndex.score * 100)}
+            {formatApsScore(displayScore)}
             <span className="ml-1 align-baseline font-sans font-normal text-muted-foreground text-sm">
               /100
             </span>
@@ -584,14 +588,13 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
           <div className="flex items-center justify-between text-muted-foreground text-xs">
             <span>Confidence band</span>
             <span className="font-mono">
-              {formatApsScore(subIndex.confidence_band.low * 100)}–
-              {formatApsScore(subIndex.confidence_band.high * 100)}
+              {formatApsScore(displayLow)}–{formatApsScore(displayHigh)}
             </span>
           </div>
           <div
             aria-label={`Sub-index confidence band from ${formatApsScore(
-              subIndex.confidence_band.low * 100,
-            )} to ${formatApsScore(subIndex.confidence_band.high * 100)} on a 0 to 100 scale`}
+              displayLow,
+            )} to ${formatApsScore(displayHigh)} on a 0 to 100 scale`}
             className="relative mt-1 h-1.5 rounded-full bg-muted"
             role="img"
           >
@@ -603,27 +606,30 @@ function ApsSubIndexCard({ subIndex }: { subIndex: ApsSubIndex }) {
         </div>
 
         <div className="space-y-2">
-          {subIndex.components.map((component) => (
-            <div className="grid gap-1" key={component.component}>
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="truncate">{tokenLabel(component.component)}</span>
-                <span className="font-mono">{formatApsScore(component.score * 100)}</span>
-              </div>
-              <div
-                aria-label={tokenLabel(component.component)}
-                aria-valuemax={100}
-                aria-valuemin={0}
-                aria-valuenow={Math.round(component.score * 100)}
-                className="h-2 overflow-hidden rounded-full bg-muted"
-                role="meter"
-              >
+          {subIndex.components.map((component) => {
+            const componentDisplayScore = apsAxisDisplayScore(subIndex.axis, component.score)
+            return (
+              <div className="grid gap-1" key={component.component}>
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="truncate">{tokenLabel(component.component)}</span>
+                  <span className="font-mono">{formatApsScore(componentDisplayScore)}</span>
+                </div>
                 <div
-                  className="h-full rounded-full bg-primary"
-                  style={{ width: `${scoreOffset(component.score * 100)}%` }}
-                />
+                  aria-label={tokenLabel(component.component)}
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={Math.round(componentDisplayScore)}
+                  className="h-2 overflow-hidden rounded-full bg-muted"
+                  role="meter"
+                >
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${scoreOffset(componentDisplayScore)}%` }}
+                  />
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </CardContent>
     </Card>

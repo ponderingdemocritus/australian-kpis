@@ -117,7 +117,7 @@ async fn discover_returns_hand_curated_nsw_budget_publications() {
 async fn default_nsw_discovery_uses_current_official_nsw_budget_urls() {
     let adapter = NswBudgetAdapter::default();
     let http = AdapterHttpClient::new(adapter.manifest().rate_limit);
-    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 19, 0, 0, 0).unwrap());
+    let ctx = DiscoveryCtx::new(http, Utc.with_ymd_and_hms(2026, 6, 29, 0, 0, 0).unwrap());
 
     let jobs = adapter
         .discover(&ctx)
@@ -127,19 +127,19 @@ async fn default_nsw_discovery_uses_current_official_nsw_budget_urls() {
     assert_eq!(jobs.len(), 1);
     assert_eq!(
         jobs[0].source_url,
-        "https://www.nsw.gov.au/sites/default/files/noindex/2026-03/bp1-budget-statement-nsw-budget-2025-26.pdf"
+        "https://www.nsw.gov.au/sites/default/files/noindex/2026-06/bp1-budget-statement-nsw-budget-2026-27.pdf"
     );
     assert_eq!(
         jobs[0].metadata["source_index_url"],
-        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers"
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2026-27-budget-papers"
     );
-    assert_eq!(jobs[0].metadata["artifact_date"], "2026-03-20");
-    assert_eq!(jobs[0].metadata["budget_year"], "2025-26");
+    assert_eq!(jobs[0].metadata["artifact_date"], "2026-06-23");
+    assert_eq!(jobs[0].metadata["budget_year"], "2026-27");
 
     let dataflows = adapter.dataflow_metadata();
     assert_eq!(
         dataflows[0].source_url,
-        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers"
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2026-27-budget-papers"
     );
 }
 
@@ -185,7 +185,7 @@ fn manifest_declares_nsw_rate_limit_and_dataflow_metadata() {
     assert_eq!(dataflows[0].attribution, "Source: NSW Treasury");
     assert_eq!(
         dataflows[0].source_url,
-        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers"
+        "https://www.nsw.gov.au/business-and-economy/nsw-budget/2026-27-budget-papers"
     );
 }
 

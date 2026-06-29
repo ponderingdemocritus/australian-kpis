@@ -21,6 +21,10 @@ fn current_jobs_emit_open_market_statistics_page_with_source_metadata() {
     assert_eq!(jobs[0].metadata["revision_key"], "ASX:market-statistics");
     assert_eq!(jobs[0].metadata["revision_version"], "2026-06");
     assert_eq!(jobs[0].metadata["attribution"], "Source: ASX");
+    assert_eq!(
+        jobs[0].metadata["license_url"],
+        "https://www.asx.com.au/legals/terms-of-use"
+    );
 }
 
 #[tokio::test]

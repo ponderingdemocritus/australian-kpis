@@ -74,6 +74,7 @@ test('APS homepage renders latest scorecard data first', async ({ page }) => {
   const throughputOrientation = page.getByTestId('aps-throughput-orientation')
   await expect(throughputOrientation).toContainText('Throughput')
   await expect(throughputOrientation).toContainText('Orientation')
+  await expect(throughputOrientation).toContainText('79.5')
   await expect(page.getByTestId('aps-systems-radar')).toBeVisible()
 
   // Constraints rank by drag (planning highest); uplift by APS gain (AI highest).
@@ -97,6 +98,7 @@ test('APS homepage renders latest scorecard data first', async ({ page }) => {
   await drilldowns.getByRole('button', { name: 'Expand Housing approvals provenance' }).click()
   await expect(drilldowns).toContainText('https://example.test/source')
   await expect(drilldowns).toContainText('CC-BY-4.0')
+  await expect(drilldowns).toContainText('Source attribution')
   await expect(drilldowns).toContainText('index')
   await expect(drilldowns).toContainText('aaaaaaaa')
 })

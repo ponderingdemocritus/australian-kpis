@@ -101,11 +101,23 @@ pub fn score_aps_snapshot(
 
     for indicator in &config.indicators {
         let observation = by_id.get(indicator.indicator_id.as_str()).copied();
-        let status = observation.map_or(indicator.coverage_status, |value| value.coverage_status);
-        let raw_value = observation.and_then(|value| value.raw_value);
+        let runtime_status =
+            observation.map_or(indicator.coverage_status, |value| value.coverage_status);
+        let config_blocks_scoring = config_status_blocks_scoring(indicator.coverage_status);
+        let status = if config_blocks_scoring {
+            indicator.coverage_status
+        } else {
+            runtime_status
+        };
+        let suppress_observation = config_status_suppresses_observation(indicator.coverage_status);
+        let observation_for_scoring = if suppress_observation {
+            None
+        } else {
+            observation
+        };
+        let raw_value = observation_for_scoring.and_then(|value| value.raw_value);
         let normalized = normalized_value(indicator, raw_value, status)?;
-        let scored =
-            !status.is_visible_unscored() && !indicator.coverage_status.is_visible_unscored();
+        let scored = status_affects_score_model(status);
 
         if scored {
             if normalized.is_some() {
@@ -130,13 +142,14 @@ pub fn score_aps_snapshot(
             );
         }
 
-        if let Some(period) = observation.and_then(|value| value.latest_period.clone()) {
+        if let Some(period) = observation_for_scoring.and_then(|value| value.latest_period.clone())
+        {
             latest_period = latest_period.max(Some(period));
         }
 
         contributions.push(contribution_row(
             indicator,
-            observation,
+            observation_for_scoring,
             status,
             raw_value,
             normalized,
@@ -318,6 +331,26 @@ fn normalized_value(
         Axis::Throughput => unit_value,
         Axis::Orientation => unit_value.mul_add(2.0, -1.0),
     }))
+}
+
+fn config_status_blocks_scoring(status: CoverageStatus) -> bool {
+    matches!(
+        status,
+        CoverageStatus::CoverageGap
+            | CoverageStatus::ManualPending
+            | CoverageStatus::VisibleUnscored
+    )
+}
+
+fn config_status_suppresses_observation(status: CoverageStatus) -> bool {
+    matches!(
+        status,
+        CoverageStatus::CoverageGap | CoverageStatus::ManualPending
+    )
+}
+
+fn status_affects_score_model(status: CoverageStatus) -> bool {
+    !status.is_visible_unscored()
 }
 
 fn normalize_unit_interval(
@@ -665,6 +698,10 @@ mod tests {
         assert_eq!(ai_adoption.measure_id, "adoption_rate_pct");
         assert_eq!(ai_adoption.confidence, Confidence::Low);
         assert_eq!(
+            ai_adoption.provenance.source_url,
+            "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker"
+        );
+        assert_eq!(
             ai_adoption
                 .dimension_selector
                 .get("segment")
@@ -678,6 +715,34 @@ mod tests {
         assert_eq!(
             ai_rd.dimension_selector.get("metric").map(String::as_str),
             Some("ai_rd_spend_m")
+        );
+
+        let bready = indicators["permitting.bready"];
+        assert_eq!(bready.source_dataflow_id, "worldbank.bready");
+        assert_eq!(bready.coverage_status, CoverageStatus::ManualPending);
+        assert!(
+            bready
+                .provenance
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("non-null"))
+        );
+
+        let super_infrastructure = indicators["capital.super-productive-infrastructure"];
+        assert_eq!(
+            super_infrastructure.source_dataflow_id,
+            "apra.super_asset_allocation"
+        );
+        assert_eq!(
+            super_infrastructure.coverage_status,
+            CoverageStatus::ManualPending
+        );
+        assert!(
+            super_infrastructure
+                .provenance
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("reviewed mappings"))
         );
 
         let ai_talent = indicators["ai.talent"];
@@ -753,6 +818,14 @@ mod tests {
             "compute.au_datacentre_capacity_mw"
         );
         assert_eq!(compute.confidence, Confidence::Low);
+        assert_eq!(compute.coverage_status, CoverageStatus::ManualPending);
+        assert!(
+            compute
+                .provenance
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("aemo.data_centre_demand"))
+        );
 
         let surveillance = indicators["surveillance.intensity"];
         assert_eq!(
@@ -805,6 +878,78 @@ mod tests {
                 .expect("visible row")
                 .normalized_value,
             None
+        );
+    }
+
+    #[test]
+    fn weak_and_visible_statuses_do_not_affect_point_estimates() {
+        let mut manual_pending = resolved("throughput.fast", 100.0);
+        manual_pending.coverage_status = CoverageStatus::ManualPending;
+
+        let config = test_config();
+        let snapshot = score_aps_snapshot(
+            &config,
+            &[
+                manual_pending.clone(),
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                IndicatorObservation::missing(
+                    "orientation.low_confidence",
+                    CoverageStatus::CoverageGap,
+                ),
+                resolved("context.unscored", 100.0),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("score snapshot");
+        let baseline = score_aps_snapshot(
+            &test_config(),
+            &[
+                manual_pending,
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                IndicatorObservation::missing(
+                    "orientation.low_confidence",
+                    CoverageStatus::CoverageGap,
+                ),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("baseline score snapshot");
+
+        assert_eq!(snapshot.score, 56.25);
+        assert_eq!(snapshot.score, baseline.score);
+        assert_eq!(snapshot.coverage_pct, 50.0);
+        assert!(snapshot.confidence_band.low < snapshot.score);
+        assert!(snapshot.confidence_band.high > snapshot.score);
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "throughput.fast")
+                .expect("manual-pending row")
+                .normalized_value,
+            None
+        );
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "orientation.low_confidence")
+                .expect("coverage-gap row")
+                .normalized_value,
+            None
+        );
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "context.unscored")
+                .expect("visible-unscored row")
+                .raw_value,
+            Some(100.0)
         );
     }
 
@@ -1054,6 +1199,40 @@ mod tests {
         assert_eq!(pending.raw_value, Some(90.0));
         assert_eq!(pending.normalized_value, None);
         assert_eq!(pending.notes.as_deref(), Some("awaiting review"));
+    }
+
+    #[test]
+    fn config_manual_pending_overrides_resolved_runtime_observation() {
+        let mut config = test_config();
+        config.indicators[0].coverage_status = CoverageStatus::ManualPending;
+
+        let snapshot = score_aps_snapshot(
+            &config,
+            &[
+                resolved("throughput.fast", 100.0),
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                resolved("orientation.low_confidence", 75.0),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("config manual-pending input");
+
+        let pending = snapshot
+            .contributions
+            .iter()
+            .find(|row| row.indicator_id == "throughput.fast")
+            .expect("pending contribution");
+        assert_eq!(pending.raw_value, None);
+        assert_eq!(pending.series_key, None);
+        assert_eq!(pending.source_artifact_id, None);
+        assert_eq!(pending.latest_period, None);
+        assert_eq!(pending.coverage_status, CoverageStatus::ManualPending);
+        assert_eq!(pending.normalized_value, None);
+        assert_eq!(snapshot.coverage_pct, 75.0);
+        assert!(snapshot.confidence_band.low < snapshot.score);
+        assert!(snapshot.confidence_band.high >= snapshot.score);
     }
 
     #[test]
