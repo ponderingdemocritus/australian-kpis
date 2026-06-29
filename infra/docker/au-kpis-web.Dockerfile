@@ -9,9 +9,7 @@ RUN corepack enable \
     && corepack prepare pnpm@9.12.0 --activate
 
 COPY . .
-RUN --mount=type=cache,id=au-kpis-pnpm-store,target=/pnpm/store \
-    pnpm config set store-dir /pnpm/store \
-    && pnpm install --frozen-lockfile --filter @au-kpis/web... \
+RUN pnpm install --frozen-lockfile --filter @au-kpis/web... \
     && pnpm --filter @au-kpis/web... build
 
 FROM node:22-bookworm-slim AS runtime
