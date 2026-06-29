@@ -513,6 +513,46 @@ jobs:
           exit-code: "1"
           format: table
 
+      - name: Build ingestion image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/au-kpis-ingestion.Dockerfile
+          target: runtime
+          tags: au-kpis-ingestion:pr
+          load: true
+          cache-from: type=gha,scope=au-kpis-ingestion
+          cache-to: type=gha,mode=max,scope=au-kpis-ingestion
+
+      - name: Scan ingestion image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: au-kpis-ingestion:pr
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Build scheduler image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/au-kpis-scheduler.Dockerfile
+          target: runtime
+          tags: au-kpis-scheduler:pr
+          load: true
+          cache-from: type=gha,scope=au-kpis-scheduler
+          cache-to: type=gha,mode=max,scope=au-kpis-scheduler
+
+      - name: Scan scheduler image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: au-kpis-scheduler:pr
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
   smoke:
     name: Smoke (k6)
     runs-on: ubuntu-latest

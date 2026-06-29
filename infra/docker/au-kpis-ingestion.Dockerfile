@@ -4,7 +4,10 @@ FROM rust:1.85-bookworm AS builder
 WORKDIR /app
 ENV RUSTC_WRAPPER=""
 COPY . .
-RUN cargo build --release --locked --bin au-kpis-ingestion \
+RUN --mount=type=cache,id=s/c7fe7e71-8213-43b3-858f-a031658b4526-/usr/local/cargo/registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=s/c7fe7e71-8213-43b3-858f-a031658b4526-/usr/local/cargo/git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=s/c7fe7e71-8213-43b3-858f-a031658b4526-/app/target,target=/app/target \
+    cargo build --release --locked --bin au-kpis-ingestion \
     && cp target/release/au-kpis-ingestion /tmp/au-kpis-ingestion
 
 FROM debian:bookworm-slim AS local

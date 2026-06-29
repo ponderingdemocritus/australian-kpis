@@ -86,6 +86,11 @@ auto-detection. This mixed Rust and Node monorepo has a root `rust-toolchain.tom
 and Railpack can otherwise produce a Rust-only build plan for the web service
 without installing pnpm.
 
+The code-service Dockerfiles use Railway cache mounts with literal service IDs,
+as required by Railway's Dockerfile builder. If a code service is recreated in a
+new Railway project, update the `id=s/<service-id>-...` cache mount prefixes in
+that service's Dockerfile before deploying it.
+
 ## Required variables
 
 Use Railway reference variables where possible so credentials rotate with the
