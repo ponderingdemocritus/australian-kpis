@@ -38,8 +38,8 @@ const ATTRIBUTION: &str = "Source: NSW Treasury";
 const LICENSE_NAME: &str = "Creative Commons Attribution 3.0 Australia Licence";
 const LICENSE_URL: &str = "https://creativecommons.org/licenses/by/3.0/au/";
 const DEFAULT_SOURCE_INDEX_URL: &str =
-    "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers";
-const DEFAULT_BUDGET_PDF_URL: &str = "https://www.nsw.gov.au/sites/default/files/noindex/2026-03/bp1-budget-statement-nsw-budget-2025-26.pdf";
+    "https://www.nsw.gov.au/business-and-economy/nsw-budget/2026-27-budget-papers";
+const DEFAULT_BUDGET_PDF_URL: &str = "https://www.nsw.gov.au/sites/default/files/noindex/2026-06/bp1-budget-statement-nsw-budget-2026-27.pdf";
 const PAPER: &str = "Budget Paper No. 1";
 const PAPER_SLUG: &str = "bp1-budget-statement";
 const TARGET_TITLE: &str = "Budget Statement";
@@ -133,7 +133,7 @@ const NSW_CONFIG: BudgetConfig = BudgetConfig {
     license_url: LICENSE_URL,
     source_index_url: DEFAULT_SOURCE_INDEX_URL,
     default_budget_pdf_url: DEFAULT_BUDGET_PDF_URL,
-    default_last_updated: "2026-03-20",
+    default_last_updated: "2026-06-23",
     paper: PAPER,
     paper_slug: PAPER_SLUG,
     target_title: TARGET_TITLE,

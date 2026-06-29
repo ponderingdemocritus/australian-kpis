@@ -82,6 +82,18 @@ mutants survive or time out, `tools/ci/mutation_report.py` generates a
 follow-up body and the workflow creates an `add test` issue that lists the
 surviving cargo-mutants locations and replacements.
 
+## Weekly source-location audit
+
+`.github/workflows/source-location-audit.yml` runs at `0 6 * * 1` on `main`.
+It runs `au-kpis-scheduler source-location-audit` without requiring production
+database access, uploads Markdown and JSON reports, and manages one deduplicated
+`data: review source location drift` issue when configured data source
+locations drift or need manual review.
+
+Drift does not fail the workflow. The tracked GitHub issue is the operational
+todo. See `docs/source-location-audit.md` for the command, report schema, issue
+lifecycle, and rule-catalog maintenance notes.
+
 ## Weekly chaos suite
 
 `.github/workflows/chaos-weekly.yml` runs at `0 5 * * 0` with the GitHub

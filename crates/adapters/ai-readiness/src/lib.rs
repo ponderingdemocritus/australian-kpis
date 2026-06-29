@@ -25,6 +25,8 @@ use tokio_util::{io::StreamReader, sync::CancellationToken};
 const DEFAULT_INDEX_URL: &str = "https://www.industry.gov.au/data-and-publications";
 const OXFORD_GARI_2025_URL: &str =
     "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/";
+const NAIC_ADOPTION_TRACKER_URL: &str =
+    "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker";
 const NAIC_ADOPTION_DEC_2025_FEB_2026_URL: &str =
     "https://www.ai.gov.au/news-and-insights/blog/ai-adoption-insights-december-2025-february-2026";
 const ABS_AI_RD_2023_24_URL: &str =
@@ -127,7 +129,7 @@ impl AiReadinessAdapter {
                 frequency: Frequency::Quarterly,
                 license: License::Other("National AI Centre terms".into()),
                 attribution: "Source: National AI Centre".into(),
-                source_url: NAIC_ADOPTION_DEC_2025_FEB_2026_URL.into(),
+                source_url: NAIC_ADOPTION_TRACKER_URL.into(),
             },
             Dataflow {
                 id: abs_ai_rd_dataflow_id(),

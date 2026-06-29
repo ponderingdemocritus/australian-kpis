@@ -665,6 +665,10 @@ mod tests {
         assert_eq!(ai_adoption.measure_id, "adoption_rate_pct");
         assert_eq!(ai_adoption.confidence, Confidence::Low);
         assert_eq!(
+            ai_adoption.provenance.source_url,
+            "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker"
+        );
+        assert_eq!(
             ai_adoption
                 .dimension_selector
                 .get("segment")
@@ -678,6 +682,34 @@ mod tests {
         assert_eq!(
             ai_rd.dimension_selector.get("metric").map(String::as_str),
             Some("ai_rd_spend_m")
+        );
+
+        let bready = indicators["permitting.bready"];
+        assert_eq!(bready.source_dataflow_id, "worldbank.bready");
+        assert_eq!(bready.coverage_status, CoverageStatus::ManualPending);
+        assert!(
+            bready
+                .provenance
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("non-null"))
+        );
+
+        let super_infrastructure = indicators["capital.super-productive-infrastructure"];
+        assert_eq!(
+            super_infrastructure.source_dataflow_id,
+            "apra.super_asset_allocation"
+        );
+        assert_eq!(
+            super_infrastructure.coverage_status,
+            CoverageStatus::ManualPending
+        );
+        assert!(
+            super_infrastructure
+                .provenance
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("reviewed mappings"))
         );
 
         let ai_talent = indicators["ai.talent"];
@@ -753,6 +785,14 @@ mod tests {
             "compute.au_datacentre_capacity_mw"
         );
         assert_eq!(compute.confidence, Confidence::Low);
+        assert_eq!(compute.coverage_status, CoverageStatus::ManualPending);
+        assert!(
+            compute
+                .provenance
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("aemo.data_centre_demand"))
+        );
 
         let surveillance = indicators["surveillance.intensity"];
         assert_eq!(
@@ -803,6 +843,66 @@ mod tests {
                 .iter()
                 .find(|row| row.indicator_id == "context.unscored")
                 .expect("visible row")
+                .normalized_value,
+            None
+        );
+    }
+
+    #[test]
+    fn weak_and_visible_statuses_do_not_affect_point_estimates() {
+        let mut manual_pending = resolved("throughput.fast", 100.0);
+        manual_pending.coverage_status = CoverageStatus::ManualPending;
+
+        let config = test_config();
+        let snapshot = score_aps_snapshot(
+            &config,
+            &[
+                manual_pending.clone(),
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                IndicatorObservation::missing(
+                    "orientation.low_confidence",
+                    CoverageStatus::CoverageGap,
+                ),
+                resolved("context.unscored", 100.0),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("score snapshot");
+        let baseline = score_aps_snapshot(
+            &test_config(),
+            &[
+                manual_pending,
+                resolved("throughput.wait", 25.0),
+                resolved("orientation.ready", 75.0),
+                IndicatorObservation::missing(
+                    "orientation.low_confidence",
+                    CoverageStatus::CoverageGap,
+                ),
+            ],
+            "2026-06-22",
+            None,
+        )
+        .expect("baseline score snapshot");
+
+        assert_eq!(snapshot.score, 56.25);
+        assert_eq!(snapshot.score, baseline.score);
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "throughput.fast")
+                .expect("manual-pending row")
+                .normalized_value,
+            None
+        );
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .find(|row| row.indicator_id == "orientation.low_confidence")
+                .expect("coverage-gap row")
                 .normalized_value,
             None
         );

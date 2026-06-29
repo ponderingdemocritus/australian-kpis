@@ -21,7 +21,7 @@ expression: snapshot
       "announcement_title": "BHP - Change in substantial holding",
       "announcement_url": "https://www.asx.com.au/asxpdf/20260619/pdf/027xyz.pdf",
       "license": "ASX Terms of Use",
-      "license_url": "https://www.asx.com.au/terms-of-use",
+      "license_url": "https://www.asx.com.au/legals/terms-of-use",
       "source": "ASX",
       "source_url": "https://www.asx.com.au/asx/rss/announcements.xml"
     },
@@ -45,7 +45,7 @@ expression: snapshot
       "announcement_title": "WBC - Appendix 3Y",
       "announcement_url": "https://www.asx.com.au/asxpdf/20260619/pdf/027abc.pdf",
       "license": "ASX Terms of Use",
-      "license_url": "https://www.asx.com.au/terms-of-use",
+      "license_url": "https://www.asx.com.au/legals/terms-of-use",
       "source": "ASX",
       "source_url": "https://www.asx.com.au/asx/rss/announcements.xml"
     },

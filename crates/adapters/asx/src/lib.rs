@@ -38,7 +38,7 @@ const EOD_DATAFLOW_ID: &str = "asx.eod";
 const SOURCE_NAME: &str = "ASX";
 const ATTRIBUTION: &str = "Source: ASX";
 const LICENSE_NAME: &str = "ASX Terms of Use";
-const LICENSE_URL: &str = "https://www.asx.com.au/terms-of-use";
+const LICENSE_URL: &str = "https://www.asx.com.au/legals/terms-of-use";
 
 /// ASX public market-statistics adapter.
 #[derive(Debug, Clone)]

@@ -41,6 +41,22 @@ git switch -c ponderingdemocritus/<issue-number>-<short-slug>
 
 Use lowercase kebab-case and keep the branch short.
 
+## Data Source Scope
+
+- A source or dataflow is in scope only when it is named in `Spec.md`, the
+  relevant issue pass requirements, or a versioned scorecard config such as
+  `crates/au-kpis-scorecard/config/aps.v1.toml`.
+- Do not add, infer, or silently expand source coverage from available web data,
+  payload shape, mirrored filenames, or adjacent datasets. If the scope is not
+  explicit, add or propose a `Spec.md` or config amendment before implementation.
+- Every scoped dataflow must have explicit `source_id`/`dataflow_id` contracts,
+  provenance, source URL, license, attribution, cadence, and validation rules.
+- For APS and other derived scorecards, unresolved or unavailable inputs must be
+  represented as coverage gaps, manual inputs, visible-unscored inputs, or
+  expected-missing entries according to config. Do not hide missing sources or
+  let them affect scored outputs unless the config marks them as scored and
+  reviewed.
+
 ## Local Setup
 
 ```bash
