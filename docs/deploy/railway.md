@@ -12,10 +12,15 @@ Use Railway Infrastructure as Code for new projects:
 pnpm install
 railway login
 railway --version  # must be 5.2.0 or newer for IaC commands
-railway init
+railway init        # only when creating a new Railway project
+# or: railway link  # when attaching this checkout to an existing project
 pnpm railway:plan
 pnpm railway:apply
 ```
+
+Do not run `railway config init` in this repo unless you intend to replace the
+checked-in Railway definition. Railway's IaC convention is the existing
+`/.railway/railway.ts` file.
 
 The Railway TypeScript SDK in this repo requires Node.js 22 or newer for IaC
 authoring. The wider application still supports the Node.js version used by CI.
@@ -34,9 +39,29 @@ private networking, so only `web` needs a public domain for the dashboard.
 Use `railway config plan` before applying changes to an existing project. The
 IaC API is still beta, and destructive changes require explicit confirmation.
 
+## Config layout
+
+Railway has two separate code-based configuration systems:
+
+- Infrastructure as Code is project/environment scoped and lives in
+  `/.railway/railway.ts`.
+- Config as Code is per-service deploy config and uses `railway.toml` or
+  `railway.json`.
+
+Do not manage the same Railway service with both systems. Railway's IaC planner
+blocks services that are still managed by `railway.toml` or `railway.json`.
+For IaC-managed projects, keep `/.railway/railway.ts` as the active source of
+truth and clear any service-level custom config file paths in the Railway
+dashboard.
+
+The `infra/railway/*.toml` files are manual fallback references only. If an
+operator opts out of project-level IaC for a service, set that service's custom
+config file path explicitly to the absolute repository path listed below. The
+config file setting does not follow Railway's Root Directory setting.
+
 ## Services
 
-| Service | Railway config file | Public domain | Health check |
+| Service | Manual config-as-code file | Public domain | Health check |
 | --- | --- | --- | --- |
 | Web dashboard | `/infra/railway/web.toml` | Yes | `/` |
 | API | `/infra/railway/api.toml` | Yes | `/v1/health` |
@@ -51,10 +76,15 @@ The `infra/railway/*.toml` files remain useful as per-service config-as-code and
 as a manual fallback. For a new project, prefer `/.railway/railway.ts` so the
 whole project graph is created consistently.
 
-For each code service, create a Railway service from this GitHub repository and
-set the service's config file path to the file listed above. The code services
-use the repository root as the build root because the Rust workspace, pnpm
-workspace, and shared packages live at the root.
+For manual Config-as-Code deployment, create each code service from this GitHub
+repository and set the service's custom config file path to the file listed
+above. Use the repository root as the build root because the Rust workspace,
+pnpm workspace, and shared packages live at the root.
+
+The web dashboard uses `infra/docker/au-kpis-web.Dockerfile` instead of Railpack
+auto-detection. This mixed Rust and Node monorepo has a root `rust-toolchain.toml`,
+and Railpack can otherwise produce a Rust-only build plan for the web service
+without installing pnpm.
 
 ## Required variables
 

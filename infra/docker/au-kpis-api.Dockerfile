@@ -4,9 +4,9 @@ FROM rust:1.85-bookworm AS builder
 WORKDIR /app
 ENV RUSTC_WRAPPER=""
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,id=au-kpis-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=au-kpis-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=au-kpis-api-target,target=/app/target \
     cargo build --release --locked --bin au-kpis-api \
     && cp target/release/au-kpis-api /tmp/au-kpis-api
 

@@ -1,8 +1,9 @@
 [build]
-builder = "RAILPACK"
-buildCommand = "pnpm --filter @au-kpis/web build"
+builder = "DOCKERFILE"
+dockerfilePath = "infra/docker/au-kpis-web.Dockerfile"
 watchPatterns = [
   "/apps/web/**",
+  "/infra/docker/au-kpis-web.Dockerfile",
   "/infra/railway/web.toml",
   "/package.json",
   "/packages/sdk/**",
@@ -14,7 +15,6 @@ watchPatterns = [
 ]
 
 [deploy]
-startCommand = "node apps/web/.next/standalone/apps/web/server.js"
 healthcheckPath = "/"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
