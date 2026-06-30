@@ -8,11 +8,16 @@ ENV CI=true \
 RUN corepack enable \
     && corepack prepare pnpm@9.12.0 --activate
 
+COPY .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY .railway/package.json .railway/package.json
+COPY apps/docs/package.json apps/docs/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/sdk/package.json packages/sdk/package.json
+COPY packages/sdk-generated/package.json packages/sdk-generated/package.json
+RUN pnpm install --frozen-lockfile --filter @au-kpis/web...
+
 COPY . .
-RUN --mount=type=cache,id=s/ccc4d8b7-33e4-4640-95c1-d7e749c9312d-/pnpm/store,target=/pnpm/store \
-    pnpm config set store-dir /pnpm/store \
-    && pnpm install --frozen-lockfile --filter @au-kpis/web... \
-    && pnpm --filter @au-kpis/web... build
+RUN pnpm --filter @au-kpis/web... build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app

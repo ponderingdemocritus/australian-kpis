@@ -553,6 +553,26 @@ jobs:
           exit-code: "1"
           format: table
 
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/au-kpis-web.Dockerfile
+          target: runtime
+          tags: au-kpis-web:pr
+          load: true
+          cache-from: type=gha,scope=au-kpis-web
+          cache-to: type=gha,mode=max,scope=au-kpis-web
+
+      - name: Scan web image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: au-kpis-web:pr
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
   smoke:
     name: Smoke (k6)
     runs-on: ubuntu-latest

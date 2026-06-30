@@ -1,13 +1,20 @@
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.85-bookworm AS chef
 WORKDIR /app
-ENV RUSTC_WRAPPER=""
+RUN cargo install cargo-chef --locked --version 0.1.77
+
+FROM chef AS planner
 COPY . .
-RUN --mount=type=cache,id=s/f8e332a7-8bf5-465e-9da7-ab4bb4513916-/usr/local/cargo/registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=s/f8e332a7-8bf5-465e-9da7-ab4bb4513916-/usr/local/cargo/git,target=/usr/local/cargo/git \
-    --mount=type=cache,id=s/f8e332a7-8bf5-465e-9da7-ab4bb4513916-/app/target,target=/app/target \
-    cargo build --release --locked --bin au-kpis-api \
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+ENV RUSTC_WRAPPER=""
+COPY rust-toolchain.toml rust-toolchain.toml
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --locked --bin au-kpis-api --recipe-path recipe.json
+COPY . .
+RUN cargo build --release --locked --bin au-kpis-api \
     && cp target/release/au-kpis-api /tmp/au-kpis-api
 
 FROM debian:bookworm-slim AS local
