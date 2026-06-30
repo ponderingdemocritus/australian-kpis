@@ -26,7 +26,8 @@ ENV HOSTNAME=0.0.0.0 \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000
 
-RUN useradd --uid 10001 --user-group --create-home --home-dir /app --shell /usr/sbin/nologin au-kpis
+RUN useradd --uid 10001 --user-group --create-home --home-dir /app --shell /usr/sbin/nologin au-kpis \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 COPY --from=builder --chown=au-kpis:au-kpis /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=au-kpis:au-kpis /app/apps/web/.next/static ./apps/web/.next/static
