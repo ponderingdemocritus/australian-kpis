@@ -176,6 +176,87 @@ recommendation = "Review the market statistics page."
                 ["asx.market_statistics", "asx.market_statistics__2"],
             )
 
+    def test_generate_includes_additional_audit_policy_domains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            report = root / "source-location-audit.json"
+            register = root / "source-register.v1.toml"
+            out = root / "research"
+
+            api_url = "https://api.worldbank.org/v2/country/AUS/indicator/IC.BRE.BE.OS"
+            report.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "source_id": "worldbank",
+                                "dataflow_id": "worldbank.bready",
+                                "severity": "manual_review",
+                                "current_url": api_url,
+                                "evidence": "Australia values were null.",
+                                "recommendation": "Review B-READY values.",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register.write_text(
+                f"""
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "worldbank"
+dataflow_id = "worldbank.bready"
+status = "manual_pending"
+owner_area = "scorecard"
+canonical_url = "https://www.worldbank.org/en/businessready"
+license = "World Bank terms"
+attribution = "Source: World Bank B-READY"
+cadence = "annual"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+expected_missing_reason = "Manual pending until Australia values are non-null."
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["Business Ready"]
+recommendation = "Review public page."
+
+[[dataflows.additional_audit_policies]]
+url = "{api_url}"
+kind = "world_bank_bready_api"
+recommendation = "Review API values."
+""",
+                encoding="utf-8",
+            )
+
+            exit_code = source_research.generate(
+                argparse.Namespace(
+                    report=report,
+                    register=register,
+                    out=out,
+                    dataflow_id=None,
+                )
+            )
+
+            self.assertEqual(exit_code, 0)
+            artifact = json.loads((out / "worldbank.bready.json").read_text())
+            self.assertEqual(
+                artifact["allowed_domains"],
+                ["api.worldbank.org", "www.worldbank.org"],
+            )
+            self.assertEqual(
+                artifact["source_urls"],
+                [api_url, "https://www.worldbank.org/en/businessready"],
+            )
+            self.assertEqual(
+                artifact["expected_missing_reason"],
+                "Manual pending until Australia values are non-null.",
+            )
+
     def test_generate_skips_audit_error_findings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

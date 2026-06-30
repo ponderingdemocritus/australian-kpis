@@ -369,6 +369,9 @@ fn source_register_location_rules() -> Result<Vec<SourceLocationRule>, SourceReg
     let mut rules = Vec::new();
 
     for dataflow in register.dataflows {
+        if !dataflow.status.emits_source_location_rules() {
+            continue;
+        }
         let source_status = source_status_name(dataflow.status);
         if let Some(rule) = source_register_rule(
             &dataflow.source_id,

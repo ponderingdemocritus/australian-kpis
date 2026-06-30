@@ -83,6 +83,9 @@ fn scheduler_default_rules_are_derived_from_source_register() {
     let register = load_source_register().expect("load source register");
     let mut registered_audited = BTreeSet::new();
     for dataflow in &register.dataflows {
+        if !dataflow.status.emits_source_location_rules() {
+            continue;
+        }
         if dataflow.audit_policy.emits_source_location_rule() {
             registered_audited.insert(register_audit_contract(
                 &dataflow.source_id,

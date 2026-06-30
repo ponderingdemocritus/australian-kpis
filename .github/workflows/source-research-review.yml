@@ -1,8 +1,9 @@
 name: Source Research Review
 
 on:
-  schedule:
-    - cron: "0 7 * * 1"
+  workflow_run:
+    workflows: ["Source Location Audit"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       audit_run_id:
@@ -49,24 +50,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ -n "${{ inputs.audit_run_id }}" ]; then
             echo "run_id=${{ inputs.audit_run_id }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          run_id="$(
-            gh run list \
-              --workflow "Source Location Audit" \
-              --branch "${GITHUB_REF_NAME}" \
-              --status completed \
-              --json databaseId,conclusion \
-              --jq '[.[] | select(.conclusion == "success" or .conclusion == "failure")] | .[0].databaseId // empty'
-          )"
-          if [ -z "${run_id}" ]; then
-            echo "No completed Source Location Audit run found for ${GITHUB_REF_NAME}." >&2
-            exit 1
-          fi
-          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "workflow_dispatch requires audit_run_id so research reuses a specific audit artifact." >&2
+          exit 1
 
       - name: Download tracked source-location audit artifact
         env:

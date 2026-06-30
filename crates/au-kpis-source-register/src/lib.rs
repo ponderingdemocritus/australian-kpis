@@ -474,6 +474,14 @@ pub enum SourceStatus {
     Retired,
 }
 
+impl SourceStatus {
+    /// True when source-location audit rules should be emitted for this status.
+    #[must_use]
+    pub const fn emits_source_location_rules(self) -> bool {
+        !matches!(self, Self::Retired)
+    }
+}
+
 /// Owner area for a source-register entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -592,6 +600,17 @@ mod tests {
                 .iter()
                 .any(|dataflow| dataflow.dataflow_id == "curated.oversight_strength")
         );
+    }
+
+    #[test]
+    fn retired_status_does_not_emit_source_location_rules() {
+        assert!(SourceStatus::Active.emits_source_location_rules());
+        assert!(SourceStatus::ManualPending.emits_source_location_rules());
+        assert!(SourceStatus::VisibleUnscored.emits_source_location_rules());
+        assert!(SourceStatus::CoverageGap.emits_source_location_rules());
+        assert!(SourceStatus::LicensedFeed.emits_source_location_rules());
+        assert!(SourceStatus::Placeholder.emits_source_location_rules());
+        assert!(!SourceStatus::Retired.emits_source_location_rules());
     }
 
     #[test]

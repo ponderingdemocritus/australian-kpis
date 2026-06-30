@@ -10,6 +10,7 @@ import pathlib
 import re
 import sys
 import tomllib
+import urllib.parse
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -245,6 +246,24 @@ def string_list_field(record: dict[str, Any], field: str) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def additional_audit_urls(record: dict[str, Any]) -> list[str]:
+    policies = record.get("additional_audit_policies", [])
+    if not isinstance(policies, list):
+        return []
+    urls: list[str] = []
+    for policy in policies:
+        if isinstance(policy, dict) and isinstance(policy.get("url"), str):
+            urls.append(cast(str, policy["url"]))
+    return urls
+
+
+def host_from_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    return parsed.netloc
+
+
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
 
@@ -274,13 +293,11 @@ def build_research_artifact(
     if register_record is None:
         raise ValueError(f"missing register record for {dataflow_id}")
 
-    allowed_domains = []
     canonical_url = str(register_record.get("canonical_url", ""))
-    if canonical_url.startswith("http"):
-        host = canonical_url.split("/", 3)[2]
-        allowed_domains.append(host)
     current_url = str(finding["current_url"])
-    source_urls = unique_non_empty([current_url, canonical_url])
+    governed_urls = unique_non_empty([current_url, canonical_url, *additional_audit_urls(register_record)])
+    allowed_domains = unique_non_empty([host_from_url(url) for url in governed_urls])
+    source_urls = governed_urls
     publisher_names = [
         publisher_name_from_attribution(str(register_record.get("attribution", "")), str(finding["source_id"]))
     ]
