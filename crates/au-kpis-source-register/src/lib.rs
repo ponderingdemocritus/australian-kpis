@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Url;
 
 /// Checked-in source register config.
 pub const SOURCE_REGISTER_V1_TOML: &str = include_str!("../config/source-register.v1.toml");
@@ -299,22 +300,18 @@ fn validate_http_url(
         )));
     }
 
-    let Some((scheme, remainder)) = value.split_once("://") else {
-        return Err(SourceRegisterError::InvalidRegister(format!(
-            "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
-        )));
-    };
-    if !matches!(scheme, "http" | "https") {
+    let parsed = Url::parse(value).map_err(|err| {
+        SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL: {err}"
+        ))
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
         return Err(SourceRegisterError::InvalidRegister(format!(
             "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
         )));
     }
 
-    let host = remainder
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .trim();
+    let host = parsed.host_str().unwrap_or_default();
     if host.is_empty() || host.starts_with('.') {
         return Err(SourceRegisterError::InvalidRegister(format!(
             "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
@@ -701,6 +698,14 @@ recommendation = "Review source."
         );
 
         let err = parse_source_register(&raw).expect_err("bad URL should fail");
+        assert!(err.to_string().contains("canonical_url"));
+
+        let raw = valid_register_fixture().replace(
+            "canonical_url = \"https://example.test/a\"",
+            "canonical_url = \"https://example.test:bad/a\"",
+        );
+
+        let err = parse_source_register(&raw).expect_err("bad URL port should fail");
         assert!(err.to_string().contains("canonical_url"));
     }
 
