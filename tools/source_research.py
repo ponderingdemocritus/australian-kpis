@@ -10,7 +10,8 @@ import pathlib
 import re
 import sys
 import tomllib
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "drift"}
 CLASSIFICATIONS = {
@@ -31,7 +32,10 @@ EVIDENCE_CHECKLIST = [
 
 
 def load_json(path: pathlib.Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return cast(dict[str, Any], raw)
 
 
 def load_register(path: pathlib.Path) -> dict[str, dict[str, Any]]:
@@ -287,7 +291,8 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
-    return args.func(args)
+    func = cast(Callable[[argparse.Namespace], int], args.func)
+    return func(args)
 
 
 if __name__ == "__main__":

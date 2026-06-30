@@ -64,6 +64,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python governance tooling
+        run: python -m pip install "ruff>=0.8,<1" "mypy>=1.13,<2"
+
+      - name: Lint source governance Python
+        run: ruff check tools/source_research.py tests/source_research
+
+      - name: Typecheck source governance Python
+        run: mypy --strict tools/source_research.py
+
       - name: Run source register unit tests
         run: cargo test -p au-kpis-source-register -- --nocapture
 

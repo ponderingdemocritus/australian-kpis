@@ -70,6 +70,16 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
     require_text("cadence", &dataflow.cadence)?;
     require_text("review_frequency", &dataflow.review_frequency)?;
     require_text("source_scope", &dataflow.source_scope)?;
+    require_text_list(
+        "provenance_requirements",
+        &dataflow.provenance_requirements,
+        &dataflow.dataflow_id,
+    )?;
+    require_text_list(
+        "validation_requirements",
+        &dataflow.validation_requirements,
+        &dataflow.dataflow_id,
+    )?;
 
     if matches!(
         dataflow.status,
@@ -169,6 +179,20 @@ fn require_optional_text(
         Err(SourceRegisterError::InvalidRegister(format!(
             "`{dataflow_id}` requires `{field}`"
         )))
+    }
+}
+
+fn require_text_list(
+    field: &str,
+    values: &[String],
+    dataflow_id: &str,
+) -> Result<(), SourceRegisterError> {
+    if values.is_empty() || values.iter().any(|value| value.trim().is_empty()) {
+        Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` requires non-empty `{field}`"
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -475,6 +499,8 @@ attribution = "Source: ABS"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -492,6 +518,8 @@ attribution = "Source: ABS"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -519,6 +547,8 @@ attribution = "Curated input"
 cadence = "annual"
 review_frequency = "annual"
 source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"
@@ -555,6 +585,21 @@ recommendation = "Review source."
         assert!(err.to_string().contains("manual_review_due_at"));
     }
 
+    #[test]
+    fn missing_requirement_lists_are_rejected() {
+        let raw = valid_register_fixture()
+            .lines()
+            .filter(|line| {
+                !line.starts_with("provenance_requirements =")
+                    && !line.starts_with("validation_requirements =")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let err = parse_source_register(&raw).expect_err("missing requirements should fail");
+        assert!(err.to_string().contains("provenance_requirements"));
+    }
+
     fn valid_register_fixture() -> String {
         r#"
 version = "source-register.v1"
@@ -570,6 +615,8 @@ attribution = "Curated input"
 cadence = "annual"
 review_frequency = "annual"
 source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"

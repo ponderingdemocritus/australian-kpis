@@ -46,7 +46,24 @@ jobs:
           cargo run --locked -p au-kpis-scheduler -- source-location-audit \
             --report-path "${AU_KPIS_SOURCE_LOCATION_AUDIT_REPORT_PATH}"
 
+      - name: Read source-location audit status
+        id: audit_status
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import pathlib
+
+          report_path = pathlib.Path("target/source-location-audit/source-location-audit.json")
+          if not report_path.exists():
+              print("status=error")
+          else:
+              report = json.loads(report_path.read_text())
+              print(f"status={report.get('status', 'error')}")
+          PY
+
       - name: Generate bounded research packets
+        if: steps.audit_status.outputs.status != 'error'
         run: |
           args=()
           if [ -n "${{ inputs.dataflow_id }}" ]; then
@@ -59,11 +76,13 @@ jobs:
             "${args[@]}"
 
       - name: Validate research packet schema
+        if: steps.audit_status.outputs.status != 'error'
         run: |
           python tools/source_research.py validate \
             --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}"
 
       - name: Render source research comment
+        if: steps.audit_status.outputs.status != 'error'
         run: |
           python tools/source_research.py render-comment \
             --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}" \
@@ -92,13 +111,13 @@ jobs:
           if not report_path.exists():
               sys.exit(0)
 
-          report = json.loads(report_path.read_text())
-          if report.get("status") == "error":
-              sys.exit("source-location audit reported error status")
+            report = json.loads(report_path.read_text())
+            if report.get("status") == "error":
+                sys.exit("source-location audit reported error status")
           PY
 
       - name: Append source research summary to tracked issue
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.audit_status.outputs.status != 'error'
         uses: actions/github-script@v8
         with:
           script: |

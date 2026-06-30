@@ -11,13 +11,13 @@ attribution = "Source: Australian Bureau of Statistics"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["ABS SDMX dataflow endpoint must expose CPI stubs."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["CPI", "Consumer Price Index"]
 recommendation = "Review the ABS CPI dataflow endpoint and update the ABS adapter source URL if it moved."
-
 [[dataflows]]
 source_id = "abs"
 dataflow_id = "abs.building_approvals"
@@ -29,12 +29,13 @@ attribution = "Source: Australian Bureau of Statistics"
 cadence = "monthly"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["Building Approvals", "latest-release"]
 recommendation = "Review the ABS Building Approvals latest-release page."
-
 [[dataflows]]
 source_id = "abs"
 dataflow_id = "abs.building_activity"
@@ -46,12 +47,13 @@ attribution = "Source: Australian Bureau of Statistics"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["Building Activity", "latest-release"]
 recommendation = "Review the ABS Building Activity latest-release page."
-
 [[dataflows]]
 source_id = "abs"
 dataflow_id = "abs.dwelling_completion_times"
@@ -63,12 +65,13 @@ attribution = "Source: Australian Bureau of Statistics"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["dwelling completion", "Average dwelling completion times"]
 recommendation = "Review the ABS dwelling completion times article location."
-
 [[dataflows]]
 source_id = "rba"
 dataflow_id = "rba.statistical_tables"
@@ -80,6 +83,7 @@ attribution = "Source: Reserve Bank of Australia"
 cadence = "weekly"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["RBA table URLs must resolve under /statistics/tables/csv/ or /statistics/tables/xls/."]
 
 [dataflows.audit_policy]
@@ -87,7 +91,6 @@ kind = "bot_filtered"
 expected_statuses = [403]
 semantic_fallback = "direct_table_artifact_manifest"
 recommendation = "Review the RBA statistical tables index and table URLs; use reviewed direct CSV/XLS artifacts if the index remains bot-filtered."
-
 [[dataflows]]
 source_id = "apra"
 dataflow_id = "apra.quarterly_statistics"
@@ -99,12 +102,13 @@ attribution = "Source: Australian Prudential Regulation Authority"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["Quarterly authorised deposit-taking institution statistics", "xlsx"]
 recommendation = "Review the APRA quarterly ADI statistics release page."
-
 [[dataflows]]
 source_id = "apra"
 dataflow_id = "apra.super_asset_allocation"
@@ -116,6 +120,8 @@ attribution = "Source: Australian Prudential Regulation Authority"
 cadence = "quarterly"
 review_frequency = "quarterly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 retrieved_at = "2026-06-29"
 reviewed_by = "source-relevance-review"
 reviewed_at = "2026-06-29"
@@ -126,7 +132,6 @@ expected_missing_reason = "Manual pending until productive/onshore infrastructur
 kind = "contains_any"
 needles = ["Quarterly superannuation statistics", "superannuation"]
 recommendation = "Review the APRA superannuation release semantics before scoring this dataflow."
-
 [[dataflows]]
 source_id = "aemo"
 dataflow_id = "aemo.dispatch"
@@ -138,12 +143,13 @@ attribution = "Source: Australian Energy Market Operator"
 cadence = "5-minute"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "directory_listing"
 required_patterns = ["PUBLIC_DISPATCHIS_", ".zip"]
 recommendation = "Review the AEMO NEMWeb DispatchIS directory if current ZIP reports disappear."
-
 [[dataflows]]
 source_id = "aemo"
 dataflow_id = "aemo.generation_mix"
@@ -155,12 +161,13 @@ attribution = "Source: Australian Energy Market Operator"
 cadence = "5-minute"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "directory_listing"
 required_patterns = ["PUBLIC_NEXT_DAY_ACTUAL_GEN_", ".zip"]
 recommendation = "Review AEMO NEMWeb Next Day Actual Gen directory if current ZIP reports disappear."
-
 [[dataflows]]
 source_id = "aemo"
 dataflow_id = "aemo.dispatchability_capacity"
@@ -172,12 +179,13 @@ attribution = "Source: Australian Energy Market Operator"
 cadence = "5-minute"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "directory_listing"
 required_patterns = ["PUBLIC_DISPATCHIS_", ".zip"]
 recommendation = "Review AEMO dispatchability-capacity proxy source semantics."
-
 [[dataflows]]
 source_id = "asx"
 dataflow_id = "asx.market_statistics"
@@ -189,6 +197,8 @@ attribution = "Source: ASX"
 cadence = "monthly"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -200,7 +210,6 @@ kind = "contains_any"
 needles = ["Terms of Use", "ASX"]
 recommendation = "Review the ASX Terms of Use location used for license attribution."
 url = "https://www.asx.com.au/legals/terms-of-use"
-
 [[dataflows]]
 source_id = "asx"
 dataflow_id = "asx.announcements"
@@ -212,11 +221,12 @@ attribution = "Source: ASX"
 cadence = "daily"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "licensed_product"
 recommendation = "Review the ASX company announcements product page; configured licensed feed URLs may remain empty."
-
 [[dataflows]]
 source_id = "asx"
 dataflow_id = "asx.eod"
@@ -228,11 +238,12 @@ attribution = "Source: ASX"
 cadence = "daily"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "licensed_product"
 recommendation = "Review the ASX reference-data product page; configured licensed EOD feed URLs may remain empty."
-
 [[dataflows]]
 source_id = "nhsac"
 dataflow_id = "nhsac.housing_accord_progress"
@@ -244,12 +255,13 @@ attribution = "Source: National Housing Supply and Affordability Council"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["publications", "Housing Accord"]
 recommendation = "Review the NHSAC publications page for housing accord progress inputs."
-
 [[dataflows]]
 source_id = "pc"
 dataflow_id = "pc.productivity_bulletin"
@@ -261,12 +273,13 @@ attribution = "Source: Productivity Commission"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["Productivity", "Insights"]
 recommendation = "Review the Productivity Commission productivity insights page."
-
 [[dataflows]]
 source_id = "worldbank"
 dataflow_id = "worldbank.bready"
@@ -278,6 +291,8 @@ attribution = "Source: World Bank B-READY"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 retrieved_at = "2026-06-29"
 reviewed_by = "source-relevance-review"
 reviewed_at = "2026-06-29"
@@ -287,7 +302,6 @@ expected_missing_reason = "Manual pending until Australia B-READY values are non
 [dataflows.audit_policy]
 kind = "world_bank_bready_api"
 recommendation = "Review World Bank B-READY Australia values before scoring this source."
-
 [[dataflows]]
 source_id = "treasury"
 dataflow_id = "treasury.budget_papers"
@@ -299,13 +313,14 @@ attribution = "Source: Australian Treasury"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "budget_year"
 configured_year = "2026-27"
 latest_year = "2026-27"
 recommendation = "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears."
-
 [[dataflows]]
 source_id = "state-budgets"
 dataflow_id = "state_budgets.nsw_budget"
@@ -317,13 +332,14 @@ attribution = "Source: NSW Treasury"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "budget_year"
 configured_year = "2026-27"
 latest_year = "2026-27"
 recommendation = "Review the NSW budget source when a newer budget year appears."
-
 [[dataflows]]
 source_id = "state-budgets"
 dataflow_id = "state_budgets.vic_budget"
@@ -335,13 +351,14 @@ attribution = "© Copyright State Government of Victoria"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "budget_year"
 configured_year = "2026-27"
 latest_year = "2026-27"
 recommendation = "Review the Victorian budget papers index when a newer budget appears."
-
 [[dataflows]]
 source_id = "state-budgets"
 dataflow_id = "state_budgets.qld_budget"
@@ -353,13 +370,14 @@ attribution = "© The State of Queensland 2025 (Queensland Treasury)"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "budget_year"
 configured_year = "2026-27"
 latest_year = "2026-27"
 recommendation = "Review the Queensland budget papers index when a newer budget appears."
-
 [[dataflows]]
 source_id = "state-planning"
 dataflow_id = "state_planning.nsw_da_processing"
@@ -371,12 +389,13 @@ attribution = "State planning dashboard sources: NSW Planning and Victoria Plann
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["data", "insights"]
 recommendation = "Review NSW Planning data-and-insights links for DA processing inputs."
-
 [[dataflows]]
 source_id = "state-planning"
 dataflow_id = "state_planning.vic_permit_activity"
@@ -388,6 +407,8 @@ attribution = "State planning dashboard sources: NSW Planning and Victoria Plann
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 expected_missing_reason = "Coverage gap until Victoria source can be reliably audited and mapped."
 replacement_candidate = "Reviewed open data CSV/XLS artifact from planning.vic.gov.au."
 
@@ -396,7 +417,6 @@ kind = "bot_filtered"
 expected_statuses = [403]
 semantic_fallback = "open_data_artifact"
 recommendation = "Review Victoria Planning permit activity source links and identify a stable machine-readable artifact."
-
 [[dataflows]]
 source_id = "ai-readiness"
 dataflow_id = "oxford.gari"
@@ -408,12 +428,13 @@ attribution = "Source: Oxford Insights Government AI Readiness Index"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["Government AI Readiness", "2025"]
 recommendation = "Review the Oxford Insights Government AI Readiness Index source page."
-
 [[dataflows]]
 source_id = "ai-readiness"
 dataflow_id = "naic.ai_adoption_tracker"
@@ -425,12 +446,13 @@ attribution = "Source: National AI Centre"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["AI adoption", "tracker"]
 recommendation = "Review the NAIC/industry AI adoption tracker source page."
-
 [[dataflows]]
 source_id = "ai-readiness"
 dataflow_id = "abs.ai_rd"
@@ -442,12 +464,13 @@ attribution = "Source: Australian Bureau of Statistics"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["AI", "business R&D"]
 recommendation = "Review ABS R&D and AI-related data source pages."
-
 [[dataflows]]
 source_id = "ai-readiness"
 dataflow_id = "home_affairs.skillselect_talent_proxy"
@@ -459,13 +482,14 @@ attribution = "Source: Department of Home Affairs"
 cadence = "quarterly"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 expected_missing_reason = "SkillSelect pages do not currently publish AI-related invitation counts."
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["SkillSelect", "skilled"]
 recommendation = "Review the Home Affairs SkillSelect invitation-rounds source link."
-
 [[dataflows]]
 source_id = "state_capital"
 dataflow_id = "state_capital.vic_major_projects"
@@ -477,13 +501,14 @@ attribution = "Pilot state capital sources: VAGO and Victorian Budget"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 expected_missing_reason = "State-scope pilot coverage only."
 
 [dataflows.audit_policy]
 kind = "contains_any"
 needles = ["Major Projects", "performance reporting"]
 recommendation = "Review the state_capital adapter index for VAGO major projects source links."
-
 [[dataflows]]
 source_id = "state_capital"
 dataflow_id = "state_capital.budget_capital_papers"
@@ -495,6 +520,8 @@ attribution = "Pilot state capital sources: VAGO and Victorian Budget"
 cadence = "annual"
 review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 expected_missing_reason = "Pilot/experimental until coverage broadens."
 replacement_candidate = "Reviewed Victorian budget capital publication links."
 
@@ -502,7 +529,6 @@ replacement_candidate = "Reviewed Victorian budget capital publication links."
 kind = "contains_any"
 needles = ["Major Projects", "performance reporting"]
 recommendation = "Review the state_capital adapter index for Victorian budget capital publication links."
-
 [[dataflows]]
 source_id = "curated"
 dataflow_id = "curated.oversight_strength"
@@ -514,6 +540,8 @@ attribution = "Curated from OAIC, ANAO, FOI, and audit-office inputs"
 cadence = "annual"
 review_frequency = "annual"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"
@@ -524,7 +552,6 @@ expected_missing_reason = "Manual input remains missing until reviewed with dura
 kind = "manual_register_only"
 reason = "Curated multi-source governance input with no single live source URL."
 recommendation = "Review OAIC, ANAO, FOI, and audit-office statutory/funding inputs before scoring."
-
 [[dataflows]]
 source_id = "curated"
 dataflow_id = "curated.control_enable_spend"
@@ -536,6 +563,8 @@ attribution = "Future Treasury/state budget taxonomy"
 cadence = "annual"
 review_frequency = "annual"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"
@@ -546,7 +575,6 @@ expected_missing_reason = "Visible-unscored input excluded from APS point estima
 kind = "manual_register_only"
 reason = "Treasury/state budget taxonomy is not reviewed."
 recommendation = "Review taxonomy before converting this visible context input into a scored dataflow."
-
 [[dataflows]]
 source_id = "curated"
 dataflow_id = "curated.surveillance_intensity"
@@ -558,6 +586,8 @@ attribution = "Source: Carnegie Endowment AI Global Surveillance index"
 cadence = "annual"
 review_frequency = "annual"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"
@@ -568,7 +598,6 @@ expected_missing_reason = "Visible low-cadence context only until a scored surve
 kind = "manual_register_only"
 reason = "Low-cadence surveillance-intensity context input is not scored."
 recommendation = "Review source taxonomy before scoring surveillance intensity."
-
 [[dataflows]]
 source_id = "compute"
 dataflow_id = "compute.au_datacentre_capacity_mw"
@@ -580,6 +609,8 @@ attribution = "Curated datacentre capacity register"
 cadence = "annual"
 review_frequency = "annual"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
+provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
+validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
 retrieved_at = "2026-06-22"
 reviewed_by = "aps-curation"
 reviewed_at = "2026-06-22"
