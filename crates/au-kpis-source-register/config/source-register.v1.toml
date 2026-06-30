@@ -121,7 +121,7 @@ source_id = "apra"
 dataflow_id = "apra.super_asset_allocation"
 status = "manual_pending"
 owner_area = "scorecard"
-canonical_url = "https://www.apra.gov.au/news-and-publications/quarterly-superannuation-statistics"
+canonical_url = "https://apra.gov.au/news-and-publications/quarterly-superannuation-statistics"
 license = "Creative Commons Attribution 3.0 Australia Licence"
 attribution = "Source: Australian Prudential Regulation Authority"
 cadence = "quarterly"
@@ -301,7 +301,7 @@ source_id = "worldbank"
 dataflow_id = "worldbank.bready"
 status = "manual_pending"
 owner_area = "scorecard"
-canonical_url = "https://api.worldbank.org/v2/country/AUS/indicator/IC.BRE.BE.OS?format=json&source=2&per_page=100"
+canonical_url = "https://www.worldbank.org/en/businessready"
 license = "World Bank terms"
 attribution = "Source: World Bank B-READY"
 cadence = "annual"
@@ -316,6 +316,12 @@ manual_review_due_at = "2027-06-29"
 expected_missing_reason = "Manual pending until Australia B-READY values are non-null and mapped to intended B-READY measures."
 
 [dataflows.audit_policy]
+kind = "contains_any"
+needles = ["Business Ready", "B-READY"]
+recommendation = "Review the World Bank B-READY public source page before changing this source mapping."
+
+[[dataflows.additional_audit_policies]]
+url = "https://api.worldbank.org/v2/country/AUS/indicator/IC.BRE.BE.OS?format=json&source=2&per_page=100"
 kind = "world_bank_bready_api"
 recommendation = "Review World Bank B-READY Australia values before scoring this source."
 
@@ -358,6 +364,12 @@ kind = "budget_year"
 configured_year = "2026-27"
 latest_year = "2026-27"
 recommendation = "Review the NSW budget source when a newer budget year appears."
+
+[[dataflows.additional_audit_policies]]
+url = "https://www.nsw.gov.au/business-and-economy/nsw-budget/2026-27-budget-papers"
+kind = "contains_any"
+needles = ["2026-27", "Budget Papers"]
+recommendation = "Review the NSW 2026-27 budget papers page if the adapter metadata URL moves."
 
 [[dataflows]]
 source_id = "state-budgets"
@@ -439,6 +451,13 @@ kind = "bot_filtered"
 expected_statuses = [403]
 semantic_fallback = "Planning permit activity"
 recommendation = "Review Victoria Planning permit activity source links and identify a stable machine-readable artifact."
+
+[[dataflows.additional_audit_policies]]
+url = "https://www.planning.vic.gov.au/guides-and-resources/data-and-insights"
+kind = "bot_filtered"
+expected_statuses = [403]
+semantic_fallback = "Data and insights"
+recommendation = "Review the Victoria Planning data-and-insights page if the adapter metadata URL moves."
 
 [[dataflows]]
 source_id = "ai-readiness"

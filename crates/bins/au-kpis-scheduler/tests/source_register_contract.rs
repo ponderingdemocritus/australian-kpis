@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use au_kpis_adapter::SourceAdapter;
 use au_kpis_scheduler::source_location_audit::{
@@ -344,6 +348,36 @@ fn active_adapter_owned_register_dataflows_have_adapter_metadata() {
             adapter_metadata.contains(&key),
             "active adapter-owned register dataflow `{key}` has no SourceAdapter::dataflow_metadata entry"
         );
+    }
+}
+
+#[test]
+fn adapter_metadata_source_urls_are_covered_by_source_register() {
+    let register = load_source_register().expect("load source register");
+    let registered = register.dataflows.iter().fold(
+        BTreeMap::<String, BTreeSet<String>>::new(),
+        |mut covered_urls, dataflow| {
+            let key = registered_dataflow_key(&dataflow.source_id, &dataflow.dataflow_id);
+            let urls = covered_urls.entry(key).or_default();
+            urls.insert(dataflow.canonical_url.clone());
+            for additional in &dataflow.additional_audit_policies {
+                urls.insert(additional.url.clone());
+            }
+            covered_urls
+        },
+    );
+
+    for adapter in implemented_adapters() {
+        for dataflow in adapter.adapter.dataflow_metadata() {
+            let key = registered_dataflow_key(&dataflow.source_id, &dataflow.id);
+            let covered_urls = registered
+                .get(&key)
+                .unwrap_or_else(|| panic!("adapter metadata dataflow `{key}` is unregistered"));
+            assert!(
+                covered_urls.contains(dataflow.source_url.as_str()),
+                "adapter metadata source_url for `{key}` must be covered by source-register canonical_url or additional audit policy"
+            );
+        }
     }
 }
 

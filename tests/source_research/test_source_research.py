@@ -72,6 +72,12 @@ recommendation = "Use reviewed direct artifacts."
             self.assertEqual(artifact["artifact_id"], "rba.statistical_tables")
             self.assertEqual(artifact["classification"], "insufficient_evidence")
             self.assertEqual(artifact["allowed_domains"], ["www.rba.gov.au"])
+            self.assertEqual(artifact["source_scope"], "test")
+            self.assertEqual(artifact["review_frequency"], "weekly")
+            self.assertEqual(artifact["expected_missing_reason"], "")
+            self.assertEqual(artifact["replacement_candidate"], "")
+            self.assertEqual(artifact["provenance_requirements"], ["Preserve source provenance."])
+            self.assertEqual(artifact["validation_requirements"], ["Validate source semantics."])
             self.assertEqual(
                 artifact["source_urls"],
                 ["https://www.rba.gov.au/statistics/tables/"],
@@ -248,8 +254,14 @@ recommendation = "Review ABS CPI source."
             "audit_severity": "info",
             "register_status": "active",
             "register_canonical_url": "https://data.api.abs.gov.au/",
+            "source_scope": "test",
+            "review_frequency": "weekly",
+            "expected_missing_reason": "",
+            "replacement_candidate": "",
             "allowed_domains": ["data.api.abs.gov.au"],
             "required_evidence": ["official publisher URL"],
+            "provenance_requirements": ["Preserve source provenance."],
+            "validation_requirements": ["Validate source semantics."],
             "classification": "same_source",
             "source_urls": ["https://data.api.abs.gov.au/"],
             "publisher_names": ["ABS"],
@@ -326,8 +338,14 @@ recommendation = "Review source."
             "audit_severity": "warning",
             "register_status": "active",
             "register_canonical_url": "https://data.api.abs.gov.au/",
+            "source_scope": "test",
+            "review_frequency": "weekly",
+            "expected_missing_reason": "",
+            "replacement_candidate": "",
             "allowed_domains": ["data.api.abs.gov.au"],
             "required_evidence": ["official publisher URL"],
+            "provenance_requirements": ["Preserve source provenance."],
+            "validation_requirements": ["Validate source semantics."],
             "classification": "insufficient_evidence",
             "source_urls": ["https://data.api.abs.gov.au/"],
             "publisher_names": ["ABS"],

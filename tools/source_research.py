@@ -238,6 +238,13 @@ def publisher_name_from_attribution(attribution: str, source_id: str) -> str:
     return cleaned or source_id
 
 
+def string_list_field(record: dict[str, Any], field: str) -> list[str]:
+    value = record.get(field, [])
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
 
@@ -288,8 +295,14 @@ def build_research_artifact(
         "audit_severity": finding["severity"],
         "register_status": register_record["status"],
         "register_canonical_url": canonical_url,
+        "source_scope": str(register_record.get("source_scope", "")),
+        "review_frequency": str(register_record.get("review_frequency", "")),
+        "expected_missing_reason": str(register_record.get("expected_missing_reason", "") or ""),
+        "replacement_candidate": str(register_record.get("replacement_candidate", "") or ""),
         "allowed_domains": allowed_domains,
         "required_evidence": EVIDENCE_CHECKLIST,
+        "provenance_requirements": string_list_field(register_record, "provenance_requirements"),
+        "validation_requirements": string_list_field(register_record, "validation_requirements"),
         "classification": "insufficient_evidence",
         "source_urls": source_urls,
         "publisher_names": publisher_names,
@@ -317,6 +330,8 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
         "audit_severity",
         "register_status",
         "register_canonical_url",
+        "source_scope",
+        "review_frequency",
         "classification",
         "retrieved_at",
         "license_evidence",
@@ -336,6 +351,8 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
     for field in [
         "allowed_domains",
         "required_evidence",
+        "provenance_requirements",
+        "validation_requirements",
         "source_urls",
         "publisher_names",
         "risk_notes",
@@ -345,9 +362,21 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
             errors.append(f"{field} must be a list")
         elif any(not isinstance(item, str) or not item.strip() for item in value):
             errors.append(f"{field} must contain only non-empty strings")
-    for field in ["allowed_domains", "required_evidence", "source_urls", "publisher_names", "risk_notes"]:
+    for field in [
+        "allowed_domains",
+        "required_evidence",
+        "provenance_requirements",
+        "validation_requirements",
+        "source_urls",
+        "publisher_names",
+        "risk_notes",
+    ]:
         if not artifact.get(field):
             errors.append(f"{field} must not be empty")
+    for field in ["expected_missing_reason", "replacement_candidate"]:
+        value = artifact.get(field)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{field} must be a string")
     retrieved_at = artifact.get("retrieved_at")
     if isinstance(retrieved_at, str) and not is_rfc3339_timestamp(retrieved_at):
         errors.append("retrieved_at must be an RFC 3339 timestamp")
@@ -367,6 +396,8 @@ def render_markdown(artifact: dict[str, Any]) -> str:
         f"- Retrieved at: `{artifact['retrieved_at']}`",
         f"- Current URL: {artifact['current_url']}",
         f"- Register URL: {artifact['register_canonical_url']}",
+        f"- Source scope: `{artifact['source_scope']}`",
+        f"- Review frequency: `{artifact['review_frequency']}`",
         "",
         "## Audit Evidence",
         "",
@@ -376,6 +407,21 @@ def render_markdown(artifact: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(f"- [ ] {item}" for item in artifact["required_evidence"])
+    lines.extend(
+        [
+            "",
+            "## Register Context",
+            "",
+            f"- Expected missing reason: {artifact['expected_missing_reason'] or 'n/a'}",
+            f"- Replacement candidate: {artifact['replacement_candidate'] or 'n/a'}",
+            "",
+            "### Provenance Requirements",
+            "",
+        ]
+    )
+    lines.extend(f"- {item}" for item in artifact["provenance_requirements"])
+    lines.extend(["", "### Validation Requirements", ""])
+    lines.extend(f"- {item}" for item in artifact["validation_requirements"])
     lines.extend(
         [
             "",
