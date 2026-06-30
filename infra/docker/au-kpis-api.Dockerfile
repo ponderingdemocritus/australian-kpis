@@ -2,7 +2,7 @@
 
 FROM rust:1.85-bookworm AS chef
 WORKDIR /app
-RUN cargo install cargo-chef --locked --version 0.1.77
+RUN cargo install cargo-chef --locked --version 0.1.72
 
 FROM chef AS planner
 COPY . .
