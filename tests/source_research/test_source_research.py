@@ -18,6 +18,9 @@ class SourceResearchTests(unittest.TestCase):
             report.write_text(
                 json.dumps(
                     {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v1",
+                        "status": "manual_review",
                         "findings": [
                             {
                                 "source_id": "rba",
@@ -76,6 +79,8 @@ recommendation = "Use reviewed direct artifacts."
             self.assertEqual(artifact["review_frequency"], "weekly")
             self.assertEqual(artifact["expected_missing_reason"], "")
             self.assertEqual(artifact["replacement_candidate"], "")
+            self.assertEqual(artifact["generated_at"], "2026-06-29T06:00:00+00:00")
+            self.assertEqual(artifact["register_version"], "source-register.v1")
             self.assertEqual(artifact["provenance_requirements"], ["Preserve source provenance."])
             self.assertEqual(artifact["validation_requirements"], ["Validate source semantics."])
             self.assertEqual(
@@ -394,7 +399,7 @@ recommendation = "Review API values."
                 "2026-06-30T00:00:00+00:00",
             )
 
-    def test_generate_skips_audit_error_findings(self):
+    def test_generate_skips_all_packets_for_error_status_audits(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             report = root / "source-location-audit.json"
@@ -409,9 +414,9 @@ recommendation = "Review API values."
                             {
                                 "source_id": "abs",
                                 "dataflow_id": "abs.cpi",
-                                "severity": "error",
+                                "severity": "warning",
                                 "current_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
-                                "evidence": "No HTTP snapshot was available.",
+                                "evidence": "Earlier actionable finding from an unreliable audit.",
                                 "recommendation": "Retry the source-location audit.",
                             }
                         ],
@@ -458,6 +463,7 @@ recommendation = "Review ABS CPI source."
             self.assertFalse((out / "abs.cpi.json").exists())
             summary = json.loads((out / "summary.json").read_text())
             self.assertEqual(summary["artifacts_total"], 0)
+            self.assertEqual(summary["audit_status"], "error")
             self.assertEqual(summary["dataflow_ids"], [])
             self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
 
@@ -484,6 +490,8 @@ recommendation = "Review ABS CPI source."
             "source_urls": ["https://data.api.abs.gov.au/"],
             "publisher_names": ["ABS"],
             "retrieved_at": "2026-06-30T00:00:00+00:00",
+            "generated_at": "2026-06-29T06:00:00+00:00",
+            "register_version": "source-register.v1",
             "license_evidence": "CC-BY-4.0",
             "attribution_evidence": "Source: ABS",
             "cadence_evidence": "quarterly",
@@ -568,6 +576,8 @@ recommendation = "Review source."
             "source_urls": ["https://data.api.abs.gov.au/"],
             "publisher_names": ["ABS"],
             "retrieved_at": "2026/06/30",
+            "generated_at": "2026/06/29",
+            "register_version": "source-register.v1",
             "license_evidence": "CC-BY-4.0",
             "attribution_evidence": "Source: ABS",
             "cadence_evidence": "quarterly",
@@ -579,6 +589,7 @@ recommendation = "Review source."
 
         self.assertIn("artifact_id must be a non-empty string", errors)
         self.assertIn("retrieved_at must be an RFC 3339 timestamp", errors)
+        self.assertIn("generated_at must be an RFC 3339 timestamp", errors)
 
 
 if __name__ == "__main__":

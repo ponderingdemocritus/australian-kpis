@@ -297,6 +297,8 @@ def build_research_artifact(
     finding: dict[str, Any],
     register: dict[str, dict[str, Any]],
     retrieved_at: str,
+    audit_generated_at: str | None = None,
+    register_version: str = "unknown",
 ) -> dict[str, Any]:
     dataflow_id = str(finding["dataflow_id"])
     register_record = register.get(dataflow_id)
@@ -340,6 +342,8 @@ def build_research_artifact(
         "source_urls": source_urls,
         "publisher_names": publisher_names,
         "retrieved_at": retrieved_at,
+        "generated_at": audit_generated_at or retrieved_at,
+        "register_version": register_version or "unknown",
         "license_evidence": str(register_record.get("license", "")),
         "attribution_evidence": str(register_record.get("attribution", "")),
         "cadence_evidence": str(register_record.get("cadence", "")),
@@ -367,6 +371,8 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
         "review_frequency",
         "classification",
         "retrieved_at",
+        "generated_at",
+        "register_version",
         "license_evidence",
         "attribution_evidence",
         "cadence_evidence",
@@ -413,6 +419,9 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
     retrieved_at = artifact.get("retrieved_at")
     if isinstance(retrieved_at, str) and not is_rfc3339_timestamp(retrieved_at):
         errors.append("retrieved_at must be an RFC 3339 timestamp")
+    generated_at = artifact.get("generated_at")
+    if isinstance(generated_at, str) and not is_rfc3339_timestamp(generated_at):
+        errors.append("generated_at must be an RFC 3339 timestamp")
     if artifact.get("audit_severity") not in ACTIONABLE_STATUSES:
         errors.append("audit_severity is not actionable for research")
     return errors
@@ -427,6 +436,8 @@ def render_markdown(artifact: dict[str, Any]) -> str:
         f"- Classification: `{artifact['classification']}`",
         f"- Register status: `{artifact['register_status']}`",
         f"- Retrieved at: `{artifact['retrieved_at']}`",
+        f"- Audit generated at: `{artifact['generated_at']}`",
+        f"- Source register: `{artifact['register_version']}`",
         f"- Current URL: {artifact['current_url']}",
         f"- Register URL: {artifact['register_canonical_url']}",
         f"- Source scope: `{artifact['source_scope']}`",
@@ -478,14 +489,25 @@ def generate(args: argparse.Namespace) -> int:
     retrieved_at = now_iso()
     artifacts: list[dict[str, Any]] = []
     occurrences: dict[str, int] = {}
+    audit_generated_at = str(report.get("generated_at") or retrieved_at)
+    register_version = str(report.get("register_version") or "unknown")
 
-    findings = [
-        finding
-        for finding in report.get("findings", [])
-        if isinstance(finding, dict) and should_research(finding, args.dataflow_id)
-    ]
+    if report.get("status") == "error":
+        findings: list[dict[str, Any]] = []
+    else:
+        findings = [
+            finding
+            for finding in report.get("findings", [])
+            if isinstance(finding, dict) and should_research(finding, args.dataflow_id)
+        ]
     for finding in sorted(findings, key=finding_sort_key):
-        artifact = build_research_artifact(finding, register, retrieved_at)
+        artifact = build_research_artifact(
+            finding,
+            register,
+            retrieved_at,
+            audit_generated_at,
+            register_version,
+        )
         dataflow_id = artifact["dataflow_id"]
         occurrences[dataflow_id] = occurrences.get(dataflow_id, 0) + 1
         artifact["artifact_id"] = artifact_id(dataflow_id, occurrences[dataflow_id])
@@ -503,6 +525,9 @@ def generate(args: argparse.Namespace) -> int:
     summary = {
         "schema_version": "source-research-summary.v1",
         "generated_at": retrieved_at,
+        "audit_generated_at": audit_generated_at,
+        "audit_status": str(report.get("status") or "unknown"),
+        "register_version": register_version,
         "artifacts_total": len(artifacts),
         "dataflow_ids": [artifact["dataflow_id"] for artifact in artifacts],
         "artifacts": [
