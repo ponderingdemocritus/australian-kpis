@@ -111,6 +111,8 @@ pub enum SourceLocationCheck {
     BotFiltered {
         /// HTTP statuses accepted as evidence of bot filtering.
         expected_statuses: Vec<u16>,
+        /// Body text that must appear if the source unexpectedly returns HTTP success.
+        semantic_fallback: Option<String>,
         /// Human recommendation for preserving auditability.
         recommendation: String,
     },
@@ -459,10 +461,11 @@ fn source_register_rule(
         },
         RegisterAuditPolicy::BotFiltered {
             expected_statuses,
+            semantic_fallback,
             recommendation,
-            ..
         } => SourceLocationCheck::BotFiltered {
             expected_statuses: expected_statuses.clone(),
+            semantic_fallback: semantic_fallback.clone(),
             recommendation: recommendation.clone(),
         },
     };
@@ -649,8 +652,15 @@ fn evaluate_rule(
         }
         SourceLocationCheck::BotFiltered {
             expected_statuses,
+            semantic_fallback,
             recommendation,
-        } => evaluate_bot_filtered(rule, snapshot, expected_statuses, recommendation),
+        } => evaluate_bot_filtered(
+            rule,
+            snapshot,
+            expected_statuses,
+            semantic_fallback.as_deref(),
+            recommendation,
+        ),
         SourceLocationCheck::ContainsAny {
             needles,
             recommendation,
@@ -815,9 +825,26 @@ fn evaluate_bot_filtered(
     rule: &SourceLocationRule,
     snapshot: &SourceUrlSnapshot,
     expected_statuses: &[u16],
+    semantic_fallback: Option<&str>,
     recommendation: &str,
 ) -> RuleEvaluation {
     if is_success(snapshot.status) {
+        if let Some(semantic_fallback) = semantic_fallback {
+            if !snapshot.body.contains(semantic_fallback) {
+                return finding_evaluation(
+                    rule,
+                    Some(snapshot),
+                    SourceAuditStatus::ManualReview,
+                    SourceAuditSeverity::ManualReview,
+                    Some(snapshot.effective_url.clone()),
+                    format!(
+                        "URL returned HTTP {} but body did not contain semantic fallback `{semantic_fallback}`.",
+                        snapshot.status
+                    ),
+                    recommendation.to_string(),
+                );
+            }
+        }
         return ok_evaluation(
             rule,
             snapshot,

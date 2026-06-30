@@ -145,7 +145,9 @@ def validate_register(raw: dict[str, Any]) -> list[str]:
                     errors.append(f"{policy_prefix} must be a table")
                     continue
                 require_non_empty_string(policy, "url", policy_prefix, errors)
-                validate_audit_policy(policy, policy_prefix, errors)
+                policy_payload = dict(policy)
+                policy_payload.pop("url", None)
+                validate_audit_policy(policy_payload, policy_prefix, errors)
     return errors
 
 

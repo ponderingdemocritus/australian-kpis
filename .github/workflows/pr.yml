@@ -85,6 +85,31 @@ jobs:
       - name: Run source research schema tests
         run: python -m unittest discover tests/source_research
 
+      - name: Run source research generation fixture
+        run: |
+          set -euo pipefail
+          mkdir -p target/source-research-fixture/out
+          cat > target/source-research-fixture/source-location-audit.json <<'JSON'
+          {
+            "findings": [
+              {
+                "source_id": "asx",
+                "dataflow_id": "asx.market_statistics",
+                "severity": "warning",
+                "current_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+                "evidence": "Fixture warning for checked-in register compatibility.",
+                "recommendation": "Review ASX market statistics source evidence."
+              }
+            ]
+          }
+          JSON
+          python tools/source_research.py generate \
+            --report target/source-research-fixture/source-location-audit.json \
+            --register crates/au-kpis-source-register/config/source-register.v1.toml \
+            --out target/source-research-fixture/out
+          python tools/source_research.py validate \
+            --research-dir target/source-research-fixture/out
+
   typescript:
     name: TypeScript Typecheck and Tests
     runs-on: ubuntu-latest
