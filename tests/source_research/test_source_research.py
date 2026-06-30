@@ -82,7 +82,7 @@ cadence = "weekly"
                             {
                                 "source_id": "asx",
                                 "dataflow_id": "asx.market_statistics",
-                                "severity": "drift",
+                                "severity": "warning",
                                 "current_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
                                 "evidence": "Market statistics page changed.",
                                 "recommendation": "Review the market statistics page.",

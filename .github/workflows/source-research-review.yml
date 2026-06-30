@@ -102,19 +102,11 @@ jobs:
       - name: Fail on source-location audit errors
         if: always()
         run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          report_path = pathlib.Path("target/source-location-audit/source-location-audit.json")
-          if not report_path.exists():
-              sys.exit(0)
-
-          report = json.loads(report_path.read_text())
-          if report.get("status") == "error":
-              sys.exit("source-location audit reported error status")
-          PY
+          status="$(python -c 'import json, pathlib; p = pathlib.Path("target/source-location-audit/source-location-audit.json"); print(json.loads(p.read_text()).get("status", "error") if p.exists() else "missing")')"
+          if [ "$status" = "error" ]; then
+            echo "source-location audit reported error status"
+            exit 1
+          fi
 
       - name: Append source research summary to tracked issue
         if: github.ref == 'refs/heads/main' && steps.audit_status.outputs.status != 'error'

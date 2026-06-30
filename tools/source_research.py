@@ -13,7 +13,7 @@ import tomllib
 from collections.abc import Callable
 from typing import Any, cast
 
-ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "drift"}
+ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "warning"}
 CLASSIFICATIONS = {
     "same_source",
     "moved",
