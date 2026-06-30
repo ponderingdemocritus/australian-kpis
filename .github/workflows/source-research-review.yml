@@ -135,6 +135,12 @@ jobs:
               print(f"status={report.get('status', 'error')}")
           PY
 
+      - name: Stop before research on source-location audit errors
+        if: steps.audit_status.outputs.status == 'error'
+        run: |
+          echo "source-location audit reported error status; skipping derived research packet generation."
+          exit 1
+
       - name: Generate bounded research packets
         run: |
           args=()

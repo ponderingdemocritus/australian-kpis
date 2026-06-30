@@ -832,21 +832,33 @@ fn evaluate_bot_filtered(
     recommendation: &str,
 ) -> RuleEvaluation {
     if is_success(snapshot.status) {
-        if let Some(semantic_fallback) = semantic_fallback {
-            if !snapshot.body.contains(semantic_fallback) {
-                return finding_evaluation(
-                    rule,
-                    Some(snapshot),
-                    SourceAuditStatus::ManualReview,
-                    SourceAuditSeverity::ManualReview,
-                    Some(snapshot.effective_url.clone()),
-                    format!(
-                        "URL returned HTTP {} but body did not contain semantic fallback `{semantic_fallback}`.",
-                        snapshot.status
-                    ),
-                    recommendation.to_string(),
-                );
-            }
+        let Some(semantic_fallback) = semantic_fallback else {
+            return finding_evaluation(
+                rule,
+                Some(snapshot),
+                SourceAuditStatus::ManualReview,
+                SourceAuditSeverity::ManualReview,
+                Some(snapshot.effective_url.clone()),
+                format!(
+                    "URL returned HTTP {} for a bot-filter policy without a semantic fallback.",
+                    snapshot.status
+                ),
+                recommendation.to_string(),
+            );
+        };
+        if !snapshot.body.contains(semantic_fallback) {
+            return finding_evaluation(
+                rule,
+                Some(snapshot),
+                SourceAuditStatus::ManualReview,
+                SourceAuditSeverity::ManualReview,
+                Some(snapshot.effective_url.clone()),
+                format!(
+                    "URL returned HTTP {} but body did not contain semantic fallback `{semantic_fallback}`.",
+                    snapshot.status
+                ),
+                recommendation.to_string(),
+            );
         }
         return ok_evaluation(
             rule,
