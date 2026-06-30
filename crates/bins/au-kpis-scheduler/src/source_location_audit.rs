@@ -712,12 +712,8 @@ fn apply_manual_review_due(
     rule: &SourceLocationRule,
     snapshot: &SourceUrlSnapshot,
     generated_at: DateTime<Utc>,
-    evaluation: RuleEvaluation,
+    mut evaluation: RuleEvaluation,
 ) -> RuleEvaluation {
-    if evaluation.result.status != SourceAuditStatus::Ok {
-        return evaluation;
-    }
-
     let (Some(reviewed_at), Some(manual_review_due_at)) =
         (&rule.reviewed_at, &rule.manual_review_due_at)
     else {
@@ -756,6 +752,20 @@ fn apply_manual_review_due(
     };
 
     if generated_at.date_naive() <= due {
+        return evaluation;
+    }
+
+    if evaluation.result.status != SourceAuditStatus::Ok {
+        let due_evidence =
+            format!(" Manual register review was due {due}; last reviewed {reviewed}.");
+        evaluation.result.evidence.push_str(&due_evidence);
+        if let Some(finding) = &mut evaluation.finding {
+            finding.evidence.push_str(&due_evidence);
+            finding.recommendation = format!(
+                "{} Refresh manual review evidence and update reviewed_at/manual_review_due_at.",
+                finding.recommendation
+            );
+        }
         return evaluation;
     }
 

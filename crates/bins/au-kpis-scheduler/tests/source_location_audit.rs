@@ -750,6 +750,41 @@ fn source_location_overdue_manual_entry_with_live_policy_requires_review() {
 }
 
 #[test]
+fn source_location_overdue_manual_entry_preserves_drift_and_review_due_evidence() {
+    let rules = [SourceLocationRule::new(
+        "apra",
+        "apra.super_asset_allocation",
+        "https://www.apra.gov.au/superannuation-statistics",
+        SourceLocationCheck::Reachable {
+            recommendation: s("Review APRA superannuation asset allocation source evidence."),
+        },
+    )
+    .with_register_metadata("manual_pending", "contains_any")
+    .with_manual_review_metadata("2026-01-01", "2026-05-01")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.apra.gov.au/superannuation-statistics",
+        "https://www.apra.gov.au/superannuation-statistics",
+        404,
+        "not found",
+    )];
+
+    let report = evaluate_source_location_snapshots(
+        &rules,
+        &snapshots,
+        Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(report.status, SourceAuditStatus::Drift);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Warning);
+    assert!(report.findings[0].evidence.contains("HTTP 404"));
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("Manual register review was due")
+    );
+}
+
+#[test]
 fn source_location_current_manual_entry_with_live_policy_passes() {
     let rules = [SourceLocationRule::new(
         "apra",

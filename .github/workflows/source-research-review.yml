@@ -60,36 +60,51 @@ jobs:
             min_created="$(date -u -d '8 days ago' +%FT%TZ)"
             run_json=""
             while [ "${SECONDS}" -lt "${deadline}" ]; do
-              run_json="$(
+              runs_json="$(
                 gh run list \
                   --workflow "Source Location Audit" \
                   --branch main \
                   --event schedule \
                   --limit 20 \
-                  --json createdAt,databaseId,conclusion,headBranch,headSha,status,url,workflowName \
-                  | jq --arg min_created "${min_created}" '[
-                    .[]
-                    | select(.createdAt >= $min_created)
-                  ] | .[0]'
+                  --json createdAt,databaseId,conclusion,headBranch,headSha,status,url,workflowName
               )"
-              if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
-                echo "Waiting for a scheduled Source Location Audit run from the last 8 days..."
-                sleep 60
-                continue
-              fi
+              wait_for_active_run=false
+              run_json=""
+              while IFS= read -r candidate_json; do
+                status="$(jq -r '.status' <<< "${candidate_json}")"
+                conclusion="$(jq -r '.conclusion' <<< "${candidate_json}")"
+                run_id="$(jq -r '.databaseId' <<< "${candidate_json}")"
 
-              status="$(jq -r '.status' <<< "${run_json}")"
-              conclusion="$(jq -r '.conclusion' <<< "${run_json}")"
-              if [ "${status}" != "completed" ]; then
-                echo "Waiting for latest scheduled Source Location Audit run to complete..."
+                if [ "${status}" != "completed" ]; then
+                  wait_for_active_run=true
+                  break
+                fi
+                if [ "${conclusion}" != "success" ] && [ "${conclusion}" != "failure" ]; then
+                  echo "Skipping scheduled Source Location Audit run ${run_id} with conclusion ${conclusion}."
+                  continue
+                fi
+
+                artifact_count="$(
+                  gh api "repos/${{ github.repository }}/actions/runs/${run_id}/artifacts" \
+                    --jq '[.artifacts[] | select(.name == "source-location-audit" and .expired == false)] | length'
+                )"
+                if [ "${artifact_count}" -gt 0 ]; then
+                  run_json="${candidate_json}"
+                  break
+                fi
+                echo "Skipping scheduled Source Location Audit run ${run_id}; source-location-audit artifact is unavailable."
+              done < <(jq -c --arg min_created "${min_created}" '.[] | select(.createdAt >= $min_created)' <<< "${runs_json}")
+
+              if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
+                if [ "${wait_for_active_run}" = "true" ]; then
+                  echo "Waiting for latest scheduled Source Location Audit run to complete..."
+                else
+                  echo "Waiting for a reusable scheduled Source Location Audit run from the last 8 days..."
+                fi
                 sleep 60
-                continue
-              fi
-              if [ "${conclusion}" = "success" ] || [ "${conclusion}" = "failure" ]; then
+              else
                 break
               fi
-              echo "Latest scheduled Source Location Audit run did not produce a reusable artifact: ${conclusion}." >&2
-              exit 1
             done
             if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
               echo "No reusable scheduled Source Location Audit run found for main in the last 8 days after waiting up to 120 minutes." >&2
@@ -160,7 +175,9 @@ jobs:
 
       - name: Validate audited source register contract
         working-directory: audited-source
-        run: cargo test -p au-kpis-source-register -- --nocapture
+        run: |
+          cargo test -p au-kpis-source-register -- --nocapture
+          cargo test -p au-kpis-scheduler --test source_register_contract -- --nocapture
 
       - name: Read source-location audit status
         id: audit_status
