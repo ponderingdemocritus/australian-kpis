@@ -40,10 +40,20 @@ version = "source-register.v1"
 source_id = "rba"
 dataflow_id = "rba.statistical_tables"
 status = "active"
+owner_area = "adapter"
 canonical_url = "https://www.rba.gov.au/statistics/tables/"
 license = "RBA Copyright and Disclaimer Notice"
 attribution = "Source: Reserve Bank of Australia"
 cadence = "weekly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "bot_filtered"
+expected_statuses = [403]
+recommendation = "Use reviewed direct artifacts."
 """,
                 encoding="utf-8",
             )
@@ -108,10 +118,20 @@ version = "source-register.v1"
 source_id = "asx"
 dataflow_id = "asx.market_statistics"
 status = "active"
+owner_area = "adapter"
 canonical_url = "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
 license = "ASX terms of use"
 attribution = "Source: ASX"
 cadence = "monthly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["market statistics"]
+recommendation = "Review the market statistics page."
 """,
                 encoding="utf-8",
             )
@@ -178,10 +198,20 @@ version = "source-register.v1"
 source_id = "abs"
 dataflow_id = "abs.cpi"
 status = "active"
+owner_area = "adapter"
 canonical_url = "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
 cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review ABS CPI source."
 """,
                 encoding="utf-8",
             )
@@ -205,6 +235,7 @@ cadence = "quarterly"
     def test_validation_rejects_non_actionable_research_artifact(self):
         artifact = {
             "schema_version": "source-research.v1",
+            "artifact_id": "abs.cpi",
             "source_id": "abs",
             "dataflow_id": "abs.cpi",
             "current_url": "https://data.api.abs.gov.au/",
@@ -228,6 +259,85 @@ cadence = "quarterly"
         errors = source_research.validate_research_artifact(artifact)
 
         self.assertIn("audit_severity is not actionable for research", errors)
+
+    def test_load_register_rejects_duplicate_dataflow_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            register = pathlib.Path(tmp) / "source-register.v1.toml"
+            register.write_text(
+                """
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://example.test/a"
+license = "CC-BY-4.0"
+attribution = "Source: ABS"
+cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review source."
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://example.test/b"
+license = "CC-BY-4.0"
+attribution = "Source: ABS"
+cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review source."
+""",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "duplicate dataflow id `abs.cpi`"):
+                source_research.load_register(register)
+
+    def test_validation_rejects_missing_artifact_id_and_bad_timestamp(self):
+        artifact = {
+            "schema_version": "source-research.v1",
+            "source_id": "abs",
+            "dataflow_id": "abs.cpi",
+            "current_url": "https://data.api.abs.gov.au/",
+            "audit_evidence": "ok",
+            "audit_severity": "warning",
+            "register_status": "active",
+            "register_canonical_url": "https://data.api.abs.gov.au/",
+            "allowed_domains": ["data.api.abs.gov.au"],
+            "required_evidence": ["official publisher URL"],
+            "classification": "insufficient_evidence",
+            "source_urls": [],
+            "publisher_names": [],
+            "retrieved_at": "2026/06/30",
+            "license_evidence": "CC-BY-4.0",
+            "attribution_evidence": "Source: ABS",
+            "cadence_evidence": "quarterly",
+            "recommendation": "Review source.",
+            "risk_notes": ["Needs human review."],
+        }
+
+        errors = source_research.validate_research_artifact(artifact)
+
+        self.assertIn("artifact_id must be a non-empty string", errors)
+        self.assertIn("retrieved_at must be an RFC 3339 timestamp", errors)
 
 
 if __name__ == "__main__":

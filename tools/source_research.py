@@ -29,6 +29,51 @@ EVIDENCE_CHECKLIST = [
     "cadence or release timing",
     "source/dataflow scope match",
 ]
+REGISTER_TOP_LEVEL_KEYS = {"version", "dataflows"}
+REGISTER_DATAFLOW_KEYS = {
+    "source_id",
+    "dataflow_id",
+    "status",
+    "owner_area",
+    "canonical_url",
+    "license",
+    "attribution",
+    "cadence",
+    "review_frequency",
+    "source_scope",
+    "provenance_requirements",
+    "validation_requirements",
+    "expected_missing_reason",
+    "retrieved_at",
+    "reviewed_by",
+    "reviewed_at",
+    "manual_review_due_at",
+    "replacement_candidate",
+    "audit_policy",
+    "additional_audit_policies",
+}
+REGISTER_REQUIRED_STRINGS = [
+    "source_id",
+    "dataflow_id",
+    "status",
+    "owner_area",
+    "canonical_url",
+    "license",
+    "attribution",
+    "cadence",
+    "review_frequency",
+    "source_scope",
+]
+REGISTER_POLICY_KEYS = {
+    "contains_any": {"kind", "needles", "recommendation"},
+    "directory_listing": {"kind", "required_patterns", "recommendation"},
+    "budget_year": {"kind", "configured_year", "latest_year", "recommendation"},
+    "licensed_product": {"kind", "recommendation"},
+    "world_bank_bready_api": {"kind", "recommendation"},
+    "manual_placeholder": {"kind", "reason", "recommendation"},
+    "manual_register_only": {"kind", "reason", "recommendation"},
+    "bot_filtered": {"kind", "expected_statuses", "semantic_fallback", "recommendation"},
+}
 
 
 def load_json(path: pathlib.Path) -> dict[str, Any]:
@@ -40,10 +85,124 @@ def load_json(path: pathlib.Path) -> dict[str, Any]:
 
 def load_register(path: pathlib.Path) -> dict[str, dict[str, Any]]:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    return {
-        str(dataflow["dataflow_id"]): dataflow
-        for dataflow in raw.get("dataflows", [])
-    }
+    errors = validate_register(raw)
+    if errors:
+        raise ValueError(f"{path}: {'; '.join(errors)}")
+
+    register: dict[str, dict[str, Any]] = {}
+    for dataflow in raw["dataflows"]:
+        dataflow_id = cast(str, dataflow["dataflow_id"])
+        register[dataflow_id] = cast(dict[str, Any], dataflow)
+    return register
+
+
+def validate_register(raw: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    unknown_top_level = set(raw) - REGISTER_TOP_LEVEL_KEYS
+    if unknown_top_level:
+        errors.append(f"unknown register keys: {', '.join(sorted(unknown_top_level))}")
+    if raw.get("version") != "source-register.v1":
+        errors.append("version must be source-register.v1")
+
+    dataflows = raw.get("dataflows")
+    if not isinstance(dataflows, list) or not dataflows:
+        errors.append("dataflows must be a non-empty list")
+        return errors
+
+    seen: set[str] = set()
+    for index, dataflow in enumerate(dataflows):
+        prefix = f"dataflows[{index}]"
+        if not isinstance(dataflow, dict):
+            errors.append(f"{prefix} must be a table")
+            continue
+        unknown_dataflow_keys = set(dataflow) - REGISTER_DATAFLOW_KEYS
+        if unknown_dataflow_keys:
+            errors.append(f"{prefix} has unknown keys: {', '.join(sorted(unknown_dataflow_keys))}")
+        for field in REGISTER_REQUIRED_STRINGS:
+            require_non_empty_string(dataflow, field, prefix, errors)
+        require_non_empty_string_list(dataflow, "provenance_requirements", prefix, errors)
+        require_non_empty_string_list(dataflow, "validation_requirements", prefix, errors)
+
+        dataflow_id = dataflow.get("dataflow_id")
+        if isinstance(dataflow_id, str) and dataflow_id.strip():
+            if dataflow_id in seen:
+                errors.append(f"duplicate dataflow id `{dataflow_id}`")
+            seen.add(dataflow_id)
+
+        audit_policy = dataflow.get("audit_policy")
+        if isinstance(audit_policy, dict):
+            validate_audit_policy(audit_policy, f"{prefix}.audit_policy", errors)
+        else:
+            errors.append(f"{prefix}.audit_policy must be a table")
+
+        additional_policies = dataflow.get("additional_audit_policies", [])
+        if not isinstance(additional_policies, list):
+            errors.append(f"{prefix}.additional_audit_policies must be a list")
+        else:
+            for policy_index, policy in enumerate(additional_policies):
+                policy_prefix = f"{prefix}.additional_audit_policies[{policy_index}]"
+                if not isinstance(policy, dict):
+                    errors.append(f"{policy_prefix} must be a table")
+                    continue
+                require_non_empty_string(policy, "url", policy_prefix, errors)
+                validate_audit_policy(policy, policy_prefix, errors)
+    return errors
+
+
+def require_non_empty_string(
+    record: dict[str, Any],
+    field: str,
+    prefix: str,
+    errors: list[str],
+) -> None:
+    value = record.get(field)
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{prefix}.{field} must be a non-empty string")
+
+
+def require_non_empty_string_list(
+    record: dict[str, Any],
+    field: str,
+    prefix: str,
+    errors: list[str],
+) -> None:
+    value = record.get(field)
+    if not isinstance(value, list) or not value or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        errors.append(f"{prefix}.{field} must be a non-empty string list")
+
+
+def validate_audit_policy(policy: dict[str, Any], prefix: str, errors: list[str]) -> None:
+    kind = policy.get("kind")
+    if not isinstance(kind, str) or kind not in REGISTER_POLICY_KEYS:
+        errors.append(f"{prefix}.kind is not allowed")
+        return
+    allowed_keys = REGISTER_POLICY_KEYS[kind]
+    unknown_keys = set(policy) - allowed_keys
+    if unknown_keys:
+        errors.append(f"{prefix} has unknown keys: {', '.join(sorted(unknown_keys))}")
+    require_non_empty_string(policy, "recommendation", prefix, errors)
+    if kind == "contains_any":
+        require_non_empty_string_list(policy, "needles", prefix, errors)
+    elif kind == "directory_listing":
+        require_non_empty_string_list(policy, "required_patterns", prefix, errors)
+    elif kind == "budget_year":
+        require_non_empty_string(policy, "configured_year", prefix, errors)
+        require_non_empty_string(policy, "latest_year", prefix, errors)
+    elif kind in {"manual_placeholder", "manual_register_only"}:
+        require_non_empty_string(policy, "reason", prefix, errors)
+    elif kind == "bot_filtered":
+        statuses = policy.get("expected_statuses")
+        if not isinstance(statuses, list) or not statuses or any(
+            not isinstance(status, int) for status in statuses
+        ):
+            errors.append(f"{prefix}.expected_statuses must be a non-empty integer list")
+        semantic_fallback = policy.get("semantic_fallback")
+        if semantic_fallback is not None and (
+            not isinstance(semantic_fallback, str) or not semantic_fallback.strip()
+        ):
+            errors.append(f"{prefix}.semantic_fallback must be a non-empty string")
 
 
 def slug(value: str) -> str:
@@ -59,6 +218,14 @@ def artifact_id(dataflow_id: str, occurrence: int) -> str:
 
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+
+
+def is_rfc3339_timestamp(value: str) -> bool:
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
 
 
 def should_research(finding: dict[str, Any], dataflow_id: str | None) -> bool:
@@ -115,6 +282,7 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     required_strings = [
         "schema_version",
+        "artifact_id",
         "source_id",
         "dataflow_id",
         "current_url",
@@ -138,11 +306,24 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
         errors.append("schema_version must be source-research.v1")
     if artifact.get("classification") not in CLASSIFICATIONS:
         errors.append("classification is not allowed")
-    for field in ["allowed_domains", "required_evidence", "source_urls", "publisher_names", "risk_notes"]:
-        if not isinstance(artifact.get(field), list):
+    for field in [
+        "allowed_domains",
+        "required_evidence",
+        "source_urls",
+        "publisher_names",
+        "risk_notes",
+    ]:
+        value = artifact.get(field)
+        if not isinstance(value, list):
             errors.append(f"{field} must be a list")
-    if not artifact.get("required_evidence"):
-        errors.append("required_evidence must not be empty")
+        elif any(not isinstance(item, str) or not item.strip() for item in value):
+            errors.append(f"{field} must contain only non-empty strings")
+    for field in ["allowed_domains", "required_evidence", "risk_notes"]:
+        if not artifact.get(field):
+            errors.append(f"{field} must not be empty")
+    retrieved_at = artifact.get("retrieved_at")
+    if isinstance(retrieved_at, str) and not is_rfc3339_timestamp(retrieved_at):
+        errors.append("retrieved_at must be an RFC 3339 timestamp")
     if artifact.get("audit_severity") not in ACTIONABLE_STATUSES:
         errors.append("audit_severity is not actionable for research")
     return errors

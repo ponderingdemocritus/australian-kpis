@@ -391,6 +391,7 @@ pub enum SourceRegisterError {
 
 /// Versioned source register.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceRegister {
     /// Register version id.
     pub version: String,
@@ -400,6 +401,7 @@ pub struct SourceRegister {
 
 /// One governed source/dataflow entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceRegisterDataflow {
     /// Source id.
     pub source_id: String,
@@ -490,7 +492,7 @@ pub enum OwnerArea {
 
 /// Source-location audit policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuditPolicy {
     /// Page body must contain one of the configured hints.
     ContainsAny {
@@ -754,6 +756,17 @@ recommendation = "Review source."
 
         let err = parse_source_register(&raw).expect_err("empty expected statuses should fail");
         assert!(err.to_string().contains("expected_statuses"));
+    }
+
+    #[test]
+    fn unknown_dataflow_keys_are_rejected() {
+        let raw = valid_register_fixture().replace(
+            "manual_review_due_at = \"2027-06-22\"",
+            "manual_review_due_at = \"2027-06-22\"\nreplacement_candidte = \"Reviewed replacement\"",
+        );
+
+        let err = parse_source_register(&raw).expect_err("unknown keys should fail");
+        assert!(err.to_string().contains("replacement_candidte"));
     }
 
     fn valid_register_fixture() -> String {
