@@ -293,12 +293,29 @@ fn validate_http_url(
     value: &str,
     dataflow_id: &str,
 ) -> Result<(), SourceRegisterError> {
-    let parsed = url::Url::parse(value).map_err(|err| {
-        SourceRegisterError::InvalidRegister(format!(
-            "`{dataflow_id}` has invalid `{field}` URL: {err}"
-        ))
-    })?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+    if value.trim() != value || value.chars().any(char::is_whitespace) {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
+        )));
+    }
+
+    let Some((scheme, remainder)) = value.split_once("://") else {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
+        )));
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
+        )));
+    }
+
+    let host = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if host.is_empty() || host.starts_with('.') {
         return Err(SourceRegisterError::InvalidRegister(format!(
             "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
         )));
