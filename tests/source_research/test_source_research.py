@@ -513,6 +513,90 @@ recommendation = "Review ABS CPI source."
 
         self.assertIn("audit_severity is not actionable for research", errors)
 
+    def test_validation_rejects_register_domain_provenance_mismatch(self):
+        artifact = {
+            "schema_version": "source-research.v1",
+            "artifact_id": "abs.cpi",
+            "source_id": "abs",
+            "dataflow_id": "abs.cpi",
+            "current_url": "https://mirror.example.invalid/cpi",
+            "audit_evidence": "ok",
+            "audit_severity": "warning",
+            "register_status": "active",
+            "register_canonical_url": "https://data.api.abs.gov.au/",
+            "source_scope": "test",
+            "review_frequency": "weekly",
+            "expected_missing_reason": "",
+            "replacement_candidate": "",
+            "allowed_domains": ["example.org"],
+            "required_evidence": ["official publisher URL"],
+            "provenance_requirements": ["Preserve source provenance."],
+            "validation_requirements": ["Validate source semantics."],
+            "classification": "insufficient_evidence",
+            "source_urls": [
+                "https://mirror.example.invalid/cpi",
+                "https://data.api.abs.gov.au/",
+                "https://unreviewed.example.net/cpi",
+            ],
+            "publisher_names": ["ABS"],
+            "retrieved_at": "2026-06-30T00:00:00+00:00",
+            "generated_at": "2026-06-29T06:00:00+00:00",
+            "register_version": "source-register.v0",
+            "license_evidence": "CC-BY-4.0",
+            "attribution_evidence": "Source: ABS",
+            "cadence_evidence": "quarterly",
+            "recommendation": "Review source.",
+            "risk_notes": ["Needs human review."],
+        }
+
+        errors = source_research.validate_research_artifact(artifact)
+
+        self.assertIn("register_version must be source-register.v1", errors)
+        self.assertIn("allowed_domains must include register_canonical_url host", errors)
+        self.assertIn(
+            "source_urls host `unreviewed.example.net` must be current_url host or allowed",
+            errors,
+        )
+
+    def test_validation_accepts_drifted_current_url_plus_governed_register_url(self):
+        artifact = {
+            "schema_version": "source-research.v1",
+            "artifact_id": "abs.cpi",
+            "source_id": "abs",
+            "dataflow_id": "abs.cpi",
+            "current_url": "https://mirror.example.invalid/cpi",
+            "audit_evidence": "ok",
+            "audit_severity": "warning",
+            "register_status": "active",
+            "register_canonical_url": "https://data.api.abs.gov.au/",
+            "source_scope": "test",
+            "review_frequency": "weekly",
+            "expected_missing_reason": "",
+            "replacement_candidate": "",
+            "allowed_domains": ["data.api.abs.gov.au"],
+            "required_evidence": ["official publisher URL"],
+            "provenance_requirements": ["Preserve source provenance."],
+            "validation_requirements": ["Validate source semantics."],
+            "classification": "insufficient_evidence",
+            "source_urls": [
+                "https://mirror.example.invalid/cpi",
+                "https://data.api.abs.gov.au/",
+            ],
+            "publisher_names": ["ABS"],
+            "retrieved_at": "2026-06-30T00:00:00+00:00",
+            "generated_at": "2026-06-29T06:00:00+00:00",
+            "register_version": "source-register.v1",
+            "license_evidence": "CC-BY-4.0",
+            "attribution_evidence": "Source: ABS",
+            "cadence_evidence": "quarterly",
+            "recommendation": "Review source.",
+            "risk_notes": ["Needs human review."],
+        }
+
+        errors = source_research.validate_research_artifact(artifact)
+
+        self.assertEqual(errors, [])
+
     def test_load_register_rejects_duplicate_dataflow_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             register = pathlib.Path(tmp) / "source-register.v1.toml"

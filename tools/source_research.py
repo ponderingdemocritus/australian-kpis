@@ -23,6 +23,7 @@ CLASSIFICATIONS = {
     "candidate_replacement",
     "insufficient_evidence",
 }
+SOURCE_REGISTER_VERSION = "source-register.v1"
 EVIDENCE_CHECKLIST = [
     "official publisher URL",
     "license or usage terms",
@@ -385,6 +386,8 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
 
     if artifact.get("schema_version") != "source-research.v1":
         errors.append("schema_version must be source-research.v1")
+    if artifact.get("register_version") != SOURCE_REGISTER_VERSION:
+        errors.append(f"register_version must be {SOURCE_REGISTER_VERSION}")
     if artifact.get("classification") not in CLASSIFICATIONS:
         errors.append("classification is not allowed")
     for field in [
@@ -424,6 +427,45 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
         errors.append("generated_at must be an RFC 3339 timestamp")
     if artifact.get("audit_severity") not in ACTIONABLE_STATUSES:
         errors.append("audit_severity is not actionable for research")
+    current_url = artifact.get("current_url")
+    register_canonical_url = artifact.get("register_canonical_url")
+    allowed_domains = artifact.get("allowed_domains")
+    source_urls = artifact.get("source_urls")
+    if isinstance(register_canonical_url, str):
+        canonical_host = host_from_url(register_canonical_url)
+        if not canonical_host:
+            errors.append("register_canonical_url must be an http(s) URL")
+        elif isinstance(allowed_domains, list) and canonical_host not in allowed_domains:
+            errors.append("allowed_domains must include register_canonical_url host")
+    if isinstance(current_url, str):
+        current_host = host_from_url(current_url)
+        if not current_host:
+            errors.append("current_url must be an http(s) URL")
+    else:
+        current_host = ""
+    if (
+        isinstance(current_url, str)
+        and isinstance(register_canonical_url, str)
+        and isinstance(source_urls, list)
+    ):
+        if current_url not in source_urls:
+            errors.append("source_urls must include current_url")
+        if register_canonical_url not in source_urls:
+            errors.append("source_urls must include register_canonical_url")
+    if isinstance(source_urls, list) and isinstance(allowed_domains, list):
+        allowed_domain_values = {
+            domain for domain in allowed_domains if isinstance(domain, str)
+        }
+        for source_url in source_urls:
+            if not isinstance(source_url, str):
+                continue
+            source_host = host_from_url(source_url)
+            if not source_host:
+                errors.append(f"source_urls entry `{source_url}` must be an http(s) URL")
+            elif source_host != current_host and source_host not in allowed_domain_values:
+                errors.append(
+                    f"source_urls host `{source_host}` must be current_url host or allowed"
+                )
     return errors
 
 
@@ -490,7 +532,7 @@ def generate(args: argparse.Namespace) -> int:
     artifacts: list[dict[str, Any]] = []
     occurrences: dict[str, int] = {}
     audit_generated_at = str(report.get("generated_at") or retrieved_at)
-    register_version = str(report.get("register_version") or "unknown")
+    register_version = str(report.get("register_version") or SOURCE_REGISTER_VERSION)
 
     findings = [
         finding

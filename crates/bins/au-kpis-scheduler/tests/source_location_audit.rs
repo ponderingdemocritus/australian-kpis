@@ -785,7 +785,7 @@ fn source_location_overdue_manual_entry_preserves_drift_and_review_due_evidence(
 }
 
 #[test]
-fn source_location_current_manual_entry_with_live_policy_passes() {
+fn source_location_current_manual_entry_with_live_policy_stays_visible() {
     let rules = [SourceLocationRule::new(
         "apra",
         "apra.super_asset_allocation",
@@ -810,12 +810,40 @@ fn source_location_current_manual_entry_with_live_policy_passes() {
         Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
     );
 
-    assert_eq!(report.status, SourceAuditStatus::Ok);
-    assert!(report.findings.is_empty());
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
     assert!(
-        report.results[0]
+        report.findings[0]
             .evidence
-            .contains("Observed expected source hint")
+            .contains("register status `manual_pending` remains unresolved")
+    );
+}
+
+#[test]
+fn source_location_coverage_gap_with_live_policy_stays_visible() {
+    let rules = [SourceLocationRule::new(
+        "state-planning",
+        "state_planning.vic_permit_activity",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        SourceLocationCheck::ContainsAny {
+            needles: sv(&["Planning permit activity"]),
+            recommendation: s("Review Victoria Planning permit activity source links."),
+        },
+    )
+    .with_register_metadata("coverage_gap", "contains_any")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        200,
+        "Planning permit activity",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("register status `coverage_gap` remains unresolved")
     );
 }
 

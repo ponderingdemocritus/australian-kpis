@@ -642,7 +642,7 @@ fn evaluate_rule(
         recommendation,
     } = &rule.check
     {
-        return evaluate_manual_register_only(
+        let evaluation = evaluate_manual_register_only(
             rule,
             generated_at,
             reason,
@@ -650,6 +650,7 @@ fn evaluate_rule(
             manual_review_due_at,
             recommendation,
         );
+        return apply_unresolved_source_status(rule, None, evaluation);
     }
 
     let Some(snapshot) = snapshot else {
@@ -705,7 +706,8 @@ fn evaluate_rule(
             unreachable!("handled before snapshot")
         }
     };
-    apply_manual_review_due(rule, snapshot, generated_at, evaluation)
+    let evaluation = apply_manual_review_due(rule, snapshot, generated_at, evaluation);
+    apply_unresolved_source_status(rule, Some(snapshot), evaluation)
 }
 
 fn apply_manual_review_due(
@@ -779,6 +781,49 @@ fn apply_manual_review_due(
             "Live source check passed, but manual register review was due {due}; last reviewed {reviewed}."
         ),
         "Refresh manual review evidence and update reviewed_at/manual_review_due_at.".to_string(),
+    )
+}
+
+fn apply_unresolved_source_status(
+    rule: &SourceLocationRule,
+    snapshot: Option<&SourceUrlSnapshot>,
+    mut evaluation: RuleEvaluation,
+) -> RuleEvaluation {
+    let Some(source_status) = rule.source_status.as_deref() else {
+        return evaluation;
+    };
+    if !matches!(
+        source_status,
+        "manual_pending" | "visible_unscored" | "coverage_gap"
+    ) {
+        return evaluation;
+    }
+
+    let status_evidence = format!(
+        " Register status `{source_status}` remains unresolved and must stay visible until reviewed."
+    );
+    let status_recommendation =
+        "Keep this source visible as unscored/manual until the register status is resolved.";
+
+    if evaluation.result.status != SourceAuditStatus::Ok {
+        evaluation.result.evidence.push_str(&status_evidence);
+        if let Some(finding) = &mut evaluation.finding {
+            finding.evidence.push_str(&status_evidence);
+            finding.recommendation = format!("{} {status_recommendation}", finding.recommendation);
+        }
+        return evaluation;
+    }
+
+    finding_evaluation(
+        rule,
+        snapshot,
+        SourceAuditStatus::ManualReview,
+        SourceAuditSeverity::ManualReview,
+        snapshot.map(|snapshot| snapshot.effective_url.clone()),
+        format!(
+            "Live source check passed, but register status `{source_status}` remains unresolved."
+        ),
+        status_recommendation.to_string(),
     )
 }
 
