@@ -163,9 +163,20 @@ recommendation = "Review the market statistics page."
 
             self.assertEqual(exit_code, 0)
             self.assertTrue((out / "asx.market_statistics.json").exists())
-            self.assertTrue((out / "asx.market_statistics__2.json").exists())
+            generated_json = sorted(
+                path.name for path in out.glob("asx.market_statistics*.json")
+            )
+            self.assertEqual(len(generated_json), 2)
+            noncanonical_name = next(
+                name for name in generated_json if name != "asx.market_statistics.json"
+            )
+            self.assertTrue(
+                noncanonical_name.startswith(
+                    "asx.market_statistics__www.asx.com.au_legals_terms-of-use_manual_review__"
+                )
+            )
             first = json.loads((out / "asx.market_statistics.json").read_text())
-            second = json.loads((out / "asx.market_statistics__2.json").read_text())
+            second = json.loads((out / noncanonical_name).read_text())
             self.assertEqual(
                 first["current_url"],
                 "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
@@ -178,7 +189,10 @@ recommendation = "Review the market statistics page."
             self.assertEqual(summary["artifacts_total"], 2)
             self.assertEqual(
                 [item["artifact_id"] for item in summary["artifacts"]],
-                ["asx.market_statistics", "asx.market_statistics__2"],
+                [
+                    "asx.market_statistics",
+                    noncanonical_name.removesuffix(".json"),
+                ],
             )
 
     def test_generate_assigns_repeated_finding_ids_from_stable_order(self):
@@ -249,8 +263,14 @@ recommendation = "Review the market statistics page."
             )
 
             self.assertEqual(exit_code, 0)
+            generated_json = sorted(
+                path.name for path in out.glob("asx.market_statistics*.json")
+            )
+            noncanonical_name = next(
+                name for name in generated_json if name != "asx.market_statistics.json"
+            )
             first = json.loads((out / "asx.market_statistics.json").read_text())
-            second = json.loads((out / "asx.market_statistics__2.json").read_text())
+            second = json.loads((out / noncanonical_name).read_text())
             self.assertEqual(
                 first["current_url"],
                 "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
@@ -259,6 +279,38 @@ recommendation = "Review the market statistics page."
                 second["current_url"],
                 "https://www.asx.com.au/legals/terms-of-use",
             )
+
+            report.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "source_id": "asx",
+                                "dataflow_id": "asx.market_statistics",
+                                "severity": "manual_review",
+                                "current_url": "https://www.asx.com.au/legals/terms-of-use",
+                                "evidence": "Terms evidence changed.",
+                                "recommendation": "Review ASX terms.",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out_single = root / "research-single"
+
+            exit_code = source_research.generate(
+                argparse.Namespace(
+                    report=report,
+                    register=register,
+                    out=out_single,
+                    dataflow_id=None,
+                )
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((out_single / noncanonical_name).exists())
+            self.assertFalse((out_single / "asx.market_statistics.json").exists())
 
     def test_generate_includes_additional_audit_policy_domains(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -327,7 +379,9 @@ recommendation = "Review API values."
             )
 
             self.assertEqual(exit_code, 0)
-            artifact = json.loads((out / "worldbank.bready.json").read_text())
+            summary = json.loads((out / "summary.json").read_text())
+            artifact_id = summary["artifacts"][0]["artifact_id"]
+            artifact = json.loads((out / f"{artifact_id}.json").read_text())
             self.assertEqual(
                 artifact["allowed_domains"],
                 ["www.worldbank.org", "api.worldbank.org"],

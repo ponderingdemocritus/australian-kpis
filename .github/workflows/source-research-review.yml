@@ -177,8 +177,8 @@ jobs:
       - name: Validate audited source register contract
         working-directory: audited-source
         run: |
-          cargo test -p au-kpis-source-register -- --nocapture
-          cargo test -p au-kpis-scheduler --test source_register_contract -- --nocapture
+          cargo test --locked -p au-kpis-source-register -- --nocapture
+          cargo test --locked -p au-kpis-scheduler --test source_register_contract -- --nocapture
 
       - name: Read source-location audit status
         id: audit_status

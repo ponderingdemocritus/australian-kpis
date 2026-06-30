@@ -170,10 +170,10 @@ The current packet has these fields:
 Agentic mode must preserve these fields and may add fields only through a
 schema-versioned change.
 
-`artifact_id` must be unique per audit finding. For a dataflow with one
-finding, it should remain the slugged `dataflow_id`; for repeated findings on
-the same dataflow, later artifacts must use stable suffixes such as
-`asx.market_statistics__2` so URL-specific evidence is not overwritten.
+`artifact_id` must be unique and stable per audit finding. Canonical findings
+may use the slugged `dataflow_id`; non-canonical or repeated findings must use a
+stable suffix derived from the audited URL/rule identity rather than a run-local
+ordinal so URL-specific evidence is not renumbered across weekly runs.
 
 ## Data We Need
 

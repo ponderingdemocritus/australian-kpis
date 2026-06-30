@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import pathlib
 import re
@@ -213,11 +214,40 @@ def slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_")
 
 
-def artifact_id(dataflow_id: str, occurrence: int) -> str:
-    base = slug(dataflow_id)
-    if occurrence == 1:
+def finding_identity_suffix(finding: dict[str, Any]) -> str:
+    current_url = str(finding.get("current_url", ""))
+    parsed = urllib.parse.urlparse(current_url)
+    url_identity = "_".join(
+        part
+        for part in [
+            parsed.netloc,
+            parsed.path.strip("/").replace("/", "_"),
+            str(finding.get("severity", "")),
+        ]
+        if part
+    )
+    stable_input = "|".join(
+        [
+            str(finding.get("source_id", "")),
+            str(finding.get("dataflow_id", "")),
+            current_url,
+            str(finding.get("severity", "")),
+        ]
+    )
+    digest = hashlib.sha1(stable_input.encode("utf-8")).hexdigest()[:8]
+    identity = slug(url_identity)[:80] or "finding"
+    return f"{identity}__{digest}"
+
+
+def artifact_id_for_finding(
+    artifact: dict[str, Any],
+    finding: dict[str, Any],
+    used_ids: set[str],
+) -> str:
+    base = slug(str(artifact["dataflow_id"]))
+    if artifact["current_url"] == artifact["register_canonical_url"] and base not in used_ids:
         return base
-    return f"{base}__{occurrence}"
+    return f"{base}__{finding_identity_suffix(finding)}"
 
 
 def unique_non_empty(values: list[str]) -> list[str]:
@@ -530,7 +560,7 @@ def generate(args: argparse.Namespace) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     retrieved_at = now_iso()
     artifacts: list[dict[str, Any]] = []
-    occurrences: dict[str, int] = {}
+    used_artifact_ids: set[str] = set()
     audit_generated_at = str(report.get("generated_at") or retrieved_at)
     register_version = str(report.get("register_version") or SOURCE_REGISTER_VERSION)
 
@@ -547,9 +577,8 @@ def generate(args: argparse.Namespace) -> int:
             audit_generated_at,
             register_version,
         )
-        dataflow_id = artifact["dataflow_id"]
-        occurrences[dataflow_id] = occurrences.get(dataflow_id, 0) + 1
-        artifact["artifact_id"] = artifact_id(dataflow_id, occurrences[dataflow_id])
+        artifact["artifact_id"] = artifact_id_for_finding(artifact, finding, used_artifact_ids)
+        used_artifact_ids.add(str(artifact["artifact_id"]))
         errors = validate_research_artifact(artifact)
         if errors:
             raise ValueError(f"{artifact.get('dataflow_id', 'unknown')}: {'; '.join(errors)}")
