@@ -12,7 +12,7 @@ import sys
 import tomllib
 from typing import Any
 
-ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "drift", "error"}
+ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "drift"}
 CLASSIFICATIONS = {
     "same_source",
     "moved",

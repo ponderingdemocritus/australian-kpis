@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use au_kpis_adapter::SourceAdapter;
 use au_kpis_scheduler::source_location_audit::default_source_location_rules;
 use au_kpis_scorecard::load_aps_v1_config;
 use au_kpis_source_register::{AuditPolicy, SourceStatus, load_source_register};
@@ -111,6 +112,81 @@ fn aps_source_dataflows_are_all_registered() {
             indicator.source_dataflow_id
         );
     }
+}
+
+#[test]
+fn adapter_manifest_dataflows_are_registered_with_matching_source_ids() {
+    let register = load_source_register().expect("load source register");
+    let registered = register
+        .dataflows
+        .iter()
+        .map(|dataflow| registered_dataflow_key(&dataflow.source_id, &dataflow.dataflow_id))
+        .collect::<BTreeSet<_>>();
+
+    assert_adapter_dataflows_registered(&au_kpis_adapter_abs::AbsAdapter::default(), &registered);
+    assert_adapter_dataflows_registered(&au_kpis_adapter_aemo::AemoAdapter::default(), &registered);
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_ai_readiness::AiReadinessAdapter::default(),
+        &registered,
+    );
+    assert_adapter_dataflows_registered(&au_kpis_adapter_apra::ApraAdapter::default(), &registered);
+    assert_adapter_dataflows_registered(&au_kpis_adapter_asx::AsxAdapter::default(), &registered);
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_nhsac::NhsacAdapter::default(),
+        &registered,
+    );
+    assert_adapter_dataflows_registered(&au_kpis_adapter_pc::PcAdapter::default(), &registered);
+    assert_adapter_dataflows_registered(&au_kpis_adapter_rba::RbaAdapter::default(), &registered);
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_state_budgets::StateBudgetsAdapter::default(),
+        &registered,
+    );
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_state_capital::StateCapitalAdapter::default(),
+        &registered,
+    );
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_state_planning::StatePlanningAdapter::default(),
+        &registered,
+    );
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_treasury::TreasuryAdapter::default(),
+        &registered,
+    );
+    assert_adapter_dataflows_registered(
+        &au_kpis_adapter_worldbank::WorldbankAdapter::default(),
+        &registered,
+    );
+}
+
+fn assert_adapter_dataflows_registered(
+    adapter: &impl SourceAdapter,
+    registered: &BTreeSet<String>,
+) {
+    let manifest = adapter.manifest();
+    for dataflow_id in &manifest.dataflows {
+        let key = registered_dataflow_key(&manifest.source_id, dataflow_id);
+        assert!(
+            registered.contains(&key),
+            "adapter `{}` manifest references unregistered source/dataflow `{}`",
+            manifest.source_id,
+            key
+        );
+    }
+
+    for dataflow in adapter.dataflow_metadata() {
+        let key = registered_dataflow_key(&manifest.source_id, &dataflow.id);
+        assert!(
+            registered.contains(&key),
+            "adapter `{}` metadata references unregistered source/dataflow `{}`",
+            manifest.source_id,
+            key
+        );
+    }
+}
+
+fn registered_dataflow_key(source_id: impl AsRef<str>, dataflow_id: impl AsRef<str>) -> String {
+    format!("{}/{}", source_id.as_ref(), dataflow_id.as_ref())
 }
 
 #[test]

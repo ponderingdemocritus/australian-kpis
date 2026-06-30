@@ -38,6 +38,20 @@ tracing = "0.1"
 
 [dev-dependencies]
 assert_cmd = "2"
+au-kpis-adapter = { workspace = true }
+au-kpis-adapter-abs = { path = "../../adapters/abs" }
+au-kpis-adapter-aemo = { path = "../../adapters/aemo" }
+au-kpis-adapter-ai-readiness = { workspace = true }
+au-kpis-adapter-apra = { path = "../../adapters/apra" }
+au-kpis-adapter-asx = { path = "../../adapters/asx" }
+au-kpis-adapter-nhsac = { workspace = true }
+au-kpis-adapter-pc = { workspace = true }
+au-kpis-adapter-rba = { path = "../../adapters/rba" }
+au-kpis-adapter-state-budgets = { path = "../../adapters/state-budgets" }
+au-kpis-adapter-state-capital = { workspace = true }
+au-kpis-adapter-state-planning = { workspace = true }
+au-kpis-adapter-treasury = { path = "../../adapters/treasury" }
+au-kpis-adapter-worldbank = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-db = { workspace = true }
 au-kpis-scorecard = { workspace = true }

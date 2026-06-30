@@ -145,7 +145,7 @@ cadence = "monthly"
                 ["asx.market_statistics", "asx.market_statistics__2"],
             )
 
-    def test_generate_includes_audit_error_findings(self):
+    def test_generate_skips_audit_error_findings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             report = root / "source-location-audit.json"
@@ -196,8 +196,10 @@ cadence = "quarterly"
             )
 
             self.assertEqual(exit_code, 0)
-            artifact = json.loads((out / "abs.cpi.json").read_text())
-            self.assertEqual(artifact["audit_severity"], "error")
+            self.assertFalse((out / "abs.cpi.json").exists())
+            summary = json.loads((out / "summary.json").read_text())
+            self.assertEqual(summary["artifacts_total"], 0)
+            self.assertEqual(summary["dataflow_ids"], [])
             self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
 
     def test_validation_rejects_non_actionable_research_artifact(self):
