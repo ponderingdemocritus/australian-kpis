@@ -1587,6 +1587,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - rust-check
+      - source-governance
       - typescript
       - sdk-runtime
       - pdf-extractor
