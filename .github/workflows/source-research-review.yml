@@ -155,6 +155,13 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Rust
+        uses: ./source-research-tooling/.github/actions/setup-rust
+
+      - name: Validate audited source register contract
+        working-directory: audited-source
+        run: cargo test -p au-kpis-source-register -- --nocapture
+
       - name: Read source-location audit status
         id: audit_status
         if: always()

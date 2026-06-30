@@ -143,9 +143,10 @@ synchronized with the register.
 
 `.github/workflows/source-research-review.yml` runs at `0 7 * * 1`, reuses the
 latest scheduled source-location audit artifact from `main` in the last eight
-days, reads the source register from the audited commit, and runs the current
-reviewed research tooling. Manual runs require an explicit source-location audit
-run id and can target all findings or one `dataflow_id`.
+days, reads the source register from the audited commit, runs the audited
+source-register Rust contract, and uses the current reviewed research tooling.
+Manual runs require an explicit source-location audit run id and can target all
+findings or one `dataflow_id`.
 
 The workflow generates bounded research packets under:
 

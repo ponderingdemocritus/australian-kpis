@@ -712,6 +712,79 @@ fn source_location_contains_any_without_expected_hint_is_manual_review() {
 }
 
 #[test]
+fn source_location_overdue_manual_entry_with_live_policy_requires_review() {
+    let rules = [SourceLocationRule::new(
+        "apra",
+        "apra.super_asset_allocation",
+        "https://www.apra.gov.au/superannuation-statistics",
+        SourceLocationCheck::ContainsAny {
+            needles: sv(&["Superannuation statistics"]),
+            recommendation: s("Review APRA superannuation asset allocation source evidence."),
+        },
+    )
+    .with_register_metadata("manual_pending", "contains_any")
+    .with_manual_review_metadata("2026-01-01", "2026-05-01")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.apra.gov.au/superannuation-statistics",
+        "https://www.apra.gov.au/superannuation-statistics",
+        200,
+        "Superannuation statistics",
+    )];
+
+    let report = evaluate_source_location_snapshots(
+        &rules,
+        &snapshots,
+        Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("manual register review was due")
+    );
+}
+
+#[test]
+fn source_location_current_manual_entry_with_live_policy_passes() {
+    let rules = [SourceLocationRule::new(
+        "apra",
+        "apra.super_asset_allocation",
+        "https://www.apra.gov.au/superannuation-statistics",
+        SourceLocationCheck::ContainsAny {
+            needles: sv(&["Superannuation statistics"]),
+            recommendation: s("Review APRA superannuation asset allocation source evidence."),
+        },
+    )
+    .with_register_metadata("manual_pending", "contains_any")
+    .with_manual_review_metadata("2026-01-01", "2026-12-01")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.apra.gov.au/superannuation-statistics",
+        "https://www.apra.gov.au/superannuation-statistics",
+        200,
+        "Superannuation statistics",
+    )];
+
+    let report = evaluate_source_location_snapshots(
+        &rules,
+        &snapshots,
+        Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(report.status, SourceAuditStatus::Ok);
+    assert!(report.findings.is_empty());
+    assert!(
+        report.results[0]
+            .evidence
+            .contains("Observed expected source hint")
+    );
+}
+
+#[test]
 fn source_location_missing_snapshot_is_error() {
     let rules = [SourceLocationRule::new(
         "asx",

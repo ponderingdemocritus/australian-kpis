@@ -30,6 +30,10 @@ pub struct SourceLocationRule {
     pub source_status: Option<String>,
     /// Register audit policy kind when this rule is register-derived.
     pub audit_policy_kind: Option<String>,
+    /// Last manual review date when this rule belongs to a manual register entry.
+    pub reviewed_at: Option<String>,
+    /// Next manual review due date when this rule belongs to a manual register entry.
+    pub manual_review_due_at: Option<String>,
 }
 
 impl SourceLocationRule {
@@ -48,6 +52,8 @@ impl SourceLocationRule {
             check,
             source_status: None,
             audit_policy_kind: None,
+            reviewed_at: None,
+            manual_review_due_at: None,
         }
     }
 
@@ -60,6 +66,18 @@ impl SourceLocationRule {
     ) -> Self {
         self.source_status = Some(source_status.into());
         self.audit_policy_kind = Some(audit_policy_kind.into());
+        self
+    }
+
+    /// Attach manual review metadata from the source register.
+    #[must_use]
+    pub fn with_manual_review_metadata(
+        mut self,
+        reviewed_at: impl Into<String>,
+        manual_review_due_at: impl Into<String>,
+    ) -> Self {
+        self.reviewed_at = Some(reviewed_at.into());
+        self.manual_review_due_at = Some(manual_review_due_at.into());
         self
     }
 }
@@ -473,10 +491,12 @@ fn source_register_rule(
         },
     };
 
-    Some(
-        SourceLocationRule::new(source_id, dataflow_id, current_url, check)
-            .with_register_metadata(source_status, audit_policy_kind),
-    )
+    let mut rule = SourceLocationRule::new(source_id, dataflow_id, current_url, check)
+        .with_register_metadata(source_status, audit_policy_kind);
+    if let (Some(reviewed_at), Some(manual_review_due_at)) = (reviewed_at, manual_review_due_at) {
+        rule = rule.with_manual_review_metadata(reviewed_at, manual_review_due_at);
+    }
+    Some(rule)
 }
 
 fn source_status_name(status: au_kpis_source_register::SourceStatus) -> &'static str {
@@ -644,7 +664,7 @@ fn evaluate_rule(
         );
     };
 
-    match &rule.check {
+    let evaluation = match &rule.check {
         SourceLocationCheck::CanonicalUrl {
             expected_url,
             recommendation,
@@ -684,7 +704,72 @@ fn evaluate_rule(
         SourceLocationCheck::ManualRegisterOnly { .. } => {
             unreachable!("handled before snapshot")
         }
+    };
+    apply_manual_review_due(rule, snapshot, generated_at, evaluation)
+}
+
+fn apply_manual_review_due(
+    rule: &SourceLocationRule,
+    snapshot: &SourceUrlSnapshot,
+    generated_at: DateTime<Utc>,
+    evaluation: RuleEvaluation,
+) -> RuleEvaluation {
+    if evaluation.result.status != SourceAuditStatus::Ok {
+        return evaluation;
     }
+
+    let (Some(reviewed_at), Some(manual_review_due_at)) =
+        (&rule.reviewed_at, &rule.manual_review_due_at)
+    else {
+        return evaluation;
+    };
+
+    let reviewed = match NaiveDate::parse_from_str(reviewed_at, "%Y-%m-%d") {
+        Ok(value) => value,
+        Err(err) => {
+            return finding_evaluation(
+                rule,
+                Some(snapshot),
+                SourceAuditStatus::Error,
+                SourceAuditSeverity::Error,
+                Some(snapshot.effective_url.clone()),
+                format!("Manual register reviewed_at `{reviewed_at}` is invalid: {err}."),
+                "Fix the source register manual review metadata.".to_string(),
+            );
+        }
+    };
+    let due = match NaiveDate::parse_from_str(manual_review_due_at, "%Y-%m-%d") {
+        Ok(value) => value,
+        Err(err) => {
+            return finding_evaluation(
+                rule,
+                Some(snapshot),
+                SourceAuditStatus::Error,
+                SourceAuditSeverity::Error,
+                Some(snapshot.effective_url.clone()),
+                format!(
+                    "Manual register manual_review_due_at `{manual_review_due_at}` is invalid: {err}."
+                ),
+                "Fix the source register manual review metadata.".to_string(),
+            );
+        }
+    };
+
+    if generated_at.date_naive() <= due {
+        return evaluation;
+    }
+
+    finding_evaluation(
+        rule,
+        Some(snapshot),
+        SourceAuditStatus::ManualReview,
+        SourceAuditSeverity::ManualReview,
+        Some(snapshot.effective_url.clone()),
+        format!(
+            "Live source check passed, but manual register review was due {due}; last reviewed {reviewed}."
+        ),
+        "Refresh manual review evidence and update reviewed_at/manual_review_due_at.".to_string(),
+    )
 }
 
 fn evaluate_canonical_url(
