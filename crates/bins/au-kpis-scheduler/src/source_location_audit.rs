@@ -1,20 +1,19 @@
 //! Source-location audit rule evaluation and reporting.
 
-use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Context;
 use au_kpis_source_register::{
     AuditPolicy as RegisterAuditPolicy, SOURCE_REGISTER_VERSION, SourceRegisterError,
     load_source_register,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
 
 const USER_AGENT: &str = concat!("au-kpis-source-location-audit/", env!("CARGO_PKG_VERSION"));
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
-static SOURCE_REGISTER_RULES: OnceLock<Vec<SourceLocationRule>> = OnceLock::new();
 
 /// One source-specific location audit rule.
 #[derive(Debug, Clone)]
@@ -127,6 +126,26 @@ pub enum SourceLocationCheck {
         /// Human recommendation for the tracked issue.
         recommendation: &'static str,
     },
+    /// Manual register-only source with no live URL audit and due-date checks.
+    ManualRegisterOnly {
+        /// Why this source is reviewed manually.
+        reason: &'static str,
+        /// Last reviewed date from the register.
+        reviewed_at: &'static str,
+        /// Next manual review due date from the register.
+        manual_review_due_at: &'static str,
+        /// Human recommendation for the tracked issue.
+        recommendation: &'static str,
+    },
+}
+
+impl SourceLocationCheck {
+    fn requires_http_snapshot(&self) -> bool {
+        !matches!(
+            self,
+            Self::ManualPlaceholder { .. } | Self::ManualRegisterOnly { .. }
+        )
+    }
 }
 
 /// HTTP snapshot used by deterministic evaluator tests and the live runner.
@@ -339,14 +358,8 @@ impl SourceAuditSeverity {
 }
 
 /// Register-backed rule catalog for implemented and APS-scoped source dataflows.
-#[must_use]
-pub fn default_source_location_rules() -> &'static [SourceLocationRule] {
-    SOURCE_REGISTER_RULES
-        .get_or_init(|| {
-            source_register_location_rules()
-                .unwrap_or_else(|err| panic!("load source-register-backed audit rules: {err}"))
-        })
-        .as_slice()
+pub fn default_source_location_rules() -> Result<Vec<SourceLocationRule>, SourceRegisterError> {
+    source_register_location_rules()
 }
 
 fn source_register_location_rules() -> Result<Vec<SourceLocationRule>, SourceRegisterError> {
@@ -361,6 +374,8 @@ fn source_register_location_rules() -> Result<Vec<SourceLocationRule>, SourceReg
             &dataflow.canonical_url,
             &dataflow.audit_policy,
             source_status,
+            dataflow.reviewed_at.as_deref(),
+            dataflow.manual_review_due_at.as_deref(),
         ) {
             rules.push(rule);
         }
@@ -371,6 +386,8 @@ fn source_register_location_rules() -> Result<Vec<SourceLocationRule>, SourceReg
                 &additional.url,
                 &additional.policy,
                 source_status,
+                dataflow.reviewed_at.as_deref(),
+                dataflow.manual_review_due_at.as_deref(),
             ) {
                 rules.push(rule);
             }
@@ -386,6 +403,8 @@ fn source_register_rule(
     current_url: &str,
     policy: &RegisterAuditPolicy,
     source_status: &'static str,
+    reviewed_at: Option<&str>,
+    manual_review_due_at: Option<&str>,
 ) -> Option<SourceLocationRule> {
     let audit_policy_kind = audit_policy_kind(policy);
     let check = match policy {
@@ -429,7 +448,15 @@ fn source_register_rule(
             reason: leak_str(reason),
             recommendation: leak_str(recommendation),
         },
-        RegisterAuditPolicy::ManualRegisterOnly { .. } => return None,
+        RegisterAuditPolicy::ManualRegisterOnly {
+            reason,
+            recommendation,
+        } => SourceLocationCheck::ManualRegisterOnly {
+            reason: leak_str(reason),
+            reviewed_at: leak_str(reviewed_at.unwrap_or("")),
+            manual_review_due_at: leak_str(manual_review_due_at.unwrap_or("")),
+            recommendation: leak_str(recommendation),
+        },
         RegisterAuditPolicy::BotFiltered {
             expected_statuses,
             recommendation,
@@ -507,7 +534,9 @@ pub async fn run_source_location_audit(
         .context("build source-location audit HTTP client")?;
     let mut snapshots = Vec::with_capacity(rules.len());
     for rule in rules {
-        snapshots.push(fetch_snapshot(&client, rule.current_url).await?);
+        if rule.check.requires_http_snapshot() {
+            snapshots.push(fetch_snapshot(&client, rule.current_url).await?);
+        }
     }
     Ok(evaluate_source_location_snapshots(rules, &snapshots, now))
 }
@@ -528,7 +557,7 @@ pub fn evaluate_source_location_snapshots(
 
     for rule in rules {
         let snapshot = snapshots_by_url.get(rule.current_url).copied();
-        let evaluation = evaluate_rule(rule, snapshot);
+        let evaluation = evaluate_rule(rule, snapshot, generated_at);
         if let Some(finding) = evaluation.finding {
             findings.push(finding);
         }
@@ -585,6 +614,7 @@ async fn fetch_snapshot(client: &reqwest::Client, url: &str) -> anyhow::Result<S
 fn evaluate_rule(
     rule: &SourceLocationRule,
     snapshot: Option<&SourceUrlSnapshot>,
+    generated_at: DateTime<Utc>,
 ) -> RuleEvaluation {
     if let SourceLocationCheck::ManualPlaceholder {
         reason,
@@ -599,6 +629,23 @@ fn evaluate_rule(
             None,
             (*reason).to_string(),
             (*recommendation).to_string(),
+        );
+    }
+
+    if let SourceLocationCheck::ManualRegisterOnly {
+        reason,
+        reviewed_at,
+        manual_review_due_at,
+        recommendation,
+    } = &rule.check
+    {
+        return evaluate_manual_register_only(
+            rule,
+            generated_at,
+            reason,
+            reviewed_at,
+            manual_review_due_at,
+            recommendation,
         );
     }
 
@@ -644,6 +691,9 @@ fn evaluate_rule(
             evaluate_world_bank_bready(rule, snapshot, recommendation)
         }
         SourceLocationCheck::ManualPlaceholder { .. } => unreachable!("handled before snapshot"),
+        SourceLocationCheck::ManualRegisterOnly { .. } => {
+            unreachable!("handled before snapshot")
+        }
     }
 }
 
@@ -723,6 +773,64 @@ fn evaluate_reachable(
         Some(snapshot.effective_url.clone()),
         format!("URL returned HTTP {}.", snapshot.status),
         recommendation.to_string(),
+    )
+}
+
+fn evaluate_manual_register_only(
+    rule: &SourceLocationRule,
+    generated_at: DateTime<Utc>,
+    reason: &str,
+    reviewed_at: &str,
+    manual_review_due_at: &str,
+    recommendation: &str,
+) -> RuleEvaluation {
+    let generated_date = generated_at.date_naive();
+    let reviewed = match NaiveDate::parse_from_str(reviewed_at, "%Y-%m-%d") {
+        Ok(value) => value,
+        Err(err) => {
+            return finding_evaluation(
+                rule,
+                None,
+                SourceAuditStatus::Error,
+                SourceAuditSeverity::Error,
+                None,
+                format!("Manual register reviewed_at `{reviewed_at}` is invalid: {err}."),
+                recommendation.to_string(),
+            );
+        }
+    };
+    let due = match NaiveDate::parse_from_str(manual_review_due_at, "%Y-%m-%d") {
+        Ok(value) => value,
+        Err(err) => {
+            return finding_evaluation(
+                rule,
+                None,
+                SourceAuditStatus::Error,
+                SourceAuditSeverity::Error,
+                None,
+                format!(
+                    "Manual register manual_review_due_at `{manual_review_due_at}` is invalid: {err}."
+                ),
+                recommendation.to_string(),
+            );
+        }
+    };
+
+    if generated_date > due {
+        return finding_evaluation(
+            rule,
+            None,
+            SourceAuditStatus::ManualReview,
+            SourceAuditSeverity::ManualReview,
+            None,
+            format!("{reason} Last reviewed {reviewed}; manual review was due {due}."),
+            recommendation.to_string(),
+        );
+    }
+
+    manual_ok_evaluation(
+        rule,
+        format!("{reason} Last reviewed {reviewed}; next manual review is due {due}."),
     )
 }
 
@@ -968,6 +1076,23 @@ fn evaluate_world_bank_bready(
             latest.value_count, latest.period
         ),
     )
+}
+
+fn manual_ok_evaluation(rule: &SourceLocationRule, evidence: String) -> RuleEvaluation {
+    RuleEvaluation {
+        result: SourceAuditResult {
+            source_id: rule.source_id.to_string(),
+            dataflow_id: rule.dataflow_id.to_string(),
+            status: SourceAuditStatus::Ok,
+            source_status: rule.source_status.map(str::to_string),
+            audit_policy_kind: rule.audit_policy_kind.map(str::to_string),
+            current_url: rule.current_url.to_string(),
+            effective_url: None,
+            http_status: None,
+            evidence,
+        },
+        finding: None,
+    }
 }
 
 fn ok_evaluation(

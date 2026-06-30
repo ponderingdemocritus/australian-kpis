@@ -43,6 +43,7 @@ fn scheduler_default_rules_are_derived_from_source_register() {
         }
     }
     let scheduler_rules = default_source_location_rules()
+        .expect("load default source-location rules")
         .iter()
         .map(|rule| {
             (
@@ -59,6 +60,24 @@ fn scheduler_default_rules_are_derived_from_source_register() {
         registered_audited, scheduler_rules,
         "scheduler source-location rules must match register-backed audit policies"
     );
+}
+
+#[test]
+fn manual_placeholder_register_entries_use_placeholder_status() {
+    let register = load_source_register().expect("load source register");
+
+    for dataflow in register
+        .dataflows
+        .iter()
+        .filter(|dataflow| matches!(dataflow.audit_policy, AuditPolicy::ManualPlaceholder { .. }))
+    {
+        assert!(
+            matches!(dataflow.status, SourceStatus::Placeholder),
+            "`{}` uses manual_placeholder but status is {:?}",
+            dataflow.dataflow_id,
+            dataflow.status
+        );
+    }
 }
 
 fn audit_policy_kind(policy: &AuditPolicy) -> &'static str {

@@ -613,6 +613,56 @@ fn source_location_manual_placeholder_source_always_creates_review_finding() {
 }
 
 #[test]
+fn source_location_manual_register_only_current_review_passes_without_http() {
+    let rules = [SourceLocationRule::new(
+        "curated",
+        "curated.oversight_strength",
+        "https://www.anao.gov.au/work-program",
+        SourceLocationCheck::ManualRegisterOnly {
+            reason: "Curated oversight-strength input is manually reviewed.",
+            reviewed_at: "2026-06-22",
+            manual_review_due_at: "2026-12-22",
+            recommendation: "Review oversight source taxonomy before scoring.",
+        },
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &[], generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Ok);
+    assert!(report.findings.is_empty());
+    assert_eq!(report.results[0].http_status, None);
+    assert!(report.results[0].evidence.contains("next manual review"));
+}
+
+#[test]
+fn source_location_manual_register_only_overdue_creates_review_finding() {
+    let rules = [SourceLocationRule::new(
+        "curated",
+        "curated.oversight_strength",
+        "https://www.anao.gov.au/work-program",
+        SourceLocationCheck::ManualRegisterOnly {
+            reason: "Curated oversight-strength input is manually reviewed.",
+            reviewed_at: "2025-06-22",
+            manual_review_due_at: "2026-01-01",
+            recommendation: "Review oversight source taxonomy before scoring.",
+        },
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &[], generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("manual review was due")
+    );
+}
+
+#[test]
 fn source_location_report_markdown_and_json_expose_stable_fields() {
     let rules = [SourceLocationRule::new(
         "compute",
@@ -677,6 +727,7 @@ fn source_location_default_rules_use_registered_source_ids() {
         "apra",
         "asx",
         "compute",
+        "curated",
         "nhsac",
         "pc",
         "rba",
@@ -687,7 +738,8 @@ fn source_location_default_rules_use_registered_source_ids() {
         "worldbank",
     ];
 
-    for rule in default_source_location_rules() {
+    let rules = default_source_location_rules().expect("load default source-location rules");
+    for rule in &rules {
         assert!(
             REGISTERED_SOURCE_IDS.contains(&rule.source_id),
             "unregistered source id {} for {}",
@@ -699,7 +751,7 @@ fn source_location_default_rules_use_registered_source_ids() {
 
 #[test]
 fn source_location_ai_rules_use_published_aps_provenance_urls() {
-    let rules = default_source_location_rules();
+    let rules = default_source_location_rules().expect("load default source-location rules");
     let oxford = rules
         .iter()
         .find(|rule| rule.dataflow_id == "oxford.gari")
@@ -724,7 +776,8 @@ fn source_location_state_capital_rules_use_adapter_index_url() {
     const STATE_CAPITAL_INDEX_URL: &str =
         "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025";
 
-    let state_capital_rules = default_source_location_rules()
+    let rules = default_source_location_rules().expect("load default source-location rules");
+    let state_capital_rules = rules
         .iter()
         .filter(|rule| rule.source_id == "state_capital")
         .collect::<Vec<_>>();
@@ -737,7 +790,8 @@ fn source_location_state_capital_rules_use_adapter_index_url() {
 
 #[test]
 fn source_location_nsw_budget_rule_uses_unversioned_landing_page() {
-    let nsw_rule = default_source_location_rules()
+    let rules = default_source_location_rules().expect("load default source-location rules");
+    let nsw_rule = rules
         .iter()
         .find(|rule| rule.dataflow_id == "state_budgets.nsw_budget")
         .expect("nsw budget rule");

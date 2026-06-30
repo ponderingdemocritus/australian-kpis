@@ -572,7 +572,7 @@ recommendation = "Review source taxonomy before scoring surveillance intensity."
 [[dataflows]]
 source_id = "compute"
 dataflow_id = "compute.au_datacentre_capacity_mw"
-status = "manual_pending"
+status = "placeholder"
 owner_area = "curated"
 canonical_url = "https://example.test/compute-capacity"
 license = "Manual review required"

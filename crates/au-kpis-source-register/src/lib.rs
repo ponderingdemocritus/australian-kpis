@@ -320,7 +320,7 @@ impl AuditPolicy {
     /// True when this policy should emit a source-location audit rule.
     #[must_use]
     pub const fn emits_source_location_rule(&self) -> bool {
-        !matches!(self, Self::ManualRegisterOnly { .. })
+        true
     }
 }
 

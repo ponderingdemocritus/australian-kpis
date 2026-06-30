@@ -146,6 +146,7 @@ australian-kpis/
 │   │   └── state-budgets/                  # package `au-kpis-adapter-state-budgets` (per-state PDF)
 │   ├── au-kpis-loader/                     # Observation upsert, revision tracking
 │   ├── au-kpis-ingestion-core/             # Orchestration: discover→fetch→parse→load
+│   ├── au-kpis-source-register/            # Versioned source governance register
 │   ├── au-kpis-api-http/                   # axum routes + handlers (library)
 │   ├── au-kpis-openapi/                    # OpenAPI spec emitter (re-exports utoipa)
 │   └── bins/
@@ -502,6 +503,16 @@ Typical latest-observation query plan:
 ## Source adapters
 
 Each source = its own crate implementing `SourceAdapter`. Adding source 15 never touches sources 1-14.
+
+Source scope is governed by
+`crates/au-kpis-source-register/config/source-register.v1.toml`. Every scoped
+adapter dataflow, APS source-dataflow, licensed feed, manual input, placeholder,
+or coverage gap must have one register entry with source id, dataflow id,
+status, canonical URL, license, attribution, cadence, scope basis, provenance
+requirements, validation requirements, and audit policy. Scheduler
+source-location rules and source-research packets are derived from this
+register, and PR CI blocks divergence between the register, APS scorecard
+config, and scheduler audit rules.
 
 | Source | Crate / path | Discovery | Fetch | Parse |
 |---|---|---|---|---|
