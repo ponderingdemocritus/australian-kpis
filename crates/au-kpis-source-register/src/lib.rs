@@ -131,6 +131,12 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
         )));
     }
 
+    validate_audit_policy(
+        "audit_policy",
+        &dataflow.audit_policy,
+        &dataflow.dataflow_id,
+    )?;
+
     validate_optional_iso_date(
         "retrieved_at",
         dataflow.retrieved_at.as_deref(),
@@ -151,6 +157,11 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
         validate_http_url(
             "additional_audit_policies.url",
             &additional.url,
+            &dataflow.dataflow_id,
+        )?;
+        validate_audit_policy(
+            "additional_audit_policies.policy",
+            &additional.policy,
             &dataflow.dataflow_id,
         )?;
     }
@@ -194,6 +205,87 @@ fn require_text_list(
     } else {
         Ok(())
     }
+}
+
+fn require_u16_list(
+    field: &str,
+    values: &[u16],
+    dataflow_id: &str,
+) -> Result<(), SourceRegisterError> {
+    if values.is_empty() {
+        Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` requires non-empty `{field}`"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_audit_policy(
+    field: &str,
+    policy: &AuditPolicy,
+    dataflow_id: &str,
+) -> Result<(), SourceRegisterError> {
+    match policy {
+        AuditPolicy::ContainsAny {
+            needles,
+            recommendation,
+        } => {
+            require_text_list(&format!("{field}.needles"), needles, dataflow_id)?;
+            require_text(&format!("{field}.recommendation"), recommendation)?;
+        }
+        AuditPolicy::DirectoryListing {
+            required_patterns,
+            recommendation,
+        } => {
+            require_text_list(
+                &format!("{field}.required_patterns"),
+                required_patterns,
+                dataflow_id,
+            )?;
+            require_text(&format!("{field}.recommendation"), recommendation)?;
+        }
+        AuditPolicy::BudgetYear {
+            configured_year,
+            latest_year,
+            recommendation,
+        } => {
+            require_text(&format!("{field}.configured_year"), configured_year)?;
+            require_text(&format!("{field}.latest_year"), latest_year)?;
+            require_text(&format!("{field}.recommendation"), recommendation)?;
+        }
+        AuditPolicy::LicensedProduct { recommendation }
+        | AuditPolicy::WorldBankBreadyApi { recommendation } => {
+            require_text(&format!("{field}.recommendation"), recommendation)?;
+        }
+        AuditPolicy::ManualPlaceholder {
+            reason,
+            recommendation,
+        }
+        | AuditPolicy::ManualRegisterOnly {
+            reason,
+            recommendation,
+        } => {
+            require_text(&format!("{field}.reason"), reason)?;
+            require_text(&format!("{field}.recommendation"), recommendation)?;
+        }
+        AuditPolicy::BotFiltered {
+            expected_statuses,
+            semantic_fallback,
+            recommendation,
+        } => {
+            require_u16_list(
+                &format!("{field}.expected_statuses"),
+                expected_statuses,
+                dataflow_id,
+            )?;
+            if let Some(semantic_fallback) = semantic_fallback {
+                require_text(&format!("{field}.semantic_fallback"), semantic_fallback)?;
+            }
+            require_text(&format!("{field}.recommendation"), recommendation)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_http_url(
@@ -630,6 +722,23 @@ recommendation = "Review source."
         assert!(err.to_string().contains("manual_register_only"));
     }
 
+    #[test]
+    fn empty_contains_any_needles_are_rejected() {
+        let raw = active_contains_any_fixture().replace("needles = [\"CPI\"]", "needles = []");
+
+        let err = parse_source_register(&raw).expect_err("empty needles should fail");
+        assert!(err.to_string().contains("audit_policy.needles"));
+    }
+
+    #[test]
+    fn empty_bot_filtered_expected_statuses_are_rejected() {
+        let raw = active_bot_filtered_fixture()
+            .replace("expected_statuses = [403]", "expected_statuses = []");
+
+        let err = parse_source_register(&raw).expect_err("empty expected statuses should fail");
+        assert!(err.to_string().contains("expected_statuses"));
+    }
+
     fn valid_register_fixture() -> String {
         r#"
 version = "source-register.v1"
@@ -655,6 +764,58 @@ manual_review_due_at = "2027-06-22"
 [dataflows.audit_policy]
 kind = "manual_register_only"
 reason = "Manual review"
+recommendation = "Review source."
+"#
+        .to_string()
+    }
+
+    fn active_contains_any_fixture() -> String {
+        r#"
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://example.test/a"
+license = "CC-BY-4.0"
+attribution = "Source: ABS"
+cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review source."
+"#
+        .to_string()
+    }
+
+    fn active_bot_filtered_fixture() -> String {
+        r#"
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "rba"
+dataflow_id = "rba.statistical_tables"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://example.test/a"
+license = "RBA Copyright and Disclaimer Notice"
+attribution = "Source: Reserve Bank of Australia"
+cadence = "weekly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "bot_filtered"
+expected_statuses = [403]
 recommendation = "Review source."
 "#
         .to_string()

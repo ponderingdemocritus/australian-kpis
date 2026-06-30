@@ -26,19 +26,19 @@ fn scheduler_default_rules_are_derived_from_source_register() {
     for dataflow in &register.dataflows {
         if dataflow.audit_policy.emits_source_location_rule() {
             registered_audited.insert((
-                dataflow.source_id.as_str(),
-                dataflow.dataflow_id.as_str(),
-                dataflow.canonical_url.as_str(),
-                audit_policy_kind(&dataflow.audit_policy),
+                dataflow.source_id.clone(),
+                dataflow.dataflow_id.clone(),
+                dataflow.canonical_url.clone(),
+                audit_policy_kind(&dataflow.audit_policy).to_string(),
             ));
         }
         for additional in &dataflow.additional_audit_policies {
             if additional.policy.emits_source_location_rule() {
                 registered_audited.insert((
-                    dataflow.source_id.as_str(),
-                    dataflow.dataflow_id.as_str(),
-                    additional.url.as_str(),
-                    audit_policy_kind(&additional.policy),
+                    dataflow.source_id.clone(),
+                    dataflow.dataflow_id.clone(),
+                    additional.url.clone(),
+                    audit_policy_kind(&additional.policy).to_string(),
                 ));
             }
         }
@@ -48,11 +48,13 @@ fn scheduler_default_rules_are_derived_from_source_register() {
         .iter()
         .map(|rule| {
             (
-                rule.source_id,
-                rule.dataflow_id,
-                rule.current_url,
+                rule.source_id.clone(),
+                rule.dataflow_id.clone(),
+                rule.current_url.clone(),
                 rule.audit_policy_kind
-                    .expect("register-derived rule must expose audit policy kind"),
+                    .as_deref()
+                    .expect("register-derived rule must expose audit policy kind")
+                    .to_string(),
             )
         })
         .collect::<BTreeSet<_>>();

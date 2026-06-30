@@ -19,32 +19,32 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone)]
 pub struct SourceLocationRule {
     /// Source id in the source catalog.
-    pub source_id: &'static str,
+    pub source_id: String,
     /// Dataflow id protected by this rule.
-    pub dataflow_id: &'static str,
+    pub dataflow_id: String,
     /// Currently configured or canonical source URL to check.
-    pub current_url: &'static str,
+    pub current_url: String,
     /// Source-specific semantic check.
     pub check: SourceLocationCheck,
     /// Register source status when this rule is register-derived.
-    pub source_status: Option<&'static str>,
+    pub source_status: Option<String>,
     /// Register audit policy kind when this rule is register-derived.
-    pub audit_policy_kind: Option<&'static str>,
+    pub audit_policy_kind: Option<String>,
 }
 
 impl SourceLocationRule {
     /// Build a source-location audit rule.
     #[must_use]
-    pub const fn new(
-        source_id: &'static str,
-        dataflow_id: &'static str,
-        current_url: &'static str,
+    pub fn new(
+        source_id: impl Into<String>,
+        dataflow_id: impl Into<String>,
+        current_url: impl Into<String>,
         check: SourceLocationCheck,
     ) -> Self {
         Self {
-            source_id,
-            dataflow_id,
-            current_url,
+            source_id: source_id.into(),
+            dataflow_id: dataflow_id.into(),
+            current_url: current_url.into(),
             check,
             source_status: None,
             audit_policy_kind: None,
@@ -53,13 +53,13 @@ impl SourceLocationRule {
 
     /// Attach source-register metadata to an audit rule.
     #[must_use]
-    pub const fn with_register_metadata(
+    pub fn with_register_metadata(
         mut self,
-        source_status: &'static str,
-        audit_policy_kind: &'static str,
+        source_status: impl Into<String>,
+        audit_policy_kind: impl Into<String>,
     ) -> Self {
-        self.source_status = Some(source_status);
-        self.audit_policy_kind = Some(audit_policy_kind);
+        self.source_status = Some(source_status.into());
+        self.audit_policy_kind = Some(audit_policy_kind.into());
         self
     }
 }
@@ -70,72 +70,72 @@ pub enum SourceLocationCheck {
     /// URL should be reachable with a successful HTTP status.
     Reachable {
         /// Human recommendation when the URL cannot be reached.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Page body should contain at least one expected semantic hint.
     ContainsAny {
         /// Text fragments accepted as evidence of the current page.
-        needles: &'static [&'static str],
+        needles: Vec<String>,
         /// Human recommendation when no hint is present.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Current URL is known to have a newer canonical replacement.
     CanonicalUrl {
         /// Expected canonical or effective URL.
-        expected_url: &'static str,
+        expected_url: String,
         /// Human recommendation for the tracked issue.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Budget index must expose the latest expected budget year.
     BudgetYear {
         /// Budget year currently configured in the adapter/catalog.
-        configured_year: &'static str,
+        configured_year: String,
         /// Latest budget year expected on the official index.
-        latest_year: &'static str,
+        latest_year: String,
         /// Human recommendation for the tracked issue.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Directory listing must include current report filename patterns.
     DirectoryListing {
         /// Required body fragments that identify the current reports.
-        required_patterns: &'static [&'static str],
+        required_patterns: Vec<String>,
         /// Human recommendation when patterns disappear.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Licensed feed dataflow where the public product page is the auditable URL.
     LicensedProduct {
         /// Human recommendation when the product page is unreachable.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Official source that is known to block or challenge automated requests.
     BotFiltered {
         /// HTTP statuses accepted as evidence of bot filtering.
-        expected_statuses: &'static [u16],
+        expected_statuses: Vec<u16>,
         /// Human recommendation for preserving auditability.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// World Bank B-READY API semantics for Australia availability.
     WorldBankBreadyApi {
         /// Human recommendation when values are unresolved.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Manual placeholder that must remain visible until replaced.
     ManualPlaceholder {
         /// Why this source cannot pass automatically.
-        reason: &'static str,
+        reason: String,
         /// Human recommendation for the tracked issue.
-        recommendation: &'static str,
+        recommendation: String,
     },
     /// Manual register-only source with no live URL audit and due-date checks.
     ManualRegisterOnly {
         /// Why this source is reviewed manually.
-        reason: &'static str,
+        reason: String,
         /// Last reviewed date from the register.
-        reviewed_at: &'static str,
+        reviewed_at: String,
         /// Next manual review due date from the register.
-        manual_review_due_at: &'static str,
+        manual_review_due_at: String,
         /// Human recommendation for the tracked issue.
-        recommendation: &'static str,
+        recommendation: String,
     },
 }
 
@@ -412,69 +412,64 @@ fn source_register_rule(
             needles,
             recommendation,
         } => SourceLocationCheck::ContainsAny {
-            needles: leak_str_slice(needles),
-            recommendation: leak_str(recommendation),
+            needles: needles.clone(),
+            recommendation: recommendation.clone(),
         },
         RegisterAuditPolicy::DirectoryListing {
             required_patterns,
             recommendation,
         } => SourceLocationCheck::DirectoryListing {
-            required_patterns: leak_str_slice(required_patterns),
-            recommendation: leak_str(recommendation),
+            required_patterns: required_patterns.clone(),
+            recommendation: recommendation.clone(),
         },
         RegisterAuditPolicy::BudgetYear {
             configured_year,
             latest_year,
             recommendation,
         } => SourceLocationCheck::BudgetYear {
-            configured_year: leak_str(configured_year),
-            latest_year: leak_str(latest_year),
-            recommendation: leak_str(recommendation),
+            configured_year: configured_year.clone(),
+            latest_year: latest_year.clone(),
+            recommendation: recommendation.clone(),
         },
         RegisterAuditPolicy::LicensedProduct { recommendation } => {
             SourceLocationCheck::LicensedProduct {
-                recommendation: leak_str(recommendation),
+                recommendation: recommendation.clone(),
             }
         }
         RegisterAuditPolicy::WorldBankBreadyApi { recommendation } => {
             SourceLocationCheck::WorldBankBreadyApi {
-                recommendation: leak_str(recommendation),
+                recommendation: recommendation.clone(),
             }
         }
         RegisterAuditPolicy::ManualPlaceholder {
             reason,
             recommendation,
         } => SourceLocationCheck::ManualPlaceholder {
-            reason: leak_str(reason),
-            recommendation: leak_str(recommendation),
+            reason: reason.clone(),
+            recommendation: recommendation.clone(),
         },
         RegisterAuditPolicy::ManualRegisterOnly {
             reason,
             recommendation,
         } => SourceLocationCheck::ManualRegisterOnly {
-            reason: leak_str(reason),
-            reviewed_at: leak_str(reviewed_at.unwrap_or("")),
-            manual_review_due_at: leak_str(manual_review_due_at.unwrap_or("")),
-            recommendation: leak_str(recommendation),
+            reason: reason.clone(),
+            reviewed_at: reviewed_at.unwrap_or("").to_string(),
+            manual_review_due_at: manual_review_due_at.unwrap_or("").to_string(),
+            recommendation: recommendation.clone(),
         },
         RegisterAuditPolicy::BotFiltered {
             expected_statuses,
             recommendation,
             ..
         } => SourceLocationCheck::BotFiltered {
-            expected_statuses: leak_u16_slice(expected_statuses),
-            recommendation: leak_str(recommendation),
+            expected_statuses: expected_statuses.clone(),
+            recommendation: recommendation.clone(),
         },
     };
 
     Some(
-        SourceLocationRule::new(
-            leak_str(source_id),
-            leak_str(dataflow_id),
-            leak_str(current_url),
-            check,
-        )
-        .with_register_metadata(source_status, audit_policy_kind),
+        SourceLocationRule::new(source_id, dataflow_id, current_url, check)
+            .with_register_metadata(source_status, audit_policy_kind),
     )
 }
 
@@ -503,24 +498,6 @@ fn audit_policy_kind(policy: &RegisterAuditPolicy) -> &'static str {
     }
 }
 
-fn leak_str(value: &str) -> &'static str {
-    Box::leak(value.to_string().into_boxed_str())
-}
-
-fn leak_str_slice(values: &[String]) -> &'static [&'static str] {
-    Box::leak(
-        values
-            .iter()
-            .map(|value| leak_str(value))
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    )
-}
-
-fn leak_u16_slice(values: &[u16]) -> &'static [u16] {
-    Box::leak(values.to_vec().into_boxed_slice())
-}
-
 /// Run the source-location audit against live external URLs.
 #[tracing::instrument(skip(rules))]
 pub async fn run_source_location_audit(
@@ -535,7 +512,7 @@ pub async fn run_source_location_audit(
     let mut snapshots = Vec::with_capacity(rules.len());
     for rule in rules {
         if rule.check.requires_http_snapshot() {
-            snapshots.push(fetch_snapshot(&client, rule.current_url).await?);
+            snapshots.push(fetch_snapshot(&client, &rule.current_url).await?);
         }
     }
     Ok(evaluate_source_location_snapshots(rules, &snapshots, now))
@@ -556,7 +533,7 @@ pub fn evaluate_source_location_snapshots(
     let mut findings = Vec::new();
 
     for rule in rules {
-        let snapshot = snapshots_by_url.get(rule.current_url).copied();
+        let snapshot = snapshots_by_url.get(rule.current_url.as_str()).copied();
         let evaluation = evaluate_rule(rule, snapshot, generated_at);
         if let Some(finding) = evaluation.finding {
             findings.push(finding);
@@ -895,7 +872,7 @@ fn evaluate_bot_filtered(
 fn evaluate_contains_any(
     rule: &SourceLocationRule,
     snapshot: &SourceUrlSnapshot,
-    needles: &[&str],
+    needles: &[String],
     recommendation: &str,
 ) -> RuleEvaluation {
     if !is_success(snapshot.status) {
@@ -903,7 +880,7 @@ fn evaluate_contains_any(
     }
     if let Some(needle) = needles
         .iter()
-        .find(|needle| snapshot.body.contains(**needle))
+        .find(|needle| snapshot.body.contains(needle.as_str()))
     {
         return ok_evaluation(
             rule,
@@ -986,7 +963,7 @@ fn evaluate_budget_year(
 fn evaluate_directory_listing(
     rule: &SourceLocationRule,
     snapshot: &SourceUrlSnapshot,
-    required_patterns: &[&str],
+    required_patterns: &[String],
     recommendation: &str,
 ) -> RuleEvaluation {
     if !is_success(snapshot.status) {
@@ -994,8 +971,8 @@ fn evaluate_directory_listing(
     }
     let missing = required_patterns
         .iter()
-        .filter(|pattern| !snapshot.body.contains(**pattern))
-        .copied()
+        .filter(|pattern| !snapshot.body.contains(pattern.as_str()))
+        .map(String::as_str)
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return ok_evaluation(
@@ -1084,8 +1061,8 @@ fn manual_ok_evaluation(rule: &SourceLocationRule, evidence: String) -> RuleEval
             source_id: rule.source_id.to_string(),
             dataflow_id: rule.dataflow_id.to_string(),
             status: SourceAuditStatus::Ok,
-            source_status: rule.source_status.map(str::to_string),
-            audit_policy_kind: rule.audit_policy_kind.map(str::to_string),
+            source_status: rule.source_status.as_deref().map(str::to_string),
+            audit_policy_kind: rule.audit_policy_kind.as_deref().map(str::to_string),
             current_url: rule.current_url.to_string(),
             effective_url: None,
             http_status: None,
@@ -1105,8 +1082,8 @@ fn ok_evaluation(
             source_id: rule.source_id.to_string(),
             dataflow_id: rule.dataflow_id.to_string(),
             status: SourceAuditStatus::Ok,
-            source_status: rule.source_status.map(str::to_string),
-            audit_policy_kind: rule.audit_policy_kind.map(str::to_string),
+            source_status: rule.source_status.as_deref().map(str::to_string),
+            audit_policy_kind: rule.audit_policy_kind.as_deref().map(str::to_string),
             current_url: rule.current_url.to_string(),
             effective_url: Some(snapshot.effective_url.clone()),
             http_status: Some(snapshot.status),
@@ -1130,8 +1107,8 @@ fn finding_evaluation(
             source_id: rule.source_id.to_string(),
             dataflow_id: rule.dataflow_id.to_string(),
             status,
-            source_status: rule.source_status.map(str::to_string),
-            audit_policy_kind: rule.audit_policy_kind.map(str::to_string),
+            source_status: rule.source_status.as_deref().map(str::to_string),
+            audit_policy_kind: rule.audit_policy_kind.as_deref().map(str::to_string),
             current_url: rule.current_url.to_string(),
             effective_url: snapshot.map(|snapshot| snapshot.effective_url.clone()),
             http_status: snapshot.map(|snapshot| snapshot.status),

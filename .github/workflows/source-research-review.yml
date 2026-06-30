@@ -63,7 +63,6 @@ jobs:
           PY
 
       - name: Generate bounded research packets
-        if: steps.audit_status.outputs.status != 'error'
         run: |
           args=()
           if [ -n "${{ inputs.dataflow_id }}" ]; then
@@ -76,13 +75,11 @@ jobs:
             "${args[@]}"
 
       - name: Validate research packet schema
-        if: steps.audit_status.outputs.status != 'error'
         run: |
           python tools/source_research.py validate \
             --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}"
 
       - name: Render source research comment
-        if: steps.audit_status.outputs.status != 'error'
         run: |
           python tools/source_research.py render-comment \
             --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}" \
