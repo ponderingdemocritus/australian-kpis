@@ -27,7 +27,8 @@ env:
   CARGO_TERM_COLOR: always
   AU_KPIS_SOURCE_LOCATION_AUDIT_REPORT_PATH: target/source-location-audit/source-location-audit.md
   AU_KPIS_SOURCE_RESEARCH_DIR: target/source-research
-  AU_KPIS_SOURCE_REGISTER_PATH: crates/au-kpis-source-register/config/source-register.v1.toml
+  AU_KPIS_SOURCE_REGISTER_PATH: audited-source/crates/au-kpis-source-register/config/source-register.v1.toml
+  AU_KPIS_SOURCE_RESEARCH_TOOL: source-research-tooling/tools/source_research.py
 
 jobs:
   source-research-review:
@@ -98,10 +99,17 @@ jobs:
             echo "run_url=$(jq -r '.url' <<< "${run_json}")"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Checkout source research tooling
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: source-research-tooling
+
       - name: Checkout audited source revision
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.audit_run.outputs.head_sha }}
+          path: audited-source
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -118,6 +126,18 @@ jobs:
             --name source-location-audit \
             --dir target/source-location-audit
           test -f target/source-location-audit/source-location-audit.json
+
+      - name: Verify audited source contract is research-compatible
+        run: |
+          set -euo pipefail
+          if [ ! -f "${AU_KPIS_SOURCE_RESEARCH_TOOL}" ]; then
+            echo "Source research tooling is missing from the workflow checkout: ${AU_KPIS_SOURCE_RESEARCH_TOOL}" >&2
+            exit 1
+          fi
+          if [ ! -f "${AU_KPIS_SOURCE_REGISTER_PATH}" ]; then
+            echo "Audited revision ${{ steps.audit_run.outputs.head_sha }} predates the source register required for research packets." >&2
+            exit 1
+          fi
 
       - name: Read source-location audit status
         id: audit_status
@@ -141,7 +161,7 @@ jobs:
           if [ -n "${{ inputs.dataflow_id }}" ]; then
             args+=(--dataflow-id "${{ inputs.dataflow_id }}")
           fi
-          python tools/source_research.py generate \
+          python "${AU_KPIS_SOURCE_RESEARCH_TOOL}" generate \
             --report target/source-location-audit/source-location-audit.json \
             --register "${AU_KPIS_SOURCE_REGISTER_PATH}" \
             --out "${AU_KPIS_SOURCE_RESEARCH_DIR}" \
@@ -149,12 +169,12 @@ jobs:
 
       - name: Validate research packet schema
         run: |
-          python tools/source_research.py validate \
+          python "${AU_KPIS_SOURCE_RESEARCH_TOOL}" validate \
             --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}"
 
       - name: Render source research comment
         run: |
-          python tools/source_research.py render-comment \
+          python "${AU_KPIS_SOURCE_RESEARCH_TOOL}" render-comment \
             --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}" \
             > "${AU_KPIS_SOURCE_RESEARCH_DIR}/comment.md"
 

@@ -882,7 +882,7 @@ fn evaluate_bot_filtered(
         );
     }
 
-    if expected_statuses.contains(&snapshot.status) || is_soft_access_status(snapshot.status) {
+    if expected_statuses.contains(&snapshot.status) {
         return finding_evaluation(
             rule,
             Some(snapshot),
