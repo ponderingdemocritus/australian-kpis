@@ -84,8 +84,9 @@ The current implementation already has:
 - `tools/source_research.py generate` creating one JSON and one Markdown packet
   per actionable finding.
 - `tools/source_research.py validate` enforcing the initial packet schema.
-- `.github/workflows/source-research-review.yml` running deterministic audit,
-  generating packets, uploading artifacts, and commenting summaries.
+- `.github/workflows/source-research-review.yml` reusing retained deterministic
+  audit artifacts, generating packets, uploading artifacts, and commenting
+  summaries.
 
 This PRD treats that as Phase 0. Agentic research must extend this baseline
 without weakening its deterministic guarantees.
@@ -363,7 +364,7 @@ and must reject `candidate_replacement` without `scope_assessment.within_existin
 
 Default for scheduled and manual runs.
 
-- Runs deterministic audit.
+- Reuses a retained deterministic audit artifact.
 - Generates bounded research packets.
 - Validates schema.
 - Uploads artifacts.
