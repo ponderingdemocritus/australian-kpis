@@ -84,6 +84,9 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
     if matches!(
         dataflow.status,
         SourceStatus::ManualPending | SourceStatus::VisibleUnscored
+    ) || matches!(
+        dataflow.audit_policy,
+        AuditPolicy::ManualRegisterOnly { .. }
     ) {
         require_optional_text(
             "retrieved_at",
@@ -598,6 +601,23 @@ recommendation = "Review source."
 
         let err = parse_source_register(&raw).expect_err("missing requirements should fail");
         assert!(err.to_string().contains("provenance_requirements"));
+    }
+
+    #[test]
+    fn manual_register_only_requires_review_dates_for_all_statuses() {
+        let raw = valid_register_fixture()
+            .replace("status = \"manual_pending\"", "status = \"placeholder\"")
+            .lines()
+            .filter(|line| {
+                !line.starts_with("retrieved_at =")
+                    && !line.starts_with("reviewed_at =")
+                    && !line.starts_with("manual_review_due_at =")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let err = parse_source_register(&raw).expect_err("missing dates should fail");
+        assert!(err.to_string().contains("retrieved_at"));
     }
 
     fn valid_register_fixture() -> String {

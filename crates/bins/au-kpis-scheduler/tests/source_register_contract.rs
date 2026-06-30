@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::Path};
 
 use au_kpis_adapter::SourceAdapter;
 use au_kpis_scheduler::source_location_audit::default_source_location_rules;
@@ -124,26 +124,104 @@ fn adapter_manifest_dataflows_are_registered_with_matching_source_ids() {
         .collect::<BTreeSet<_>>();
 
     for adapter in implemented_adapters() {
-        assert_adapter_dataflows_registered(adapter.as_ref(), &registered);
+        assert_adapter_dataflows_registered(adapter.adapter.as_ref(), &registered);
     }
 }
 
-fn implemented_adapters() -> Vec<Box<dyn SourceAdapter>> {
+#[test]
+fn every_workspace_adapter_crate_is_covered_by_register_contract() {
+    let workspace_adapters = workspace_adapter_package_names();
+    let covered_adapters = implemented_adapters()
+        .iter()
+        .map(|adapter| adapter.package_name.to_owned())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        workspace_adapters, covered_adapters,
+        "every crates/adapters package must be covered by implemented_adapters()"
+    );
+}
+
+struct ImplementedAdapter {
+    package_name: &'static str,
+    adapter: Box<dyn SourceAdapter>,
+}
+
+fn implemented_adapters() -> Vec<ImplementedAdapter> {
     vec![
-        Box::new(au_kpis_adapter_abs::AbsAdapter::default()),
-        Box::new(au_kpis_adapter_aemo::AemoAdapter::default()),
-        Box::new(au_kpis_adapter_ai_readiness::AiReadinessAdapter::default()),
-        Box::new(au_kpis_adapter_apra::ApraAdapter::default()),
-        Box::new(au_kpis_adapter_asx::AsxAdapter::default()),
-        Box::new(au_kpis_adapter_nhsac::NhsacAdapter::default()),
-        Box::new(au_kpis_adapter_pc::PcAdapter::default()),
-        Box::new(au_kpis_adapter_rba::RbaAdapter::default()),
-        Box::new(au_kpis_adapter_state_budgets::StateBudgetsAdapter::default()),
-        Box::new(au_kpis_adapter_state_capital::StateCapitalAdapter::default()),
-        Box::new(au_kpis_adapter_state_planning::StatePlanningAdapter::default()),
-        Box::new(au_kpis_adapter_treasury::TreasuryAdapter::default()),
-        Box::new(au_kpis_adapter_worldbank::WorldbankAdapter::default()),
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-abs",
+            adapter: Box::new(au_kpis_adapter_abs::AbsAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-aemo",
+            adapter: Box::new(au_kpis_adapter_aemo::AemoAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-ai-readiness",
+            adapter: Box::new(au_kpis_adapter_ai_readiness::AiReadinessAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-apra",
+            adapter: Box::new(au_kpis_adapter_apra::ApraAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-asx",
+            adapter: Box::new(au_kpis_adapter_asx::AsxAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-nhsac",
+            adapter: Box::new(au_kpis_adapter_nhsac::NhsacAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-pc",
+            adapter: Box::new(au_kpis_adapter_pc::PcAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-rba",
+            adapter: Box::new(au_kpis_adapter_rba::RbaAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-state-budgets",
+            adapter: Box::new(au_kpis_adapter_state_budgets::StateBudgetsAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-state-capital",
+            adapter: Box::new(au_kpis_adapter_state_capital::StateCapitalAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-state-planning",
+            adapter: Box::new(au_kpis_adapter_state_planning::StatePlanningAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-treasury",
+            adapter: Box::new(au_kpis_adapter_treasury::TreasuryAdapter::default()),
+        },
+        ImplementedAdapter {
+            package_name: "au-kpis-adapter-worldbank",
+            adapter: Box::new(au_kpis_adapter_worldbank::WorldbankAdapter::default()),
+        },
     ]
+}
+
+fn workspace_adapter_package_names() -> BTreeSet<String> {
+    let adapters_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("crates/adapters");
+    fs::read_dir(adapters_dir)
+        .expect("read crates/adapters")
+        .map(|entry| entry.expect("read adapter entry").path().join("Cargo.toml"))
+        .filter(|path| path.exists())
+        .map(|path| {
+            let manifest = fs::read_to_string(&path).expect("read adapter Cargo.toml");
+            manifest
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("name = \""))
+                .and_then(|value| value.strip_suffix('"'))
+                .expect("adapter Cargo.toml declares package name")
+                .to_owned()
+        })
+        .collect()
 }
 
 fn assert_adapter_dataflows_registered(adapter: &dyn SourceAdapter, registered: &BTreeSet<String>) {
