@@ -561,8 +561,18 @@ def generate(args: argparse.Namespace) -> int:
     retrieved_at = now_iso()
     artifacts: list[dict[str, Any]] = []
     used_artifact_ids: set[str] = set()
-    audit_generated_at = str(report.get("generated_at") or retrieved_at)
-    register_version = str(report.get("register_version") or SOURCE_REGISTER_VERSION)
+    audit_generated_at_value = report.get("generated_at")
+    if not isinstance(audit_generated_at_value, str) or not audit_generated_at_value.strip():
+        raise ValueError("source-location audit report must include generated_at")
+    if not is_rfc3339_timestamp(audit_generated_at_value):
+        raise ValueError("source-location audit report generated_at must be RFC 3339")
+    register_version_value = report.get("register_version")
+    if register_version_value != SOURCE_REGISTER_VERSION:
+        raise ValueError(
+            f"source-location audit report register_version must be {SOURCE_REGISTER_VERSION}"
+        )
+    audit_generated_at = audit_generated_at_value
+    register_version = register_version_value
 
     findings = [
         finding

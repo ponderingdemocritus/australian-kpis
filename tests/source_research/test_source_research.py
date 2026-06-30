@@ -104,6 +104,8 @@ recommendation = "Use reviewed direct artifacts."
             report.write_text(
                 json.dumps(
                     {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v1",
                         "findings": [
                             {
                                 "source_id": "asx",
@@ -205,6 +207,8 @@ recommendation = "Review the market statistics page."
             report.write_text(
                 json.dumps(
                     {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v1",
                         "findings": [
                             {
                                 "source_id": "asx",
@@ -283,6 +287,8 @@ recommendation = "Review the market statistics page."
             report.write_text(
                 json.dumps(
                     {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v1",
                         "findings": [
                             {
                                 "source_id": "asx",
@@ -323,6 +329,8 @@ recommendation = "Review the market statistics page."
             report.write_text(
                 json.dumps(
                     {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v1",
                         "findings": [
                             {
                                 "source_id": "worldbank",
@@ -463,6 +471,8 @@ recommendation = "Review API values."
             report.write_text(
                 json.dumps(
                     {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v1",
                         "status": "error",
                         "findings": [
                             {
@@ -530,6 +540,66 @@ recommendation = "Review ABS CPI source."
             self.assertEqual(summary["audit_status"], "error")
             self.assertEqual(summary["dataflow_ids"], ["abs.cpi"])
             self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
+
+    def test_generate_rejects_report_without_audit_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            report = root / "source-location-audit.json"
+            register = root / "source-register.v1.toml"
+            out = root / "research"
+
+            report.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "source_id": "abs",
+                                "dataflow_id": "abs.cpi",
+                                "severity": "warning",
+                                "current_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
+                                "evidence": "Source moved.",
+                                "recommendation": "Review ABS CPI source.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register.write_text(
+                """
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review ABS CPI source."
+""",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "must include generated_at"):
+                source_research.generate(
+                    argparse.Namespace(
+                        report=report,
+                        register=register,
+                        out=out,
+                        dataflow_id=None,
+                    )
+                )
 
     def test_validation_rejects_non_actionable_research_artifact(self):
         artifact = {

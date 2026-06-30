@@ -650,7 +650,7 @@ fn evaluate_rule(
             manual_review_due_at,
             recommendation,
         );
-        return apply_unresolved_source_status(rule, None, evaluation);
+        return apply_unresolved_source_status(rule, evaluation);
     }
 
     let Some(snapshot) = snapshot else {
@@ -707,7 +707,7 @@ fn evaluate_rule(
         }
     };
     let evaluation = apply_manual_review_due(rule, snapshot, generated_at, evaluation);
-    apply_unresolved_source_status(rule, Some(snapshot), evaluation)
+    apply_unresolved_source_status(rule, evaluation)
 }
 
 fn apply_manual_review_due(
@@ -786,7 +786,6 @@ fn apply_manual_review_due(
 
 fn apply_unresolved_source_status(
     rule: &SourceLocationRule,
-    snapshot: Option<&SourceUrlSnapshot>,
     mut evaluation: RuleEvaluation,
 ) -> RuleEvaluation {
     let Some(source_status) = rule.source_status.as_deref() else {
@@ -805,26 +804,13 @@ fn apply_unresolved_source_status(
     let status_recommendation =
         "Keep this source visible as unscored/manual until the register status is resolved.";
 
-    if evaluation.result.status != SourceAuditStatus::Ok {
-        evaluation.result.evidence.push_str(&status_evidence);
-        if let Some(finding) = &mut evaluation.finding {
-            finding.evidence.push_str(&status_evidence);
-            finding.recommendation = format!("{} {status_recommendation}", finding.recommendation);
-        }
+    evaluation.result.evidence.push_str(&status_evidence);
+    if let Some(finding) = &mut evaluation.finding {
+        finding.evidence.push_str(&status_evidence);
+        finding.recommendation = format!("{} {status_recommendation}", finding.recommendation);
         return evaluation;
     }
-
-    finding_evaluation(
-        rule,
-        snapshot,
-        SourceAuditStatus::ManualReview,
-        SourceAuditSeverity::ManualReview,
-        snapshot.map(|snapshot| snapshot.effective_url.clone()),
-        format!(
-            "Live source check passed, but register status `{source_status}` remains unresolved."
-        ),
-        status_recommendation.to_string(),
-    )
+    evaluation
 }
 
 fn evaluate_canonical_url(
