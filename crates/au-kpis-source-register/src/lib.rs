@@ -123,10 +123,7 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
         AuditPolicy::ManualRegisterOnly { .. }
     ) && !matches!(
         dataflow.status,
-        SourceStatus::ManualPending
-            | SourceStatus::VisibleUnscored
-            | SourceStatus::CoverageGap
-            | SourceStatus::Placeholder
+        SourceStatus::ManualPending | SourceStatus::VisibleUnscored
     ) {
         return Err(SourceRegisterError::InvalidRegister(format!(
             "`{}` uses manual_register_only but status is {:?}",
@@ -618,6 +615,19 @@ recommendation = "Review source."
 
         let err = parse_source_register(&raw).expect_err("missing dates should fail");
         assert!(err.to_string().contains("retrieved_at"));
+    }
+
+    #[test]
+    fn manual_register_only_rejects_placeholder_status() {
+        let raw = valid_register_fixture()
+            .replace("status = \"manual_pending\"", "status = \"placeholder\"")
+            .replace(
+                "manual_review_due_at = \"2027-06-22\"",
+                "manual_review_due_at = \"2027-06-22\"\nreplacement_candidate = \"Reviewed replacement\"",
+            );
+
+        let err = parse_source_register(&raw).expect_err("placeholder policy should fail");
+        assert!(err.to_string().contains("manual_register_only"));
     }
 
     fn valid_register_fixture() -> String {

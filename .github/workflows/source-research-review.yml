@@ -111,9 +111,9 @@ jobs:
           if not report_path.exists():
               sys.exit(0)
 
-            report = json.loads(report_path.read_text())
-            if report.get("status") == "error":
-                sys.exit("source-location audit reported error status")
+          report = json.loads(report_path.read_text())
+          if report.get("status") == "error":
+              sys.exit("source-location audit reported error status")
           PY
 
       - name: Append source research summary to tracked issue
