@@ -33,7 +33,7 @@ jobs:
   source-research-review:
     name: Generate source research artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 150
     steps:
       - name: Select tracked source-location audit run
         id: audit_run
@@ -55,7 +55,7 @@ jobs:
               exit 1
             fi
           else
-            deadline=$((SECONDS + 1800))
+            deadline=$((SECONDS + 7200))
             run_json=""
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               run_json="$(
@@ -75,7 +75,7 @@ jobs:
               sleep 60
             done
             if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
-              echo "No completed scheduled Source Location Audit run found for main today after waiting." >&2
+              echo "No completed scheduled Source Location Audit run found for main today after waiting up to 120 minutes." >&2
               exit 1
             fi
           fi

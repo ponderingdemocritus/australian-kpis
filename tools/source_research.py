@@ -283,6 +283,16 @@ def should_research(finding: dict[str, Any], dataflow_id: str | None) -> bool:
     return severity in ACTIONABLE_STATUSES
 
 
+def finding_sort_key(finding: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    return (
+        str(finding.get("dataflow_id", "")),
+        str(finding.get("source_id", "")),
+        str(finding.get("current_url", "")),
+        str(finding.get("severity", "")),
+        str(finding.get("evidence", "")),
+    )
+
+
 def build_research_artifact(
     finding: dict[str, Any],
     register: dict[str, dict[str, Any]],
@@ -469,9 +479,12 @@ def generate(args: argparse.Namespace) -> int:
     artifacts: list[dict[str, Any]] = []
     occurrences: dict[str, int] = {}
 
-    for finding in report.get("findings", []):
-        if not should_research(finding, args.dataflow_id):
-            continue
+    findings = [
+        finding
+        for finding in report.get("findings", [])
+        if isinstance(finding, dict) and should_research(finding, args.dataflow_id)
+    ]
+    for finding in sorted(findings, key=finding_sort_key):
         artifact = build_research_artifact(finding, register, retrieved_at)
         dataflow_id = artifact["dataflow_id"]
         occurrences[dataflow_id] = occurrences.get(dataflow_id, 0) + 1

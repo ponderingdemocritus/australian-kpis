@@ -176,6 +176,85 @@ recommendation = "Review the market statistics page."
                 ["asx.market_statistics", "asx.market_statistics__2"],
             )
 
+    def test_generate_assigns_repeated_finding_ids_from_stable_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            report = root / "source-location-audit.json"
+            register = root / "source-register.v1.toml"
+            out = root / "research"
+
+            report.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "source_id": "asx",
+                                "dataflow_id": "asx.market_statistics",
+                                "severity": "manual_review",
+                                "current_url": "https://www.asx.com.au/legals/terms-of-use",
+                                "evidence": "Terms evidence changed.",
+                                "recommendation": "Review ASX terms.",
+                            },
+                            {
+                                "source_id": "asx",
+                                "dataflow_id": "asx.market_statistics",
+                                "severity": "warning",
+                                "current_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+                                "evidence": "Market statistics page changed.",
+                                "recommendation": "Review the market statistics page.",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register.write_text(
+                """
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "asx"
+dataflow_id = "asx.market_statistics"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+license = "ASX terms of use"
+attribution = "Source: ASX"
+cadence = "monthly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["market statistics"]
+recommendation = "Review the market statistics page."
+""",
+                encoding="utf-8",
+            )
+
+            exit_code = source_research.generate(
+                argparse.Namespace(
+                    report=report,
+                    register=register,
+                    out=out,
+                    dataflow_id=None,
+                )
+            )
+
+            self.assertEqual(exit_code, 0)
+            first = json.loads((out / "asx.market_statistics.json").read_text())
+            second = json.loads((out / "asx.market_statistics__2.json").read_text())
+            self.assertEqual(
+                first["current_url"],
+                "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+            )
+            self.assertEqual(
+                second["current_url"],
+                "https://www.asx.com.au/legals/terms-of-use",
+            )
+
     def test_generate_includes_additional_audit_policy_domains(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
