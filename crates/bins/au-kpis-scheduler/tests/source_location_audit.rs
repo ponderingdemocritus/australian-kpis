@@ -785,7 +785,7 @@ fn source_location_overdue_manual_entry_preserves_drift_and_review_due_evidence(
 }
 
 #[test]
-fn source_location_current_manual_entry_with_live_policy_records_status_without_finding() {
+fn source_location_current_manual_entry_with_live_policy_records_info_finding() {
     let rules = [SourceLocationRule::new(
         "apra",
         "apra.super_asset_allocation",
@@ -811,16 +811,16 @@ fn source_location_current_manual_entry_with_live_policy_records_status_without_
     );
 
     assert_eq!(report.status, SourceAuditStatus::Ok);
-    assert!(report.findings.is_empty());
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Info);
     assert!(
-        report.results[0]
+        report.findings[0]
             .evidence
-            .contains("Register status `manual_pending` remains unresolved")
+            .contains("register status `manual_pending` remains unresolved")
     );
 }
 
 #[test]
-fn source_location_coverage_gap_with_live_policy_records_status_without_finding() {
+fn source_location_coverage_gap_with_live_policy_records_info_finding() {
     let rules = [SourceLocationRule::new(
         "state-planning",
         "state_planning.vic_permit_activity",
@@ -841,11 +841,11 @@ fn source_location_coverage_gap_with_live_policy_records_status_without_finding(
     let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
 
     assert_eq!(report.status, SourceAuditStatus::Ok);
-    assert!(report.findings.is_empty());
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Info);
     assert!(
-        report.results[0]
+        report.findings[0]
             .evidence
-            .contains("Register status `coverage_gap` remains unresolved")
+            .contains("register status `coverage_gap` remains unresolved")
     );
 }
 

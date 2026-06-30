@@ -94,8 +94,9 @@ jobs:
               return !issue.pull_request && issue.body && issue.body.includes(marker)
             })
             const openTrackedIssue = trackedIssue && trackedIssue.state === 'open'
+            const actionableFindings = report.findings.filter((finding) => finding.severity !== 'info')
 
-            if (report.findings_total === 0) {
+            if (actionableFindings.length === 0) {
               if (openTrackedIssue) {
                 await github.rest.issues.createComment({
                   owner,
@@ -111,11 +112,11 @@ jobs:
                   labels: labels.map((label) => label.name),
                 })
               }
-              core.info('No source-location findings detected.')
+              core.info('No actionable source-location findings detected.')
               return
             }
 
-            const severityCounts = report.findings.reduce((counts, finding) => {
+            const severityCounts = actionableFindings.reduce((counts, finding) => {
               counts[finding.severity] = (counts[finding.severity] || 0) + 1
               return counts
             }, {})
@@ -125,11 +126,11 @@ jobs:
               .map(([severity, count]) => `${severity}: ${count}`)
               .join(', ')
 
-            const tableRows = report.findings.map((finding) => {
+            const tableRows = actionableFindings.map((finding) => {
               const latest = finding.latest_url || 'n/a'
               return `| \`${finding.severity}\` | \`${finding.source_id}\` | \`${finding.dataflow_id}\` | ${tableCell(finding.current_url)} | ${tableCell(latest)} | ${tableCell(finding.evidence)} |`
             })
-            const checklist = report.findings.map((finding) => {
+            const checklist = actionableFindings.map((finding) => {
               return `- [ ] \`${finding.dataflow_id}\`: ${finding.recommendation}`
             })
             const body = [
@@ -144,7 +145,8 @@ jobs:
               `- Source register: \`${report.register_version}\``,
               `- Status: \`${report.status}\``,
               `- Rules checked: \`${report.checked_total}\``,
-              `- Findings: \`${report.findings_total}\``,
+              `- Actionable findings: \`${actionableFindings.length}\``,
+              `- Report findings including info: \`${report.findings_total}\``,
               `- Severity counts: ${summary}`,
               '',
               '## Findings',
