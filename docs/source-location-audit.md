@@ -146,9 +146,10 @@ latest scheduled source-location audit artifact from `main` in the last eight
 days, reads the source register from the audited commit, runs the audited
 source-register and scheduler/register Rust contracts, and uses the current
 reviewed research tooling. Completed scheduled audit runs are reusable only when
-their retained `source-location-audit` artifact is present. Manual runs require
-an explicit source-location audit run id and can target all findings or one
-`dataflow_id`.
+their retained `source-location-audit` artifact is present; in-progress scheduled
+runs do not block reuse of the latest completed artifact in the eight-day
+window. Manual runs require an explicit source-location audit run id and can
+target all findings or one `dataflow_id`.
 
 The workflow generates bounded research packets under:
 
@@ -159,7 +160,8 @@ target/source-research/
 Each packet is schema-validated before issue comments are posted. Scheduled mode
 creates evidence packets and recommendations only; it does not change Rust
 adapters, scoring config, or source mappings. Issue comments are posted only for
-audits from `main`; branch-local and manual non-main runs upload artifacts only.
-Replacement URLs still require a reviewed register/config change.
+audits from `main` when the workflow itself is running from `main`; branch-local
+and manual non-main runs upload artifacts only. Replacement URLs still require a
+reviewed register/config change.
 If an audit report has aggregate `error` status, non-error actionable findings
 still get retained research packets before the workflow fails on the audit error.
