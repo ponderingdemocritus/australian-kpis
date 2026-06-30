@@ -178,7 +178,11 @@ jobs:
         working-directory: audited-source
         run: |
           cargo test --locked -p au-kpis-source-register -- --nocapture
-          cargo test --locked -p au-kpis-scheduler --test source_register_contract -- --nocapture
+          if [ -f crates/bins/au-kpis-scheduler/tests/source_register_contract.rs ]; then
+            cargo test --locked -p au-kpis-scheduler --test source_register_contract -- --nocapture
+          else
+            echo "Audited revision predates scheduler source_register_contract test; source-register crate contract passed."
+          fi
 
       - name: Read source-location audit status
         id: audit_status
