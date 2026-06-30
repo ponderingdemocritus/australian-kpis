@@ -1185,6 +1185,7 @@ parallel:
   - snapshot        (insta check)
   - openapi         (`cargo run -p au-kpis-openapi` export + oasdiff vs main)
   - contract        (live `/v1/openapi.json` schema validation + schemathesis)
+  - source-governance (source-register validation + scheduler/register contracts + source-location fixture tests + source-research schema tests)
   - security        (cargo audit, trivy on built images)
   - smoke           (spin compose, run curl + SDK smoke)
   - bench           (critcmp — advisory on PR, blocking in merge queue)
@@ -1245,6 +1246,7 @@ Triggered on merge to `main`.
 | `0 4 * * *` | `schemathesis` against staging (deep fuzz) | Contract robustness |
 | `0 6 * * 0` | `cargo mutants` weekly | Test quality |
 | `0 6 * * 1` | Source-location audit + tracked drift issue | Data source drift |
+| `0 7 * * 1` | Source research packet generation + tracked issue comment | Data source evidence review |
 | `0 7 * * 0` | Renovate dependency PRs | Hygiene |
 
 ### Release cadence + versioning

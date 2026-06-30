@@ -59,6 +59,7 @@ cadence = "weekly"
 
             self.assertEqual(exit_code, 0)
             artifact = json.loads((out / "rba.statistical_tables.json").read_text())
+            self.assertEqual(artifact["artifact_id"], "rba.statistical_tables")
             self.assertEqual(artifact["classification"], "insufficient_evidence")
             self.assertEqual(artifact["allowed_domains"], ["www.rba.gov.au"])
             self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
@@ -66,6 +67,138 @@ cadence = "weekly"
                 "Source Research: rba.statistical_tables",
                 (out / "rba.statistical_tables.md").read_text(),
             )
+
+    def test_generate_preserves_multiple_findings_for_one_dataflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            report = root / "source-location-audit.json"
+            register = root / "source-register.v1.toml"
+            out = root / "research"
+
+            report.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "source_id": "asx",
+                                "dataflow_id": "asx.market_statistics",
+                                "severity": "drift",
+                                "current_url": "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+                                "evidence": "Market statistics page changed.",
+                                "recommendation": "Review the market statistics page.",
+                            },
+                            {
+                                "source_id": "asx",
+                                "dataflow_id": "asx.market_statistics",
+                                "severity": "manual_review",
+                                "current_url": "https://www.asx.com.au/legals/terms-of-use",
+                                "evidence": "Terms evidence changed.",
+                                "recommendation": "Review ASX terms.",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register.write_text(
+                """
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "asx"
+dataflow_id = "asx.market_statistics"
+status = "active"
+canonical_url = "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
+license = "ASX terms of use"
+attribution = "Source: ASX"
+cadence = "monthly"
+""",
+                encoding="utf-8",
+            )
+
+            exit_code = source_research.generate(
+                argparse.Namespace(
+                    report=report,
+                    register=register,
+                    out=out,
+                    dataflow_id=None,
+                )
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((out / "asx.market_statistics.json").exists())
+            self.assertTrue((out / "asx.market_statistics__2.json").exists())
+            first = json.loads((out / "asx.market_statistics.json").read_text())
+            second = json.loads((out / "asx.market_statistics__2.json").read_text())
+            self.assertEqual(
+                first["current_url"],
+                "https://www.asx.com.au/about/market-statistics/historical-market-statistics",
+            )
+            self.assertEqual(
+                second["current_url"],
+                "https://www.asx.com.au/legals/terms-of-use",
+            )
+            summary = json.loads((out / "summary.json").read_text())
+            self.assertEqual(summary["artifacts_total"], 2)
+            self.assertEqual(
+                [item["artifact_id"] for item in summary["artifacts"]],
+                ["asx.market_statistics", "asx.market_statistics__2"],
+            )
+
+    def test_generate_includes_audit_error_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            report = root / "source-location-audit.json"
+            register = root / "source-register.v1.toml"
+            out = root / "research"
+
+            report.write_text(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "findings": [
+                            {
+                                "source_id": "abs",
+                                "dataflow_id": "abs.cpi",
+                                "severity": "error",
+                                "current_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
+                                "evidence": "No HTTP snapshot was available.",
+                                "recommendation": "Retry the source-location audit.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register.write_text(
+                """
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+canonical_url = "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+cadence = "quarterly"
+""",
+                encoding="utf-8",
+            )
+
+            exit_code = source_research.generate(
+                argparse.Namespace(
+                    report=report,
+                    register=register,
+                    out=out,
+                    dataflow_id=None,
+                )
+            )
+
+            self.assertEqual(exit_code, 0)
+            artifact = json.loads((out / "abs.cpi.json").read_text())
+            self.assertEqual(artifact["audit_severity"], "error")
+            self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
 
     def test_validation_rejects_non_actionable_research_artifact(self):
         artifact = {

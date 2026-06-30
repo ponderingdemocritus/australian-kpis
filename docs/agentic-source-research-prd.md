@@ -146,6 +146,7 @@ replacement URL is found.
 The current packet has these fields:
 
 - `schema_version`
+- `artifact_id`
 - `source_id`
 - `dataflow_id`
 - `current_url`
@@ -167,6 +168,11 @@ The current packet has these fields:
 
 Agentic mode must preserve these fields and may add fields only through a
 schema-versioned change.
+
+`artifact_id` must be unique per audit finding. For a dataflow with one
+finding, it should remain the slugged `dataflow_id`; for repeated findings on
+the same dataflow, later artifacts must use stable suffixes such as
+`asx.market_statistics__2` so URL-specific evidence is not overwritten.
 
 ## Data We Need
 
@@ -274,6 +280,7 @@ Required top-level fields:
 ```json
 {
   "schema_version": "source-research.v2",
+  "artifact_id": "rba.statistical_tables",
   "source_id": "rba",
   "dataflow_id": "rba.statistical_tables",
   "classification": "bot_filtered",
@@ -526,6 +533,10 @@ target/source-research/<dataflow_id>.md
 target/source-research/<dataflow_id>.agent.json
 target/source-research/<dataflow_id>.agent.md
 ```
+
+In the concrete file paths, `<dataflow_id>` means the unique `artifact_id`
+derived from the dataflow id plus a suffix when multiple findings exist for the
+same dataflow.
 
 Summary files:
 

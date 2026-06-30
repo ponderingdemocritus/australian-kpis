@@ -229,8 +229,10 @@ Research task inputs:
 
 Research task outputs:
 
-- `target/source-research/<dataflow_id>.md`
-- `target/source-research/<dataflow_id>.json`
+- `target/source-research/<artifact_id>.md`
+- `target/source-research/<artifact_id>.json`
+- `artifact_id` is unique per audit finding so multi-rule dataflows do not
+  overwrite evidence.
 - proposed classification: `same_source`, `moved`, `bot_filtered`,
   `source_retired`, `candidate_replacement`, `insufficient_evidence`
 - source URLs with publisher names and retrieval timestamp,

@@ -21,21 +21,57 @@ fn source_register_dataflow_ids_are_unique() {
 #[test]
 fn scheduler_default_rules_are_derived_from_source_register() {
     let register = load_source_register().expect("load source register");
-    let registered_audited = register
-        .dataflows
-        .iter()
-        .filter(|dataflow| dataflow.audit_policy.emits_source_location_rule())
-        .map(|dataflow| dataflow.dataflow_id.as_str())
-        .collect::<BTreeSet<_>>();
+    let mut registered_audited = BTreeSet::new();
+    for dataflow in &register.dataflows {
+        if dataflow.audit_policy.emits_source_location_rule() {
+            registered_audited.insert((
+                dataflow.source_id.as_str(),
+                dataflow.dataflow_id.as_str(),
+                dataflow.canonical_url.as_str(),
+                audit_policy_kind(&dataflow.audit_policy),
+            ));
+        }
+        for additional in &dataflow.additional_audit_policies {
+            if additional.policy.emits_source_location_rule() {
+                registered_audited.insert((
+                    dataflow.source_id.as_str(),
+                    dataflow.dataflow_id.as_str(),
+                    additional.url.as_str(),
+                    audit_policy_kind(&additional.policy),
+                ));
+            }
+        }
+    }
     let scheduler_rules = default_source_location_rules()
         .iter()
-        .map(|rule| rule.dataflow_id)
+        .map(|rule| {
+            (
+                rule.source_id,
+                rule.dataflow_id,
+                rule.current_url,
+                rule.audit_policy_kind
+                    .expect("register-derived rule must expose audit policy kind"),
+            )
+        })
         .collect::<BTreeSet<_>>();
 
     assert_eq!(
         registered_audited, scheduler_rules,
         "scheduler source-location rules must match register-backed audit policies"
     );
+}
+
+fn audit_policy_kind(policy: &AuditPolicy) -> &'static str {
+    match policy {
+        AuditPolicy::ContainsAny { .. } => "contains_any",
+        AuditPolicy::DirectoryListing { .. } => "directory_listing",
+        AuditPolicy::BudgetYear { .. } => "budget_year",
+        AuditPolicy::LicensedProduct { .. } => "licensed_product",
+        AuditPolicy::WorldBankBreadyApi { .. } => "world_bank_bready_api",
+        AuditPolicy::ManualPlaceholder { .. } => "manual_placeholder",
+        AuditPolicy::ManualRegisterOnly { .. } => "manual_register_only",
+        AuditPolicy::BotFiltered { .. } => "bot_filtered",
+    }
 }
 
 #[test]

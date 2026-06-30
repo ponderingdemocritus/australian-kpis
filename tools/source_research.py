@@ -12,7 +12,7 @@ import sys
 import tomllib
 from typing import Any
 
-ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "drift"}
+ACTIONABLE_STATUSES = {"manual_review", "bot_filtered", "drift", "error"}
 CLASSIFICATIONS = {
     "same_source",
     "moved",
@@ -46,6 +46,13 @@ def slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_")
 
 
+def artifact_id(dataflow_id: str, occurrence: int) -> str:
+    base = slug(dataflow_id)
+    if occurrence == 1:
+        return base
+    return f"{base}__{occurrence}"
+
+
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
 
@@ -75,6 +82,7 @@ def build_research_artifact(
 
     return {
         "schema_version": "source-research.v1",
+        "artifact_id": "",
         "source_id": finding["source_id"],
         "dataflow_id": dataflow_id,
         "current_url": finding["current_url"],
@@ -178,15 +186,19 @@ def generate(args: argparse.Namespace) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     retrieved_at = now_iso()
     artifacts: list[dict[str, Any]] = []
+    occurrences: dict[str, int] = {}
 
     for finding in report.get("findings", []):
         if not should_research(finding, args.dataflow_id):
             continue
         artifact = build_research_artifact(finding, register, retrieved_at)
+        dataflow_id = artifact["dataflow_id"]
+        occurrences[dataflow_id] = occurrences.get(dataflow_id, 0) + 1
+        artifact["artifact_id"] = artifact_id(dataflow_id, occurrences[dataflow_id])
         errors = validate_research_artifact(artifact)
         if errors:
             raise ValueError(f"{artifact.get('dataflow_id', 'unknown')}: {'; '.join(errors)}")
-        stem = slug(artifact["dataflow_id"])
+        stem = artifact["artifact_id"]
         (args.out / f"{stem}.json").write_text(
             json.dumps(artifact, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -199,6 +211,15 @@ def generate(args: argparse.Namespace) -> int:
         "generated_at": retrieved_at,
         "artifacts_total": len(artifacts),
         "dataflow_ids": [artifact["dataflow_id"] for artifact in artifacts],
+        "artifacts": [
+            {
+                "artifact_id": artifact["artifact_id"],
+                "dataflow_id": artifact["dataflow_id"],
+                "audit_severity": artifact["audit_severity"],
+                "current_url": artifact["current_url"],
+            }
+            for artifact in artifacts
+        ],
     }
     (args.out / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -230,10 +251,14 @@ def render_comment(args: argparse.Namespace) -> int:
         f"Artifacts generated: `{summary['artifacts_total']}`",
         "",
     ]
-    for dataflow_id in summary["dataflow_ids"]:
-        artifact = load_json(args.research_dir / f"{slug(dataflow_id)}.json")
+    artifacts = summary.get("artifacts") or [
+        {"artifact_id": slug(dataflow_id), "dataflow_id": dataflow_id}
+        for dataflow_id in summary["dataflow_ids"]
+    ]
+    for item in artifacts:
+        artifact = load_json(args.research_dir / f"{item['artifact_id']}.json")
         lines.append(
-            f"- `{dataflow_id}`: `{artifact['classification']}`; {artifact['recommendation']}"
+            f"- `{item['dataflow_id']}` (`{item['artifact_id']}`): `{artifact['classification']}`; {artifact['recommendation']}"
         )
     print("\n".join(lines))
     return 0
