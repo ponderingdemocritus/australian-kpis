@@ -72,6 +72,11 @@ recommendation = "Use reviewed direct artifacts."
             self.assertEqual(artifact["artifact_id"], "rba.statistical_tables")
             self.assertEqual(artifact["classification"], "insufficient_evidence")
             self.assertEqual(artifact["allowed_domains"], ["www.rba.gov.au"])
+            self.assertEqual(
+                artifact["source_urls"],
+                ["https://www.rba.gov.au/statistics/tables/"],
+            )
+            self.assertEqual(artifact["publisher_names"], ["Reserve Bank of Australia"])
             self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
             self.assertIn(
                 "Source Research: rba.statistical_tables",
@@ -246,8 +251,8 @@ recommendation = "Review ABS CPI source."
             "allowed_domains": ["data.api.abs.gov.au"],
             "required_evidence": ["official publisher URL"],
             "classification": "same_source",
-            "source_urls": [],
-            "publisher_names": [],
+            "source_urls": ["https://data.api.abs.gov.au/"],
+            "publisher_names": ["ABS"],
             "retrieved_at": "2026-06-30T00:00:00+00:00",
             "license_evidence": "CC-BY-4.0",
             "attribution_evidence": "Source: ABS",
@@ -324,8 +329,8 @@ recommendation = "Review source."
             "allowed_domains": ["data.api.abs.gov.au"],
             "required_evidence": ["official publisher URL"],
             "classification": "insufficient_evidence",
-            "source_urls": [],
-            "publisher_names": [],
+            "source_urls": ["https://data.api.abs.gov.au/"],
+            "publisher_names": ["ABS"],
             "retrieved_at": "2026/06/30",
             "license_evidence": "CC-BY-4.0",
             "attribution_evidence": "Source: ABS",

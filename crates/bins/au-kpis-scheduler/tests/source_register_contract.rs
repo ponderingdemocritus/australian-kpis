@@ -1,9 +1,64 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use au_kpis_adapter::SourceAdapter;
-use au_kpis_scheduler::source_location_audit::default_source_location_rules;
+use au_kpis_scheduler::source_location_audit::{
+    SourceLocationCheck, default_source_location_rules,
+};
 use au_kpis_scorecard::load_aps_v1_config;
-use au_kpis_source_register::{AuditPolicy, SourceStatus, load_source_register};
+use au_kpis_source_register::{AuditPolicy, OwnerArea, SourceStatus, load_source_register};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AuditRuleContract {
+    source_id: String,
+    dataflow_id: String,
+    current_url: String,
+    check: AuditCheckContract,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum AuditCheckContract {
+    Reachable {
+        recommendation: String,
+    },
+    ContainsAny {
+        needles: Vec<String>,
+        recommendation: String,
+    },
+    CanonicalUrl {
+        expected_url: String,
+        recommendation: String,
+    },
+    BudgetYear {
+        configured_year: String,
+        latest_year: String,
+        recommendation: String,
+    },
+    DirectoryListing {
+        required_patterns: Vec<String>,
+        recommendation: String,
+    },
+    LicensedProduct {
+        recommendation: String,
+    },
+    BotFiltered {
+        expected_statuses: Vec<u16>,
+        semantic_fallback: Option<String>,
+        recommendation: String,
+    },
+    WorldBankBreadyApi {
+        recommendation: String,
+    },
+    ManualPlaceholder {
+        reason: String,
+        recommendation: String,
+    },
+    ManualRegisterOnly {
+        reason: String,
+        reviewed_at: String,
+        manual_review_due_at: String,
+        recommendation: String,
+    },
+}
 
 #[test]
 fn source_register_dataflow_ids_are_unique() {
@@ -25,20 +80,24 @@ fn scheduler_default_rules_are_derived_from_source_register() {
     let mut registered_audited = BTreeSet::new();
     for dataflow in &register.dataflows {
         if dataflow.audit_policy.emits_source_location_rule() {
-            registered_audited.insert((
-                dataflow.source_id.clone(),
-                dataflow.dataflow_id.clone(),
-                dataflow.canonical_url.clone(),
-                audit_policy_kind(&dataflow.audit_policy).to_string(),
+            registered_audited.insert(register_audit_contract(
+                &dataflow.source_id,
+                &dataflow.dataflow_id,
+                &dataflow.canonical_url,
+                &dataflow.audit_policy,
+                dataflow.reviewed_at.as_deref(),
+                dataflow.manual_review_due_at.as_deref(),
             ));
         }
         for additional in &dataflow.additional_audit_policies {
             if additional.policy.emits_source_location_rule() {
-                registered_audited.insert((
-                    dataflow.source_id.clone(),
-                    dataflow.dataflow_id.clone(),
-                    additional.url.clone(),
-                    audit_policy_kind(&additional.policy).to_string(),
+                registered_audited.insert(register_audit_contract(
+                    &dataflow.source_id,
+                    &dataflow.dataflow_id,
+                    &additional.url,
+                    &additional.policy,
+                    dataflow.reviewed_at.as_deref(),
+                    dataflow.manual_review_due_at.as_deref(),
                 ));
             }
         }
@@ -46,16 +105,11 @@ fn scheduler_default_rules_are_derived_from_source_register() {
     let scheduler_rules = default_source_location_rules()
         .expect("load default source-location rules")
         .iter()
-        .map(|rule| {
-            (
-                rule.source_id.clone(),
-                rule.dataflow_id.clone(),
-                rule.current_url.clone(),
-                rule.audit_policy_kind
-                    .as_deref()
-                    .expect("register-derived rule must expose audit policy kind")
-                    .to_string(),
-            )
+        .map(|rule| AuditRuleContract {
+            source_id: rule.source_id.clone(),
+            dataflow_id: rule.dataflow_id.clone(),
+            current_url: rule.current_url.clone(),
+            check: scheduler_audit_check_contract(&rule.check),
         })
         .collect::<BTreeSet<_>>();
 
@@ -63,6 +117,162 @@ fn scheduler_default_rules_are_derived_from_source_register() {
         registered_audited, scheduler_rules,
         "scheduler source-location rules must match register-backed audit policies"
     );
+}
+
+fn register_audit_contract(
+    source_id: &str,
+    dataflow_id: &str,
+    current_url: &str,
+    policy: &AuditPolicy,
+    reviewed_at: Option<&str>,
+    manual_review_due_at: Option<&str>,
+) -> AuditRuleContract {
+    AuditRuleContract {
+        source_id: source_id.to_string(),
+        dataflow_id: dataflow_id.to_string(),
+        current_url: current_url.to_string(),
+        check: register_audit_check_contract(policy, reviewed_at, manual_review_due_at),
+    }
+}
+
+fn register_audit_check_contract(
+    policy: &AuditPolicy,
+    reviewed_at: Option<&str>,
+    manual_review_due_at: Option<&str>,
+) -> AuditCheckContract {
+    match policy {
+        AuditPolicy::ContainsAny {
+            needles,
+            recommendation,
+        } => AuditCheckContract::ContainsAny {
+            needles: needles.clone(),
+            recommendation: recommendation.clone(),
+        },
+        AuditPolicy::DirectoryListing {
+            required_patterns,
+            recommendation,
+        } => AuditCheckContract::DirectoryListing {
+            required_patterns: required_patterns.clone(),
+            recommendation: recommendation.clone(),
+        },
+        AuditPolicy::BudgetYear {
+            configured_year,
+            latest_year,
+            recommendation,
+        } => AuditCheckContract::BudgetYear {
+            configured_year: configured_year.clone(),
+            latest_year: latest_year.clone(),
+            recommendation: recommendation.clone(),
+        },
+        AuditPolicy::LicensedProduct { recommendation } => AuditCheckContract::LicensedProduct {
+            recommendation: recommendation.clone(),
+        },
+        AuditPolicy::WorldBankBreadyApi { recommendation } => {
+            AuditCheckContract::WorldBankBreadyApi {
+                recommendation: recommendation.clone(),
+            }
+        }
+        AuditPolicy::ManualPlaceholder {
+            reason,
+            recommendation,
+        } => AuditCheckContract::ManualPlaceholder {
+            reason: reason.clone(),
+            recommendation: recommendation.clone(),
+        },
+        AuditPolicy::ManualRegisterOnly {
+            reason,
+            recommendation,
+        } => AuditCheckContract::ManualRegisterOnly {
+            reason: reason.clone(),
+            reviewed_at: reviewed_at.unwrap_or("").to_string(),
+            manual_review_due_at: manual_review_due_at.unwrap_or("").to_string(),
+            recommendation: recommendation.clone(),
+        },
+        AuditPolicy::BotFiltered {
+            expected_statuses,
+            semantic_fallback,
+            recommendation,
+        } => AuditCheckContract::BotFiltered {
+            expected_statuses: expected_statuses.clone(),
+            semantic_fallback: semantic_fallback.clone(),
+            recommendation: recommendation.clone(),
+        },
+    }
+}
+
+fn scheduler_audit_check_contract(check: &SourceLocationCheck) -> AuditCheckContract {
+    match check {
+        SourceLocationCheck::Reachable { recommendation } => AuditCheckContract::Reachable {
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::ContainsAny {
+            needles,
+            recommendation,
+        } => AuditCheckContract::ContainsAny {
+            needles: needles.clone(),
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::CanonicalUrl {
+            expected_url,
+            recommendation,
+        } => AuditCheckContract::CanonicalUrl {
+            expected_url: expected_url.clone(),
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::BudgetYear {
+            configured_year,
+            latest_year,
+            recommendation,
+        } => AuditCheckContract::BudgetYear {
+            configured_year: configured_year.clone(),
+            latest_year: latest_year.clone(),
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::DirectoryListing {
+            required_patterns,
+            recommendation,
+        } => AuditCheckContract::DirectoryListing {
+            required_patterns: required_patterns.clone(),
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::LicensedProduct { recommendation } => {
+            AuditCheckContract::LicensedProduct {
+                recommendation: recommendation.clone(),
+            }
+        }
+        SourceLocationCheck::BotFiltered {
+            expected_statuses,
+            semantic_fallback,
+            recommendation,
+        } => AuditCheckContract::BotFiltered {
+            expected_statuses: expected_statuses.clone(),
+            semantic_fallback: semantic_fallback.clone(),
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::WorldBankBreadyApi { recommendation } => {
+            AuditCheckContract::WorldBankBreadyApi {
+                recommendation: recommendation.clone(),
+            }
+        }
+        SourceLocationCheck::ManualPlaceholder {
+            reason,
+            recommendation,
+        } => AuditCheckContract::ManualPlaceholder {
+            reason: reason.clone(),
+            recommendation: recommendation.clone(),
+        },
+        SourceLocationCheck::ManualRegisterOnly {
+            reason,
+            reviewed_at,
+            manual_review_due_at,
+            recommendation,
+        } => AuditCheckContract::ManualRegisterOnly {
+            reason: reason.clone(),
+            reviewed_at: reviewed_at.clone(),
+            manual_review_due_at: manual_review_due_at.clone(),
+            recommendation: recommendation.clone(),
+        },
+    }
 }
 
 #[test]
@@ -80,19 +290,6 @@ fn manual_placeholder_register_entries_use_placeholder_status() {
             dataflow.dataflow_id,
             dataflow.status
         );
-    }
-}
-
-fn audit_policy_kind(policy: &AuditPolicy) -> &'static str {
-    match policy {
-        AuditPolicy::ContainsAny { .. } => "contains_any",
-        AuditPolicy::DirectoryListing { .. } => "directory_listing",
-        AuditPolicy::BudgetYear { .. } => "budget_year",
-        AuditPolicy::LicensedProduct { .. } => "licensed_product",
-        AuditPolicy::WorldBankBreadyApi { .. } => "world_bank_bready_api",
-        AuditPolicy::ManualPlaceholder { .. } => "manual_placeholder",
-        AuditPolicy::ManualRegisterOnly { .. } => "manual_register_only",
-        AuditPolicy::BotFiltered { .. } => "bot_filtered",
     }
 }
 
@@ -127,6 +324,26 @@ fn adapter_manifest_dataflows_are_registered_with_matching_source_ids() {
 
     for adapter in implemented_adapters() {
         assert_adapter_dataflows_registered(adapter.adapter.as_ref(), &registered);
+    }
+}
+
+#[test]
+fn active_adapter_owned_register_dataflows_have_adapter_metadata() {
+    let register = load_source_register().expect("load source register");
+    let adapter_metadata = implemented_adapters()
+        .into_iter()
+        .flat_map(|adapter| adapter.adapter.dataflow_metadata())
+        .map(|dataflow| registered_dataflow_key(&dataflow.source_id, &dataflow.id))
+        .collect::<BTreeSet<_>>();
+
+    for dataflow in register.dataflows.iter().filter(|dataflow| {
+        dataflow.status == SourceStatus::Active && dataflow.owner_area == OwnerArea::Adapter
+    }) {
+        let key = registered_dataflow_key(&dataflow.source_id, &dataflow.dataflow_id);
+        assert!(
+            adapter_metadata.contains(&key),
+            "active adapter-owned register dataflow `{key}` has no SourceAdapter::dataflow_metadata entry"
+        );
     }
 }
 

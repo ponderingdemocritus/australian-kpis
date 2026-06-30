@@ -218,6 +218,26 @@ def artifact_id(dataflow_id: str, occurrence: int) -> str:
     return f"{base}__{occurrence}"
 
 
+def unique_non_empty(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            unique.append(cleaned)
+    return unique
+
+
+def publisher_name_from_attribution(attribution: str, source_id: str) -> str:
+    cleaned = attribution.strip()
+    for prefix in ("Source: ", "Sources: "):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+            break
+    return cleaned or source_id
+
+
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
 
@@ -252,13 +272,18 @@ def build_research_artifact(
     if canonical_url.startswith("http"):
         host = canonical_url.split("/", 3)[2]
         allowed_domains.append(host)
+    current_url = str(finding["current_url"])
+    source_urls = unique_non_empty([current_url, canonical_url])
+    publisher_names = [
+        publisher_name_from_attribution(str(register_record.get("attribution", "")), str(finding["source_id"]))
+    ]
 
     return {
         "schema_version": "source-research.v1",
         "artifact_id": "",
         "source_id": finding["source_id"],
         "dataflow_id": dataflow_id,
-        "current_url": finding["current_url"],
+        "current_url": current_url,
         "audit_evidence": finding["evidence"],
         "audit_severity": finding["severity"],
         "register_status": register_record["status"],
@@ -266,8 +291,8 @@ def build_research_artifact(
         "allowed_domains": allowed_domains,
         "required_evidence": EVIDENCE_CHECKLIST,
         "classification": "insufficient_evidence",
-        "source_urls": [],
-        "publisher_names": [],
+        "source_urls": source_urls,
+        "publisher_names": publisher_names,
         "retrieved_at": retrieved_at,
         "license_evidence": str(register_record.get("license", "")),
         "attribution_evidence": str(register_record.get("attribution", "")),
@@ -320,7 +345,7 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
             errors.append(f"{field} must be a list")
         elif any(not isinstance(item, str) or not item.strip() for item in value):
             errors.append(f"{field} must contain only non-empty strings")
-    for field in ["allowed_domains", "required_evidence", "risk_notes"]:
+    for field in ["allowed_domains", "required_evidence", "source_urls", "publisher_names", "risk_notes"]:
         if not artifact.get(field):
             errors.append(f"{field} must not be empty")
     retrieved_at = artifact.get("retrieved_at")
