@@ -121,6 +121,8 @@ export default defineRailway(() => {
       builder: 'DOCKERFILE',
       dockerfilePath: 'infra/docker/au-kpis-web.Dockerfile',
       watchPatterns: [
+        '/.npmrc',
+        '/.railway/package.json',
         '/apps/web/**',
         '/infra/docker/au-kpis-web.Dockerfile',
         '/package.json',
