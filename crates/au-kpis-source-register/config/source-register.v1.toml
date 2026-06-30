@@ -93,7 +93,7 @@ validation_requirements = ["RBA table URLs must resolve under /statistics/tables
 
 [dataflows.audit_policy]
 kind = "bot_filtered"
-expected_statuses = [403]
+expected_statuses = [403, 429]
 semantic_fallback = "Statistical Tables"
 recommendation = "Review the RBA statistical tables index and table URLs; use reviewed direct CSV/XLS artifacts if the index remains bot-filtered."
 
@@ -448,14 +448,14 @@ replacement_candidate = "Reviewed open data CSV/XLS artifact from planning.vic.g
 
 [dataflows.audit_policy]
 kind = "bot_filtered"
-expected_statuses = [403]
+expected_statuses = [403, 429]
 semantic_fallback = "Planning permit activity"
 recommendation = "Review Victoria Planning permit activity source links and identify a stable machine-readable artifact."
 
 [[dataflows.additional_audit_policies]]
 url = "https://www.planning.vic.gov.au/guides-and-resources/data-and-insights"
 kind = "bot_filtered"
-expected_statuses = [403]
+expected_statuses = [403, 429]
 semantic_fallback = "Data and insights"
 recommendation = "Review the Victoria Planning data-and-insights page if the adapter metadata URL moves."
 

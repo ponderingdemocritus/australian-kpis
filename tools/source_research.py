@@ -492,14 +492,11 @@ def generate(args: argparse.Namespace) -> int:
     audit_generated_at = str(report.get("generated_at") or retrieved_at)
     register_version = str(report.get("register_version") or "unknown")
 
-    if report.get("status") == "error":
-        findings: list[dict[str, Any]] = []
-    else:
-        findings = [
-            finding
-            for finding in report.get("findings", [])
-            if isinstance(finding, dict) and should_research(finding, args.dataflow_id)
-        ]
+    findings = [
+        finding
+        for finding in report.get("findings", [])
+        if isinstance(finding, dict) and should_research(finding, args.dataflow_id)
+    ]
     for finding in sorted(findings, key=finding_sort_key):
         artifact = build_research_artifact(
             finding,

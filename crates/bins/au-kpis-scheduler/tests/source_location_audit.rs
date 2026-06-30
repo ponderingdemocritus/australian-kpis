@@ -484,6 +484,38 @@ fn source_location_bot_filtered_expected_status_is_not_drift() {
 }
 
 #[test]
+fn source_location_bot_filtered_expected_rate_limit_status_is_not_drift() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403, 429],
+            semantic_fallback: Some(s("Statistical Tables")),
+            recommendation: s(
+                "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+            ),
+        },
+    )
+    .with_register_metadata("active", "bot_filtered")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        429,
+        "rate limited",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::BotFiltered);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::BotFiltered
+    );
+    assert!(report.findings[0].evidence.contains("access-challenged"));
+}
+
+#[test]
 fn source_location_bot_filtered_success_without_semantic_hint_needs_review() {
     let rules = [SourceLocationRule::new(
         "rba",

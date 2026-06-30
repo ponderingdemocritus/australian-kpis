@@ -57,6 +57,7 @@ jobs:
             fi
           else
             deadline=$((SECONDS + 7200))
+            min_created="$(date -u -d '8 days ago' +%FT%TZ)"
             run_json=""
             while [ "${SECONDS}" -lt "${deadline}" ]; do
               run_json="$(
@@ -64,19 +65,34 @@ jobs:
                   --workflow "Source Location Audit" \
                   --branch main \
                   --event schedule \
-                  --status completed \
-                  --created "$(date -u +%F)" \
-                  --json databaseId,conclusion,headBranch,headSha,status,url,workflowName \
-                  --jq '[.[] | select(.conclusion == "success" or .conclusion == "failure")] | .[0]'
+                  --limit 20 \
+                  --json createdAt,databaseId,conclusion,headBranch,headSha,status,url,workflowName \
+                  | jq --arg min_created "${min_created}" '[
+                    .[]
+                    | select(.createdAt >= $min_created)
+                  ] | .[0]'
               )"
-              if [ -n "${run_json}" ] && [ "${run_json}" != "null" ]; then
+              if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
+                echo "Waiting for a scheduled Source Location Audit run from the last 8 days..."
+                sleep 60
+                continue
+              fi
+
+              status="$(jq -r '.status' <<< "${run_json}")"
+              conclusion="$(jq -r '.conclusion' <<< "${run_json}")"
+              if [ "${status}" != "completed" ]; then
+                echo "Waiting for latest scheduled Source Location Audit run to complete..."
+                sleep 60
+                continue
+              fi
+              if [ "${conclusion}" = "success" ] || [ "${conclusion}" = "failure" ]; then
                 break
               fi
-              echo "Waiting for today's scheduled Source Location Audit run to complete..."
-              sleep 60
+              echo "Latest scheduled Source Location Audit run did not produce a reusable artifact: ${conclusion}." >&2
+              exit 1
             done
             if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
-              echo "No completed scheduled Source Location Audit run found for main today after waiting up to 120 minutes." >&2
+              echo "No reusable scheduled Source Location Audit run found for main in the last 8 days after waiting up to 120 minutes." >&2
               exit 1
             fi
           fi

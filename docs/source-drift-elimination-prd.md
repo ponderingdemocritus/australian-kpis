@@ -202,7 +202,7 @@ Acceptance criteria:
 
 - NAIC transient HTTP/2 failure is classified as transport/tooling unless a
   retry confirms semantic absence.
-- RBA and Victoria Planning 403 responses become `bot_filtered` findings with
+- RBA and Victoria Planning 403/429 responses become `bot_filtered` findings with
   source-specific recommendations, not generic drift.
 - World Bank null Australia values remain `manual_review` and cannot be scored.
 
@@ -433,7 +433,7 @@ validation_requirements = [
 [dataflows.audit_policy]
 kind = "bot_filtered"
 semantic_fallback = "direct_table_artifact_manifest"
-expected_statuses = [403]
+expected_statuses = [403, 429]
 recommendation = "Use reviewed direct CSV/XLS table artifacts if the index is bot-filtered."
 ```
 

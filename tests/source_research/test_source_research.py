@@ -399,7 +399,7 @@ recommendation = "Review API values."
                 "2026-06-30T00:00:00+00:00",
             )
 
-    def test_generate_skips_all_packets_for_error_status_audits(self):
+    def test_generate_keeps_actionable_packets_for_mixed_error_audits(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             report = root / "source-location-audit.json"
@@ -414,10 +414,18 @@ recommendation = "Review API values."
                             {
                                 "source_id": "abs",
                                 "dataflow_id": "abs.cpi",
+                                "severity": "error",
+                                "current_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
+                                "evidence": "One audit request failed before an HTTP response.",
+                                "recommendation": "Retry the source-location audit.",
+                            },
+                            {
+                                "source_id": "abs",
+                                "dataflow_id": "abs.cpi",
                                 "severity": "warning",
                                 "current_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
-                                "evidence": "Earlier actionable finding from an unreliable audit.",
-                                "recommendation": "Retry the source-location audit.",
+                                "evidence": "Another checked source moved.",
+                                "recommendation": "Review ABS CPI source.",
                             }
                         ],
                     }
@@ -460,11 +468,13 @@ recommendation = "Review ABS CPI source."
             )
 
             self.assertEqual(exit_code, 0)
-            self.assertFalse((out / "abs.cpi.json").exists())
+            self.assertTrue((out / "abs.cpi.json").exists())
+            artifact = json.loads((out / "abs.cpi.json").read_text())
+            self.assertEqual(artifact["audit_severity"], "warning")
             summary = json.loads((out / "summary.json").read_text())
-            self.assertEqual(summary["artifacts_total"], 0)
+            self.assertEqual(summary["artifacts_total"], 1)
             self.assertEqual(summary["audit_status"], "error")
-            self.assertEqual(summary["dataflow_ids"], [])
+            self.assertEqual(summary["dataflow_ids"], ["abs.cpi"])
             self.assertEqual(source_research.validate(argparse.Namespace(research_dir=out)), 0)
 
     def test_validation_rejects_non_actionable_research_artifact(self):

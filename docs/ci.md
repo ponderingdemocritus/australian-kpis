@@ -93,12 +93,15 @@ locations drift or need manual review.
 Drift, bot-filtered, and manual-review findings do not fail the workflow. The
 tracked GitHub issue is the operational todo. The companion
 `.github/workflows/source-research-review.yml` workflow runs at `0 7 * * 1`,
-reuses the same-day scheduled `Source Location Audit` artifact, reads the source
-register from the audited commit, runs the current reviewed research tooling,
-writes schema-validated `target/source-research/` packets for actionable
-findings, uploads them for 30 days, and appends a summary to the tracked issue
-only when the audited branch is `main`. Audit runs from revisions that predate
-the source register fail fast with a compatibility error.
+reuses the latest scheduled `Source Location Audit` artifact from `main` within
+the last eight days, reads the source register from the audited commit, runs the
+current reviewed research tooling, writes schema-validated
+`target/source-research/` packets for actionable findings, uploads them for 30
+days, and appends a summary to the tracked issue only when the audited branch is
+`main`. Mixed reports with aggregate `error` status still preserve packets for
+non-error actionable findings before the workflow fails on the audit error.
+Audit runs from revisions that predate the source register fail fast with a
+compatibility error.
 
 Pull requests also run the `Source Governance Contracts` job in
 `.github/workflows/pr.yml`. It blocks on the source-register contract test,

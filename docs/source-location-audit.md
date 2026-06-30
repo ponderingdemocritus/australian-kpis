@@ -142,9 +142,10 @@ synchronized with the register.
 ## Source Research Review
 
 `.github/workflows/source-research-review.yml` runs at `0 7 * * 1`, reuses the
-same-day scheduled source-location audit artifact, and checks out the audited
-commit before generating packets. Manual runs require an explicit source-location
-audit run id and can target all findings or one `dataflow_id`.
+latest scheduled source-location audit artifact from `main` in the last eight
+days, reads the source register from the audited commit, and runs the current
+reviewed research tooling. Manual runs require an explicit source-location audit
+run id and can target all findings or one `dataflow_id`.
 
 The workflow generates bounded research packets under:
 
@@ -157,3 +158,5 @@ creates evidence packets and recommendations only; it does not change Rust
 adapters, scoring config, or source mappings. Issue comments are posted only for
 audits from `main`; branch-local and manual non-main runs upload artifacts only.
 Replacement URLs still require a reviewed register/config change.
+If an audit report has aggregate `error` status, non-error actionable findings
+still get retained research packets before the workflow fails on the audit error.
