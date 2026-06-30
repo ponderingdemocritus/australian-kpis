@@ -123,47 +123,48 @@ fn adapter_manifest_dataflows_are_registered_with_matching_source_ids() {
         .map(|dataflow| registered_dataflow_key(&dataflow.source_id, &dataflow.dataflow_id))
         .collect::<BTreeSet<_>>();
 
-    assert_adapter_dataflows_registered(&au_kpis_adapter_abs::AbsAdapter::default(), &registered);
-    assert_adapter_dataflows_registered(&au_kpis_adapter_aemo::AemoAdapter::default(), &registered);
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_ai_readiness::AiReadinessAdapter::default(),
-        &registered,
-    );
-    assert_adapter_dataflows_registered(&au_kpis_adapter_apra::ApraAdapter::default(), &registered);
-    assert_adapter_dataflows_registered(&au_kpis_adapter_asx::AsxAdapter::default(), &registered);
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_nhsac::NhsacAdapter::default(),
-        &registered,
-    );
-    assert_adapter_dataflows_registered(&au_kpis_adapter_pc::PcAdapter::default(), &registered);
-    assert_adapter_dataflows_registered(&au_kpis_adapter_rba::RbaAdapter::default(), &registered);
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_state_budgets::StateBudgetsAdapter::default(),
-        &registered,
-    );
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_state_capital::StateCapitalAdapter::default(),
-        &registered,
-    );
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_state_planning::StatePlanningAdapter::default(),
-        &registered,
-    );
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_treasury::TreasuryAdapter::default(),
-        &registered,
-    );
-    assert_adapter_dataflows_registered(
-        &au_kpis_adapter_worldbank::WorldbankAdapter::default(),
-        &registered,
-    );
+    for adapter in implemented_adapters() {
+        assert_adapter_dataflows_registered(adapter.as_ref(), &registered);
+    }
 }
 
-fn assert_adapter_dataflows_registered(
-    adapter: &impl SourceAdapter,
-    registered: &BTreeSet<String>,
-) {
+fn implemented_adapters() -> Vec<Box<dyn SourceAdapter>> {
+    vec![
+        Box::new(au_kpis_adapter_abs::AbsAdapter::default()),
+        Box::new(au_kpis_adapter_aemo::AemoAdapter::default()),
+        Box::new(au_kpis_adapter_ai_readiness::AiReadinessAdapter::default()),
+        Box::new(au_kpis_adapter_apra::ApraAdapter::default()),
+        Box::new(au_kpis_adapter_asx::AsxAdapter::default()),
+        Box::new(au_kpis_adapter_nhsac::NhsacAdapter::default()),
+        Box::new(au_kpis_adapter_pc::PcAdapter::default()),
+        Box::new(au_kpis_adapter_rba::RbaAdapter::default()),
+        Box::new(au_kpis_adapter_state_budgets::StateBudgetsAdapter::default()),
+        Box::new(au_kpis_adapter_state_capital::StateCapitalAdapter::default()),
+        Box::new(au_kpis_adapter_state_planning::StatePlanningAdapter::default()),
+        Box::new(au_kpis_adapter_treasury::TreasuryAdapter::default()),
+        Box::new(au_kpis_adapter_worldbank::WorldbankAdapter::default()),
+    ]
+}
+
+fn assert_adapter_dataflows_registered(adapter: &dyn SourceAdapter, registered: &BTreeSet<String>) {
     let manifest = adapter.manifest();
+    let manifest_dataflow_ids = manifest
+        .dataflows
+        .iter()
+        .map(|dataflow_id| dataflow_id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let metadata = adapter.dataflow_metadata();
+    let metadata_dataflow_ids = metadata
+        .iter()
+        .map(|dataflow| dataflow.id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        manifest_dataflow_ids, metadata_dataflow_ids,
+        "adapter `{}` manifest dataflows must match SourceAdapter::dataflow_metadata ids",
+        manifest.source_id
+    );
+
     for dataflow_id in &manifest.dataflows {
         let key = registered_dataflow_key(&manifest.source_id, dataflow_id);
         assert!(
@@ -174,8 +175,13 @@ fn assert_adapter_dataflows_registered(
         );
     }
 
-    for dataflow in adapter.dataflow_metadata() {
-        let key = registered_dataflow_key(&manifest.source_id, &dataflow.id);
+    for dataflow in metadata {
+        assert_eq!(
+            dataflow.source_id, manifest.source_id,
+            "adapter `{}` metadata dataflow `{}` must use the manifest source id",
+            manifest.source_id, dataflow.id
+        );
+        let key = registered_dataflow_key(&dataflow.source_id, &dataflow.id);
         assert!(
             registered.contains(&key),
             "adapter `{}` metadata references unregistered source/dataflow `{}`",

@@ -11,6 +11,7 @@ description = "Versioned source governance register for australian-kpis."
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
+url = "2"
 
 [lints]
 workspace = true

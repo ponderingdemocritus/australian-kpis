@@ -60,6 +60,11 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
     require_text("source_id", &dataflow.source_id)?;
     require_text("dataflow_id", &dataflow.dataflow_id)?;
     require_text("canonical_url", &dataflow.canonical_url)?;
+    validate_http_url(
+        "canonical_url",
+        &dataflow.canonical_url,
+        &dataflow.dataflow_id,
+    )?;
     require_text("license", &dataflow.license)?;
     require_text("attribution", &dataflow.attribution)?;
     require_text("cadence", &dataflow.cadence)?;
@@ -116,6 +121,30 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
         )));
     }
 
+    validate_optional_iso_date(
+        "retrieved_at",
+        dataflow.retrieved_at.as_deref(),
+        &dataflow.dataflow_id,
+    )?;
+    validate_optional_iso_date(
+        "reviewed_at",
+        dataflow.reviewed_at.as_deref(),
+        &dataflow.dataflow_id,
+    )?;
+    validate_optional_iso_date(
+        "manual_review_due_at",
+        dataflow.manual_review_due_at.as_deref(),
+        &dataflow.dataflow_id,
+    )?;
+
+    for additional in &dataflow.additional_audit_policies {
+        validate_http_url(
+            "additional_audit_policies.url",
+            &additional.url,
+            &dataflow.dataflow_id,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -141,6 +170,79 @@ fn require_optional_text(
             "`{dataflow_id}` requires `{field}`"
         )))
     }
+}
+
+fn validate_http_url(
+    field: &str,
+    value: &str,
+    dataflow_id: &str,
+) -> Result<(), SourceRegisterError> {
+    let parsed = url::Url::parse(value).map_err(|err| {
+        SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` has invalid `{field}` URL: {err}"
+        ))
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` `{field}` must be an absolute HTTP(S) URL"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_optional_iso_date(
+    field: &str,
+    value: Option<&str>,
+    dataflow_id: &str,
+) -> Result<(), SourceRegisterError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if is_valid_iso_date(value) {
+        Ok(())
+    } else {
+        Err(SourceRegisterError::InvalidRegister(format!(
+            "`{dataflow_id}` `{field}` must use YYYY-MM-DD"
+        )))
+    }
+}
+
+fn is_valid_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let year = parse_fixed_digits(&bytes[0..4]);
+    let month = parse_fixed_digits(&bytes[5..7]);
+    let day = parse_fixed_digits(&bytes[8..10]);
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        return false;
+    };
+    if month == 0 || month > 12 || day == 0 {
+        return false;
+    }
+    day <= days_in_month(year, month)
+}
+
+fn parse_fixed_digits(bytes: &[u8]) -> Option<u32> {
+    bytes.iter().try_fold(0_u32, |acc, byte| {
+        byte.is_ascii_digit()
+            .then(|| acc * 10 + u32::from(byte - b'0'))
+    })
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 /// Source register parse/validation error.
@@ -429,5 +531,55 @@ recommendation = "Review source."
 
         let err = parse_source_register(raw).expect_err("missing due date should fail");
         assert!(err.to_string().contains("manual_review_due_at"));
+    }
+
+    #[test]
+    fn malformed_register_urls_are_rejected() {
+        let raw = valid_register_fixture().replace(
+            "canonical_url = \"https://example.test/a\"",
+            "canonical_url = \"not a url\"",
+        );
+
+        let err = parse_source_register(&raw).expect_err("bad URL should fail");
+        assert!(err.to_string().contains("canonical_url"));
+    }
+
+    #[test]
+    fn malformed_register_dates_are_rejected() {
+        let raw = valid_register_fixture().replace(
+            "manual_review_due_at = \"2027-06-22\"",
+            "manual_review_due_at = \"2027/06/22\"",
+        );
+
+        let err = parse_source_register(&raw).expect_err("bad date should fail");
+        assert!(err.to_string().contains("manual_review_due_at"));
+    }
+
+    fn valid_register_fixture() -> String {
+        r#"
+version = "source-register.v1"
+
+[[dataflows]]
+source_id = "curated"
+dataflow_id = "curated.oversight_strength"
+status = "manual_pending"
+owner_area = "curated"
+canonical_url = "https://example.test/a"
+license = "Manual review required"
+attribution = "Curated input"
+cadence = "annual"
+review_frequency = "annual"
+source_scope = "test"
+retrieved_at = "2026-06-22"
+reviewed_by = "aps-curation"
+reviewed_at = "2026-06-22"
+manual_review_due_at = "2027-06-22"
+
+[dataflows.audit_policy]
+kind = "manual_register_only"
+reason = "Manual review"
+recommendation = "Review source."
+"#
+        .to_string()
     }
 }
