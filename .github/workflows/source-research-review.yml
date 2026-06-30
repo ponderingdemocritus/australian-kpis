@@ -55,18 +55,27 @@ jobs:
               exit 1
             fi
           else
-            run_json="$(
-              gh run list \
-                --workflow "Source Location Audit" \
-                --branch main \
-                --event schedule \
-                --status completed \
-                --created "$(date -u +%F)" \
-                --json databaseId,conclusion,headBranch,headSha,status,url,workflowName \
-                --jq '[.[] | select(.conclusion == "success" or .conclusion == "failure")] | .[0]'
-            )"
+            deadline=$((SECONDS + 1800))
+            run_json=""
+            while [ "${SECONDS}" -lt "${deadline}" ]; do
+              run_json="$(
+                gh run list \
+                  --workflow "Source Location Audit" \
+                  --branch main \
+                  --event schedule \
+                  --status completed \
+                  --created "$(date -u +%F)" \
+                  --json databaseId,conclusion,headBranch,headSha,status,url,workflowName \
+                  --jq '[.[] | select(.conclusion == "success" or .conclusion == "failure")] | .[0]'
+              )"
+              if [ -n "${run_json}" ] && [ "${run_json}" != "null" ]; then
+                break
+              fi
+              echo "Waiting for today's scheduled Source Location Audit run to complete..."
+              sleep 60
+            done
             if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
-              echo "No completed scheduled Source Location Audit run found for main today." >&2
+              echo "No completed scheduled Source Location Audit run found for main today after waiting." >&2
               exit 1
             fi
           fi

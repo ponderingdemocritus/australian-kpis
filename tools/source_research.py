@@ -292,12 +292,18 @@ def build_research_artifact(
     register_record = register.get(dataflow_id)
     if register_record is None:
         raise ValueError(f"missing register record for {dataflow_id}")
+    if finding["source_id"] != register_record.get("source_id"):
+        raise ValueError(
+            f"ambiguous provenance for {dataflow_id}: audit source_id "
+            f"{finding['source_id']!r} does not match register source_id "
+            f"{register_record.get('source_id')!r}"
+        )
 
     canonical_url = str(register_record.get("canonical_url", ""))
     current_url = str(finding["current_url"])
-    governed_urls = unique_non_empty([current_url, canonical_url, *additional_audit_urls(register_record)])
+    governed_urls = unique_non_empty([canonical_url, *additional_audit_urls(register_record)])
     allowed_domains = unique_non_empty([host_from_url(url) for url in governed_urls])
-    source_urls = governed_urls
+    source_urls = unique_non_empty([current_url, *governed_urls])
     publisher_names = [
         publisher_name_from_attribution(str(register_record.get("attribution", "")), str(finding["source_id"]))
     ]

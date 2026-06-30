@@ -246,7 +246,7 @@ recommendation = "Review API values."
             artifact = json.loads((out / "worldbank.bready.json").read_text())
             self.assertEqual(
                 artifact["allowed_domains"],
-                ["api.worldbank.org", "www.worldbank.org"],
+                ["www.worldbank.org", "api.worldbank.org"],
             )
             self.assertEqual(
                 artifact["source_urls"],
@@ -255,6 +255,64 @@ recommendation = "Review API values."
             self.assertEqual(
                 artifact["expected_missing_reason"],
                 "Manual pending until Australia values are non-null.",
+            )
+
+    def test_allowed_domains_exclude_drifted_current_url_host(self):
+        artifact = source_research.build_research_artifact(
+            {
+                "source_id": "treasury",
+                "dataflow_id": "treasury.budget",
+                "severity": "warning",
+                "current_url": "https://mirror.example.invalid/budget-paper.pdf",
+                "evidence": "Configured source URL drifted.",
+                "recommendation": "Review the official budget page.",
+            },
+            {
+                "treasury.budget": {
+                    "source_id": "treasury",
+                    "status": "active",
+                    "canonical_url": "https://budget.gov.au/content/bp1/index.htm",
+                    "attribution": "Source: Australian Treasury",
+                    "source_scope": "test",
+                    "review_frequency": "weekly",
+                    "provenance_requirements": ["Preserve source provenance."],
+                    "validation_requirements": ["Validate source semantics."],
+                }
+            },
+            "2026-06-30T00:00:00+00:00",
+        )
+
+        self.assertEqual(artifact["allowed_domains"], ["budget.gov.au"])
+        self.assertEqual(
+            artifact["source_urls"],
+            [
+                "https://mirror.example.invalid/budget-paper.pdf",
+                "https://budget.gov.au/content/bp1/index.htm",
+            ],
+        )
+
+    def test_build_rejects_source_id_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "ambiguous provenance"):
+            source_research.build_research_artifact(
+                {
+                    "source_id": "abs",
+                    "dataflow_id": "rba.statistical_tables",
+                    "severity": "warning",
+                    "current_url": "https://www.rba.gov.au/statistics/tables/",
+                    "evidence": "Fixture mismatch.",
+                    "recommendation": "Reject ambiguous provenance.",
+                },
+                {
+                    "rba.statistical_tables": {
+                        "source_id": "rba",
+                        "status": "active",
+                        "canonical_url": "https://www.rba.gov.au/statistics/tables/",
+                        "attribution": "Source: Reserve Bank of Australia",
+                        "source_scope": "test",
+                        "review_frequency": "weekly",
+                    }
+                },
+                "2026-06-30T00:00:00+00:00",
             )
 
     def test_generate_skips_audit_error_findings(self):
