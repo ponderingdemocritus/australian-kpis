@@ -141,9 +141,10 @@ synchronized with the register.
 
 ## Source Research Review
 
-`.github/workflows/source-research-review.yml` runs after a deterministic audit
-on the same weekly cadence, and can be started manually for all findings or one
-`dataflow_id`.
+`.github/workflows/source-research-review.yml` runs at `0 7 * * 1`, reuses the
+same-day scheduled source-location audit artifact, and checks out the audited
+commit before generating packets. Manual runs require an explicit source-location
+audit run id and can target all findings or one `dataflow_id`.
 
 The workflow generates bounded research packets under:
 
@@ -151,7 +152,8 @@ The workflow generates bounded research packets under:
 target/source-research/
 ```
 
-Each packet is schema-validated before issue comments are posted. Scheduled
-mode creates evidence packets and recommendations only; it does not change Rust
-adapters, scoring config, or source mappings. Replacement URLs still require a
-reviewed register/config change.
+Each packet is schema-validated before issue comments are posted. Scheduled mode
+creates evidence packets and recommendations only; it does not change Rust
+adapters, scoring config, or source mappings. Issue comments are posted only for
+audits from `main`; branch-local and manual non-main runs upload artifacts only.
+Replacement URLs still require a reviewed register/config change.
