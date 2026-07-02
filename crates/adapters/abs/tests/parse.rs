@@ -19,8 +19,8 @@ use futures::{FutureExt, StreamExt, stream, stream::BoxStream};
 use object_store::memory::InMemory;
 use object_store::{
     Attributes, Error as ObjectStoreError, GetOptions, GetResult, GetResultPayload, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
-    Result as ObjectStoreResult, UploadPart, path::Path,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result as ObjectStoreResult, UploadPart, path::Path,
 };
 use proptest::prelude::*;
 use serde::Serialize;
@@ -1122,7 +1122,7 @@ impl ObjectStore for FailingReadObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         Ok(Box::new(UnsupportedMultipartUpload))
     }
@@ -1165,7 +1165,7 @@ impl ObjectStore for FailingReadObjectStore {
         Ok(())
     }
 
-    fn list(&self, _prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    fn list(&self, _prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         stream::empty().boxed()
     }
 
