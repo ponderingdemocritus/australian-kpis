@@ -77,8 +77,8 @@ jobs:
 
                 if [ "${status}" != "completed" ]; then
                   wait_for_active_run=true
-                  echo "Skipping scheduled Source Location Audit run ${run_id}; status is ${status}."
-                  continue
+                  echo "Waiting for newer scheduled Source Location Audit run ${run_id}; status is ${status}."
+                  break
                 fi
                 if [ "${conclusion}" != "success" ] && [ "${conclusion}" != "failure" ]; then
                   echo "Skipping scheduled Source Location Audit run ${run_id} with conclusion ${conclusion}."
