@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1.85-bookworm AS chef
+FROM lukemathwalker/cargo-chef:0.1.71-rust-1.85.0-bookworm AS chef
 WORKDIR /app
-RUN cargo install cargo-chef --locked --version 0.1.72
 
 FROM chef AS planner
 COPY . .
@@ -10,7 +9,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 ENV RUSTC_WRAPPER=""
-COPY rust-toolchain.toml rust-toolchain.toml
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --locked --bin au-kpis-ingestion --recipe-path recipe.json
 COPY . .

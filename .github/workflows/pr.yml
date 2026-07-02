@@ -62,6 +62,9 @@ jobs:
       - name: Typecheck TypeScript packages
         run: pnpm turbo run typecheck --cache-dir=.turbo
 
+      - name: Test deploy configuration
+        run: pnpm run test:deploy
+
       - name: Test TypeScript packages
         run: pnpm turbo run test --cache-dir=.turbo
 

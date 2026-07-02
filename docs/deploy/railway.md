@@ -87,8 +87,8 @@ and Railpack can otherwise produce a Rust-only build plan for the web service
 without installing pnpm.
 
 The code-service Dockerfiles avoid Railway-specific cache mount IDs. Rust
-services use `cargo-chef` layers for dependency caching, and the web image keeps
-`pnpm install` behind the lockfile and package-manifest layer so fresh Railway
+services use `cargo-chef` layers for dependency caching, and the web image uses
+a lockfile-only `pnpm fetch` layer before the source copy so fresh Railway
 projects can build from source without project-specific Dockerfile edits.
 
 ## Required variables

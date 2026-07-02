@@ -101,6 +101,7 @@ export default defineRailway(() => {
       ],
     },
     env: {
+      PORT: '3000',
       AU_KPIS_DATABASE__URL: timescaleDatabaseUrl,
       AU_KPIS_CACHE__URL: cache.env.REDIS_URL,
       AU_KPIS_HTTP__CORS_ALLOWED_ORIGINS: '["https://${{web.RAILWAY_PUBLIC_DOMAIN}}"]',
@@ -122,7 +123,6 @@ export default defineRailway(() => {
       dockerfilePath: 'infra/docker/au-kpis-web.Dockerfile',
       watchPatterns: [
         '/.npmrc',
-        '/.railway/package.json',
         '/apps/web/**',
         '/infra/docker/au-kpis-web.Dockerfile',
         '/package.json',
