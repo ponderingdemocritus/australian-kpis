@@ -439,6 +439,89 @@ Provider exit behavior:
 - convert model unavailability into a non-blocking skipped result for manual
   issue comments, not a failing scheduled audit.
 
+## External Research Caveat Scope
+
+The current workflow stops at bounded, schema-validated packet generation. The
+next slice should add the first external research integration without changing
+scheduled behavior.
+
+### Phase 2A: Provider Harness, No Network
+
+Purpose: prove the orchestration contract before any external service is
+trusted.
+
+In scope:
+
+- `tools/source_research_agent.py run` command with the provider interface above.
+- `--provider mock` implementation that reads static fixture responses.
+- Prompt builder that serializes only the packet, register record, audit
+  finding, allowed domains, and output schema.
+- V2 validator and Markdown renderer for agent output.
+- Workflow dry-run path gated by manual dispatch input.
+- Unit and fixture tests proving prompt shape, output validation, and comment
+  rendering.
+
+Out of scope:
+
+- Calling OpenAI, browser automation, search APIs, or other network services.
+- Scheduled agentic runs.
+- Draft PR creation.
+- Any source-register, adapter, scorecard, loader, or migration mutation.
+
+Exit criteria:
+
+- CI proves the provider harness with deterministic fixtures only.
+- Mock provider artifacts validate as `source-research.v2`.
+- Invalid mock responses fail before issue-comment posting.
+- Scheduled `packet_only` workflow has no provider invocation path.
+
+### Phase 2B: Manual Real Provider Pilot
+
+Purpose: allow a maintainer to request evidence gathering for one known
+dataflow while preserving review control.
+
+In scope:
+
+- One approved provider selected by repository configuration.
+- Manual-only `research_mode=agentic_manual`.
+- Required `dataflow_id`; `all_findings=true` remains disabled for the first
+  pilot.
+- Per-run limits: one dataflow, maximum 6 inspected URLs, maximum 10 minutes,
+  provider cost limit reported in the summary when available.
+- Primary-source-only evidence preference, constrained by `allowed_domains`.
+- Provider transcript uploaded as an artifact, not posted to issues by default.
+- Skipped result when provider secret/configuration is absent.
+
+Out of scope:
+
+- Scheduled provider calls.
+- Multi-finding runs.
+- Browser sessions with authenticated user state.
+- Non-primary source recommendations unless the output is
+  `insufficient_evidence`.
+- Automatic register edits or draft PRs.
+
+Exit criteria:
+
+- Three maintainer-triggered runs produce valid artifacts for three distinct
+  source/dataflow pairs.
+- No run violates domain, scope, mutation, or scoring guardrails.
+- At least two runs include actionable primary-source evidence that a maintainer
+  accepts as useful in issue/PR review.
+- Provider unavailable, timeout, and malformed-output paths produce bounded
+  diagnostics without failing deterministic audit jobs.
+
+### Phase 2C: Promotion Decision
+
+Only after Phase 2B should the team choose between:
+
+- limited `agentic_scheduled_candidate` comments for repeated findings, or
+- manual `draft_pr` generation for register/docs-only changes.
+
+The first promotion should not enable both paths. Scheduled candidate mode must
+remain comment-only; draft PR mode must remain manually triggered and
+path-limited.
+
 ## Prompt Requirements
 
 Every provider prompt must include:
@@ -614,8 +697,12 @@ Add manual-dispatch agentic mode.
 Acceptance criteria:
 
 - `packet_only` remains scheduled default.
+- Provider harness lands first with a fixture-backed mock provider.
 - `agentic_manual` runs only from workflow dispatch.
-- Missing provider secret skips cleanly with a clear artifact and issue note.
+- The first real-provider pilot requires a single `dataflow_id`; multi-finding
+  runs are disabled until the pilot exits successfully.
+- Missing provider secret/configuration skips cleanly with a clear artifact and
+  issue note.
 - Provider writes only research artifacts.
 - Valid agentic output appends an issue comment.
 
@@ -711,7 +798,7 @@ Exit criteria:
 - V2 validation covers every classification and guardrail.
 - Existing packet-only workflow is unchanged.
 
-### Phase 2: Mock Provider
+### Phase 2A: Mock Provider Harness
 
 - Add provider interface with mocked static responses.
 - Add prompt builder tests.
@@ -721,17 +808,20 @@ Exit criteria:
 
 - CI can prove provider orchestration without external services.
 
-### Phase 3: Manual Real Provider
+### Phase 2B: Manual Real Provider Pilot
 
 - Add provider secret boundary.
-- Enable `agentic_manual` for one dataflow per dispatch by default.
+- Enable `agentic_manual` for exactly one required `dataflow_id` per dispatch.
+- Keep `all_findings=true` disabled.
+- Report provider timeout, inspected URL count, and cost when available.
 - Append validated comments to tracked issue.
 
 Exit criteria:
 
-- Three manual runs produce useful evidence without guardrail violations.
+- Three manual runs across distinct dataflows produce useful evidence without
+  guardrail violations.
 
-### Phase 4: Limited Multi-Finding Manual Runs
+### Phase 3: Limited Multi-Finding Manual Runs
 
 - Allow `all_findings=true` with `max_findings`.
 - Add cost and timeout reporting.
@@ -741,7 +831,7 @@ Exit criteria:
 
 - One failed provider call does not prevent other valid artifacts from posting.
 
-### Phase 5: Scheduled Candidate Or Draft PR Pilot
+### Phase 4: Scheduled Candidate Or Draft PR Pilot
 
 - Choose one: scheduled candidate comments or manual draft PR generation.
 - Keep rollout behind repository variable.
