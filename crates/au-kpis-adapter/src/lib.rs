@@ -26,7 +26,7 @@ use au_kpis_storage::{BlobStore, StorageError, StorageKey};
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::stream::BoxStream;
 use quick_xml::{
-    Reader as XmlReader,
+    Reader as XmlReader, XmlVersion,
     encoding::Decoder,
     events::{BytesStart, Event},
 };
@@ -283,7 +283,7 @@ fn validate_xlsx_cell_attributes(
         })?;
         if attribute.key.as_ref() == b"r" {
             let cell_reference = attribute
-                .decode_and_unescape_value(decoder)
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
                 .map_err(|err| {
                     AdapterError::FormatDrift(format!(
                         "{source} XLSX worksheet `{sheet_name}` has invalid cell reference: {err}"
@@ -293,7 +293,7 @@ fn validate_xlsx_cell_attributes(
             reference = Some(cell_reference.into_owned());
         } else if attribute.key.as_ref() == b"t" {
             let cell_type = attribute
-                .decode_and_unescape_value(decoder)
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
                 .map_err(|err| {
                     AdapterError::FormatDrift(format!(
                         "{source} XLSX worksheet `{sheet_name}` has invalid cell type: {err}"
