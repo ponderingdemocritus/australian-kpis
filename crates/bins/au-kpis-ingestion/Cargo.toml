@@ -40,7 +40,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # CLI parsing is binary-local; no existing workspace crate covers flags/subcommands.
 clap = { version = "4", features = ["derive", "env"] }
 # Needed to construct the production S3/R2 store from ingestion-process env config.
-object_store = { version = "0.11", features = ["aws"] }
+object_store = { version = "0.12", features = ["aws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = [

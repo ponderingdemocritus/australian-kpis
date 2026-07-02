@@ -675,7 +675,7 @@ recommendation = "Review ABS CPI source."
 
         errors = source_research.validate_research_artifact(artifact)
 
-        self.assertIn("register_version must be source-register.v1", errors)
+        self.assertIn("register_version must match source-register.vN", errors)
         self.assertIn("allowed_domains must include register_canonical_url host", errors)
         self.assertIn(
             "source_urls host `unreviewed.example.net` must be current_url host or allowed",
@@ -771,6 +771,41 @@ recommendation = "Review source."
 
             with self.assertRaisesRegex(ValueError, "duplicate dataflow id `abs.cpi`"):
                 source_research.load_register(register)
+
+    def test_load_register_accepts_retained_future_version_with_additive_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            register = pathlib.Path(tmp) / "source-register.v2.toml"
+            register.write_text(
+                """
+version = "source-register.v2"
+extra_top_level = "ignored by retained research packet generation"
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://example.test/a"
+license = "CC-BY-4.0"
+attribution = "Source: ABS"
+cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+future_metadata = "ignored by retained research packet generation"
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review source."
+""",
+                encoding="utf-8",
+            )
+
+            loaded = source_research.load_register(register)
+
+            self.assertIn("abs.cpi", loaded)
 
     def test_validation_rejects_missing_artifact_id_and_bad_timestamp(self):
         artifact = {

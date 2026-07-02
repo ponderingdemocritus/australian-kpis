@@ -123,11 +123,16 @@ jobs:
             echo "Source Location Audit run did not produce a reusable audit artifact: ${conclusion}." >&2
             exit 1
           fi
+          head_branch="$(jq -r '.headBranch' <<< "${run_json}")"
+          if [ "${head_branch}" != "main" ]; then
+            echo "Source Location Audit run must come from trusted branch main before its checked-out code can be executed, got ${head_branch}." >&2
+            exit 1
+          fi
 
           {
             echo "run_id=$(jq -r '.databaseId' <<< "${run_json}")"
             echo "head_sha=$(jq -r '.headSha' <<< "${run_json}")"
-            echo "head_branch=$(jq -r '.headBranch' <<< "${run_json}")"
+            echo "head_branch=${head_branch}"
             echo "run_url=$(jq -r '.url' <<< "${run_json}")"
           } >> "$GITHUB_OUTPUT"
 

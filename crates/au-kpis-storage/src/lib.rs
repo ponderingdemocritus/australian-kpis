@@ -378,7 +378,7 @@ impl BlobStore {
         // whether to no-op or repair; this keeps the common duplicate path
         // metadata-only while still catching same-size corruption.
         match self.inner.head(&canonical).await {
-            Ok(meta) if u64::try_from(meta.size).is_ok_and(|size| size == staged.size_bytes) => {
+            Ok(meta) if meta.size == staged.size_bytes => {
                 let staged_meta = match self.inner.head(staging_path).await {
                     Ok(staged_meta) => staged_meta,
                     Err(err) => {

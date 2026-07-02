@@ -31,7 +31,7 @@ tracing-opentelemetry = "0.28"
 au-kpis-adapter-abs = { path = "../adapters/abs" }
 au-kpis-config = { workspace = true }
 au-kpis-testing = { workspace = true }
-object_store = "0.11"
+object_store = "0.12"
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
