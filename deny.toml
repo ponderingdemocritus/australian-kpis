@@ -11,6 +11,8 @@ ignore = [
     { id = "RUSTSEC-2025-0111", reason = "testcontainers is limited to local integration-test harnesses; the fixed release requires a newer Rust toolchain than the repository pin" },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is transitive through network/client crates and has no safe direct replacement available in those upstream dependency chains yet" },
     { id = "RUSTSEC-2024-0436", reason = "parquet 58.3.0 depends on paste internally; this is required for arrow-rs Parquet response encoding until upstream removes or replaces the transitive dependency" },
+    { id = "RUSTSEC-2026-0194", reason = "remaining quick-xml <0.41 paths are transitive through calamine 0.35 and object_store cloud features; direct adapter parsing is pinned to quick-xml 0.41 and no fixed upstream parent release is available yet" },
+    { id = "RUSTSEC-2026-0195", reason = "remaining quick-xml <0.41 paths are transitive through calamine 0.35 and object_store cloud features; direct adapter parsing is pinned to quick-xml 0.41 and no fixed upstream parent release is available yet" },
 ]
 
 [licenses]

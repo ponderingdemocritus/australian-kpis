@@ -2,4 +2,5 @@ target/
 .git/
 .context/
 node_modules/
+rust-toolchain.toml
 **/.DS_Store
