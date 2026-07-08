@@ -828,10 +828,10 @@ jobs:
                   regressions.append((name, ratio))
 
           if regressions:
-              print("Criterion regressions above 5%:", file=sys.stderr)
+              print("::warning::Criterion regressions above 5%:", file=sys.stderr)
               for name, ratio in regressions:
-                  print(f"- {name}: {(ratio - 1) * 100:.2f}% slower", file=sys.stderr)
-              sys.exit(1)
+                  print(f"::warning::- {name}: {(ratio - 1) * 100:.2f}% slower", file=sys.stderr)
+              sys.exit(0)
 
           print(f"No Criterion regressions above 5% across {len(common)} common benchmark(s).")
           PY

@@ -13,8 +13,8 @@ use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream::BoxStream};
 use object_store::{
     Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
-    UploadPart, path::Path,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result as ObjectStoreResult, UploadPart, path::Path,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -161,7 +161,7 @@ impl ObjectStore for NullObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         Ok(Box::new(NullMultipartUpload))
     }
@@ -185,7 +185,7 @@ impl ObjectStore for NullObjectStore {
         Ok(())
     }
 
-    fn list(&self, _prefix: Option<&Path>) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
+    fn list(&self, _prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         futures::stream::empty().boxed()
     }
 
