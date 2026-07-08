@@ -1,0 +1,289 @@
+name: Source Research Review
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      audit_run_id:
+        description: "Source Location Audit workflow run id to reuse"
+        required: true
+        type: string
+      dataflow_id:
+        description: "Optional single dataflow id to research from the audit findings"
+        required: false
+        type: string
+
+concurrency:
+  group: source-research-review
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+  AU_KPIS_SOURCE_LOCATION_AUDIT_REPORT_PATH: target/source-location-audit/source-location-audit.md
+  AU_KPIS_SOURCE_RESEARCH_DIR: target/source-research
+  AU_KPIS_SOURCE_REGISTER_PATH: audited-source/crates/au-kpis-source-register/config/source-register.v1.toml
+  AU_KPIS_SOURCE_RESEARCH_TOOL: source-research-tooling/tools/source_research.py
+
+jobs:
+  source-research-review:
+    name: Generate source research artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Select tracked source-location audit run
+        id: audit_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_AUDIT_RUN_ID: ${{ inputs.audit_run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -z "${INPUT_AUDIT_RUN_ID}" ]; then
+              echo "workflow_dispatch requires audit_run_id so research reuses a specific audit artifact." >&2
+              exit 1
+            fi
+            run_json="$(gh run view "${INPUT_AUDIT_RUN_ID}" --json databaseId,conclusion,headBranch,headSha,status,url,workflowName)"
+            workflow_name="$(jq -r '.workflowName' <<< "${run_json}")"
+            if [ "${workflow_name}" != "Source Location Audit" ]; then
+              echo "audit_run_id must identify a Source Location Audit run, got ${workflow_name}." >&2
+              exit 1
+            fi
+          else
+            deadline=$((SECONDS + 7200))
+            min_created="$(date -u -d '8 days ago' +%FT%TZ)"
+            run_json=""
+            while [ "${SECONDS}" -lt "${deadline}" ]; do
+              runs_json="$(
+                gh run list \
+                  --workflow "Source Location Audit" \
+                  --branch main \
+                  --event schedule \
+                  --limit 20 \
+                  --json createdAt,databaseId,conclusion,headBranch,headSha,status,url,workflowName
+              )"
+              wait_for_active_run=false
+              run_json=""
+              while IFS= read -r candidate_json; do
+                status="$(jq -r '.status' <<< "${candidate_json}")"
+                conclusion="$(jq -r '.conclusion' <<< "${candidate_json}")"
+                run_id="$(jq -r '.databaseId' <<< "${candidate_json}")"
+
+                if [ "${status}" != "completed" ]; then
+                  wait_for_active_run=true
+                  echo "Waiting for newer scheduled Source Location Audit run ${run_id}; status is ${status}."
+                  break
+                fi
+                if [ "${conclusion}" != "success" ] && [ "${conclusion}" != "failure" ]; then
+                  echo "Skipping scheduled Source Location Audit run ${run_id} with conclusion ${conclusion}."
+                  continue
+                fi
+
+                artifact_count="$(
+                  gh api "repos/${{ github.repository }}/actions/runs/${run_id}/artifacts" \
+                    --jq '[.artifacts[] | select(.name == "source-location-audit" and .expired == false)] | length'
+                )"
+                if [ "${artifact_count}" -gt 0 ]; then
+                  run_json="${candidate_json}"
+                  break
+                fi
+                echo "Skipping scheduled Source Location Audit run ${run_id}; source-location-audit artifact is unavailable."
+              done < <(jq -c --arg min_created "${min_created}" '.[] | select(.createdAt >= $min_created)' <<< "${runs_json}")
+
+              if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
+                if [ "${wait_for_active_run}" = "true" ]; then
+                  echo "Waiting for latest scheduled Source Location Audit run to complete..."
+                else
+                  echo "Waiting for a reusable scheduled Source Location Audit run from the last 8 days..."
+                fi
+                sleep 60
+              else
+                break
+              fi
+            done
+            if [ -z "${run_json}" ] || [ "${run_json}" = "null" ]; then
+              echo "No reusable scheduled Source Location Audit run found for main in the last 8 days after waiting up to 120 minutes." >&2
+              exit 1
+            fi
+          fi
+
+          status="$(jq -r '.status' <<< "${run_json}")"
+          conclusion="$(jq -r '.conclusion' <<< "${run_json}")"
+          if [ "${status}" != "completed" ]; then
+            echo "Source Location Audit run is not completed: ${status}." >&2
+            exit 1
+          fi
+          if [ "${conclusion}" != "success" ] && [ "${conclusion}" != "failure" ]; then
+            echo "Source Location Audit run did not produce a reusable audit artifact: ${conclusion}." >&2
+            exit 1
+          fi
+          head_branch="$(jq -r '.headBranch' <<< "${run_json}")"
+          if [ "${head_branch}" != "main" ]; then
+            echo "Source Location Audit run must come from trusted branch main before its checked-out code can be executed, got ${head_branch}." >&2
+            exit 1
+          fi
+
+          {
+            echo "run_id=$(jq -r '.databaseId' <<< "${run_json}")"
+            echo "head_sha=$(jq -r '.headSha' <<< "${run_json}")"
+            echo "head_branch=${head_branch}"
+            echo "run_url=$(jq -r '.url' <<< "${run_json}")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source research tooling
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: source-research-tooling
+
+      - name: Checkout audited source revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.audit_run.outputs.head_sha }}
+          path: audited-source
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download tracked source-location audit artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/source-location-audit
+          gh run download "${{ steps.audit_run.outputs.run_id }}" \
+            --name source-location-audit \
+            --dir target/source-location-audit
+          test -f target/source-location-audit/source-location-audit.json
+
+      - name: Verify audited source contract is research-compatible
+        run: |
+          set -euo pipefail
+          if [ ! -f "${AU_KPIS_SOURCE_RESEARCH_TOOL}" ]; then
+            echo "Source research tooling is missing from the workflow checkout: ${AU_KPIS_SOURCE_RESEARCH_TOOL}" >&2
+            exit 1
+          fi
+          if [ ! -f "${AU_KPIS_SOURCE_REGISTER_PATH}" ]; then
+            echo "Audited revision ${{ steps.audit_run.outputs.head_sha }} predates the source register required for research packets." >&2
+            exit 1
+          fi
+
+      - name: Set up Rust
+        uses: ./source-research-tooling/.github/actions/setup-rust
+
+      - name: Validate audited source register contract
+        working-directory: audited-source
+        run: |
+          cargo test --locked -p au-kpis-source-register -- --nocapture
+          if [ -f crates/bins/au-kpis-scheduler/tests/source_register_contract.rs ]; then
+            cargo test --locked -p au-kpis-scheduler --test source_register_contract -- --nocapture
+          else
+            echo "Audited revision predates scheduler source_register_contract test; source-register crate contract passed."
+          fi
+
+      - name: Read source-location audit status
+        id: audit_status
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import pathlib
+
+          report_path = pathlib.Path("target/source-location-audit/source-location-audit.json")
+          if not report_path.exists():
+              print("status=error")
+          else:
+              report = json.loads(report_path.read_text())
+              print(f"status={report.get('status', 'error')}")
+          PY
+
+      - name: Generate bounded research packets
+        run: |
+          args=()
+          if [ -n "${{ inputs.dataflow_id }}" ]; then
+            args+=(--dataflow-id "${{ inputs.dataflow_id }}")
+          fi
+          python "${AU_KPIS_SOURCE_RESEARCH_TOOL}" generate \
+            --report target/source-location-audit/source-location-audit.json \
+            --register "${AU_KPIS_SOURCE_REGISTER_PATH}" \
+            --out "${AU_KPIS_SOURCE_RESEARCH_DIR}" \
+            "${args[@]}"
+
+      - name: Validate research packet schema
+        run: |
+          python "${AU_KPIS_SOURCE_RESEARCH_TOOL}" validate \
+            --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}"
+
+      - name: Render source research comment
+        run: |
+          python "${AU_KPIS_SOURCE_RESEARCH_TOOL}" render-comment \
+            --research-dir "${AU_KPIS_SOURCE_RESEARCH_DIR}" \
+            > "${AU_KPIS_SOURCE_RESEARCH_DIR}/comment.md"
+
+      - name: Upload source research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-research
+          path: |
+            target/source-location-audit/
+            target/source-research/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail on source-location audit errors
+        if: always()
+        run: |
+          status="$(python -c 'import json, pathlib; p = pathlib.Path("target/source-location-audit/source-location-audit.json"); print(json.loads(p.read_text()).get("status", "error") if p.exists() else "missing")')"
+          if [ "$status" = "error" ]; then
+            echo "source-location audit reported error status"
+            exit 1
+          fi
+
+      - name: Append source research summary to tracked issue
+        if: github.ref == 'refs/heads/main' && steps.audit_run.outputs.head_branch == 'main' && steps.audit_status.outputs.status != 'error'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs')
+
+            const marker = '<!-- source-location-audit:tracked -->'
+            const summary = JSON.parse(fs.readFileSync('target/source-research/summary.json', 'utf8'))
+            if (summary.artifacts_total === 0) {
+              core.info('No actionable source-location findings required research packets.')
+              return
+            }
+
+            const { owner, repo } = context.repo
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              labels: 'source-drift',
+              per_page: 100,
+            })
+            const trackedIssue = issues.find((issue) => {
+              return !issue.pull_request && issue.body && issue.body.includes(marker)
+            })
+            if (!trackedIssue) {
+              core.warning('No open tracked source-drift issue found; research artifacts were uploaded only.')
+              return
+            }
+
+            const comment = fs.readFileSync('target/source-research/comment.md', 'utf8')
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const auditRunUrl = '${{ steps.audit_run.outputs.run_url }}'
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: trackedIssue.number,
+              body: `${comment}\n\nAudited source-location run: ${auditRunUrl}\nArtifacts: \`source-research\` from ${runUrl}`,
+            })

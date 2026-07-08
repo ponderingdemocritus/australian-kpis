@@ -23,5 +23,5 @@ tracing = "0.1"
 [dev-dependencies]
 bytes = "1"
 insta = { version = "1", features = ["json"] }
-object_store = "0.11"
+object_store = "0.12"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread"] }

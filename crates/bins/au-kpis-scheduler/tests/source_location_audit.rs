@@ -10,6 +10,14 @@ fn generated_at() -> chrono::DateTime<Utc> {
         .expect("valid timestamp")
 }
 
+fn s(value: &str) -> String {
+    value.to_string()
+}
+
+fn sv(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
 #[test]
 fn source_location_asx_legacy_terms_url_maps_to_current_terms_location() {
     let rules = [SourceLocationRule::new(
@@ -17,8 +25,10 @@ fn source_location_asx_legacy_terms_url_maps_to_current_terms_location() {
         "asx.market_statistics",
         "https://www.asx.com.au/terms-of-use",
         SourceLocationCheck::CanonicalUrl {
-            expected_url: "https://www.asx.com.au/legals/terms-of-use",
-            recommendation: "Update ASX license attribution to https://www.asx.com.au/legals/terms-of-use.",
+            expected_url: s("https://www.asx.com.au/legals/terms-of-use"),
+            recommendation: s(
+                "Update ASX license attribution to https://www.asx.com.au/legals/terms-of-use.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -49,9 +59,11 @@ fn source_location_nsw_budget_rule_flags_configured_older_budget_year() {
         "state_budgets.nsw_budget",
         "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers",
         SourceLocationCheck::BudgetYear {
-            configured_year: "2025-26",
-            latest_year: "2026-27",
-            recommendation: "Review and update the NSW budget source to the current 2026-27 budget papers.",
+            configured_year: s("2025-26"),
+            latest_year: s("2026-27"),
+            recommendation: s(
+                "Review and update the NSW budget source to the current 2026-27 budget papers.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -84,7 +96,9 @@ fn source_location_world_bank_bready_null_australia_values_are_unresolved_manual
         "worldbank.bready",
         "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
         SourceLocationCheck::WorldBankBreadyApi {
-            recommendation: "Review World Bank B-READY Australia availability before scoring this source.",
+            recommendation: s(
+                "Review World Bank B-READY Australia availability before scoring this source.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -112,7 +126,9 @@ fn source_location_world_bank_bready_invalid_json_is_tool_error() {
         "worldbank.bready",
         "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
         SourceLocationCheck::WorldBankBreadyApi {
-            recommendation: "Review World Bank B-READY Australia availability before scoring this source.",
+            recommendation: s(
+                "Review World Bank B-READY Australia availability before scoring this source.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -136,7 +152,9 @@ fn source_location_world_bank_bready_non_null_australia_values_pass() {
         "worldbank.bready",
         "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
         SourceLocationCheck::WorldBankBreadyApi {
-            recommendation: "Review World Bank B-READY Australia availability before scoring this source.",
+            recommendation: s(
+                "Review World Bank B-READY Australia availability before scoring this source.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -159,7 +177,9 @@ fn source_location_world_bank_bready_ignores_older_null_australia_values() {
         "worldbank.bready",
         "https://api.worldbank.org/v2/country/AUS/indicator/BREADY?format=json",
         SourceLocationCheck::WorldBankBreadyApi {
-            recommendation: "Review World Bank B-READY Australia availability before scoring this source.",
+            recommendation: s(
+                "Review World Bank B-READY Australia availability before scoring this source.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -183,8 +203,10 @@ fn source_location_aemo_directory_with_expected_zip_patterns_passes() {
         "aemo.dispatch",
         "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/",
         SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_DISPATCHIS_", ".zip"],
-            recommendation: "Review AEMO NEMWeb DispatchIS directory if current ZIP reports disappear.",
+            required_patterns: sv(&["PUBLIC_DISPATCHIS_", ".zip"]),
+            recommendation: s(
+                "Review AEMO NEMWeb DispatchIS directory if current ZIP reports disappear.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -207,8 +229,10 @@ fn source_location_aemo_next_day_actual_gen_directory_passes() {
         "aemo.generation_mix",
         "https://nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/",
         SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_NEXT_DAY_ACTUAL_GEN_", ".zip"],
-            recommendation: "Review AEMO NEMWeb Next Day Actual Gen directory if current ZIP reports disappear.",
+            required_patterns: sv(&["PUBLIC_NEXT_DAY_ACTUAL_GEN_", ".zip"]),
+            recommendation: s(
+                "Review AEMO NEMWeb Next Day Actual Gen directory if current ZIP reports disappear.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -231,8 +255,10 @@ fn source_location_directory_missing_pattern_flags_drift() {
         "aemo.generation_mix",
         "https://nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/",
         SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_NEXT_DAY_ACTUAL_GEN_", ".zip"],
-            recommendation: "Review AEMO NEMWeb Next Day Actual Gen directory if current ZIP reports disappear.",
+            required_patterns: sv(&["PUBLIC_NEXT_DAY_ACTUAL_GEN_", ".zip"]),
+            recommendation: s(
+                "Review AEMO NEMWeb Next Day Actual Gen directory if current ZIP reports disappear.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -260,9 +286,11 @@ fn source_location_federal_budget_2026_27_bp4_is_current() {
         "treasury.budget_papers",
         "https://budget.gov.au/content/bp4/index.htm",
         SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            configured_year: s("2026-27"),
+            latest_year: s("2026-27"),
+            recommendation: s(
+                "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -285,9 +313,11 @@ fn source_location_current_budget_rule_flags_newer_budget_year() {
         "treasury.budget_papers",
         "https://budget.gov.au/content/bp4/index.htm",
         SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            configured_year: s("2026-27"),
+            latest_year: s("2026-27"),
+            recommendation: s(
+                "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -311,9 +341,11 @@ fn source_location_budget_year_unconfirmed_latest_is_manual_review() {
         "state_budgets.nsw_budget",
         "https://www.nsw.gov.au/business-and-economy/nsw-budget/2025-26-budget-papers",
         SourceLocationCheck::BudgetYear {
-            configured_year: "2025-26",
-            latest_year: "2026-27",
-            recommendation: "Review and update the NSW budget source to the current 2026-27 budget papers.",
+            configured_year: s("2025-26"),
+            latest_year: s("2026-27"),
+            recommendation: s(
+                "Review and update the NSW budget source to the current 2026-27 budget papers.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -340,9 +372,11 @@ fn source_location_budget_year_ignores_iso_dates_when_current_year_is_present() 
         "treasury.budget_papers",
         "https://budget.gov.au/content/bp4/index.htm",
         SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            configured_year: s("2026-27"),
+            latest_year: s("2026-27"),
+            recommendation: s(
+                "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -365,9 +399,11 @@ fn source_location_budget_year_ignores_forward_estimate_years_when_current_year_
         "treasury.budget_papers",
         "https://budget.gov.au/content/bp4/index.htm",
         SourceLocationCheck::BudgetYear {
-            configured_year: "2026-27",
-            latest_year: "2026-27",
-            recommendation: "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            configured_year: s("2026-27"),
+            latest_year: s("2026-27"),
+            recommendation: s(
+                "Review the Australian Government Budget Paper No. 4 page when a newer federal budget appears.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -390,7 +426,7 @@ fn source_location_reachable_soft_access_is_manual_review() {
         "rba.statistical_tables",
         "https://www.rba.gov.au/statistics/tables/",
         SourceLocationCheck::Reachable {
-            recommendation: "Review the RBA statistical tables index and table URLs.",
+            recommendation: s("Review the RBA statistical tables index and table URLs."),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -411,13 +447,206 @@ fn source_location_reachable_soft_access_is_manual_review() {
 }
 
 #[test]
+fn source_location_bot_filtered_expected_status_is_not_drift() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403],
+            semantic_fallback: Some(s("Statistical Tables")),
+            recommendation: s(
+                "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+            ),
+        },
+    )
+    .with_register_metadata("active", "bot_filtered")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        403,
+        "forbidden",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::BotFiltered);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::BotFiltered
+    );
+    assert_eq!(report.results[0].source_status.as_deref(), Some("active"));
+    assert_eq!(
+        report.results[0].audit_policy_kind.as_deref(),
+        Some("bot_filtered")
+    );
+    assert!(report.findings[0].evidence.contains("access-challenged"));
+}
+
+#[test]
+fn source_location_bot_filtered_expected_rate_limit_status_is_not_drift() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403, 429],
+            semantic_fallback: Some(s("Statistical Tables")),
+            recommendation: s(
+                "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+            ),
+        },
+    )
+    .with_register_metadata("active", "bot_filtered")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        429,
+        "rate limited",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::BotFiltered);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::BotFiltered
+    );
+    assert!(report.findings[0].evidence.contains("access-challenged"));
+}
+
+#[test]
+fn source_location_bot_filtered_success_without_semantic_hint_needs_review() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403],
+            semantic_fallback: Some(s("Statistical Tables")),
+            recommendation: s(
+                "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+            ),
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        200,
+        "Access challenge",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("did not contain semantic fallback")
+    );
+}
+
+#[test]
+fn source_location_bot_filtered_success_without_semantic_fallback_needs_review() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403],
+            semantic_fallback: None,
+            recommendation: s(
+                "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+            ),
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        200,
+        "Access challenge",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("without a semantic fallback")
+    );
+}
+
+#[test]
+fn source_location_bot_filtered_unexpected_status_is_drift() {
+    let rules = [SourceLocationRule::new(
+        "state-planning",
+        "state_planning.vic_permit_activity",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403],
+            semantic_fallback: Some(s("Planning permit activity")),
+            recommendation: s("Review Victoria Planning permit activity source links."),
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        404,
+        "not found",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Drift);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Warning);
+    assert!(report.findings[0].evidence.contains("outside expected"));
+}
+
+#[test]
+fn source_location_bot_filtered_unlisted_soft_access_status_is_drift() {
+    let rules = [SourceLocationRule::new(
+        "rba",
+        "rba.statistical_tables",
+        "https://www.rba.gov.au/statistics/tables/",
+        SourceLocationCheck::BotFiltered {
+            expected_statuses: vec![403],
+            semantic_fallback: Some(s("Statistical Tables")),
+            recommendation: s(
+                "Use reviewed direct CSV/XLS table artifacts if the RBA index is bot-filtered.",
+            ),
+        },
+    )];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.rba.gov.au/statistics/tables/",
+        "https://www.rba.gov.au/statistics/tables/",
+        429,
+        "rate limited",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Drift);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Warning);
+    assert!(report.findings[0].evidence.contains("outside expected"));
+}
+
+#[test]
 fn source_location_request_failure_is_tool_error() {
     let rules = [SourceLocationRule::new(
         "rba",
         "rba.statistical_tables",
         "https://www.rba.gov.au/statistics/tables/",
         SourceLocationCheck::Reachable {
-            recommendation: "Review the RBA statistical tables index and table URLs.",
+            recommendation: s("Review the RBA statistical tables index and table URLs."),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -441,7 +670,7 @@ fn source_location_reachable_hard_failure_is_drift() {
         "home_affairs.skillselect_talent_proxy",
         "https://immi.homeaffairs.gov.au/visas/working-in-australia/skillselect/invitation-rounds",
         SourceLocationCheck::Reachable {
-            recommendation: "Review the Home Affairs SkillSelect invitation-rounds source link.",
+            recommendation: s("Review the Home Affairs SkillSelect invitation-rounds source link."),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -465,8 +694,8 @@ fn source_location_contains_any_without_expected_hint_is_manual_review() {
         "naic.ai_adoption_tracker",
         "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker",
         SourceLocationCheck::ContainsAny {
-            needles: &["AI adoption", "tracker"],
-            recommendation: "Review the NAIC/industry AI adoption tracker source page.",
+            needles: sv(&["AI adoption", "tracker"]),
+            recommendation: s("Review the NAIC/industry AI adoption tracker source page."),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -483,14 +712,158 @@ fn source_location_contains_any_without_expected_hint_is_manual_review() {
 }
 
 #[test]
+fn source_location_overdue_manual_entry_with_live_policy_requires_review() {
+    let rules = [SourceLocationRule::new(
+        "apra",
+        "apra.super_asset_allocation",
+        "https://www.apra.gov.au/superannuation-statistics",
+        SourceLocationCheck::ContainsAny {
+            needles: sv(&["Superannuation statistics"]),
+            recommendation: s("Review APRA superannuation asset allocation source evidence."),
+        },
+    )
+    .with_register_metadata("manual_pending", "contains_any")
+    .with_manual_review_metadata("2026-01-01", "2026-05-01")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.apra.gov.au/superannuation-statistics",
+        "https://www.apra.gov.au/superannuation-statistics",
+        200,
+        "Superannuation statistics",
+    )];
+
+    let report = evaluate_source_location_snapshots(
+        &rules,
+        &snapshots,
+        Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("manual register review was due")
+    );
+}
+
+#[test]
+fn source_location_overdue_manual_entry_preserves_drift_and_review_due_evidence() {
+    let rules = [SourceLocationRule::new(
+        "apra",
+        "apra.super_asset_allocation",
+        "https://www.apra.gov.au/superannuation-statistics",
+        SourceLocationCheck::Reachable {
+            recommendation: s("Review APRA superannuation asset allocation source evidence."),
+        },
+    )
+    .with_register_metadata("manual_pending", "contains_any")
+    .with_manual_review_metadata("2026-01-01", "2026-05-01")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.apra.gov.au/superannuation-statistics",
+        "https://www.apra.gov.au/superannuation-statistics",
+        404,
+        "not found",
+    )];
+
+    let report = evaluate_source_location_snapshots(
+        &rules,
+        &snapshots,
+        Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(report.status, SourceAuditStatus::Drift);
+    assert_eq!(report.findings[0].severity, SourceAuditSeverity::Warning);
+    assert!(report.findings[0].evidence.contains("HTTP 404"));
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("Manual register review was due")
+    );
+}
+
+#[test]
+fn source_location_current_manual_entry_with_live_policy_requires_manual_review() {
+    let rules = [SourceLocationRule::new(
+        "apra",
+        "apra.super_asset_allocation",
+        "https://www.apra.gov.au/superannuation-statistics",
+        SourceLocationCheck::ContainsAny {
+            needles: sv(&["Superannuation statistics"]),
+            recommendation: s("Review APRA superannuation asset allocation source evidence."),
+        },
+    )
+    .with_register_metadata("manual_pending", "contains_any")
+    .with_manual_review_metadata("2026-01-01", "2026-12-01")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.apra.gov.au/superannuation-statistics",
+        "https://www.apra.gov.au/superannuation-statistics",
+        200,
+        "Superannuation statistics",
+    )];
+
+    let report = evaluate_source_location_snapshots(
+        &rules,
+        &snapshots,
+        Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap(),
+    );
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("register status `manual_pending` remains unresolved")
+    );
+}
+
+#[test]
+fn source_location_coverage_gap_with_live_policy_requires_manual_review() {
+    let rules = [SourceLocationRule::new(
+        "state-planning",
+        "state_planning.vic_permit_activity",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        SourceLocationCheck::ContainsAny {
+            needles: sv(&["Planning permit activity"]),
+            recommendation: s("Review Victoria Planning permit activity source links."),
+        },
+    )
+    .with_register_metadata("coverage_gap", "contains_any")];
+    let snapshots = [SourceUrlSnapshot::new(
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        "https://www.planning.vic.gov.au/guides-and-resources/data-insights-and-analytics/planning-permit-activity-in-victoria",
+        200,
+        "Planning permit activity",
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &snapshots, generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("register status `coverage_gap` remains unresolved")
+    );
+}
+
+#[test]
 fn source_location_missing_snapshot_is_error() {
     let rules = [SourceLocationRule::new(
         "asx",
         "asx.market_statistics",
         "https://www.asx.com.au/legals/terms-of-use",
         SourceLocationCheck::ContainsAny {
-            needles: &["Terms of Use", "ASX"],
-            recommendation: "Review the ASX Terms of Use location used for license attribution.",
+            needles: sv(&["Terms of Use", "ASX"]),
+            recommendation: s("Review the ASX Terms of Use location used for license attribution."),
         },
     )];
 
@@ -508,8 +881,10 @@ fn source_location_canonical_url_current_location_passes() {
         "asx.market_statistics",
         "https://www.asx.com.au/terms-of-use",
         SourceLocationCheck::CanonicalUrl {
-            expected_url: "https://www.asx.com.au/legals/terms-of-use",
-            recommendation: "Update ASX license attribution to https://www.asx.com.au/legals/terms-of-use.",
+            expected_url: s("https://www.asx.com.au/legals/terms-of-use"),
+            recommendation: s(
+                "Update ASX license attribution to https://www.asx.com.au/legals/terms-of-use.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -532,8 +907,10 @@ fn source_location_manual_placeholder_source_always_creates_review_finding() {
         "compute.au_datacentre_capacity_mw",
         "https://example.test/compute-capacity",
         SourceLocationCheck::ManualPlaceholder {
-            reason: "example.test is a placeholder source.",
-            recommendation: "Replace compute.au_datacentre_capacity_mw with a reviewed primary source.",
+            reason: s("example.test is a placeholder source."),
+            recommendation: s(
+                "Replace compute.au_datacentre_capacity_mw with a reviewed primary source.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -554,14 +931,66 @@ fn source_location_manual_placeholder_source_always_creates_review_finding() {
 }
 
 #[test]
+fn source_location_manual_register_only_current_review_passes_without_http() {
+    let rules = [SourceLocationRule::new(
+        "curated",
+        "curated.oversight_strength",
+        "https://www.anao.gov.au/work-program",
+        SourceLocationCheck::ManualRegisterOnly {
+            reason: s("Curated oversight-strength input is manually reviewed."),
+            reviewed_at: s("2026-06-22"),
+            manual_review_due_at: s("2026-12-22"),
+            recommendation: s("Review oversight source taxonomy before scoring."),
+        },
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &[], generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::Ok);
+    assert!(report.findings.is_empty());
+    assert_eq!(report.results[0].http_status, None);
+    assert!(report.results[0].evidence.contains("next manual review"));
+}
+
+#[test]
+fn source_location_manual_register_only_overdue_creates_review_finding() {
+    let rules = [SourceLocationRule::new(
+        "curated",
+        "curated.oversight_strength",
+        "https://www.anao.gov.au/work-program",
+        SourceLocationCheck::ManualRegisterOnly {
+            reason: s("Curated oversight-strength input is manually reviewed."),
+            reviewed_at: s("2025-06-22"),
+            manual_review_due_at: s("2026-01-01"),
+            recommendation: s("Review oversight source taxonomy before scoring."),
+        },
+    )];
+
+    let report = evaluate_source_location_snapshots(&rules, &[], generated_at());
+
+    assert_eq!(report.status, SourceAuditStatus::ManualReview);
+    assert_eq!(
+        report.findings[0].severity,
+        SourceAuditSeverity::ManualReview
+    );
+    assert!(
+        report.findings[0]
+            .evidence
+            .contains("manual review was due")
+    );
+}
+
+#[test]
 fn source_location_report_markdown_and_json_expose_stable_fields() {
     let rules = [SourceLocationRule::new(
         "compute",
         "compute.au_datacentre_capacity_mw",
         "https://example.test/compute-capacity",
         SourceLocationCheck::ManualPlaceholder {
-            reason: "example.test is a placeholder source.",
-            recommendation: "Replace compute.au_datacentre_capacity_mw with a reviewed primary source.",
+            reason: s("example.test is a placeholder source."),
+            recommendation: s(
+                "Replace compute.au_datacentre_capacity_mw with a reviewed primary source.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -576,7 +1005,9 @@ fn source_location_report_markdown_and_json_expose_stable_fields() {
     let json = serde_json::to_value(&report).expect("serialize report");
 
     assert!(markdown.contains("# Source Location Audit Report"));
+    assert!(markdown.contains("Source register: `source-register.v1`"));
     assert!(markdown.contains("compute.au_datacentre_capacity_mw"));
+    assert_eq!(json["register_version"], "source-register.v1");
     assert_eq!(json["status"], "manual_review");
     assert_eq!(json["findings_total"], 1);
     assert!(json["findings"][0]["recommendation"].is_string());
@@ -589,8 +1020,10 @@ fn source_location_passing_report_markdown_says_no_findings() {
         "aemo.dispatch",
         "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/",
         SourceLocationCheck::DirectoryListing {
-            required_patterns: &["PUBLIC_DISPATCHIS_", ".zip"],
-            recommendation: "Review the AEMO NEMWeb DispatchIS directory if current ZIP reports disappear.",
+            required_patterns: sv(&["PUBLIC_DISPATCHIS_", ".zip"]),
+            recommendation: s(
+                "Review the AEMO NEMWeb DispatchIS directory if current ZIP reports disappear.",
+            ),
         },
     )];
     let snapshots = [SourceUrlSnapshot::new(
@@ -616,6 +1049,7 @@ fn source_location_default_rules_use_registered_source_ids() {
         "apra",
         "asx",
         "compute",
+        "curated",
         "nhsac",
         "pc",
         "rba",
@@ -626,9 +1060,10 @@ fn source_location_default_rules_use_registered_source_ids() {
         "worldbank",
     ];
 
-    for rule in default_source_location_rules() {
+    let rules = default_source_location_rules().expect("load default source-location rules");
+    for rule in &rules {
         assert!(
-            REGISTERED_SOURCE_IDS.contains(&rule.source_id),
+            REGISTERED_SOURCE_IDS.contains(&rule.source_id.as_str()),
             "unregistered source id {} for {}",
             rule.source_id,
             rule.dataflow_id
@@ -638,7 +1073,7 @@ fn source_location_default_rules_use_registered_source_ids() {
 
 #[test]
 fn source_location_ai_rules_use_published_aps_provenance_urls() {
-    let rules = default_source_location_rules();
+    let rules = default_source_location_rules().expect("load default source-location rules");
     let oxford = rules
         .iter()
         .find(|rule| rule.dataflow_id == "oxford.gari")
@@ -663,7 +1098,8 @@ fn source_location_state_capital_rules_use_adapter_index_url() {
     const STATE_CAPITAL_INDEX_URL: &str =
         "https://www.audit.vic.gov.au/report/major-projects-performance-reporting-2025";
 
-    let state_capital_rules = default_source_location_rules()
+    let rules = default_source_location_rules().expect("load default source-location rules");
+    let state_capital_rules = rules
         .iter()
         .filter(|rule| rule.source_id == "state_capital")
         .collect::<Vec<_>>();
@@ -676,7 +1112,8 @@ fn source_location_state_capital_rules_use_adapter_index_url() {
 
 #[test]
 fn source_location_nsw_budget_rule_uses_unversioned_landing_page() {
-    let nsw_rule = default_source_location_rules()
+    let rules = default_source_location_rules().expect("load default source-location rules");
+    let nsw_rule = rules
         .iter()
         .find(|rule| rule.dataflow_id == "state_budgets.nsw_budget")
         .expect("nsw budget rule");

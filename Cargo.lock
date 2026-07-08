@@ -949,10 +949,26 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "au-kpis-adapter",
+ "au-kpis-adapter-abs",
+ "au-kpis-adapter-aemo",
+ "au-kpis-adapter-ai-readiness",
+ "au-kpis-adapter-apra",
+ "au-kpis-adapter-asx",
+ "au-kpis-adapter-nhsac",
+ "au-kpis-adapter-pc",
+ "au-kpis-adapter-rba",
+ "au-kpis-adapter-state-budgets",
+ "au-kpis-adapter-state-capital",
+ "au-kpis-adapter-state-planning",
+ "au-kpis-adapter-treasury",
+ "au-kpis-adapter-worldbank",
  "au-kpis-config",
  "au-kpis-db",
  "au-kpis-domain",
  "au-kpis-queue",
+ "au-kpis-scorecard",
+ "au-kpis-source-register",
  "au-kpis-telemetry",
  "au-kpis-testing",
  "axum 0.7.9",
@@ -981,6 +997,16 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "utoipa",
+]
+
+[[package]]
+name = "au-kpis-source-register"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
+ "url",
 ]
 
 [[package]]
@@ -1783,9 +1809,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -2821,15 +2847,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -3174,32 +3191,38 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.11.2"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cfccb68961a56facde1163f9319e0d15743352344e7808a11795fb99698dcaf"
+checksum = "fbfbfff40aeccab00ec8a910b57ca8ecf4319b335c542f2edcd19dd25a1e2a00"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "form_urlencoded",
  "futures",
+ "http",
+ "http-body-util",
  "humantime",
  "hyper",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "md-5",
  "parking_lot",
  "percent-encoding",
- "quick-xml 0.37.5",
- "rand 0.8.6",
+ "quick-xml 0.38.4",
+ "rand 0.9.4",
  "reqwest",
  "ring",
  "serde",
  "serde_json",
- "snafu",
+ "serde_urlencoded",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "url",
  "walkdir",
+ "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]
@@ -3716,9 +3739,9 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
-version = "0.37.5"
+version = "0.38.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
  "serde",
@@ -4569,27 +4592,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "snafu"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e84b3f4eacbf3a1ce05eac6763b4d629d60cbc94d632e4092c54ade71f1e1a2"
-dependencies = [
- "snafu-derive",
-]
-
-[[package]]
-name = "snafu-derive"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

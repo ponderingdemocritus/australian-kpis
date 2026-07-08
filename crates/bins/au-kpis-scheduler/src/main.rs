@@ -372,7 +372,8 @@ async fn run_data_quality_command(
 }
 
 async fn run_source_location_audit_command(report_path: &Path) -> anyhow::Result<()> {
-    let report = run_source_location_audit(default_source_location_rules(), Utc::now())
+    let rules = default_source_location_rules().context("load source-location audit rules")?;
+    let report = run_source_location_audit(&rules, Utc::now())
         .await
         .context("run source-location audit")?;
     write_source_location_audit_reports(report_path, &report)
@@ -783,6 +784,7 @@ mod tests {
         let now = Utc::now();
         let report = SourceLocationAuditReport {
             generated_at: now,
+            register_version: "source-register.v1".into(),
             status: SourceAuditStatus::ManualReview,
             checked_total: 1,
             findings_total: 1,
