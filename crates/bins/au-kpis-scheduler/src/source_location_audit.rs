@@ -813,12 +813,13 @@ fn apply_unresolved_source_status(
     let evidence = format!(
         "Live source check passed, but register status `{source_status}` remains unresolved."
     );
+    evaluation.result.status = SourceAuditStatus::ManualReview;
     RuleEvaluation {
         result: evaluation.result,
         finding: Some(SourceAuditFinding {
             source_id: rule.source_id.to_string(),
             dataflow_id: rule.dataflow_id.to_string(),
-            severity: SourceAuditSeverity::Info,
+            severity: SourceAuditSeverity::ManualReview,
             current_url: rule.current_url.to_string(),
             latest_url: None,
             evidence,

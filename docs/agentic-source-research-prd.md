@@ -1,8 +1,8 @@
 # Agentic Source Research PRD
 
-Status: Draft  
-Owner: Data platform / ingestion  
-Created: 2026-06-30  
+Status: Draft
+Owner: Data platform / ingestion
+Created: 2026-06-30
 Related docs: `docs/source-drift-elimination-prd.md`,
 `docs/source-location-audit.md`, `docs/ci.md`,
 `crates/au-kpis-source-register/config/source-register.v1.toml`
@@ -855,18 +855,18 @@ Exit criteria:
 
 ## Risks And Mitigations
 
-- Risk: The agent recommends plausible but non-official sources.  
+- Risk: The agent recommends plausible but non-official sources.
   Mitigation: official-domain validation and `insufficient_evidence` default.
-- Risk: The agent expands product scope.  
+- Risk: The agent expands product scope.
   Mitigation: replacement authorization gate and scope assessment.
-- Risk: Model availability creates CI flake.  
+- Risk: Model availability creates CI flake.
   Mitigation: scheduled mode stays packet-only; manual provider failures are
   non-blocking for deterministic audit artifacts.
-- Risk: Evidence quotes exceed safe limits or include irrelevant content.  
+- Risk: Evidence quotes exceed safe limits or include irrelevant content.
   Mitigation: short source-specific snippets and artifact validation.
-- Risk: Cost grows with repeated findings.  
+- Risk: Cost grows with repeated findings.
   Mitigation: per-run dataflow, URL, timeout, and mode limits.
-- Risk: Draft PR mode changes behavior prematurely.  
+- Risk: Draft PR mode changes behavior prematurely.
   Mitigation: manual-only, draft-only, path-limited, and no adapter/scorecard
   mutation without approval.
 

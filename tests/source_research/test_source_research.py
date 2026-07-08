@@ -601,6 +601,68 @@ recommendation = "Review ABS CPI source."
                     )
                 )
 
+    def test_generate_rejects_future_source_register_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            report = root / "source-location-audit.json"
+            register = root / "source-register.v2.toml"
+            out = root / "research"
+
+            report.write_text(
+                json.dumps(
+                    {
+                        "generated_at": "2026-06-29T06:00:00+00:00",
+                        "register_version": "source-register.v2",
+                        "findings": [
+                            {
+                                "source_id": "abs",
+                                "dataflow_id": "abs.cpi",
+                                "severity": "warning",
+                                "current_url": "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs",
+                                "evidence": "Source moved.",
+                                "recommendation": "Review ABS CPI source.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register.write_text(
+                """
+version = "source-register.v2"
+
+[[dataflows]]
+source_id = "abs"
+dataflow_id = "abs.cpi"
+status = "active"
+owner_area = "adapter"
+canonical_url = "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs"
+license = "CC-BY-4.0"
+attribution = "Source: Australian Bureau of Statistics"
+cadence = "quarterly"
+review_frequency = "weekly"
+source_scope = "test"
+provenance_requirements = ["Preserve source provenance."]
+validation_requirements = ["Validate source semantics."]
+
+[dataflows.audit_policy]
+kind = "contains_any"
+needles = ["CPI"]
+recommendation = "Review ABS CPI source."
+""",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "version must be source-register.v1"):
+                source_research.generate(
+                    argparse.Namespace(
+                        report=report,
+                        register=register,
+                        out=out,
+                        dataflow_id=None,
+                    )
+                )
+
     def test_validation_rejects_non_actionable_research_artifact(self):
         artifact = {
             "schema_version": "source-research.v1",
@@ -675,7 +737,7 @@ recommendation = "Review ABS CPI source."
 
         errors = source_research.validate_research_artifact(artifact)
 
-        self.assertIn("register_version must match source-register.vN", errors)
+        self.assertIn("register_version must be source-register.v1", errors)
         self.assertIn("allowed_domains must include register_canonical_url host", errors)
         self.assertIn(
             "source_urls host `unreviewed.example.net` must be current_url host or allowed",
@@ -772,7 +834,7 @@ recommendation = "Review source."
             with self.assertRaisesRegex(ValueError, "duplicate dataflow id `abs.cpi`"):
                 source_research.load_register(register)
 
-    def test_load_register_accepts_retained_future_version_with_additive_fields(self):
+    def test_load_register_rejects_future_version_with_additive_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             register = pathlib.Path(tmp) / "source-register.v2.toml"
             register.write_text(
@@ -803,9 +865,8 @@ recommendation = "Review source."
                 encoding="utf-8",
             )
 
-            loaded = source_research.load_register(register)
-
-            self.assertIn("abs.cpi", loaded)
+            with self.assertRaisesRegex(ValueError, "version must be source-register.v1"):
+                source_research.load_register(register)
 
     def test_validation_rejects_missing_artifact_id_and_bad_timestamp(self):
         artifact = {

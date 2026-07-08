@@ -24,7 +24,7 @@ CLASSIFICATIONS = {
     "candidate_replacement",
     "insufficient_evidence",
 }
-SOURCE_REGISTER_VERSION_PATTERN = re.compile(r"^source-register\.v[1-9][0-9]*$")
+SOURCE_REGISTER_VERSION = "source-register.v1"
 EVIDENCE_CHECKLIST = [
     "official publisher URL",
     "license or usage terms",
@@ -102,8 +102,8 @@ def load_register(path: pathlib.Path) -> dict[str, dict[str, Any]]:
 def validate_register(raw: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     version = raw.get("version")
-    if not isinstance(version, str) or not SOURCE_REGISTER_VERSION_PATTERN.fullmatch(version):
-        errors.append("version must match source-register.vN")
+    if version != SOURCE_REGISTER_VERSION:
+        errors.append(f"version must be {SOURCE_REGISTER_VERSION}")
 
     dataflows = raw.get("dataflows")
     if not isinstance(dataflows, list) or not dataflows:
@@ -412,10 +412,8 @@ def validate_research_artifact(artifact: dict[str, Any]) -> list[str]:
     if artifact.get("schema_version") != "source-research.v1":
         errors.append("schema_version must be source-research.v1")
     register_version = artifact.get("register_version")
-    if not isinstance(register_version, str) or not SOURCE_REGISTER_VERSION_PATTERN.fullmatch(
-        register_version
-    ):
-        errors.append("register_version must match source-register.vN")
+    if register_version != SOURCE_REGISTER_VERSION:
+        errors.append(f"register_version must be {SOURCE_REGISTER_VERSION}")
     if artifact.get("classification") not in CLASSIFICATIONS:
         errors.append("classification is not allowed")
     for field in [
@@ -565,10 +563,10 @@ def generate(args: argparse.Namespace) -> int:
     if not is_rfc3339_timestamp(audit_generated_at_value):
         raise ValueError("source-location audit report generated_at must be RFC 3339")
     register_version_value = report.get("register_version")
-    if not isinstance(register_version_value, str) or not SOURCE_REGISTER_VERSION_PATTERN.fullmatch(
-        register_version_value
-    ):
-        raise ValueError("source-location audit report register_version must match source-register.vN")
+    if register_version_value != SOURCE_REGISTER_VERSION:
+        raise ValueError(
+            f"source-location audit report register_version must be {SOURCE_REGISTER_VERSION}"
+        )
     audit_generated_at = audit_generated_at_value
     register_version = register_version_value
 
