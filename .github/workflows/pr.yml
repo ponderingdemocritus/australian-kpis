@@ -127,6 +127,9 @@ jobs:
       - name: Typecheck TypeScript packages
         run: pnpm turbo run typecheck --cache-dir=.turbo
 
+      - name: Test deploy configuration
+        run: pnpm run test:deploy
+
       - name: Test TypeScript packages
         run: pnpm turbo run test --cache-dir=.turbo
 
@@ -552,11 +555,31 @@ jobs:
           GITLEAKS_CONFIG: .gitleaks.toml
 
   container-security:
-    name: Container Build and Trivy
+    name: Container Build and Trivy (${{ matrix.image }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            file: infra/docker/au-kpis-api.Dockerfile
+            tag: au-kpis-api:pr
+            scope: au-kpis-api
+          - image: ingestion
+            file: infra/docker/au-kpis-ingestion.Dockerfile
+            tag: au-kpis-ingestion:pr
+            scope: au-kpis-ingestion
+          - image: scheduler
+            file: infra/docker/au-kpis-scheduler.Dockerfile
+            tag: au-kpis-scheduler:pr
+            scope: au-kpis-scheduler
+          - image: web
+            file: infra/docker/au-kpis-web.Dockerfile
+            tag: au-kpis-web:pr
+            scope: au-kpis-web
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -564,21 +587,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build API image
+      - name: Build ${{ matrix.image }} image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: infra/docker/au-kpis-api.Dockerfile
+          file: ${{ matrix.file }}
           target: runtime
-          tags: au-kpis-api:pr
+          tags: ${{ matrix.tag }}
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
 
-      - name: Scan API image
+      - name: Scan ${{ matrix.image }} image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: au-kpis-api:pr
+          image-ref: ${{ matrix.tag }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"

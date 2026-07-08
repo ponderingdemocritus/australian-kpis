@@ -17,7 +17,8 @@
     "release:sdk": "changeset publish",
     "sdk:generate": "node tools/openapi-gen/generate.mjs",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
+    "test": "pnpm run test:deploy && turbo run test",
+    "test:deploy": "node --test tests/**/*.test.mjs",
     "railway:plan": "RAILWAY_IAC_TS_BIN=.railway/node_modules/.bin/railway-iac-ts .railway/node_modules/.bin/railway config plan",
     "railway:apply": "RAILWAY_IAC_TS_BIN=.railway/node_modules/.bin/railway-iac-ts .railway/node_modules/.bin/railway config apply"
   },
