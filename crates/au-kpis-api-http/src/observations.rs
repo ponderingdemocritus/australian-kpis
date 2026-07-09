@@ -33,6 +33,9 @@ use utoipa::ToSchema;
 
 use crate::{AppState, error::ApiError};
 
+mod query_plan;
+mod render;
+
 const DEFAULT_LIMIT: usize = 1_000;
 const MAX_LIMIT: usize = 10_000;
 const MAX_PARQUET_BULK_LIMIT: usize = 1_000_000;
@@ -172,8 +175,11 @@ pub async fn list_observations(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<Response, ApiError> {
-    let query = parse_observations_query(uri.query())?;
-    if requires_cache_fingerprint(&query) {
+    let plan = query_plan::ObservationsQueryPlan::parse(uri.query())?;
+    let planned_limit = plan.limit();
+    let query = plan.clone().into_query();
+    debug_assert_eq!(query.limit, planned_limit);
+    if plan.requires_cache_fingerprint() {
         let fingerprint = load_cache_fingerprint(&state.db, &query).await?;
         validate_observation_query_bounds(&query, &fingerprint)?;
         let json_cache_key = observations_json_cache_key(uri.query(), &query);
@@ -181,7 +187,7 @@ pub async fn list_observations(
             return cached_json_observations_response(&headers, cached);
         }
 
-        let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
+        let metadata = load_observations_metadata(&state.db, plan.dataflow()).await?;
         let etag = compute_etag(&query, &fingerprint)?;
         let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
         let etag_header = HeaderValue::from_str(&etag).map_err(|err| {
@@ -222,28 +228,10 @@ pub async fn list_observations(
     }
 
     validate_streaming_observation_query_bounds(&state.db, &query).await?;
-    let metadata = load_observations_metadata(&state.db, &query.dataflow).await?;
+    let metadata = load_observations_metadata(&state.db, plan.dataflow()).await?;
     let cache_control = HeaderValue::from_static(CACHE_CONTROL_VALUE);
-    let content_type = match query.format {
-        ResponseFormat::Json => HeaderValue::from_static("application/json"),
-        ResponseFormat::Csv => HeaderValue::from_static("text/csv; charset=utf-8"),
-        ResponseFormat::Parquet => HeaderValue::from_static("application/vnd.apache.parquet"),
-    };
-    let stream = match query.format {
-        ResponseFormat::Json => {
-            Body::from_stream(json_observations_stream(state.db.clone(), query, metadata))
-        }
-        ResponseFormat::Csv => {
-            Body::from_stream(csv_observations_stream(state.db.clone(), query, metadata))
-        }
-        ResponseFormat::Parquet => Body::from_stream(parquet_observations_stream(
-            state.db.clone(),
-            query,
-            metadata,
-        )),
-    };
-
-    let mut response = Response::new(stream);
+    let content_type = render::content_type_for_format(plan.response_format());
+    let mut response = Response::new(render::body_for_query(state.db.clone(), query, metadata));
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, cache_control);
@@ -2191,6 +2179,44 @@ mod tests {
         let parquet = parse_observations_query(Some("dataflow=abs.cpi&format=parquet")).unwrap();
         assert!(!requires_cache_fingerprint(&parquet));
         assert!(!emits_etag_header(&parquet));
+    }
+
+    #[test]
+    fn observations_query_plan_preserves_format_limits_and_cache_policy() {
+        let plan = query_plan::ObservationsQueryPlan::parse(Some(
+            "dataflow=abs.cpi&dimensions[region]=AUS&format=parquet&limit=1000000",
+        ))
+        .expect("parquet bulk query should plan");
+
+        assert_eq!(plan.dataflow().as_str(), "abs.cpi");
+        assert_eq!(plan.limit(), MAX_PARQUET_BULK_LIMIT);
+        assert_eq!(plan.response_format(), query_plan::ResponseFormat::Parquet);
+        assert!(!plan.requires_cache_fingerprint());
+
+        let json_plan =
+            query_plan::ObservationsQueryPlan::parse(Some("dataflow=abs.cpi&limit=1000"))
+                .expect("default JSON query should plan");
+        assert_eq!(
+            json_plan.response_format(),
+            query_plan::ResponseFormat::Json
+        );
+        assert!(json_plan.requires_cache_fingerprint());
+    }
+
+    #[test]
+    fn observations_render_adapter_maps_formats_to_content_types() {
+        assert_eq!(
+            render::content_type_for_format(query_plan::ResponseFormat::Json),
+            HeaderValue::from_static("application/json")
+        );
+        assert_eq!(
+            render::content_type_for_format(query_plan::ResponseFormat::Csv),
+            HeaderValue::from_static("text/csv; charset=utf-8")
+        );
+        assert_eq!(
+            render::content_type_for_format(query_plan::ResponseFormat::Parquet),
+            HeaderValue::from_static("application/vnd.apache.parquet")
+        );
     }
 
     #[test]
