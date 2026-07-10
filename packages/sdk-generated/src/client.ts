@@ -1411,27 +1411,28 @@ export type GetApsScorecardConfigParams = {
 /**
  * Config version; omitted selects the current version.
  */
-version?: string | null;
+version?: string;
 };
 
 export type ListApsScorecardHistoryParams = {
 /**
  * Inclusive lower snapshot date in `YYYY-MM-DD` form.
  */
-since?: string | null;
+since?: string;
 /**
  * Inclusive upper snapshot date in `YYYY-MM-DD` form.
  */
-until?: string | null;
+until?: string;
 /**
  * Revision view, defaulting to original as-published values.
  */
 view?: HistoryView;
 /**
  * Maximum points returned, from 1 through 1,000.
- * @minimum 0
+ * @minimum 1
+ * @maximum 1000
  */
-limit?: number | null;
+limit?: number;
 };
 
 export type SearchCatalogParams = {
@@ -1935,6 +1936,11 @@ export type getApsScorecardConfigResponse304 = {
   status: 304
 }
 
+export type getApsScorecardConfigResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
 export type getApsScorecardConfigResponse500 = {
   data: ProblemDetails
   status: 500
@@ -1943,7 +1949,7 @@ export type getApsScorecardConfigResponse500 = {
 export type getApsScorecardConfigResponseSuccess = (getApsScorecardConfigResponse200) & {
   headers: Headers;
 };
-export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse304 | getApsScorecardConfigResponse500) & {
+export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse304 | getApsScorecardConfigResponse404 | getApsScorecardConfigResponse500) & {
   headers: Headers;
 };
 
@@ -2062,6 +2068,11 @@ export type getApsScorecardLatestResponse304 = {
   status: 304
 }
 
+export type getApsScorecardLatestResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
 export type getApsScorecardLatestResponse500 = {
   data: ProblemDetails
   status: 500
@@ -2070,7 +2081,7 @@ export type getApsScorecardLatestResponse500 = {
 export type getApsScorecardLatestResponseSuccess = (getApsScorecardLatestResponse200) & {
   headers: Headers;
 };
-export type getApsScorecardLatestResponseError = (getApsScorecardLatestResponse304 | getApsScorecardLatestResponse500) & {
+export type getApsScorecardLatestResponseError = (getApsScorecardLatestResponse304 | getApsScorecardLatestResponse404 | getApsScorecardLatestResponse500) & {
   headers: Headers;
 };
 
@@ -2111,6 +2122,11 @@ export type getApsScorecardSnapshotResponse200 = {
   status: 200
 }
 
+export type getApsScorecardSnapshotResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type getApsScorecardSnapshotResponse404 = {
   data: ProblemDetails
   status: 404
@@ -2119,7 +2135,7 @@ export type getApsScorecardSnapshotResponse404 = {
 export type getApsScorecardSnapshotResponseSuccess = (getApsScorecardSnapshotResponse200) & {
   headers: Headers;
 };
-export type getApsScorecardSnapshotResponseError = (getApsScorecardSnapshotResponse404) & {
+export type getApsScorecardSnapshotResponseError = (getApsScorecardSnapshotResponse400 | getApsScorecardSnapshotResponse404) & {
   headers: Headers;
 };
 
@@ -2514,6 +2530,11 @@ export type getSubscriptionResponse200 = {
   status: 200
 }
 
+export type getSubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type getSubscriptionResponse401 = {
   data: ProblemDetails
   status: 401
@@ -2537,7 +2558,7 @@ export type getSubscriptionResponse503 = {
 export type getSubscriptionResponseSuccess = (getSubscriptionResponse200) & {
   headers: Headers;
 };
-export type getSubscriptionResponseError = (getSubscriptionResponse401 | getSubscriptionResponse403 | getSubscriptionResponse404 | getSubscriptionResponse503) & {
+export type getSubscriptionResponseError = (getSubscriptionResponse400 | getSubscriptionResponse401 | getSubscriptionResponse403 | getSubscriptionResponse404 | getSubscriptionResponse503) & {
   headers: Headers;
 };
 
@@ -2578,6 +2599,11 @@ export type revokeSubscriptionResponse204 = {
   status: 204
 }
 
+export type revokeSubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type revokeSubscriptionResponse401 = {
   data: ProblemDetails
   status: 401
@@ -2601,7 +2627,7 @@ export type revokeSubscriptionResponse503 = {
 export type revokeSubscriptionResponseSuccess = (revokeSubscriptionResponse204) & {
   headers: Headers;
 };
-export type revokeSubscriptionResponseError = (revokeSubscriptionResponse401 | revokeSubscriptionResponse403 | revokeSubscriptionResponse404 | revokeSubscriptionResponse503) & {
+export type revokeSubscriptionResponseError = (revokeSubscriptionResponse400 | revokeSubscriptionResponse401 | revokeSubscriptionResponse403 | revokeSubscriptionResponse404 | revokeSubscriptionResponse503) & {
   headers: Headers;
 };
 
@@ -2642,6 +2668,11 @@ export type rotateSubscriptionSecretResponse200 = {
   status: 200
 }
 
+export type rotateSubscriptionSecretResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type rotateSubscriptionSecretResponse401 = {
   data: ProblemDetails
   status: 401
@@ -2665,7 +2696,7 @@ export type rotateSubscriptionSecretResponse503 = {
 export type rotateSubscriptionSecretResponseSuccess = (rotateSubscriptionSecretResponse200) & {
   headers: Headers;
 };
-export type rotateSubscriptionSecretResponseError = (rotateSubscriptionSecretResponse401 | rotateSubscriptionSecretResponse403 | rotateSubscriptionSecretResponse404 | rotateSubscriptionSecretResponse503) & {
+export type rotateSubscriptionSecretResponseError = (rotateSubscriptionSecretResponse400 | rotateSubscriptionSecretResponse401 | rotateSubscriptionSecretResponse403 | rotateSubscriptionSecretResponse404 | rotateSubscriptionSecretResponse503) & {
   headers: Headers;
 };
 

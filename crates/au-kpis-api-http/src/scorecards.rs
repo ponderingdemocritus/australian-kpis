@@ -7,7 +7,10 @@ use au_kpis_scorecard::{
 };
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{
+        Path, Query, State,
+        rejection::{PathRejection, QueryRejection},
+    },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -23,6 +26,8 @@ const APS_HISTORY_CACHE_CONTROL: &str = "public, max-age=300, stale-while-revali
 
 /// Query string for APS history snapshots.
 #[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
 pub struct ScorecardHistoryQuery {
     /// Inclusive lower snapshot date in `YYYY-MM-DD` form.
     pub since: Option<String>,
@@ -30,21 +35,28 @@ pub struct ScorecardHistoryQuery {
     pub until: Option<String>,
     /// Revision view, defaulting to original as-published values.
     #[serde(default)]
+    #[param(required = false)]
     pub view: HistoryView,
     /// Maximum points returned, from 1 through 1,000.
+    #[param(minimum = 1, maximum = 1000)]
     pub limit: Option<u32>,
 }
 
 /// Query string for the latest APS snapshot.
 #[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
 pub struct ScorecardLatestQuery {
     /// Revision view, defaulting to original as-published values.
     #[serde(default)]
+    #[param(required = false)]
     pub view: HistoryView,
 }
 
 /// Query string selecting an immutable APS config version.
 #[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
 pub struct ScorecardConfigQuery {
     /// Config version; omitted selects the current version.
     pub version: Option<String>,
@@ -75,6 +87,12 @@ pub struct ScorecardConfigQuery {
             )
         ),
         (
+            status = 404,
+            description = "Requested APS config version was not found.",
+            content_type = "application/problem+json",
+            body = crate::error::ProblemDetails
+        ),
+        (
             status = 500,
             description = "Internal server error.",
             content_type = "application/problem+json",
@@ -85,8 +103,9 @@ pub struct ScorecardConfigQuery {
 )]
 pub async fn aps_config(
     headers: HeaderMap,
-    Query(query): Query<ScorecardConfigQuery>,
+    query: Result<Query<ScorecardConfigQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
+    let Query(query) = query.map_err(query_rejection)?;
     let config = load_config()?;
     if query
         .version
@@ -125,6 +144,12 @@ pub async fn aps_config(
             )
         ),
         (
+            status = 404,
+            description = "No official APS snapshot has been published.",
+            content_type = "application/problem+json",
+            body = crate::error::ProblemDetails
+        ),
+        (
             status = 500,
             description = "Internal server error.",
             content_type = "application/problem+json",
@@ -136,8 +161,9 @@ pub async fn aps_config(
 pub async fn aps_latest(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<ScorecardLatestQuery>,
+    query: Result<Query<ScorecardLatestQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
+    let Query(query) = query.map_err(query_rejection)?;
     let snapshot = load_latest_aps_snapshot(&state.db, query.view)
         .await
         .map_err(scorecard_store_error)?
@@ -187,8 +213,9 @@ pub async fn aps_latest(
 pub async fn aps_history(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<ScorecardHistoryQuery>,
+    query: Result<Query<ScorecardHistoryQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
+    let Query(query) = query.map_err(query_rejection)?;
     let since = parse_history_date(query.since.as_deref(), "since")?;
     let until = parse_history_date(query.until.as_deref(), "until")?;
     if let (Some(since), Some(until)) = (since, until) {
@@ -229,6 +256,7 @@ pub async fn aps_history(
     params(("id" = Uuid, Path, description = "Snapshot revision UUID.")),
     responses(
         (status = 200, description = "Immutable APS snapshot revision.", body = PublishedApsSnapshot),
+        (status = 400, description = "Invalid snapshot UUID.", body = crate::ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = "Snapshot not found.", body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
     tag = "scorecards"
@@ -236,13 +264,22 @@ pub async fn aps_history(
 pub async fn aps_snapshot(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<Uuid>,
+    id: Result<Path<Uuid>, PathRejection>,
 ) -> Result<Response, ApiError> {
+    let Path(id) = id.map_err(path_rejection)?;
     let snapshot = load_aps_snapshot(&state.db, id)
         .await
         .map_err(scorecard_store_error)?
         .ok_or_else(|| ApiError::NotFound(format!("APS snapshot `{id}`")))?;
     json_cache_response(&headers, &snapshot, APS_HISTORY_CACHE_CONTROL)
+}
+
+fn query_rejection(error: QueryRejection) -> ApiError {
+    ApiError::Validation(error.body_text())
+}
+
+fn path_rejection(error: PathRejection) -> ApiError {
+    ApiError::Validation(error.body_text())
 }
 
 fn load_config() -> Result<ScorecardConfig, ApiError> {
@@ -402,12 +439,12 @@ mod tests {
         let reversed = aps_history(
             State(test_state()),
             HeaderMap::new(),
-            Query(ScorecardHistoryQuery {
+            Ok(Query(ScorecardHistoryQuery {
                 since: Some("2025-02-01".into()),
                 until: Some("2025-01-01".into()),
                 view: HistoryView::AsPublished,
                 limit: None,
-            }),
+            })),
         )
         .await
         .expect_err("reversed history bounds should be rejected");
@@ -416,12 +453,12 @@ mod tests {
         let ordered = aps_history(
             State(test_state()),
             HeaderMap::new(),
-            Query(ScorecardHistoryQuery {
+            Ok(Query(ScorecardHistoryQuery {
                 since: Some("2025-01-01".into()),
                 until: Some("2025-02-01".into()),
                 view: HistoryView::AsPublished,
                 limit: None,
-            }),
+            })),
         )
         .await;
         assert!(ordered.is_err());
@@ -429,12 +466,12 @@ mod tests {
         let open_ended = aps_history(
             State(test_state()),
             HeaderMap::new(),
-            Query(ScorecardHistoryQuery {
+            Ok(Query(ScorecardHistoryQuery {
                 since: Some("2025-01-01".into()),
                 until: None,
                 view: HistoryView::AsPublished,
                 limit: None,
-            }),
+            })),
         )
         .await;
         assert!(open_ended.is_err());

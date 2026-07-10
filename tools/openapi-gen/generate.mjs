@@ -55,17 +55,6 @@ writeFileSync(
 )
 rmSync(zodTempDir, { force: true, recursive: true })
 
-run('pnpm', [
-  'exec',
-  'biome',
-  'format',
-  '--write',
-  'openapi.json',
-  'packages/sdk-generated/src/client.ts',
-  'packages/sdk-generated/src/types.ts',
-  'packages/sdk-generated/src/zod.ts',
-])
-
 for (const file of [
   openApiPath,
   resolve(generatedSource, 'client.ts'),

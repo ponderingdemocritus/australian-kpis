@@ -158,13 +158,13 @@ async fn probe_database(state: &AppState) -> DependencyHealth {
     let started = Instant::now();
     let result = tokio::time::timeout(
         Duration::from_millis(500),
-        sqlx::query_scalar::<_, i64>(
-            "SELECT version FROM _sqlx_migrations ORDER BY version DESC LIMIT 1",
+        sqlx::query_scalar::<_, bool>(
+            "SELECT to_regclass('public.operator_audit_log') IS NOT NULL",
         )
-        .fetch_optional(&state.db),
+        .fetch_one(&state.db),
     )
     .await;
-    let status = if matches!(result, Ok(Ok(Some(_)))) {
+    let status = if matches!(result, Ok(Ok(true))) {
         "up"
     } else {
         "down"

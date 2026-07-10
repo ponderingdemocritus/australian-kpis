@@ -582,10 +582,7 @@
             "description": "Config version; omitted selects the current version.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -631,6 +628,16 @@
               }
             }
           },
+          "404": {
+            "description": "Requested APS config version was not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error.",
             "content": {
@@ -658,10 +665,7 @@
             "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -670,10 +674,7 @@
             "description": "Inclusive upper snapshot date in `YYYY-MM-DD` form.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -691,12 +692,10 @@
             "description": "Maximum points returned, from 1 through 1,000.",
             "required": false,
             "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "maximum": 1000,
+              "minimum": 1
             }
           }
         ],
@@ -817,6 +816,16 @@
               }
             }
           },
+          "404": {
+            "description": "No official APS snapshot has been published.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error.",
             "content": {
@@ -856,6 +865,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PublishedApsSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid snapshot UUID.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -1144,7 +1163,7 @@
           "401": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1154,7 +1173,7 @@
           "403": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1164,7 +1183,7 @@
           "503": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1292,10 +1311,20 @@
               }
             }
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "401": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1305,7 +1334,7 @@
           "403": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1315,7 +1344,7 @@
           "404": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1325,7 +1354,7 @@
           "503": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1360,10 +1389,20 @@
           "204": {
             "description": "Subscription revoked without deleting audit history."
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "401": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1373,7 +1412,7 @@
           "403": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1383,7 +1422,7 @@
           "404": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1393,7 +1432,7 @@
           "503": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1437,10 +1476,20 @@
               }
             }
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "401": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1450,7 +1499,7 @@
           "403": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1460,7 +1509,7 @@
           "404": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1470,7 +1519,7 @@
           "503": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1517,7 +1566,7 @@
           "400": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1527,7 +1576,7 @@
           "401": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1537,7 +1586,7 @@
           "403": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1547,7 +1596,7 @@
           "404": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1557,7 +1606,7 @@
           "503": {
             "description": "",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3106,7 +3155,8 @@
             ],
             "description": "Config version; omitted selects the current version."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "ScorecardHistoryQuery": {
         "type": "object",
@@ -3139,7 +3189,8 @@
             "$ref": "#/components/schemas/HistoryView",
             "description": "Revision view, defaulting to original as-published values."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "ScorecardLatestQuery": {
         "type": "object",
@@ -3149,7 +3200,8 @@
             "$ref": "#/components/schemas/HistoryView",
             "description": "Revision view, defaulting to original as-published values."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "ScorecardSnapshot": {
         "type": "object",

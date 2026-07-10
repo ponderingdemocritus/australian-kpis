@@ -1526,6 +1526,7 @@ expression: emitted_spec()
         "type": "object"
       },
       "ScorecardConfigQuery": {
+        "additionalProperties": false,
         "description": "Query string selecting an immutable APS config version.",
         "properties": {
           "version": {
@@ -1539,6 +1540,7 @@ expression: emitted_spec()
         "type": "object"
       },
       "ScorecardHistoryQuery": {
+        "additionalProperties": false,
         "description": "Query string for APS history snapshots.",
         "properties": {
           "limit": {
@@ -1572,6 +1574,7 @@ expression: emitted_spec()
         "type": "object"
       },
       "ScorecardLatestQuery": {
+        "additionalProperties": false,
         "description": "Query string for the latest APS snapshot.",
         "properties": {
           "view": {
@@ -2860,10 +2863,7 @@ expression: emitted_spec()
             "name": "version",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -2909,6 +2909,16 @@ expression: emitted_spec()
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Requested APS config version was not found."
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2936,10 +2946,7 @@ expression: emitted_spec()
             "name": "since",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -2948,10 +2955,7 @@ expression: emitted_spec()
             "name": "until",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -2970,11 +2974,9 @@ expression: emitted_spec()
             "required": false,
             "schema": {
               "format": "int32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -3095,6 +3097,16 @@ expression: emitted_spec()
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No official APS snapshot has been published."
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -3137,6 +3149,16 @@ expression: emitted_spec()
               }
             },
             "description": "Immutable APS snapshot revision."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid snapshot UUID."
           },
           "404": {
             "content": {
@@ -3421,7 +3443,7 @@ expression: emitted_spec()
           },
           "401": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3431,7 +3453,7 @@ expression: emitted_spec()
           },
           "403": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3441,7 +3463,7 @@ expression: emitted_spec()
           },
           "503": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3563,9 +3585,19 @@ expression: emitted_spec()
           "204": {
             "description": "Subscription revoked without deleting audit history."
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
           "401": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3575,7 +3607,7 @@ expression: emitted_spec()
           },
           "403": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3585,7 +3617,7 @@ expression: emitted_spec()
           },
           "404": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3595,7 +3627,7 @@ expression: emitted_spec()
           },
           "503": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3638,9 +3670,19 @@ expression: emitted_spec()
             },
             "description": ""
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
           "401": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3650,7 +3692,7 @@ expression: emitted_spec()
           },
           "403": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3660,7 +3702,7 @@ expression: emitted_spec()
           },
           "404": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3670,7 +3712,7 @@ expression: emitted_spec()
           },
           "503": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3715,9 +3757,19 @@ expression: emitted_spec()
             },
             "description": ""
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
           "401": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3727,7 +3779,7 @@ expression: emitted_spec()
           },
           "403": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3737,7 +3789,7 @@ expression: emitted_spec()
           },
           "404": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3747,7 +3799,7 @@ expression: emitted_spec()
           },
           "503": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3794,7 +3846,7 @@ expression: emitted_spec()
           },
           "400": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3804,7 +3856,7 @@ expression: emitted_spec()
           },
           "401": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3814,7 +3866,7 @@ expression: emitted_spec()
           },
           "403": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3824,7 +3876,7 @@ expression: emitted_spec()
           },
           "404": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -3834,7 +3886,7 @@ expression: emitted_spec()
           },
           "503": {
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }

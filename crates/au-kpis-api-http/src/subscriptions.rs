@@ -224,9 +224,9 @@ pub async fn create_subscription(
     path = "/v1/subscriptions",
     responses(
         (status = 200, body = ListSubscriptionsResponse),
-        (status = 401, body = crate::ProblemDetails),
-        (status = 403, body = crate::ProblemDetails),
-        (status = 503, body = crate::ProblemDetails)
+        (status = 401, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 403, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 503, body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
     security(("ApiKeyAuth" = [])),
     tag = "subscriptions"
@@ -250,10 +250,11 @@ pub async fn list_subscriptions(
     params(("id" = Uuid, Path)),
     responses(
         (status = 200, body = SubscriptionDetails),
-        (status = 401, body = crate::ProblemDetails),
-        (status = 403, body = crate::ProblemDetails),
-        (status = 404, body = crate::ProblemDetails),
-        (status = 503, body = crate::ProblemDetails)
+        (status = 400, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 401, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 403, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 404, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 503, body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
     security(("ApiKeyAuth" = [])),
     tag = "subscriptions"
@@ -278,11 +279,11 @@ pub async fn get_subscription(
     params(("id" = Uuid, Path)),
     responses(
         (status = 200, body = SubscriptionDetails),
-        (status = 400, body = crate::ProblemDetails),
-        (status = 401, body = crate::ProblemDetails),
-        (status = 403, body = crate::ProblemDetails),
-        (status = 404, body = crate::ProblemDetails),
-        (status = 503, body = crate::ProblemDetails)
+        (status = 400, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 401, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 403, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 404, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 503, body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
     security(("ApiKeyAuth" = [])),
     tag = "subscriptions"
@@ -307,10 +308,11 @@ pub async fn verify_subscription(
     params(("id" = Uuid, Path)),
     responses(
         (status = 200, body = RotateSubscriptionSecretResponse),
-        (status = 401, body = crate::ProblemDetails),
-        (status = 403, body = crate::ProblemDetails),
-        (status = 404, body = crate::ProblemDetails),
-        (status = 503, body = crate::ProblemDetails)
+        (status = 400, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 401, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 403, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 404, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 503, body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
     security(("ApiKeyAuth" = [])),
     tag = "subscriptions"
@@ -335,10 +337,11 @@ pub async fn rotate_subscription_secret(
     params(("id" = Uuid, Path)),
     responses(
         (status = 204, description = "Subscription revoked without deleting audit history."),
-        (status = 401, body = crate::ProblemDetails),
-        (status = 403, body = crate::ProblemDetails),
-        (status = 404, body = crate::ProblemDetails),
-        (status = 503, body = crate::ProblemDetails)
+        (status = 400, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 401, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 403, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 404, body = crate::ProblemDetails, content_type = "application/problem+json"),
+        (status = 503, body = crate::ProblemDetails, content_type = "application/problem+json")
     ),
     security(("ApiKeyAuth" = [])),
     tag = "subscriptions"

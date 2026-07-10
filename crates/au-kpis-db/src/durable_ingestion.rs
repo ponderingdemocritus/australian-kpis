@@ -7,7 +7,7 @@ use au_kpis_domain::{
     Sha256Digest, SourceId, TimePrecision,
 };
 use au_kpis_error::CoreError;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, QueryBuilder, Row};
@@ -251,8 +251,11 @@ impl StageDigest {
     /// Add one row using length-prefixed canonical JSON.
     pub fn update(&mut self, row: ObservationStageRow<'_>) -> Result<(), DbError> {
         validate_stage_row_shape(row)?;
-        let canonical = serde_json::to_vec(&(row.row_no, row.series, row.observation))
-            .map_err(CoreError::from)?;
+        let mut observation = row.observation.clone();
+        observation.time = postgres_timestamp_precision(observation.time);
+        observation.ingested_at = postgres_timestamp_precision(observation.ingested_at);
+        let canonical =
+            serde_json::to_vec(&(row.row_no, row.series, observation)).map_err(CoreError::from)?;
         self.0.update((canonical.len() as u64).to_be_bytes());
         self.0.update(canonical);
         Ok(())
@@ -263,6 +266,12 @@ impl StageDigest {
     pub fn finalize(self) -> [u8; 32] {
         self.0.finalize().into()
     }
+}
+
+fn postgres_timestamp_precision(value: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        .with_nanosecond(value.nanosecond() / 1_000 * 1_000)
+        .unwrap_or(value)
 }
 
 impl Default for StageDigest {
@@ -1032,9 +1041,15 @@ fn nonnegative_count(name: &str, value: i64) -> Result<u64, DbError> {
 
 #[cfg(test)]
 mod tests {
-    use au_kpis_domain::{DataflowId, SourceId};
+    use std::collections::BTreeMap;
 
-    use super::{GenerationStatus, work_identity_key};
+    use au_kpis_domain::{
+        ArtifactId, DataflowId, MeasureId, Observation, ObservationStatus, SeriesDescriptor,
+        SeriesKey, SourceId, TimePrecision,
+    };
+    use chrono::{TimeZone, Timelike, Utc};
+
+    use super::{GenerationStatus, ObservationStageRow, StageDigest, work_identity_key};
 
     #[test]
     fn work_identity_normalizes_url_query_order_and_fragment() {
@@ -1078,5 +1093,61 @@ mod tests {
         assert!(!GenerationStatus::PendingParse.can_transition_to(GenerationStatus::Published));
         assert!(!GenerationStatus::Published.can_transition_to(GenerationStatus::PendingLoad));
         assert!(!GenerationStatus::Rejected.can_transition_to(GenerationStatus::PendingParse));
+    }
+
+    #[test]
+    fn stage_digest_matches_postgres_timestamp_precision() {
+        let dataflow_id = DataflowId::new("abs.cpi").unwrap();
+        let measure_id = MeasureId::new("index").unwrap();
+        let series_key = SeriesKey::derive(
+            &dataflow_id,
+            &measure_id,
+            std::iter::empty::<(&str, &str)>(),
+        );
+        let series = SeriesDescriptor {
+            series_key,
+            dataflow_id,
+            measure_id,
+            dimensions: BTreeMap::new(),
+            unit: "index".to_string(),
+        };
+        let timestamp = Utc
+            .with_ymd_and_hms(2026, 7, 11, 9, 30, 0)
+            .unwrap()
+            .with_nanosecond(123_456_789)
+            .unwrap();
+        let mut original = Observation {
+            series_key,
+            time: timestamp,
+            time_precision: TimePrecision::Quarter,
+            value: Some(136.9),
+            status: ObservationStatus::Normal,
+            revision_no: 0,
+            attributes: BTreeMap::new(),
+            ingested_at: timestamp,
+            source_artifact_id: ArtifactId::of_content(b"stage-digest"),
+        };
+        let mut round_tripped = original.clone();
+        round_tripped.time = round_tripped.time.with_nanosecond(123_456_000).unwrap();
+        round_tripped.ingested_at = round_tripped
+            .ingested_at
+            .with_nanosecond(123_456_000)
+            .unwrap();
+
+        let digest = |observation: &Observation| {
+            let mut digest = StageDigest::new();
+            digest
+                .update(ObservationStageRow {
+                    row_no: 0,
+                    series: &series,
+                    observation,
+                })
+                .unwrap();
+            digest.finalize()
+        };
+        assert_eq!(digest(&original), digest(&round_tripped));
+
+        original.value = Some(137.0);
+        assert_ne!(digest(&original), digest(&round_tripped));
     }
 }

@@ -560,7 +560,6 @@ const ObservationsResponse: z.ZodType<ObservationsResponse> = z
     pagination: PaginationMetadata,
   })
   .passthrough();
-const version = z.union([z.string(), z.null()]).optional();
 const CoverageThresholds: z.ZodType<CoverageThresholds> = z
   .object({ axis_pct: z.number(), overall_pct: z.number() })
   .passthrough();
@@ -631,7 +630,6 @@ const ScorecardConfig: z.ZodType<ScorecardConfig> = z
     zone_thresholds: ZoneThresholds,
   })
   .passthrough();
-const limit = z.union([z.number(), z.null()]).optional();
 const ConfidenceBand: z.ZodType<ConfidenceBand> = z
   .object({ high: z.number(), low: z.number() })
   .passthrough();
@@ -841,15 +839,6 @@ const SubscriptionDetails: z.ZodType<SubscriptionDetails> = z
 const ListSubscriptionsResponse: z.ZodType<ListSubscriptionsResponse> = z
   .object({ subscriptions: z.array(SubscriptionDetails) })
   .passthrough();
-const ProblemDetails = z
-  .object({
-    detail: z.union([z.string(), z.null()]).optional(),
-    instance: z.union([z.string(), z.null()]).optional(),
-    status: z.number().int().gte(0),
-    title: z.string(),
-    type: z.string(),
-  })
-  .passthrough();
 const CreateSubscriptionRequest: z.ZodType<CreateSubscriptionRequest> = z
   .object({ dataflow_ids: z.array(DataflowId).optional(), url: z.string() })
   .passthrough();
@@ -868,10 +857,18 @@ const DataflowsQuery: z.ZodType<DataflowsQuery> = z
   .partial()
   .passthrough();
 const HistoryView = z.enum(["as_published", "latest"]);
+const ProblemDetails = z
+  .object({
+    detail: z.union([z.string(), z.null()]).optional(),
+    instance: z.union([z.string(), z.null()]).optional(),
+    status: z.number().int().gte(0),
+    title: z.string(),
+    type: z.string(),
+  })
+  .passthrough();
 const ScorecardConfigQuery = z
   .object({ version: z.union([z.string(), z.null()]) })
-  .partial()
-  .passthrough();
+  .partial();
 const ScorecardHistoryQuery: z.ZodType<ScorecardHistoryQuery> = z
   .object({
     limit: z.union([z.number(), z.null()]),
@@ -879,12 +876,10 @@ const ScorecardHistoryQuery: z.ZodType<ScorecardHistoryQuery> = z
     until: z.union([z.string(), z.null()]),
     view: HistoryView,
   })
-  .partial()
-  .passthrough();
+  .partial();
 const ScorecardLatestQuery: z.ZodType<ScorecardLatestQuery> = z
   .object({ view: HistoryView })
-  .partial()
-  .passthrough();
+  .partial();
 const ScorecardSnapshot: z.ZodType<ScorecardSnapshot> = z
   .object({
     as_of: z.string(),
@@ -935,7 +930,6 @@ export const schemas = {
   ObservationsRow,
   PaginationMetadata,
   ObservationsResponse,
-  version,
   CoverageThresholds,
   Axis,
   Confidence,
@@ -946,7 +940,6 @@ export const schemas = {
   IndicatorConfig,
   ZoneThresholds,
   ScorecardConfig,
-  limit,
   ConfidenceBand,
   PublicationState,
   ComponentScore,
@@ -973,12 +966,12 @@ export const schemas = {
   SourcesResponse,
   SubscriptionDetails,
   ListSubscriptionsResponse,
-  ProblemDetails,
   CreateSubscriptionRequest,
   CreateSubscriptionResponse,
   RotateSubscriptionSecretResponse,
   DataflowsQuery,
   HistoryView,
+  ProblemDetails,
   ScorecardConfigQuery,
   ScorecardHistoryQuery,
   ScorecardLatestQuery,

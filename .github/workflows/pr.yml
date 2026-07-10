@@ -758,6 +758,7 @@ jobs:
 
       - name: Capture benchmark baselines
         env:
+          AU_KPIS_CURSOR_SIGNING_KEY: ci-benchmark-cursor-signing-key-not-for-production
           BASE_REF: ${{ inputs.base_ref || github.base_ref || 'main' }}
         run: |
           set -euo pipefail

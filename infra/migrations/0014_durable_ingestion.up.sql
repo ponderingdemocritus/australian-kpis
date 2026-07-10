@@ -345,6 +345,8 @@ FROM legacy_work
 ON CONFLICT (artifact_fetch_id, dataflow_id, parser_version, transform_version)
 DO NOTHING;
 
+DROP TABLE migration_0014_legacy_units;
+
 UPDATE observations
 SET ingestion_generation_id = ingestion_generations.id
 FROM series, ingestion_generations, artifact_fetches
