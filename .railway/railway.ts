@@ -12,12 +12,7 @@ const restartPolicy = {
   sleepApplication: false,
 }
 
-function deploy(
-  replicas: number,
-  cpu: number,
-  memoryGiB: number,
-  healthcheckPath?: string,
-) {
+function deploy(replicas: number, cpu: number, memoryGiB: number, healthcheckPath?: string) {
   return {
     ...restartPolicy,
     healthcheckPath,
@@ -33,8 +28,7 @@ const telemetryEnv = (serviceName: string) => ({
   AU_KPIS_TELEMETRY__LOG_FORMAT: 'json',
   AU_KPIS_TELEMETRY__LOG_LEVEL: 'info',
   AU_KPIS_TELEMETRY__SERVICE_NAME: serviceName,
-  OTEL_EXPORTER_OTLP_ENDPOINT:
-    'http://otel-collector.railway.internal:4318/v1/traces',
+  OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel-collector.railway.internal:4318/v1/traces',
 })
 
 const databaseEnv = () => ({
@@ -82,8 +76,25 @@ export default defineRailway(() => {
 
   const web = service('web', {
     source: empty(),
+    build: {
+      builder: 'DOCKERFILE',
+      dockerfilePath: 'infra/docker/au-kpis-web.Dockerfile',
+      watchPatterns: [
+        '/.npmrc',
+        '/apps/web/**',
+        '/infra/docker/au-kpis-web.Dockerfile',
+        '/package.json',
+        '/packages/sdk/**',
+        '/packages/sdk-generated/**',
+        '/pnpm-lock.yaml',
+        '/pnpm-workspace.yaml',
+        '/tsconfig.base.json',
+        '/turbo.json',
+        '/.railway/railway.ts',
+      ],
+    },
     env: {
-      AU_KPIS_API_BASE_URL: 'http://api.railway.internal:3000',
+      AU_KPIS_API_BASE_URL: 'http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}',
       AU_KPIS_BFF_ORIGIN_ID: preserve(),
       AU_KPIS_BFF_ORIGIN_SECRET: preserve(),
       AU_KPIS_ORIGIN_AUTH_REQUIRED: 'true',

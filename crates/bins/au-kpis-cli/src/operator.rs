@@ -56,9 +56,9 @@ pub(super) struct ReparseOutput {
 pub(super) struct ManualLoadOutput {
     artifact_id: String,
     generation_id: Uuid,
-    queue_job_id: i64,
+    queue_job_id: Option<i64>,
     rows_staged: usize,
-    status: &'static str,
+    status: String,
     audit_id: i64,
 }
 
@@ -514,10 +514,23 @@ pub(super) async fn load_manual_input(
     .execute(pool)
     .await
     .context("record manual review provenance")?;
-    let queue_job = ApalisPgQueue::new(pool.clone())
-        .push(Job::load(dataflow.clone(), generation.id).with_max_attempts(5))
-        .await
-        .context("enqueue manual generation load")?;
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM ingestion_generations WHERE id = $1")
+            .bind(generation.id)
+            .fetch_one(pool)
+            .await
+            .context("load staged manual generation state")?;
+    let queue_job_id = if status == "published" {
+        None
+    } else {
+        Some(
+            ApalisPgQueue::new(pool.clone())
+                .push(Job::load(dataflow.clone(), generation.id).with_max_attempts(5))
+                .await
+                .context("enqueue manual generation load")?
+                .get(),
+        )
+    };
     let audit_id = record_audit(
         pool,
         "manual_input.load",
@@ -531,16 +544,17 @@ pub(super) async fn load_manual_input(
             "rows_staged": rows_staged,
             "reviewer_role": review.reviewer_role,
             "reviewed_at": review.reviewed_at,
-            "queue_job_id": queue_job.get(),
+            "queue_job_id": queue_job_id,
+            "status": status,
         }),
     )
     .await?;
     Ok(ManualLoadOutput {
         artifact_id: artifact_id.to_string(),
         generation_id: generation.id,
-        queue_job_id: queue_job.get(),
+        queue_job_id,
         rows_staged,
-        status: "pending_load",
+        status,
         audit_id,
     })
 }

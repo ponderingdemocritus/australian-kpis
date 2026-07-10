@@ -80,8 +80,10 @@ Run the command with the governed licence, HTTPS evidence URL, retrieval date,
 reviewer role/date, evidence notes, actor, and reason. It creates or validates
 the governed manual catalog row, writes the immutable artifact, stages typed
 rows under a new generation, records `manual_input_reviews`, and enqueues the
-normal atomic Load stage. A successful command means `pending_load`, not
-published; wait for the generation and launch-readiness gates.
+normal atomic Load stage. A newly accepted input returns `pending_load`, not
+published; wait for the generation and launch-readiness gates. Repeating the
+same reviewed input after publication is idempotent and returns `published`
+without adding another Load job.
 
 ```bash
 au-kpis-cli manual-input load --file reviewed-input.json \

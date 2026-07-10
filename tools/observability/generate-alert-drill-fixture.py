@@ -30,19 +30,43 @@ DYNAMIC_LABELS = {
 }
 
 INPUT_SERIES = [
-    ('au_kpis_http_requests_total{eligible="true",status="500"}', "0+100x120 12000+0x360"),
+    (
+        'au_kpis_http_requests_total{eligible="true",status="500"}',
+        "0+100x120 12000+0x360",
+    ),
     ('au_kpis_http_requests_total{eligible="true",status="200"}', "0+0x120 0+100x360"),
-    ('au_kpis_http_request_duration_seconds_bucket{eligible="true",le="0.1"}', "0+0x120 0+100x360"),
-    ('au_kpis_http_request_duration_seconds_bucket{eligible="true",le="0.5"}', "0+0x120 0+100x360"),
-    ('au_kpis_http_request_duration_seconds_bucket{eligible="true",le="1"}', "0+100x480"),
-    ('au_kpis_http_request_duration_seconds_bucket{eligible="true",le="+Inf"}', "0+100x480"),
+    (
+        'au_kpis_http_request_duration_seconds_bucket{eligible="true",le="0.1"}',
+        "0+0x120 0+100x360",
+    ),
+    (
+        'au_kpis_http_request_duration_seconds_bucket{eligible="true",le="0.5"}',
+        "0+0x120 0+100x360",
+    ),
+    (
+        'au_kpis_http_request_duration_seconds_bucket{eligible="true",le="1"}',
+        "0+100x480",
+    ),
+    (
+        'au_kpis_http_request_duration_seconds_bucket{eligible="true",le="+Inf"}',
+        "0+100x480",
+    ),
     ('au_kpis_ingestion_lag_seconds{dataflow="abs.cpi"}', "100x120 0x360"),
     ('au_kpis_ingestion_freshness_budget_seconds{dataflow="abs.cpi"}', "10x480"),
     ("au_kpis_ingestion_generation_failures_recent", "1x120 0x360"),
     ("au_kpis_queue_oldest_pending_age_seconds", "1000x120 0x360"),
-    ('au_kpis_schema_hash_drifts_total{source="treasury",dataflow="treasury.budget_papers"}', "0+1x120 120+0x360"),
-    ('au_kpis_stream_duration_seconds_bucket{format="parquet",le="10"}', "0+0x120 0+100x360"),
-    ('au_kpis_stream_duration_seconds_bucket{format="parquet",le="30"}', "0+0x120 0+100x360"),
+    (
+        'au_kpis_schema_hash_drifts_total{source="treasury",dataflow="treasury.budget_papers"}',
+        "0+1x120 120+0x360",
+    ),
+    (
+        'au_kpis_stream_duration_seconds_bucket{format="parquet",le="10"}',
+        "0+0x120 0+100x360",
+    ),
+    (
+        'au_kpis_stream_duration_seconds_bucket{format="parquet",le="30"}',
+        "0+0x120 0+100x360",
+    ),
     ('au_kpis_stream_duration_seconds_bucket{format="parquet",le="60"}', "0+100x480"),
     ('au_kpis_stream_duration_seconds_bucket{format="parquet",le="+Inf"}', "0+100x480"),
     ('au_kpis_db_pool_connections{state="in_use"}', "9x120 1x360"),
@@ -119,7 +143,9 @@ def generate_fixture(alerts: list[Alert]) -> str:
         "    input_series:",
     ]
     for series, values in INPUT_SERIES:
-        lines.extend([f"      - series: {quote(series)}", f"        values: {quote(values)}"])
+        lines.extend(
+            [f"      - series: {quote(series)}", f"        values: {quote(values)}"]
+        )
     lines.append("    alert_rule_test:")
     for alert in alerts:
         dynamic = DYNAMIC_LABELS.get(alert.name, {})

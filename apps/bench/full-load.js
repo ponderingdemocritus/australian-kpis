@@ -1,6 +1,6 @@
 import { check } from 'k6'
-import { Rate } from 'k6/metrics'
 import http from 'k6/http'
+import { Rate } from 'k6/metrics'
 
 const baseUrl = __ENV.AU_KPIS_BASE_URL || 'http://127.0.0.1:3000'
 const apiKey = __ENV.AU_KPIS_API_KEY
@@ -68,9 +68,12 @@ export const options = {
 
 export function setup() {
   const probes = [
-    [`/v1/observations?dataflow=${dataflow}&dimensions[benchmark_series]=0&limit=5`, 'observations'],
+    [
+      `/v1/observations?dataflow=${dataflow}&dimensions[benchmark_series]=0&limit=5`,
+      'observations',
+    ],
     ['/v1/sources', 'sources'],
-    ['/v1/scorecards/aps/latest', 'snapshot_id'],
+    ['/v1/scorecards/aps/latest', 'id'],
     ['/v1/scorecards/aps/history?limit=10', null],
   ]
   for (const [path, field] of probes) {

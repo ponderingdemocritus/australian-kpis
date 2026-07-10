@@ -147,6 +147,29 @@ CREATE UNLOGGED TABLE observation_stage (
 CREATE INDEX observation_stage_series_time_idx
 ON observation_stage (generation_id, series_key, time, row_no);
 
+-- TimescaleDB 2.17 cannot alter a hypertable while compression is enabled.
+-- Existing production chunks must be decompressed before the generation
+-- ownership column is added, then the original policy is restored below.
+SELECT remove_compression_policy('observations', if_exists => TRUE);
+
+DO $$
+DECLARE
+    compressed_chunk REGCLASS;
+BEGIN
+    FOR compressed_chunk IN
+        SELECT format('%I.%I', chunk_schema, chunk_name)::REGCLASS
+        FROM timescaledb_information.chunks
+        WHERE hypertable_schema = 'public'
+          AND hypertable_name = 'observations'
+          AND is_compressed
+    LOOP
+        PERFORM decompress_chunk(compressed_chunk, if_compressed => TRUE);
+    END LOOP;
+END
+$$;
+
+ALTER TABLE observations SET (timescaledb.compress = FALSE);
+
 ALTER TABLE observations
 ADD COLUMN ingestion_generation_id UUID;
 
@@ -166,3 +189,210 @@ REFERENCES ingestion_generations(id) ON DELETE RESTRICT;
 ALTER TABLE parse_errors
 ADD COLUMN ingestion_generation_id UUID
 REFERENCES ingestion_generations(id) ON DELETE SET NULL;
+
+-- Every pre-durable observation is assigned to an explicit immutable legacy
+-- generation. This preserves provenance without pretending that the original
+-- parser/transform versions are known.
+INSERT INTO artifact_fetches (
+    artifact_id,
+    source_id,
+    source_url,
+    content_type,
+    response_headers,
+    size_bytes,
+    storage_key,
+    fetched_at,
+    created_at
+)
+SELECT artifacts.id,
+       artifacts.source_id,
+       artifacts.source_url,
+       artifacts.content_type,
+       artifacts.response_headers,
+       artifacts.size_bytes,
+       artifacts.storage_key,
+       artifacts.fetched_at,
+       artifacts.created_at
+FROM artifacts
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM artifact_fetches
+    WHERE artifact_fetches.artifact_id = artifacts.id
+      AND artifact_fetches.source_id = artifacts.source_id
+)
+AND EXISTS (
+    SELECT 1
+    FROM observations
+    WHERE observations.source_artifact_id = artifacts.id
+);
+
+CREATE TEMPORARY TABLE migration_0014_legacy_units ON COMMIT DROP AS
+SELECT
+    observations.source_artifact_id AS artifact_id,
+    series.dataflow_id,
+    fetches.id AS artifact_fetch_id,
+    fetches.source_id,
+    fetches.source_url,
+    count(*)::BIGINT AS observation_count,
+    max(observations.ingested_at) AS published_at
+FROM observations
+JOIN series ON series.series_key = observations.series_key
+JOIN LATERAL (
+    SELECT artifact_fetches.id,
+           artifact_fetches.source_id,
+           artifact_fetches.source_url
+    FROM artifact_fetches
+    WHERE artifact_fetches.artifact_id = observations.source_artifact_id
+    ORDER BY artifact_fetches.id
+    LIMIT 1
+) AS fetches ON TRUE
+GROUP BY observations.source_artifact_id,
+         series.dataflow_id,
+         fetches.id,
+         fetches.source_id,
+         fetches.source_url;
+
+INSERT INTO discovered_work (
+    source_id,
+    dataflow_id,
+    source_url,
+    upstream_revision,
+    identity_key,
+    status,
+    discovery_metadata,
+    discovered_at,
+    fetched_at,
+    handled_at,
+    updated_at
+)
+SELECT
+    source_id,
+    dataflow_id,
+    source_url,
+    'legacy:' || encode(artifact_id, 'hex'),
+    digest(
+        convert_to(
+            'legacy-v1' || E'\n' || source_id || E'\n' || dataflow_id ||
+            E'\n' || source_url || E'\n' || encode(artifact_id, 'hex'),
+            'UTF8'
+        ),
+        'sha256'
+    ),
+    'handled',
+    jsonb_build_object(
+        'legacy', TRUE,
+        'artifact_id', encode(artifact_id, 'hex')
+    ),
+    published_at,
+    published_at,
+    published_at,
+    published_at
+FROM migration_0014_legacy_units
+ON CONFLICT (identity_key) DO NOTHING;
+
+WITH legacy_work AS (
+    SELECT
+        migration_0014_legacy_units.*,
+        discovered_work.id AS discovered_work_id
+    FROM migration_0014_legacy_units
+    JOIN discovered_work ON discovered_work.identity_key = digest(
+        convert_to(
+            'legacy-v1' || E'\n' || migration_0014_legacy_units.source_id || E'\n' ||
+            migration_0014_legacy_units.dataflow_id || E'\n' ||
+            migration_0014_legacy_units.source_url || E'\n' ||
+            encode(migration_0014_legacy_units.artifact_id, 'hex'),
+            'UTF8'
+        ),
+        'sha256'
+    )
+)
+INSERT INTO ingestion_generations (
+    discovered_work_id,
+    artifact_fetch_id,
+    source_id,
+    dataflow_id,
+    parser_version,
+    transform_version,
+    status,
+    parsed_count,
+    loaded_count,
+    error_count,
+    actor,
+    reason,
+    created_at,
+    parsed_at,
+    published_at,
+    updated_at
+)
+SELECT
+    discovered_work_id,
+    artifact_fetch_id,
+    source_id,
+    dataflow_id,
+    'legacy-pre-durable-v1',
+    'legacy-pre-durable-v1',
+    'published',
+    observation_count,
+    observation_count,
+    0,
+    'migration-0014',
+    'backfill pre-durable observations',
+    published_at,
+    published_at,
+    published_at,
+    published_at
+FROM legacy_work
+ON CONFLICT (artifact_fetch_id, dataflow_id, parser_version, transform_version)
+DO NOTHING;
+
+UPDATE observations
+SET ingestion_generation_id = ingestion_generations.id
+FROM series, ingestion_generations, artifact_fetches
+WHERE series.series_key = observations.series_key
+  AND artifact_fetches.id = ingestion_generations.artifact_fetch_id
+  AND artifact_fetches.artifact_id = observations.source_artifact_id
+  AND ingestion_generations.dataflow_id = series.dataflow_id
+  AND ingestion_generations.parser_version = 'legacy-pre-durable-v1'
+  AND ingestion_generations.transform_version = 'legacy-pre-durable-v1';
+
+DO $$
+DECLARE
+    unmapped TEXT;
+BEGIN
+    SELECT string_agg(
+        encode(observations.source_artifact_id, 'hex') || ':' || series.dataflow_id,
+        ', '
+        ORDER BY encode(observations.source_artifact_id, 'hex'), series.dataflow_id
+    )
+    INTO unmapped
+    FROM observations
+    JOIN series ON series.series_key = observations.series_key
+    WHERE observations.ingestion_generation_id IS NULL;
+
+    IF unmapped IS NOT NULL THEN
+        RAISE EXCEPTION
+            'migration 0014 could not assign existing observations to legacy generations: %',
+            unmapped;
+    END IF;
+END
+$$;
+
+UPDATE artifact_loads
+SET ingestion_generation_id = ingestion_generations.id
+FROM ingestion_generations
+WHERE ingestion_generations.artifact_fetch_id = artifact_loads.artifact_fetch_id
+  AND ingestion_generations.dataflow_id = artifact_loads.dataflow_id
+  AND ingestion_generations.parser_version = 'legacy-pre-durable-v1'
+  AND ingestion_generations.transform_version = 'legacy-pre-durable-v1';
+
+ALTER TABLE observations SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'series_key',
+    timescaledb.compress_orderby = 'time DESC, revision_no DESC'
+);
+
+SELECT add_compression_policy(
+    'observations',
+    INTERVAL '7 days',
+    if_not_exists => TRUE
+);

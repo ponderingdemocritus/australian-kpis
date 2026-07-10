@@ -35,6 +35,10 @@ Do not connect code services to GitHub in Railway. The IaC graph creates them
 without a source. `deploy.yml` connects signed immutable GHCR digests after all
 release gates pass, so repository auto-deploy remains disabled.
 
+The web image uses a lockfile-only `pnpm fetch` layer before source is copied,
+so dependency downloads remain cache-stable when application code changes. Its
+Railway watch list mirrors every Docker build input for reproducible previews.
+
 ## Topology
 
 All Railway services run in `asia-southeast1-eqsg3a` without application sleep.

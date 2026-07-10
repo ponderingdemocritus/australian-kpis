@@ -83,9 +83,13 @@ async fn has_continuous_aggregate_policy(pool: &PgPool, name: &str) -> bool {
     let row: (bool,) = sqlx::query_as(
         "SELECT EXISTS (
             SELECT 1
-            FROM   timescaledb_information.jobs
-            WHERE  proc_name = 'policy_refresh_continuous_aggregate'
-            AND    hypertable_name = $1
+            FROM timescaledb_information.jobs AS jobs
+            JOIN timescaledb_information.continuous_aggregates AS aggregates
+              ON aggregates.materialization_hypertable_schema = jobs.hypertable_schema
+             AND aggregates.materialization_hypertable_name = jobs.hypertable_name
+            WHERE jobs.proc_name = 'policy_refresh_continuous_aggregate'
+              AND aggregates.view_schema = 'public'
+              AND aggregates.view_name = $1
         )",
     )
     .bind(name)

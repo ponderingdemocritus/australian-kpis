@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from typing import TypedDict, cast
 
 
 ENDPOINT_BUDGETS_MS = {
@@ -25,30 +26,70 @@ DEGRADATION_ENDPOINTS = [
     "aps-history",
 ]
 
-
-def load(path: Path) -> dict:
-    return json.loads(path.read_text())
+JsonObject = dict[str, object]
 
 
-def metric(summary: dict, name: str) -> dict:
-    try:
-        return summary["metrics"][name]
-    except KeyError as error:
-        raise ValueError(f"k6 summary is missing metric `{name}`") from error
+class Check(TypedDict):
+    name: str
+    measured: object
+    budget: object
+    passed: bool
 
 
-def p95(summary: dict, endpoint: str) -> float:
-    values = metric(summary, f"http_req_duration{{endpoint:{endpoint}}}")["values"]
-    return float(values["p(95)"])
+def require_object(value: object, context: str) -> JsonObject:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be a JSON object")
+    return cast(JsonObject, value)
 
 
-def thresholds_pass(summary: dict) -> bool:
-    for details in summary.get("metrics", {}).values():
-        for result in details.get("thresholds", {}).values():
-            passed = result.get("ok") if isinstance(result, dict) else result
+def load(path: Path) -> JsonObject:
+    value: object = json.loads(path.read_text())
+    return require_object(value, str(path))
+
+
+def metric(summary: JsonObject, name: str) -> JsonObject:
+    metrics = require_object(summary.get("metrics"), "k6 metrics")
+    if name not in metrics:
+        raise ValueError(f"k6 summary is missing metric `{name}`")
+    return require_object(metrics[name], f"k6 metric `{name}`")
+
+
+def metric_value(summary: JsonObject, name: str, value_name: str) -> float:
+    values = require_object(
+        metric(summary, name).get("values"), f"k6 metric `{name}` values"
+    )
+    value = values.get(value_name)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(f"k6 metric `{name}` value `{value_name}` must be numeric")
+    return float(value)
+
+
+def p95(summary: JsonObject, endpoint: str) -> float:
+    return metric_value(summary, f"http_req_duration{{endpoint:{endpoint}}}", "p(95)")
+
+
+def thresholds_pass(summary: JsonObject) -> bool:
+    metrics = require_object(summary.get("metrics"), "k6 metrics")
+    for raw_details in metrics.values():
+        details = require_object(raw_details, "k6 metric")
+        raw_thresholds = details.get("thresholds", {})
+        thresholds = require_object(raw_thresholds, "k6 thresholds")
+        for result in thresholds.values():
+            passed = (
+                require_object(result, "k6 threshold result").get("ok")
+                if isinstance(result, dict)
+                else result
+            )
             if passed is not True:
                 return False
     return True
+
+
+def numeric_field(document: JsonObject, name: str) -> float:
+    value = document.get(name)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(f"JSON field `{name}` must be numeric")
+    return float(value)
 
 
 def extract_peak_heap(path: Path) -> int:
@@ -81,7 +122,7 @@ def main() -> None:
     current = load(args.current)
     baseline = load(args.baseline)
     seed = load(args.seed)
-    checks: list[dict] = []
+    checks: list[Check] = []
 
     def add(name: str, measured: object, budget: object, passed: bool) -> None:
         checks.append(
@@ -89,18 +130,18 @@ def main() -> None:
         )
 
     add("k6 thresholds", thresholds_pass(current), True, thresholds_pass(current))
-    endpoint_values = {}
+    endpoint_values: dict[str, float] = {}
     for endpoint, budget in ENDPOINT_BUDGETS_MS.items():
         measured = p95(current, endpoint)
         endpoint_values[endpoint] = measured
         add(f"{endpoint} p95", measured, f"< {budget} ms", measured < budget)
 
-    server_error = float(metric(current, "server_error_rate")["values"]["rate"])
-    dropped = float(metric(current, "dropped_iterations")["values"]["count"])
+    server_error = metric_value(current, "server_error_rate", "rate")
+    dropped = metric_value(current, "dropped_iterations", "count")
     add("server error rate", server_error, "< 0.001", server_error < 0.001)
     add("dropped iterations", dropped, "0", dropped == 0)
 
-    degradation = {}
+    degradation: dict[str, float] = {}
     for endpoint in DEGRADATION_ENDPOINTS:
         paused = p95(baseline, endpoint)
         concurrent = endpoint_values[endpoint]
@@ -115,23 +156,56 @@ def main() -> None:
         "< 0.80",
         0 <= args.pool_utilization < 0.80,
     )
-    add("concurrent ingestion jobs", args.ingestion_jobs, "> 0", args.ingestion_jobs > 0)
-    add("catalog dataflows", seed.get("catalog_dataflows"), 100, seed.get("catalog_dataflows") == 100)
-    add("launch dataflows", seed.get("launch_dataflows"), 20, seed.get("launch_dataflows") == 20)
+    add(
+        "concurrent ingestion jobs", args.ingestion_jobs, "> 0", args.ingestion_jobs > 0
+    )
+    catalog_dataflows = numeric_field(seed, "catalog_dataflows")
+    launch_dataflows = numeric_field(seed, "launch_dataflows")
+    actual_observations = numeric_field(seed, "actual_observations")
+    revision_observations = numeric_field(seed, "revision_observations")
+    aemo_five_minute_rows = numeric_field(seed, "aemo_five_minute_rows")
+    chunks_compressed = numeric_field(seed, "chunks_compressed")
+    add("catalog dataflows", catalog_dataflows, 100, catalog_dataflows == 100)
+    add("launch dataflows", launch_dataflows, 20, launch_dataflows == 20)
     add(
         "seed observations",
-        seed.get("actual_observations"),
+        actual_observations,
         50_000_000,
-        seed.get("actual_observations") == 50_000_000,
+        actual_observations == 50_000_000,
     )
-    add("seed revisions", seed.get("revision_observations"), "> 0", seed.get("revision_observations", 0) > 0)
-    add("five-minute AEMO rows", seed.get("aemo_five_minute_rows"), "> 0", seed.get("aemo_five_minute_rows", 0) > 0)
-    add("compressed chunks", seed.get("chunks_compressed"), "> 0", seed.get("chunks_compressed", 0) > 0)
+    add(
+        "seed revisions",
+        revision_observations,
+        "> 0",
+        revision_observations > 0,
+    )
+    add(
+        "five-minute AEMO rows",
+        aemo_five_minute_rows,
+        "> 0",
+        aemo_five_minute_rows > 0,
+    )
+    add(
+        "compressed chunks",
+        chunks_compressed,
+        "> 0",
+        chunks_compressed > 0,
+    )
 
     peak_heap = extract_peak_heap(args.parquet_heap_log)
     partition_elapsed_ms = extract_scale_elapsed(args.parquet_time_log)
-    add("1M-row Parquet peak heap", peak_heap, "< 104857600 bytes", peak_heap < 100 * 1024 * 1024)
-    add("10x1M offline Parquet", partition_elapsed_ms, "< 30000 ms", partition_elapsed_ms < 30_000)
+    add(
+        "1M-row Parquet peak heap",
+        peak_heap,
+        "< 104857600 bytes",
+        peak_heap < 100 * 1024 * 1024,
+    )
+    add(
+        "10x1M offline Parquet",
+        partition_elapsed_ms,
+        "< 30000 ms",
+        partition_elapsed_ms < 30_000,
+    )
 
     status = "passed" if all(check["passed"] for check in checks) else "failed"
     report = {

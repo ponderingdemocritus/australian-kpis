@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf, process::Command, time::SystemTime};
 
 use assert_cmd::cargo::cargo_bin;
 use au_kpis_config::DatabaseConfig;
-use au_kpis_db::{connect, migrate};
+use au_kpis_db::{GenerationStatus, connect, migrate, transition_ingestion_generation};
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_queue::{ApalisPgQueue, CronSchedule, Job, Queue};
 use au_kpis_testing::{minio::start_minio, timescale::start_timescale};
@@ -155,6 +155,59 @@ async fn operator_commands_are_audited_and_preserve_durable_state() {
     assert_eq!(inspected["status"], "pending_load");
     assert_eq!(inspected["artifact_id"], loaded["artifact_id"]);
 
+    transition_ingestion_generation(
+        &pool,
+        generation_id.parse().unwrap(),
+        GenerationStatus::PendingLoad,
+        GenerationStatus::Loading,
+    )
+    .await
+    .expect("begin synthetic publication");
+    transition_ingestion_generation(
+        &pool,
+        generation_id.parse().unwrap(),
+        GenerationStatus::Loading,
+        GenerationStatus::Published,
+    )
+    .await
+    .expect("complete synthetic publication");
+    let repeated = run(command(postgres.url(), &minio).args([
+        "manual-input",
+        "load",
+        "--file",
+        input.to_str().unwrap(),
+        "--dataflow",
+        "apra.super_asset_allocation",
+        "--source-url",
+        "https://apra.example.test/reviewed-super.xlsx",
+        "--license",
+        "Creative Commons Attribution 3.0 Australia Licence",
+        "--retrieved-at",
+        "2026-07-01",
+        "--reviewer-role",
+        "product-methodology",
+        "--reviewed-at",
+        "2026-07-02",
+        "--evidence-notes",
+        "Category mapping approved in methodology review MR-12.",
+        "--actor",
+        "methodology-reviewer@example.test",
+        "--reason",
+        "load reviewed launch blocker",
+    ]));
+    assert_eq!(repeated["generation_id"], loaded["generation_id"]);
+    assert_eq!(repeated["status"], "published");
+    assert!(repeated["queue_job_id"].is_null());
+    let load_jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM queue_jobs
+         WHERE payload #>> '{kind,generation_id}' = $1 AND stage = 'load'",
+    )
+    .bind(generation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count idempotent manual load jobs");
+    assert_eq!(load_jobs, 1);
+
     let reparsed = run(command(postgres.url(), &minio).args([
         "artifact",
         "reparse",
@@ -192,6 +245,7 @@ async fn operator_commands_are_audited_and_preserve_durable_state() {
             "source.pause",
             "source.resume",
             "queue.retry_dlq",
+            "manual_input.load",
             "manual_input.load",
             "artifact.reparse",
         ]
