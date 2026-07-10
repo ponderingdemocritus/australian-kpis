@@ -226,7 +226,7 @@ AND EXISTS (
     WHERE observations.source_artifact_id = artifacts.id
 );
 
-CREATE TEMPORARY TABLE migration_0014_legacy_units ON COMMIT DROP AS
+CREATE TEMPORARY TABLE migration_0014_legacy_units ON COMMIT PRESERVE ROWS AS
 SELECT
     observations.source_artifact_id AS artifact_id,
     series.dataflow_id,
