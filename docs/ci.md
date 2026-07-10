@@ -15,6 +15,11 @@ the single `CI OK` status check.
 - Rust coverage with line and branch thresholds plus advisory Codecov upload
 - Snapshot checks with `cargo insta`
 - OpenAPI drift and `oasdiff breaking` checks against the base branch document
+
+The unreleased production-v1 correction set is enumerated exactly in
+`tools/ci/openapi-production-v1-prefreeze.err-ignore`, as permitted by the
+production-v1 release contract. Remove that file and its workflow flag at API
+freeze; it is not a general exemption for later `/v1` breaking changes.
 - Schemathesis contract checks against the docker-compose API stack
 - Supply-chain and secret scans: `cargo deny`, `cargo audit`,
   `pnpm audit --audit-level critical`, and gitleaks over full history

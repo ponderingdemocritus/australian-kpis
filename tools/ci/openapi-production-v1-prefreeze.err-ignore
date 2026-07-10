@@ -1,0 +1,10 @@
+GET /v1/scorecards/aps/history the response property `items/score` became nullable for the status `200`
+GET /v1/scorecards/aps/history the response property `items/score` became optional for the status `200`
+GET /v1/scorecards/aps/history the response property `items/zone` became optional for the status `200`
+GET /v1/scorecards/aps/history response property `items/zone` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+GET /v1/scorecards/aps/history removed the required property `items/contributions` from the response with the `200` status
+GET /v1/scorecards/aps/latest the response property `score` became nullable for the status `200`
+GET /v1/scorecards/aps/latest the response property `score` became optional for the status `200`
+GET /v1/scorecards/aps/latest the response property `zone` became optional for the status `200`
+GET /v1/scorecards/aps/latest response property `zone` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+POST /v1/subscriptions removed the success response with the status `201`
