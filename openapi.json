@@ -60,7 +60,9 @@
     },
     "/v1/dataflows": {
       "get": {
-        "tags": ["dataflows"],
+        "tags": [
+          "dataflows"
+        ],
         "summary": "`GET /v1/dataflows`.",
         "operationId": "listDataflows",
         "parameters": [
@@ -131,7 +133,9 @@
     },
     "/v1/dataflows/{id}": {
       "get": {
-        "tags": ["dataflows"],
+        "tags": [
+          "dataflows"
+        ],
         "summary": "`GET /v1/dataflows/{id}`.",
         "operationId": "getDataflow",
         "parameters": [
@@ -201,7 +205,9 @@
     },
     "/v1/dataflows/{id}/codelists/{dim}": {
       "get": {
-        "tags": ["dataflows"],
+        "tags": [
+          "dataflows"
+        ],
         "summary": "`GET /v1/dataflows/{id}/codelists/{dim}`.",
         "operationId": "getDataflowCodelist",
         "parameters": [
@@ -311,7 +317,9 @@
     },
     "/v1/observations": {
       "get": {
-        "tags": ["observations"],
+        "tags": [
+          "observations"
+        ],
         "summary": "`GET /v1/observations`.",
         "operationId": "listObservations",
         "parameters": [
@@ -562,7 +570,9 @@
     },
     "/v1/scorecards/aps/config": {
       "get": {
-        "tags": ["scorecards"],
+        "tags": [
+          "scorecards"
+        ],
         "summary": "`GET /v1/scorecards/aps/config`.",
         "operationId": "getApsScorecardConfig",
         "parameters": [
@@ -572,7 +582,10 @@
             "description": "Config version; omitted selects the current version.",
             "required": false,
             "schema": {
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -633,7 +646,9 @@
     },
     "/v1/scorecards/aps/history": {
       "get": {
-        "tags": ["scorecards"],
+        "tags": [
+          "scorecards"
+        ],
         "summary": "`GET /v1/scorecards/aps/history`.",
         "operationId": "listApsScorecardHistory",
         "parameters": [
@@ -643,7 +658,10 @@
             "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form.",
             "required": false,
             "schema": {
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -652,7 +670,10 @@
             "description": "Inclusive upper snapshot date in `YYYY-MM-DD` form.",
             "required": false,
             "schema": {
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -670,7 +691,10 @@
             "description": "Maximum points returned, from 1 through 1,000.",
             "required": false,
             "schema": {
-              "type": ["integer", "null"],
+              "type": [
+                "integer",
+                "null"
+              ],
               "format": "int32",
               "minimum": 0
             }
@@ -746,7 +770,9 @@
     },
     "/v1/scorecards/aps/latest": {
       "get": {
-        "tags": ["scorecards"],
+        "tags": [
+          "scorecards"
+        ],
         "summary": "`GET /v1/scorecards/aps/latest`.",
         "operationId": "getApsScorecardLatest",
         "responses": {
@@ -806,7 +832,9 @@
     },
     "/v1/scorecards/aps/snapshots/{id}": {
       "get": {
-        "tags": ["scorecards"],
+        "tags": [
+          "scorecards"
+        ],
         "summary": "`GET /v1/scorecards/aps/snapshots/{id}`.",
         "operationId": "getApsScorecardSnapshot",
         "parameters": [
@@ -847,7 +875,9 @@
     },
     "/v1/search": {
       "get": {
-        "tags": ["search"],
+        "tags": [
+          "search"
+        ],
         "summary": "`GET /v1/search`.",
         "operationId": "searchCatalog",
         "parameters": [
@@ -918,7 +948,9 @@
     },
     "/v1/series/{dataflow}/{series_key}": {
       "get": {
-        "tags": ["series"],
+        "tags": [
+          "series"
+        ],
         "summary": "`GET /v1/series/{dataflow}/{series_key}`.",
         "operationId": "getSeries",
         "parameters": [
@@ -992,7 +1024,9 @@
     },
     "/v1/sources": {
       "get": {
-        "tags": ["sources"],
+        "tags": [
+          "sources"
+        ],
         "summary": "`GET /v1/sources`.",
         "operationId": "listSources",
         "responses": {
@@ -1029,7 +1063,9 @@
     },
     "/v1/sources/{source_id}": {
       "get": {
-        "tags": ["sources"],
+        "tags": [
+          "sources"
+        ],
         "summary": "`GET /v1/sources/{source_id}`.",
         "operationId": "getSource",
         "parameters": [
@@ -1089,7 +1125,9 @@
     },
     "/v1/subscriptions": {
       "get": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`GET /v1/subscriptions`.",
         "operationId": "listSubscriptions",
         "responses": {
@@ -1141,7 +1179,9 @@
         ]
       },
       "post": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`POST /v1/subscriptions`.",
         "operationId": "createSubscription",
         "requestBody": {
@@ -1225,7 +1265,9 @@
     },
     "/v1/subscriptions/{id}": {
       "get": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`GET /v1/subscriptions/{id}`.",
         "operationId": "getSubscription",
         "parameters": [
@@ -1298,7 +1340,9 @@
         ]
       },
       "delete": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`DELETE /v1/subscriptions/{id}`.",
         "operationId": "revokeSubscription",
         "parameters": [
@@ -1366,7 +1410,9 @@
     },
     "/v1/subscriptions/{id}/rotate-secret": {
       "post": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`POST /v1/subscriptions/{id}/rotate-secret`.",
         "operationId": "rotateSubscriptionSecret",
         "parameters": [
@@ -1441,7 +1487,9 @@
     },
     "/v1/subscriptions/{id}/verify": {
       "post": {
-        "tags": ["subscriptions"],
+        "tags": [
+          "subscriptions"
+        ],
         "summary": "`POST /v1/subscriptions/{id}/verify`.",
         "operationId": "verifySubscription",
         "parameters": [
@@ -1594,7 +1642,10 @@
             "minimum": 0
           },
           "score": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "Numeric APS value only when coverage gates pass."
           },
@@ -1615,7 +1666,10 @@
             "description": "Axis-level values and coverage."
           },
           "supersedes_snapshot_id": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
             "description": "Prior snapshot revision superseded by this correction."
           },
@@ -1646,19 +1700,29 @@
       "Axis": {
         "type": "string",
         "description": "Scorecard axis used by APS v1.",
-        "enum": ["throughput", "orientation"]
+        "enum": [
+          "throughput",
+          "orientation"
+        ]
       },
       "Code": {
         "type": "object",
         "description": "A single code within a codelist (e.g. `VIC` → \"Victoria\").",
-        "required": ["id", "codelist_id", "name"],
+        "required": [
+          "id",
+          "codelist_id",
+          "name"
+        ],
         "properties": {
           "codelist_id": {
             "$ref": "#/components/schemas/CodelistId",
             "description": "The codelist this code belongs to. Denormalised here so a `Code`\nemitted from the API is self-contained."
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/CodeId"
@@ -1686,7 +1750,11 @@
       "Codelist": {
         "type": "object",
         "description": "A reusable vocabulary of codes attached to dimensions.",
-        "required": ["id", "name", "codes"],
+        "required": [
+          "id",
+          "name",
+          "codes"
+        ],
         "properties": {
           "codes": {
             "type": "array",
@@ -1695,7 +1763,10 @@
             }
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/CodelistId"
@@ -1712,7 +1783,12 @@
       "ComponentScore": {
         "type": "object",
         "description": "Component-level score inside a sub-index.",
-        "required": ["component", "score", "weight", "coverage_pct"],
+        "required": [
+          "component",
+          "score",
+          "weight",
+          "coverage_pct"
+        ],
         "properties": {
           "component": {
             "type": "string",
@@ -1738,12 +1814,19 @@
       "Confidence": {
         "type": "string",
         "description": "Confidence label exposed for configs, contributions, and snapshots.",
-        "enum": ["high", "medium", "low"]
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ]
       },
       "ConfidenceBand": {
         "type": "object",
         "description": "Lower and upper score bounds.",
-        "required": ["low", "high"],
+        "required": [
+          "low",
+          "high"
+        ],
         "properties": {
           "high": {
             "type": "number",
@@ -1772,7 +1855,10 @@
       "CoverageThresholds": {
         "type": "object",
         "description": "Coverage gates required for a numeric APS publication.",
-        "required": ["overall_pct", "axis_pct"],
+        "required": [
+          "overall_pct",
+          "axis_pct"
+        ],
         "properties": {
           "axis_pct": {
             "type": "number",
@@ -1789,7 +1875,9 @@
       "CreateSubscriptionRequest": {
         "type": "object",
         "description": "Request body for `POST /v1/subscriptions`.",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
           "dataflow_ids": {
             "type": "array",
@@ -1807,7 +1895,10 @@
       "CreateSubscriptionResponse": {
         "type": "object",
         "description": "Response body for `POST /v1/subscriptions`.",
-        "required": ["subscription", "signing_secret"],
+        "required": [
+          "subscription",
+          "signing_secret"
+        ],
         "properties": {
           "signing_secret": {
             "type": "string",
@@ -1839,7 +1930,10 @@
             "description": "Required attribution string shown to end-users alongside derived charts."
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "dimensions": {
             "type": "array",
@@ -1879,7 +1973,11 @@
       "DataflowCodelistResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/dataflows/{id}/codelists/{dim}`.",
-        "required": ["dataflow_id", "dimension_id", "codelist"],
+        "required": [
+          "dataflow_id",
+          "dimension_id",
+          "codelist"
+        ],
         "properties": {
           "codelist": {
             "$ref": "#/components/schemas/Codelist",
@@ -1898,7 +1996,10 @@
       "DataflowDetailResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/dataflows/{id}`.",
-        "required": ["dataflow", "dimensions"],
+        "required": [
+          "dataflow",
+          "dimensions"
+        ],
         "properties": {
           "dataflow": {
             "$ref": "#/components/schemas/Dataflow",
@@ -1948,7 +2049,9 @@
       "DataflowsResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/dataflows`.",
-        "required": ["dataflows"],
+        "required": [
+          "dataflows"
+        ],
         "properties": {
           "dataflows": {
             "type": "array",
@@ -1962,10 +2065,15 @@
       "DependencyHealth": {
         "type": "object",
         "description": "One dependency status in the production readiness response.",
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "properties": {
           "latency_ms": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
             "description": "Probe latency in whole milliseconds when a probe was attempted.",
             "minimum": 0
@@ -1979,13 +2087,21 @@
       "Dimension": {
         "type": "object",
         "description": "A single dimension within a dataflow. Binds a dimension id to a codelist\nthat enumerates the permitted values.",
-        "required": ["id", "name", "codelist_id", "position"],
+        "required": [
+          "id",
+          "name",
+          "codelist_id",
+          "position"
+        ],
         "properties": {
           "codelist_id": {
             "$ref": "#/components/schemas/CodelistId"
           },
           "description": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/DimensionId"
@@ -2008,17 +2124,31 @@
       "Direction": {
         "type": "string",
         "description": "Direction used to normalize raw indicator values.",
-        "enum": ["higher_is_better", "lower_is_better"]
+        "enum": [
+          "higher_is_better",
+          "lower_is_better"
+        ]
       },
       "Frequency": {
         "type": "string",
         "description": "Cadence at which a dataflow publishes new observations. Informational —\nused by the scheduler to pick discovery intervals and by the SLO alerting\nrule `dataflow-no-new-observations`.",
-        "enum": ["daily", "weekly", "monthly", "quarterly", "annual", "irregular"]
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly",
+          "quarterly",
+          "annual",
+          "irregular"
+        ]
       },
       "HealthDependencies": {
         "type": "object",
         "description": "Dependency collection in the production readiness response.",
-        "required": ["database", "redis", "telemetry"],
+        "required": [
+          "database",
+          "redis",
+          "telemetry"
+        ],
         "properties": {
           "database": {
             "$ref": "#/components/schemas/DependencyHealth",
@@ -2037,7 +2167,9 @@
       "HealthResponse": {
         "type": "object",
         "description": "Health endpoint response.",
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "properties": {
           "status": {
             "type": "string",
@@ -2048,7 +2180,10 @@
       "HistoryView": {
         "type": "string",
         "description": "Revision view used by APS history reads.",
-        "enum": ["as_published", "latest"]
+        "enum": [
+          "as_published",
+          "latest"
+        ]
       },
       "IndicatorConfig": {
         "type": "object",
@@ -2216,7 +2351,10 @@
             "description": "Indicator id."
           },
           "ingestion_generation_id": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Ingestion generation that published the resolved observation."
           },
           "label": {
@@ -2224,7 +2362,10 @@
             "description": "Indicator label."
           },
           "latest_period": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Latest resolved period, when available."
           },
           "license": {
@@ -2236,25 +2377,40 @@
             "description": "Source measure id."
           },
           "normalized_value": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "Normalized value in the axis scale, when scored."
           },
           "notes": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional notes."
           },
           "raw_value": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "Raw observation value, when resolved."
           },
           "series_key": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Resolved series key, when available."
           },
           "source_artifact_id": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Resolved source artifact id, when available."
           },
           "source_dataflow_id": {
@@ -2280,24 +2436,34 @@
         "oneOf": [
           {
             "type": "string",
-            "enum": ["CC-BY-4.0"]
+            "enum": [
+              "CC-BY-4.0"
+            ]
           },
           {
             "type": "string",
-            "enum": ["CC-BY-ND-4.0"]
+            "enum": [
+              "CC-BY-ND-4.0"
+            ]
           },
           {
             "type": "string",
-            "enum": ["CC-BY-SA-4.0"]
+            "enum": [
+              "CC-BY-SA-4.0"
+            ]
           },
           {
             "type": "string",
-            "enum": ["public-domain"]
+            "enum": [
+              "public-domain"
+            ]
           },
           {
             "type": "object",
             "description": "Escape hatch for licenses not yet enumerated. Carries the SPDX-style id.",
-            "required": ["other"],
+            "required": [
+              "other"
+            ],
             "properties": {
               "other": {
                 "type": "string",
@@ -2311,7 +2477,9 @@
       "ListSubscriptionsResponse": {
         "type": "object",
         "description": "Collection response for subscriptions owned by one API key.",
-        "required": ["subscriptions"],
+        "required": [
+          "subscriptions"
+        ],
         "properties": {
           "subscriptions": {
             "type": "array",
@@ -2329,7 +2497,10 @@
       "Normalization": {
         "type": "object",
         "description": "Linear normalization references for one indicator.",
-        "required": ["worst", "best"],
+        "required": [
+          "worst",
+          "best"
+        ],
         "properties": {
           "best": {
             "type": "number",
@@ -2394,7 +2565,10 @@
             "$ref": "#/components/schemas/TimePrecision"
           },
           "value": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "`None` when `status = Missing`."
           }
@@ -2417,7 +2591,12 @@
       "ObservationsMetadata": {
         "type": "object",
         "description": "Attribution and licensing metadata that applies to an observations page.",
-        "required": ["dataflow", "attribution", "license", "source_url"],
+        "required": [
+          "dataflow",
+          "attribution",
+          "license",
+          "source_url"
+        ],
         "properties": {
           "attribution": {
             "type": "string",
@@ -2440,7 +2619,11 @@
       "ObservationsResponse": {
         "type": "object",
         "description": "JSON response envelope for `/v1/observations`.",
-        "required": ["metadata", "observations", "pagination"],
+        "required": [
+          "metadata",
+          "observations",
+          "pagination"
+        ],
         "properties": {
           "metadata": {
             "$ref": "#/components/schemas/ObservationsMetadata",
@@ -2537,7 +2720,10 @@
             "description": "Unit for the series values."
           },
           "value": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "Numeric value; null when status is `missing`."
           }
@@ -2548,7 +2734,10 @@
         "description": "Cursor metadata for the current observations page.",
         "properties": {
           "next_cursor": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Opaque cursor for the next page, or null when the page is complete."
           }
         }
@@ -2556,14 +2745,24 @@
       "ProblemDetails": {
         "type": "object",
         "description": "RFC 7807 problem details body.",
-        "required": ["type", "title", "status"],
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
         "properties": {
           "detail": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Request-specific detail, if any."
           },
           "instance": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Resource-specific identifier, if any."
           },
           "status": {
@@ -2585,7 +2784,11 @@
       "Provenance": {
         "type": "object",
         "description": "Source and licensing metadata for a scorecard input.",
-        "required": ["source_url", "license", "attribution"],
+        "required": [
+          "source_url",
+          "license",
+          "attribution"
+        ],
         "properties": {
           "attribution": {
             "type": "string",
@@ -2596,19 +2799,31 @@
             "description": "License identifier or source-specific license note."
           },
           "notes": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional source or review notes."
           },
           "retrieved_at": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional retrieval date for curated/manual inputs."
           },
           "reviewed_at": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional review date for curated/manual inputs."
           },
           "reviewed_by": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional reviewer identifier for curated/manual inputs."
           },
           "source_url": {
@@ -2620,7 +2835,10 @@
       "PublicationState": {
         "type": "string",
         "description": "Snapshot publication result after applying coverage gates.",
-        "enum": ["published", "insufficient_coverage"]
+        "enum": [
+          "published",
+          "insufficient_coverage"
+        ]
       },
       "PublishedApsSnapshot": {
         "type": "object",
@@ -2697,7 +2915,10 @@
             "minimum": 0
           },
           "score": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "Numeric APS value only when coverage gates pass."
           },
@@ -2718,7 +2939,10 @@
             "description": "Axis-level values and coverage."
           },
           "supersedes_snapshot_id": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
             "description": "Prior snapshot revision superseded by this correction."
           },
@@ -2742,7 +2966,10 @@
       "RotateSubscriptionSecretResponse": {
         "type": "object",
         "description": "One-time secret returned by a rotation command.",
-        "required": ["subscription", "signing_secret"],
+        "required": [
+          "subscription",
+          "signing_secret"
+        ],
         "properties": {
           "signing_secret": {
             "type": "string",
@@ -2757,7 +2984,10 @@
       "RuntimeHealthResponse": {
         "type": "object",
         "description": "Production liveness/readiness response.",
-        "required": ["status", "version"],
+        "required": [
+          "status",
+          "version"
+        ],
         "properties": {
           "dependencies": {
             "oneOf": [
@@ -2783,7 +3013,11 @@
       "ScoreZone": {
         "type": "string",
         "description": "APS score zone.",
-        "enum": ["scarcity", "mixed", "abundance"]
+        "enum": [
+          "scarcity",
+          "mixed",
+          "abundance"
+        ]
       },
       "ScorecardConfig": {
         "type": "object",
@@ -2866,7 +3100,10 @@
         "description": "Query string selecting an immutable APS config version.",
         "properties": {
           "version": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Config version; omitted selects the current version."
           }
         }
@@ -2876,17 +3113,26 @@
         "description": "Query string for APS history snapshots.",
         "properties": {
           "limit": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
             "description": "Maximum points returned, from 1 through 1,000.",
             "minimum": 0
           },
           "since": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form."
           },
           "until": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Inclusive upper snapshot date in `YYYY-MM-DD` form."
           },
           "view": {
@@ -2951,7 +3197,10 @@
             "description": "Weight-aware coverage percentage."
           },
           "latest_period": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Latest period represented by resolved inputs."
           },
           "score": {
@@ -2983,10 +3232,15 @@
       "SearchQuery": {
         "type": "object",
         "description": "Query parameters for `GET /v1/search`.",
-        "required": ["q"],
+        "required": [
+          "q"
+        ],
         "properties": {
           "limit": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
             "description": "Maximum number of catalog results to return.",
             "minimum": 0
@@ -3000,7 +3254,10 @@
       "SearchResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/search`.",
-        "required": ["query", "results"],
+        "required": [
+          "query",
+          "results"
+        ],
         "properties": {
           "query": {
             "type": "string",
@@ -3018,7 +3275,13 @@
       "SearchResult": {
         "type": "object",
         "description": "A ranked catalog search result.",
-        "required": ["kind", "id", "name", "score", "dataflow_ids"],
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "score",
+          "dataflow_ids"
+        ],
         "properties": {
           "dataflow_ids": {
             "type": "array",
@@ -3028,7 +3291,10 @@
             "description": "Dataflows directly represented by this match."
           },
           "description": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional catalog description."
           },
           "id": {
@@ -3064,12 +3330,22 @@
       "SearchResultKind": {
         "type": "string",
         "description": "Catalog object types returned by search.",
-        "enum": ["dataflow", "measure"]
+        "enum": [
+          "dataflow",
+          "measure"
+        ]
       },
       "Series": {
         "type": "object",
         "description": "One time series within a dataflow. `dimensions` is the sorted bag of\n`(key, value)` pairs that, together with `dataflow_id` and `measure_id`,\nseeds `series_key`.",
-        "required": ["series_key", "dataflow_id", "measure_id", "dimensions", "unit", "active"],
+        "required": [
+          "series_key",
+          "dataflow_id",
+          "measure_id",
+          "dimensions",
+          "unit",
+          "active"
+        ],
         "properties": {
           "active": {
             "type": "boolean",
@@ -3090,11 +3366,17 @@
             }
           },
           "first_observed": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "last_observed": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "measure_id": {
@@ -3118,7 +3400,9 @@
       "SeriesLookupResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/series/{dataflow}/{series_key}`.",
-        "required": ["series"],
+        "required": [
+          "series"
+        ],
         "properties": {
           "latest_observation": {
             "oneOf": [
@@ -3151,7 +3435,12 @@
       "SeriesRevisionMetadata": {
         "type": "object",
         "description": "Revision details for the latest observation returned with a series lookup.",
-        "required": ["revision_no", "is_revision", "ingested_at", "source_artifact_id"],
+        "required": [
+          "revision_no",
+          "is_revision",
+          "ingested_at",
+          "source_artifact_id"
+        ],
         "properties": {
           "ingested_at": {
             "type": "string",
@@ -3205,7 +3494,10 @@
             "description": "Stable dataflow id."
           },
           "fixture_reference": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Repository-relative representative fixture or reviewed snapshot."
           },
           "freshness_policy": {
@@ -3228,7 +3520,10 @@
             "description": "Owning implementation area."
           },
           "owner_role": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Accountable production role, when assigned."
           },
           "request_policy": {
@@ -3277,7 +3572,10 @@
       "SourceCatalogEntry": {
         "type": "object",
         "description": "One source and its governed dataflows.",
-        "required": ["source_id", "dataflows"],
+        "required": [
+          "source_id",
+          "dataflows"
+        ],
         "properties": {
           "dataflows": {
             "type": "array",
@@ -3295,7 +3593,10 @@
       "SourceFreshnessPolicy": {
         "type": "object",
         "description": "Public source freshness policy.",
-        "required": ["soft_after_seconds", "hard_after_seconds"],
+        "required": [
+          "soft_after_seconds",
+          "hard_after_seconds"
+        ],
         "properties": {
           "hard_after_seconds": {
             "type": "integer",
@@ -3318,7 +3619,11 @@
       "SourceRequestPolicy": {
         "type": "object",
         "description": "Public upstream request policy.",
-        "required": ["timeout_seconds", "max_requests_per_minute", "burst"],
+        "required": [
+          "timeout_seconds",
+          "max_requests_per_minute",
+          "burst"
+        ],
         "properties": {
           "burst": {
             "type": "integer",
@@ -3343,7 +3648,10 @@
       "SourceSchedule": {
         "type": "object",
         "description": "Public source discovery schedule.",
-        "required": ["cron", "timezone"],
+        "required": [
+          "cron",
+          "timezone"
+        ],
         "properties": {
           "cron": {
             "type": "string",
@@ -3358,7 +3666,11 @@
       "SourceValidationPolicy": {
         "type": "object",
         "description": "Public source validation policy.",
-        "required": ["range_rule", "max_series_cardinality", "allow_partial_rows"],
+        "required": [
+          "range_rule",
+          "max_series_cardinality",
+          "allow_partial_rows"
+        ],
         "properties": {
           "allow_partial_rows": {
             "type": "boolean",
@@ -3379,7 +3691,9 @@
       "SourcesResponse": {
         "type": "object",
         "description": "Response envelope for `GET /v1/sources`.",
-        "required": ["sources"],
+        "required": [
+          "sources"
+        ],
         "properties": {
           "sources": {
             "type": "array",
@@ -3393,7 +3707,14 @@
       "SubIndexScore": {
         "type": "object",
         "description": "Axis-level sub-index score.",
-        "required": ["axis", "score", "coverage_pct", "weight", "confidence_band", "components"],
+        "required": [
+          "axis",
+          "score",
+          "coverage_pct",
+          "weight",
+          "confidence_band",
+          "components"
+        ],
         "properties": {
           "axis": {
             "$ref": "#/components/schemas/Axis",
@@ -3430,7 +3751,14 @@
       "SubscriptionDetails": {
         "type": "object",
         "description": "Created webhook subscription details.",
-        "required": ["id", "url", "dataflow_ids", "status", "created_at", "updated_at"],
+        "required": [
+          "id",
+          "url",
+          "dataflow_ids",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
         "properties": {
           "created_at": {
             "type": "string",
@@ -3463,7 +3791,10 @@
             "description": "Delivery target URL."
           },
           "verified_at": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
             "description": "UTC endpoint verification time."
           }
@@ -3472,17 +3803,32 @@
       "TimePrecision": {
         "type": "string",
         "description": "Temporal granularity of an observation's timestamp. Matches the SDMX\n`@FREQ` facet on a coarse scale.",
-        "enum": ["minute", "day", "week", "month", "quarter", "year"]
+        "enum": [
+          "minute",
+          "day",
+          "week",
+          "month",
+          "quarter",
+          "year"
+        ]
       },
       "Trend": {
         "type": "string",
         "description": "Trend arrow comparing the latest score to a prior comparable snapshot.",
-        "enum": ["up", "down", "flat", "unavailable"]
+        "enum": [
+          "up",
+          "down",
+          "flat",
+          "unavailable"
+        ]
       },
       "ZoneThresholds": {
         "type": "object",
         "description": "Inclusive upper bounds for the first two APS zones.",
-        "required": ["scarcity_max", "mixed_max"],
+        "required": [
+          "scarcity_max",
+          "mixed_max"
+        ],
         "properties": {
           "mixed_max": {
             "type": "number",
