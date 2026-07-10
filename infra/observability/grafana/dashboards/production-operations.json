@@ -1,0 +1,125 @@
+{
+  "uid": "au-kpis-production-operations",
+  "title": "Australian KPIs Production Operations",
+  "tags": ["au-kpis", "production", "operations"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Eligible API 5xx Ratio",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(au_kpis_http_requests_total{eligible=\"true\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(au_kpis_http_requests_total{eligible=\"true\"}[5m])), 1)", "legendFormat": "5xx ratio" }],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Route p95",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (route, le) (rate(au_kpis_http_request_duration_seconds_bucket{eligible=\"true\"}[5m])))", "legendFormat": "{{route}}" }],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "Edge Synthetics",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [{ "refId": "A", "expr": "probe_success{job=~\"au-kpis-(api|web)-production\"}", "legendFormat": "{{job}} {{probe}}" }],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 }
+    },
+    {
+      "id": 4,
+      "title": "DB Pool and Replication",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_db_pool_connections", "legendFormat": "pool {{state}}" },
+        { "refId": "B", "expr": "au_kpis_db_replication_lag_seconds", "legendFormat": "replication lag" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 }
+    },
+    {
+      "id": 5,
+      "title": "Redis and Admission",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_redis_up", "legendFormat": "redis up" },
+        { "refId": "B", "expr": "au_kpis_admission_available_permits", "legendFormat": "{{class}} permits" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 }
+    },
+    {
+      "id": 6,
+      "title": "Streams",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_stream_active", "legendFormat": "active {{format}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (format, le) (rate(au_kpis_stream_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{format}}" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 }
+    },
+    {
+      "id": 7,
+      "title": "Durable Queue",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_queue_depth", "legendFormat": "{{stage}} {{status}}" },
+        { "refId": "B", "expr": "au_kpis_queue_oldest_pending_age_seconds", "legendFormat": "oldest pending age" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 }
+    },
+    {
+      "id": 8,
+      "title": "Ingestion Freshness",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_ingestion_lag_seconds", "legendFormat": "{{dataflow}} lag" },
+        { "refId": "B", "expr": "au_kpis_ingestion_freshness_budget_seconds", "legendFormat": "{{dataflow}} budget" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 }
+    },
+    {
+      "id": 9,
+      "title": "APS Publication",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_aps_snapshot_age_seconds", "legendFormat": "snapshot age" },
+        { "refId": "B", "expr": "au_kpis_aps_coverage_percent", "legendFormat": "coverage %" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 }
+    },
+    {
+      "id": 10,
+      "title": "Webhook Delivery",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_webhook_deliveries", "legendFormat": "delivery {{status}}" },
+        { "refId": "B", "expr": "au_kpis_webhook_oldest_due_age_seconds", "legendFormat": "oldest due age" },
+        { "refId": "C", "expr": "au_kpis_webhook_subscriptions", "legendFormat": "subscription {{status}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 }
+    },
+    {
+      "id": 11,
+      "title": "Scheduler Leadership",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "au-kpis-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "au_kpis_scheduler_leader_active", "legendFormat": "{{service_instance_id}}" },
+        { "refId": "B", "expr": "rate(au_kpis_scheduler_discovery_jobs_emitted_total[5m])", "legendFormat": "discoveries/s" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 }
+    }
+  ]
+}

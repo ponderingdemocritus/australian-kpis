@@ -1,5 +1,6 @@
 //! Coverage report generation for local and production ingestion runs.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -13,6 +14,7 @@ pub(crate) enum CoverageStatus {
     CoverageGap,
     ManualPending,
     VisibleUnscored,
+    Stale,
 }
 
 impl CoverageStatus {
@@ -26,6 +28,7 @@ impl CoverageStatus {
             Self::CoverageGap => "coverage_gap",
             Self::ManualPending => "manual_pending",
             Self::VisibleUnscored => "visible_unscored",
+            Self::Stale => "stale",
         }
     }
 }
@@ -42,6 +45,9 @@ pub(crate) struct RawCoverageRow {
     pub(crate) parse_errors: i64,
     pub(crate) latest_load: Option<String>,
     pub(crate) expected_status: Option<CoverageStatus>,
+    pub(crate) governance_status: String,
+    pub(crate) launch_required: bool,
+    pub(crate) freshness_hard_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -57,6 +63,9 @@ pub(crate) struct CoverageDataflow {
     pub(crate) latest_load: Option<String>,
     pub(crate) status: CoverageStatus,
     pub(crate) status_reason: String,
+    pub(crate) governance_status: String,
+    pub(crate) launch_required: bool,
+    pub(crate) launch_ready: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -70,6 +79,10 @@ pub(crate) struct CoverageTotals {
     pub(crate) coverage_gap: usize,
     pub(crate) manual_pending: usize,
     pub(crate) visible_unscored: usize,
+    pub(crate) stale: usize,
+    pub(crate) launch_required: usize,
+    pub(crate) launch_ready: usize,
+    pub(crate) launch_blockers: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,15 +92,40 @@ pub(crate) struct CoverageReport {
 }
 
 pub(crate) fn build_report(rows: Vec<RawCoverageRow>) -> CoverageReport {
+    build_report_at(rows, Utc::now())
+}
+
+fn build_report_at(rows: Vec<RawCoverageRow>, now: DateTime<Utc>) -> CoverageReport {
     let dataflows = rows
         .into_iter()
         .map(|row| {
-            let (status, status_reason) = classify_status(
+            let (mut status, mut status_reason) = classify_status(
                 row.artifact_count,
                 row.observations_loaded,
                 row.parse_errors,
                 row.expected_status,
             );
+            let fresh = row.freshness_hard_seconds.is_none_or(|hard_seconds| {
+                row.latest_load
+                    .as_deref()
+                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                    .is_some_and(|latest| {
+                        now.signed_duration_since(latest.with_timezone(&Utc))
+                            <= chrono::Duration::seconds(
+                                i64::try_from(hard_seconds).unwrap_or(i64::MAX),
+                            )
+                    })
+            });
+            if row.launch_required && status == CoverageStatus::Loaded && !fresh {
+                status = CoverageStatus::Stale;
+                status_reason = match (&row.latest_load, row.freshness_hard_seconds) {
+                    (Some(latest), Some(seconds)) => format!(
+                        "latest load at {latest} exceeds the {seconds}-second hard freshness limit"
+                    ),
+                    _ => "no timestamp is available to prove launch freshness".to_string(),
+                };
+            }
+            let launch_ready = row.launch_required && status == CoverageStatus::Loaded;
             CoverageDataflow {
                 source_id: row.source_id,
                 dataflow_id: row.dataflow_id,
@@ -100,6 +138,9 @@ pub(crate) fn build_report(rows: Vec<RawCoverageRow>) -> CoverageReport {
                 latest_load: row.latest_load,
                 status,
                 status_reason,
+                governance_status: row.governance_status,
+                launch_required: row.launch_required,
+                launch_ready,
             }
         })
         .collect::<Vec<_>>();
@@ -118,6 +159,15 @@ pub(crate) fn build_report(rows: Vec<RawCoverageRow>) -> CoverageReport {
                 CoverageStatus::CoverageGap => totals.coverage_gap += 1,
                 CoverageStatus::ManualPending => totals.manual_pending += 1,
                 CoverageStatus::VisibleUnscored => totals.visible_unscored += 1,
+                CoverageStatus::Stale => totals.stale += 1,
+            }
+            if dataflow.launch_required {
+                totals.launch_required += 1;
+                if dataflow.launch_ready {
+                    totals.launch_ready += 1;
+                } else {
+                    totals.launch_blockers += 1;
+                }
             }
             totals
         },
@@ -146,19 +196,26 @@ pub(crate) fn render_markdown(report: &CoverageReport) -> String {
         report.totals.manual_pending
     ));
     markdown.push_str(&format!(
-        "| Visible unscored | {} |\n\n",
+        "| Visible unscored | {} |\n",
         report.totals.visible_unscored
     ));
+    markdown.push_str(&format!("| Stale | {} |\n", report.totals.stale));
+    markdown.push_str(&format!(
+        "| Launch required | {} |\n| Launch ready | {} |\n| Launch blockers | {} |\n\n",
+        report.totals.launch_required, report.totals.launch_ready, report.totals.launch_blockers
+    ));
     markdown.push_str(
-        "| Dataflow | Source | Status | Artifacts | Loaded rows | Parse errors | Reason |\n\
-         |---|---|---|---:|---:|---:|---|\n",
+        "| Dataflow | Source | Governance | Status | Launch required | Artifacts | Loaded rows | Parse errors | Reason |\n\
+         |---|---|---|---|---:|---:|---:|---:|---|\n",
     );
     for dataflow in &report.dataflows {
         markdown.push_str(&format!(
-            "| `{}` | `{}` | `{}` | {} | {} | {} | {} |\n",
+            "| `{}` | `{}` | `{}` | `{}` | {} | {} | {} | {} | {} |\n",
             dataflow.dataflow_id,
             dataflow.source_id,
+            dataflow.governance_status,
             dataflow.status.as_str(),
+            dataflow.launch_required,
             dataflow.artifact_count,
             dataflow.observations_loaded,
             dataflow.parse_errors,
@@ -308,13 +365,39 @@ mod tests {
         );
 
         let markdown = render_markdown(&report);
-        assert!(markdown.contains("| `abs.cpi` | `abs` | `loaded` | 1 | 100 | 0 |"));
         assert!(
-            markdown.contains("| `apra.super_asset_allocation` | `apra` | `failed` | 1 | 0 | 1 |")
+            markdown.contains(
+                "| `abs.cpi` | `abs` | `coverage_gap` | `loaded` | false | 1 | 100 | 0 |"
+            )
+        );
+        assert!(
+            markdown.contains("| `apra.super_asset_allocation` | `apra` | `coverage_gap` | `failed` | false | 1 | 0 | 1 |")
         );
         assert!(markdown.contains(
-            "| `nhsac.housing_accord_progress` | `nhsac` | `missing_expected` | 0 | 0 | 0 |"
+            "| `nhsac.housing_accord_progress` | `nhsac` | `coverage_gap` | `missing_expected` | false | 0 | 0 | 0 |"
         ));
+    }
+
+    #[test]
+    fn launch_readiness_requires_a_recent_load() {
+        let now = DateTime::parse_from_rfc3339("2026-07-10T12:00:00Z")
+            .expect("fixed now")
+            .with_timezone(&Utc);
+        let mut fresh = raw_row("aemo", "aemo.dispatch", 1, 10, 0);
+        fresh.governance_status = "active".to_string();
+        fresh.launch_required = true;
+        fresh.freshness_hard_seconds = Some(3_600);
+        fresh.latest_load = Some("2026-07-10T11:30:00Z".to_string());
+        let mut stale = fresh.clone();
+        stale.dataflow_id = "aemo.generation_mix".to_string();
+        stale.latest_load = Some("2026-07-10T10:00:00Z".to_string());
+
+        let report = build_report_at(vec![fresh, stale], now);
+
+        assert_eq!(report.totals.launch_required, 2);
+        assert_eq!(report.totals.launch_ready, 1);
+        assert_eq!(report.totals.launch_blockers, 1);
+        assert_eq!(report.dataflows[1].status, CoverageStatus::Stale);
     }
 
     fn raw_row(
@@ -335,6 +418,9 @@ mod tests {
             parse_errors,
             latest_load: None,
             expected_status: None,
+            governance_status: "coverage_gap".to_string(),
+            launch_required: false,
+            freshness_hard_seconds: None,
         }
     }
 }

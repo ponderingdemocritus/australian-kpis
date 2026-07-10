@@ -11,6 +11,7 @@ Cargo.lock.bak
 # Node / TS
 node_modules/
 .turbo/
+**/.terraform/
 dist/
 build/
 .next/

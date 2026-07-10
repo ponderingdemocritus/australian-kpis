@@ -17,11 +17,11 @@ use std::{
 
 use anyhow::Context;
 use au_kpis_config::load_ingestion;
-use au_kpis_db::{PgPool, connect as connect_db, migrate};
+use au_kpis_db::{PgPool, connect as connect_db};
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_queue::{ApalisPgQueue, CronSchedule, Job, Queue};
 use au_kpis_scheduler::data_quality::{
-    PagerDutyConfig, PagerDutyOutcome, default_data_quality_rules, notify_pagerduty,
+    PagerDutyConfig, PagerDutyOutcome, launch_data_quality_rules, notify_pagerduty,
     run_data_quality_checks,
 };
 use au_kpis_scheduler::source_location_audit::{
@@ -210,8 +210,6 @@ async fn main() -> anyhow::Result<()> {
     let db = connect_db(&config.database)
         .await
         .context("connect postgres database")?;
-    migrate(&db).await.context("apply database migrations")?;
-
     if let Command::DataQuality {
         report_path,
         pagerduty_routing_key,
@@ -289,7 +287,8 @@ async fn run_data_quality_command(
     pagerduty_routing_key: Option<String>,
     pagerduty_events_url: String,
 ) -> anyhow::Result<()> {
-    let report = run_data_quality_checks(db, default_data_quality_rules(), Utc::now())
+    let rules = launch_data_quality_rules().context("build launch data-quality rule set")?;
+    let report = run_data_quality_checks(db, &rules, Utc::now())
         .await
         .context("run data-quality checks")?;
     write_data_quality_reports(report_path, &report)
@@ -324,6 +323,14 @@ async fn run_data_quality_command(
                 "data-quality anomalies sent to PagerDuty"
             );
         }
+    }
+
+    if report.has_anomalies() {
+        anyhow::bail!(
+            "data-quality gate failed with {} anomalies; see {}",
+            report.anomalies_total(),
+            report_path.display()
+        );
     }
 
     Ok(())

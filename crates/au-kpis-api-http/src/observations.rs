@@ -274,6 +274,7 @@ pub async fn list_observations(
         render::body_for_query(state.db.clone(), query, metadata),
         admission,
         is_bulk,
+        response_format,
     );
     let mut response = Response::new(body);
     response
@@ -302,10 +303,20 @@ fn acquire_admission(state: &AppState, bulk: bool) -> Result<OwnedSemaphorePermi
         .map_err(|_| ApiError::AdmissionOverloaded { bulk })
 }
 
-fn hold_admission_permit(body: Body, permit: OwnedSemaphorePermit, bulk: bool) -> Body {
+fn hold_admission_permit(
+    body: Body,
+    permit: OwnedSemaphorePermit,
+    bulk: bool,
+    format: query_plan::ResponseFormat,
+) -> Body {
     let mut stream = body.into_data_stream();
     Body::from_stream(async_stream::stream! {
         let _permit = permit;
+        let mut metrics = crate::metrics::StreamGuard::start(match format {
+            query_plan::ResponseFormat::Json => "json",
+            query_plan::ResponseFormat::Csv => "csv",
+            query_plan::ResponseFormat::Parquet => "parquet",
+        });
         let deadline = tokio::time::Instant::now() + BULK_STREAM_TOTAL_DEADLINE;
         loop {
             let next = if bulk {
@@ -325,7 +336,10 @@ fn hold_admission_permit(body: Body, permit: OwnedSemaphorePermit, bulk: bool) -
                 stream.next().await
             };
             match next {
-                Some(item) => yield item,
+                Some(item) => {
+                    metrics.record_chunk(&item);
+                    yield item;
+                }
                 None => break,
             }
         }

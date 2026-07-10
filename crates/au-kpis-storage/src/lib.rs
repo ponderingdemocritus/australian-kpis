@@ -38,11 +38,9 @@
 //!
 //! Streaming writes land first in `artifacts-staging/<uuid>` and are
 //! server-side copied to the canonical key once the hash is known. The
-//! staging delete on the happy path is retried with backoff before
-//! being logged — see [`STAGING_PREFIX`] — so the deployment **must**
-//! configure a bucket lifecycle rule that sweeps this prefix (7d is
-//! generous) to catch the rare case where delete fails for longer
-//! than the retry window can cover.
+//! staging cleanup is controlled by an explicit capability. Local/test stores
+//! delete eagerly; production R2 disables runtime deletes and relies on a
+//! bucket lifecycle rule to sweep this prefix after seven days.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
@@ -182,6 +180,7 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, StorageError>>;
 #[derive(Clone)]
 pub struct BlobStore {
     inner: Arc<dyn ObjectStore>,
+    delete_enabled: bool,
 }
 
 /// A completed streaming upload that is still parked under the staging prefix.
@@ -220,6 +219,7 @@ impl BlobStore {
     pub fn new<S: ObjectStore + 'static>(inner: S) -> Self {
         Self {
             inner: Arc::new(inner),
+            delete_enabled: true,
         }
     }
 
@@ -228,7 +228,20 @@ impl BlobStore {
     /// `ObjectMeta` across `put_artifact` calls).
     #[must_use]
     pub fn from_arc(inner: Arc<dyn ObjectStore>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            delete_enabled: true,
+        }
+    }
+
+    /// Enable or disable object deletion for this client capability.
+    ///
+    /// Production R2 clients set this to `false`; temporary staging objects
+    /// are then removed only by the bucket lifecycle policy.
+    #[must_use]
+    pub fn with_delete_enabled(mut self, enabled: bool) -> Self {
+        self.delete_enabled = enabled;
+        self
     }
 
     /// Write `content` under its content-addressed key.
@@ -550,6 +563,10 @@ impl BlobStore {
     /// safely.
     #[tracing::instrument(skip(self))]
     pub async fn delete(&self, key: &StorageKey) -> Result<(), StorageError> {
+        if !self.delete_enabled {
+            tracing::debug!(storage_key = %key, "object delete skipped by client capability");
+            return Ok(());
+        }
         match self.inner.delete(&key.as_object_path()).await {
             Ok(()) | Err(ObjectStoreError::NotFound { .. }) => Ok(()),
             Err(err) => Err(StorageError::from_object_store(err)),
@@ -567,6 +584,10 @@ impl BlobStore {
     /// never surface this as an error: turning a benign staging leak
     /// into a put failure would be a worse outcome.
     async fn best_effort_delete_staging(&self, path: &ObjectPath) {
+        if !self.delete_enabled {
+            tracing::debug!(staging_key = %path, "staging delete delegated to bucket lifecycle");
+            return;
+        }
         const ATTEMPTS: u32 = 3;
         let mut backoff = Duration::from_millis(100);
         let mut last_err: Option<ObjectStoreError> = None;
@@ -617,6 +638,21 @@ mod tests {
             StorageKey::canonical_for(&id).as_str(),
             "artifacts/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[tokio::test]
+    async fn disabled_delete_capability_never_removes_objects() {
+        let store =
+            BlobStore::new(object_store::memory::InMemory::new()).with_delete_enabled(false);
+        let id = store
+            .put_artifact(Bytes::from_static(b"immutable"))
+            .await
+            .expect("put artifact");
+        let key = StorageKey::canonical_for(&id);
+
+        store.delete(&key).await.expect("delete is a no-op");
+
+        assert!(store.exists(&key).await.expect("artifact still exists"));
     }
 
     #[test]

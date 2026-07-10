@@ -32,7 +32,7 @@ pub async fn require_trusted_origin(
     mut request: Request,
     next: Next,
 ) -> Response {
-    if !origin_auth_required() {
+    if !origin_auth_required() || is_operational_probe(request.uri().path()) {
         return next.run(request).await;
     }
 
@@ -69,6 +69,10 @@ pub async fn require_trusted_origin(
             ApiError::DependencyUnavailable("redis").into_response()
         }
     }
+}
+
+fn is_operational_probe(path: &str) -> bool {
+    matches!(path, "/livez" | "/readyz" | "/metrics")
 }
 
 #[derive(Debug)]
@@ -184,7 +188,18 @@ mod tests {
 
     use crate::ApiError;
 
-    use super::{sign_origin_for_test, verify_headers_at, verify_origin_signature};
+    use super::{
+        is_operational_probe, sign_origin_for_test, verify_headers_at, verify_origin_signature,
+    };
+
+    #[test]
+    fn only_operational_paths_bypass_origin_signatures() {
+        assert!(is_operational_probe("/livez"));
+        assert!(is_operational_probe("/readyz"));
+        assert!(is_operational_probe("/metrics"));
+        assert!(!is_operational_probe("/v1/health"));
+        assert!(!is_operational_probe("/metrics/extra"));
+    }
 
     #[test]
     fn trusted_origin_signature_rejects_tampering() {

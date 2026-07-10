@@ -419,19 +419,13 @@ impl Default for ConnectOptions {
     }
 }
 
-/// Connect using [`ConnectOptions::default`] and enable the TimescaleDB
-/// extension on the target database.
+/// Connect using [`ConnectOptions::default`]. Schema and extension setup is
+/// owned by the one-shot migration process, never a runtime service.
 pub async fn connect(cfg: &DatabaseConfig) -> Result<PgPool, DbError> {
     connect_with(cfg, ConnectOptions::default()).await
 }
 
-/// Connect with caller-supplied pool options and enable the TimescaleDB
-/// extension on the target database.
-///
-/// The extension is created with `IF NOT EXISTS`, which is a no-op on
-/// managed Timescale Cloud (where it's pre-installed) and a one-shot
-/// install step in local / test environments backed by the upstream
-/// `timescale/timescaledb` image.
+/// Connect with caller-supplied pool options without issuing DDL.
 #[instrument(skip(cfg), fields(url.len = cfg.url.len()))]
 pub async fn connect_with(cfg: &DatabaseConfig, opts: ConnectOptions) -> Result<PgPool, DbError> {
     let pool = PgPoolOptions::new()
@@ -441,7 +435,6 @@ pub async fn connect_with(cfg: &DatabaseConfig, opts: ConnectOptions) -> Result<
         .connect(&cfg.url)
         .await
         .map_err(DbError::Connect)?;
-    ensure_timescale(&pool).await?;
     Ok(pool)
 }
 

@@ -33,7 +33,7 @@ use au_kpis_adapter_state_planning::StatePlanningAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_adapter_worldbank::WorldbankAdapter;
 use au_kpis_config::load_ingestion;
-use au_kpis_db::{connect as connect_db, migrate};
+use au_kpis_db::connect as connect_db;
 use au_kpis_domain::{
     Dataflow, Frequency, License, Source,
     ids::{DataflowId, SourceId},
@@ -46,6 +46,7 @@ use au_kpis_pdf_client::PdfClient;
 use au_kpis_queue::JobKind;
 use au_kpis_queue::{ApalisPgQueue, LeasedJob, Nack, Queue, QueueStage, WorkerId};
 use au_kpis_scorecard::{CoverageStatus as ScorecardCoverageStatus, load_aps_v1_config};
+use au_kpis_source_register::{SourceRegisterDataflow, SourceStatus, load_source_register};
 use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
@@ -167,6 +168,10 @@ enum Command {
         /// Exit non-zero when any dataflow is not fully loaded.
         #[arg(long)]
         fail_on_gaps: bool,
+
+        /// Exit non-zero unless all active dataflows and required manual inputs are launch-ready.
+        #[arg(long)]
+        fail_on_launch_blockers: bool,
     },
 }
 
@@ -182,6 +187,7 @@ enum Mode {
         output: Option<PathBuf>,
         markdown: Option<PathBuf>,
         fail_on_gaps: bool,
+        fail_on_launch_blockers: bool,
     },
 }
 
@@ -288,6 +294,7 @@ struct ObjectStoreConfig {
     secret_access_key: Option<String>,
     region: Option<String>,
     allow_http: bool,
+    delete_enabled: bool,
 }
 
 impl ObjectStoreConfig {
@@ -301,6 +308,10 @@ impl ObjectStoreConfig {
             allow_http: env::var("AU_KPIS_OBJECT_STORE__ALLOW_HTTP")
                 .ok()
                 .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes")),
+            delete_enabled: env::var("AU_KPIS_OBJECT_STORE__DELETE_ENABLED")
+                .map_or(true, |value| {
+                    matches!(value.as_str(), "1" | "true" | "TRUE" | "yes")
+                }),
         }
     }
 }
@@ -321,7 +332,6 @@ async fn main() -> anyhow::Result<()> {
     let db = connect_db(&config.database)
         .await
         .context("connect postgres database")?;
-    migrate(&db).await.context("apply database migrations")?;
     let adapters = build_adapters()?;
     sync_adapter_catalog(&db, &adapters)
         .await
@@ -330,9 +340,17 @@ async fn main() -> anyhow::Result<()> {
         output,
         markdown,
         fail_on_gaps,
+        fail_on_launch_blockers,
     } = mode
     {
-        write_coverage_report(&db, output.as_ref(), markdown.as_ref(), fail_on_gaps).await?;
+        write_coverage_report(
+            &db,
+            output.as_ref(),
+            markdown.as_ref(),
+            fail_on_gaps,
+            fail_on_launch_blockers,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -451,6 +469,7 @@ async fn write_coverage_report(
     output: Option<&PathBuf>,
     markdown: Option<&PathBuf>,
     fail_on_gaps: bool,
+    fail_on_launch_blockers: bool,
 ) -> anyhow::Result<()> {
     let report = load_coverage_report(pool).await?;
     let json = serde_json::to_string_pretty(&report).context("serialize coverage report")?;
@@ -476,6 +495,12 @@ async fn write_coverage_report(
             bail!("{gap_count} dataflows are not fully loaded; see coverage report");
         }
     }
+    if fail_on_launch_blockers && report.totals.launch_blockers > 0 {
+        bail!(
+            "{} launch-required dataflows are not loaded and fresh; see coverage report",
+            report.totals.launch_blockers
+        );
+    }
     Ok(())
 }
 
@@ -484,7 +509,13 @@ async fn load_coverage_report(
     pool: &au_kpis_db::PgPool,
 ) -> anyhow::Result<coverage_report::CoverageReport> {
     let expected_statuses = expected_coverage_statuses_by_dataflow()?;
-    let rows = sqlx::query_as::<
+    let register = load_source_register().context("load source register for coverage report")?;
+    let contracts = register
+        .dataflows
+        .into_iter()
+        .map(|dataflow| (dataflow.dataflow_id.clone(), dataflow))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = sqlx::query_as::<
         _,
         (
             String,
@@ -586,12 +617,80 @@ async fn load_coverage_report(
                 parse_errors,
                 latest_load,
                 expected_status,
+                governance_status: String::new(),
+                launch_required: false,
+                freshness_hard_seconds: None,
             }
         },
     )
-    .collect();
+    .collect::<Vec<_>>();
+
+    for row in &mut rows {
+        apply_coverage_contract(row, contracts.get(&row.dataflow_id));
+    }
+    let present = rows
+        .iter()
+        .map(|row| row.dataflow_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for contract in contracts
+        .values()
+        .filter(|contract| !present.contains(&contract.dataflow_id))
+    {
+        let mut row = coverage_report::RawCoverageRow {
+            source_id: contract.source_id.clone(),
+            dataflow_id: contract.dataflow_id.clone(),
+            name: contract.dataflow_id.clone(),
+            source_url: contract.canonical_url.clone(),
+            series_count: 0,
+            artifact_count: 0,
+            observations_loaded: 0,
+            parse_errors: 0,
+            latest_load: None,
+            expected_status: expected_statuses.get(&contract.dataflow_id).copied(),
+            governance_status: String::new(),
+            launch_required: false,
+            freshness_hard_seconds: None,
+        };
+        apply_coverage_contract(&mut row, Some(contract));
+        rows.push(row);
+    }
+    rows.sort_by(|left, right| {
+        (&left.source_id, &left.dataflow_id).cmp(&(&right.source_id, &right.dataflow_id))
+    });
 
     Ok(coverage_report::build_report(rows))
+}
+
+fn apply_coverage_contract(
+    row: &mut coverage_report::RawCoverageRow,
+    contract: Option<&SourceRegisterDataflow>,
+) {
+    let Some(contract) = contract else {
+        row.governance_status = "unregistered".to_string();
+        return;
+    };
+    row.governance_status = source_status_label(contract.status).to_string();
+    row.launch_required = contract.status == SourceStatus::Active
+        || matches!(
+            contract.dataflow_id.as_str(),
+            APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID | "curated.oversight_strength"
+        );
+    row.freshness_hard_seconds = contract
+        .freshness_policy
+        .as_ref()
+        .map(|policy| policy.hard_after_seconds);
+}
+
+fn source_status_label(status: SourceStatus) -> &'static str {
+    match status {
+        SourceStatus::Active => "active",
+        SourceStatus::ManualPending => "manual_pending",
+        SourceStatus::VisibleUnscored => "visible_unscored",
+        SourceStatus::CoverageGap => "coverage_gap",
+        SourceStatus::LicensedFeed => "licensed_feed",
+        SourceStatus::Placeholder => "placeholder",
+        SourceStatus::Retired => "retired",
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -607,6 +706,23 @@ fn expected_coverage_statuses_by_dataflow()
     }
     for (dataflow_id, status) in catalog_coverage_statuses() {
         insert_expected_coverage_status(&mut statuses, dataflow_id, status);
+    }
+    for dataflow in load_source_register()
+        .context("load source register coverage statuses")?
+        .dataflows
+    {
+        let status = match dataflow.status {
+            SourceStatus::Active => continue,
+            SourceStatus::ManualPending => coverage_report::CoverageStatus::ManualPending,
+            SourceStatus::VisibleUnscored | SourceStatus::Retired => {
+                coverage_report::CoverageStatus::VisibleUnscored
+            }
+            SourceStatus::CoverageGap | SourceStatus::LicensedFeed => {
+                coverage_report::CoverageStatus::CoverageGap
+            }
+            SourceStatus::Placeholder => coverage_report::CoverageStatus::MissingExpected,
+        };
+        insert_expected_coverage_status(&mut statuses, dataflow.dataflow_id, status);
     }
     Ok(statuses)
 }
@@ -671,7 +787,8 @@ fn coverage_report_status_priority(status: coverage_report::CoverageStatus) -> u
         coverage_report::CoverageStatus::Loaded
         | coverage_report::CoverageStatus::Partial
         | coverage_report::CoverageStatus::Failed
-        | coverage_report::CoverageStatus::ZeroRows => 4,
+        | coverage_report::CoverageStatus::ZeroRows
+        | coverage_report::CoverageStatus::Stale => 4,
     }
 }
 
@@ -1289,7 +1406,7 @@ fn build_blob_store(mode: &Mode, config: ObjectStoreConfig) -> anyhow::Result<Bl
                 .with_virtual_hosted_style_request(false)
                 .build()
                 .context("build S3-compatible object store")?;
-            Ok(BlobStore::new(store))
+            Ok(BlobStore::new(store).with_delete_enabled(config.delete_enabled))
         }
         (None, None, None, None) => durable_object_store_required(mode),
         _ => bail!(
@@ -1402,6 +1519,7 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
                 output,
                 markdown,
                 fail_on_gaps,
+                fail_on_launch_blockers,
             }),
         ) => {
             if cli.source.is_some() || cli.dataflow.is_some() || cli.allow_zero_jobs {
@@ -1413,6 +1531,7 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
                 output,
                 markdown,
                 fail_on_gaps,
+                fail_on_launch_blockers,
             })
         }
         (false, None) => {
@@ -1972,6 +2091,7 @@ mod tests {
                 output: Some(PathBuf::from("coverage.json")),
                 markdown: Some(PathBuf::from("coverage.md")),
                 fail_on_gaps: false,
+                fail_on_launch_blockers: false,
             }
         );
     }

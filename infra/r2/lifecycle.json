@@ -6,6 +6,17 @@
       "Filter": { "Prefix": "artifacts-staging/" },
       "Expiration": { "Days": 7 },
       "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    },
+    {
+      "ID": "archive-immutable-artifacts",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "artifacts/" },
+      "Transitions": [
+        {
+          "Days": 365,
+          "StorageClass": "STANDARD_IA"
+        }
+      ]
     }
   ]
 }

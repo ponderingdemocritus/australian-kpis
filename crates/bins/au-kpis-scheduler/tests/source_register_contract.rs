@@ -5,6 +5,7 @@ use std::{
 };
 
 use au_kpis_adapter::SourceAdapter;
+use au_kpis_scheduler::data_quality::{default_data_quality_rules, launch_data_quality_rules};
 use au_kpis_scheduler::source_location_audit::{
     SourceLocationCheck, default_source_location_rules,
 };
@@ -76,6 +77,41 @@ fn source_register_dataflow_ids_are_unique() {
             dataflow.dataflow_id
         );
     }
+}
+
+#[test]
+fn every_active_launch_dataflow_has_a_data_quality_rule() {
+    let register = load_source_register().expect("load source register");
+    let quality_covered = default_data_quality_rules()
+        .iter()
+        .map(|rule| rule.dataflow_id)
+        .collect::<BTreeSet<_>>();
+    let missing = register
+        .dataflows
+        .iter()
+        .filter(|dataflow| dataflow.status == SourceStatus::Active)
+        .filter(|dataflow| !quality_covered.contains(dataflow.dataflow_id.as_str()))
+        .map(|dataflow| dataflow.dataflow_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "active dataflows missing data-quality rules: {missing:?}"
+    );
+}
+
+#[test]
+fn launch_quality_gate_includes_active_and_required_manual_dataflows_only() {
+    let rules = launch_data_quality_rules().expect("build launch rules");
+    let ids = rules
+        .iter()
+        .map(|rule| rule.dataflow_id)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(ids.len(), 22);
+    assert!(ids.contains("apra.super_asset_allocation"));
+    assert!(ids.contains("curated.oversight_strength"));
+    assert!(!ids.contains("curated.control_enable_spend"));
 }
 
 #[test]

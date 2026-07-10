@@ -27,6 +27,7 @@ pub mod auth;
 pub mod dataflows;
 pub mod docs;
 pub mod error;
+pub mod metrics;
 pub mod observations;
 pub mod origin_auth;
 pub mod rate_limit;
@@ -45,6 +46,7 @@ pub use dataflows::{
 };
 pub use docs::ApiDoc;
 pub use error::{ApiError, ProblemDetails};
+pub use metrics::{metrics, record_http_metrics};
 pub use observations::{
     ObservationsMetadata, ObservationsResponse, ObservationsRow, PaginationMetadata,
     list_observations,
@@ -88,10 +90,12 @@ pub fn router_with(routes: Router<AppState>, state: AppState) -> Result<Router, 
     let rate_limit = middleware::from_fn_with_state(state.clone(), rate_limit::rate_limit);
     let origin_auth =
         middleware::from_fn_with_state(state.clone(), origin_auth::require_trusted_origin);
+    let http_metrics = middleware::from_fn(metrics::record_http_metrics);
 
     Ok(routes.with_state(state).layer(
         ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
+            .layer(http_metrics)
             .layer(origin_auth)
             .layer(rate_limit)
             .layer(cors)
@@ -109,6 +113,7 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
         Router::<AppState>::new()
             .route("/livez", get(livez))
             .route("/readyz", get(readyz))
+            .route("/metrics", get(metrics::metrics))
             .route("/v1/health", get(health))
             .route("/v1/sources", get(sources::list_sources))
             .route("/v1/sources/:source_id", get(sources::get_source))

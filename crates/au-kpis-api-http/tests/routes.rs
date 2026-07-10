@@ -145,6 +145,34 @@ async fn liveness_does_not_require_database_or_redis() {
 }
 
 #[tokio::test]
+async fn metrics_exposes_process_state_when_database_is_unavailable() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/plain; version=0.0.4; charset=utf-8"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("metrics body");
+    let body = std::str::from_utf8(&body).expect("metrics utf-8");
+    assert!(body.contains("au_kpis_http_requests_total"));
+    assert!(body.contains("au_kpis_db_pool_connections{state=\"maximum\"} 1"));
+    assert!(body.contains("au_kpis_metrics_collection_success 0"));
+    assert!(body.contains("au_kpis_redis_up 1"));
+}
+
+#[tokio::test]
 async fn readiness_fails_closed_when_database_is_unavailable() {
     let response = router(test_state())
         .expect("router")

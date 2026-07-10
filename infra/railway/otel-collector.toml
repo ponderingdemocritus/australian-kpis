@@ -1,18 +1,10 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "infra/docker/au-kpis-web.Dockerfile"
+dockerfilePath = "infra/docker/otel-collector.Dockerfile"
 watchPatterns = [
-  "/.npmrc",
-  "/apps/web/**",
-  "/infra/docker/au-kpis-web.Dockerfile",
-  "/package.json",
-  "/packages/sdk/**",
-  "/packages/sdk-generated/**",
-  "/pnpm-lock.yaml",
-  "/pnpm-workspace.yaml",
-  "/tsconfig.base.json",
-  "/turbo.json",
-  "/infra/railway/web.toml",
+  "/infra/docker/otel-collector.Dockerfile",
+  "/infra/observability/otel-collector-production.yml",
+  "/infra/railway/otel-collector.toml",
 ]
 
 [deploy]

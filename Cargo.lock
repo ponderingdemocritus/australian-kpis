@@ -782,13 +782,20 @@ dependencies = [
  "au-kpis-cache",
  "au-kpis-config",
  "au-kpis-db",
+ "au-kpis-domain",
+ "au-kpis-queue",
+ "au-kpis-source-register",
+ "au-kpis-storage",
  "au-kpis-testing",
+ "bytes",
  "chrono",
  "clap",
+ "object_store",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -937,6 +944,16 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "au-kpis-migrate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "au-kpis-config",
+ "au-kpis-db",
+ "tokio",
 ]
 
 [[package]]
@@ -1109,7 +1126,16 @@ dependencies = [
 name = "au-kpis-testing"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "au-kpis-source-register",
+ "clap",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
  "testcontainers",
+ "tokio",
 ]
 
 [[package]]

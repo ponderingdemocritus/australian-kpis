@@ -1,0 +1,72 @@
+extensions:
+  basicauth/grafana:
+    client_auth:
+      username: ${env:GRAFANA_CLOUD_INSTANCE_ID}
+      password: ${env:GRAFANA_CLOUD_API_KEY}
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: au-kpis-api
+          metrics_path: /metrics
+          authorization:
+            credentials: ${env:AU_KPIS_METRICS_BEARER_TOKEN}
+          static_configs:
+            - targets: [api.railway.internal:3000]
+              labels:
+                environment: ${env:RAILWAY_ENVIRONMENT}
+        - job_name: au-kpis-ingestion
+          metrics_path: /metrics
+          static_configs:
+            - targets: [ingestion.railway.internal:3000]
+              labels:
+                environment: ${env:RAILWAY_ENVIRONMENT}
+        - job_name: au-kpis-scheduler
+          metrics_path: /metrics
+          static_configs:
+            - targets: [scheduler.railway.internal:3000]
+              labels:
+                environment: ${env:RAILWAY_ENVIRONMENT}
+
+processors:
+  batch:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 768
+    spike_limit_mib: 192
+  resource:
+    attributes:
+      - action: upsert
+        key: deployment.environment
+        value: ${env:RAILWAY_ENVIRONMENT}
+
+exporters:
+  otlphttp/grafana:
+    endpoint: ${env:GRAFANA_CLOUD_OTLP_ENDPOINT}
+    auth:
+      authenticator: basicauth/grafana
+
+service:
+  extensions: [basicauth/grafana, health_check]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/grafana]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/grafana]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/grafana]

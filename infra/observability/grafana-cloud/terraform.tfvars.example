@@ -1,0 +1,8 @@
+grafana_url                    = "https://example.grafana.net"
+grafana_service_account_token  = "replace-with-secret"
+prometheus_datasource_uid      = "grafanacloud-prom"
+synthetic_monitoring_url       = "https://synthetic-monitoring-api-au-southeast.grafana.net"
+synthetic_monitoring_token     = "replace-with-secret"
+synthetic_probe_ids            = [1, 2]
+api_base_url                   = "https://api.example.com"
+web_base_url                   = "https://example.com"

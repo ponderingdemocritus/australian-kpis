@@ -5,9 +5,9 @@ groups:
       - alert: AuKpisApiAvailabilityFastBurn
         expr: |
           (
-            sum(rate(au_kpis_http_requests_total{status=~"5.."}[5m]))
+            sum(rate(au_kpis_http_requests_total{eligible="true",status=~"5.."}[5m]))
             /
-            clamp_min(sum(rate(au_kpis_http_requests_total[5m])), 1)
+            clamp_min(sum(rate(au_kpis_http_requests_total{eligible="true"}[5m])), 1)
           ) > (14.4 * 0.001)
         for: 5m
         labels:
@@ -22,9 +22,9 @@ groups:
       - alert: AuKpisApiAvailabilitySlowBurn
         expr: |
           (
-            sum(rate(au_kpis_http_requests_total{status=~"5.."}[1h]))
+            sum(rate(au_kpis_http_requests_total{eligible="true",status=~"5.."}[1h]))
             /
-            clamp_min(sum(rate(au_kpis_http_requests_total[1h])), 1)
+            clamp_min(sum(rate(au_kpis_http_requests_total{eligible="true"}[1h])), 1)
           ) > (6 * 0.001)
         for: 30m
         labels:
@@ -40,7 +40,7 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum(rate(au_kpis_http_request_duration_seconds_bucket[5m])) by (le)
+            sum(rate(au_kpis_http_request_duration_seconds_bucket{eligible="true"}[5m])) by (le)
           ) > 0.5
         for: 5m
         labels:
@@ -56,7 +56,7 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum(rate(au_kpis_http_request_duration_seconds_bucket[1h])) by (le)
+            sum(rate(au_kpis_http_request_duration_seconds_bucket{eligible="true"}[1h])) by (le)
           ) > 0.5
         for: 30m
         labels:
@@ -69,7 +69,10 @@ groups:
           description: API p95 remains above the cold-read 500 ms SLO.
 
       - alert: AuKpisFreshnessFastBurn
-        expr: max by (dataflow) (au_kpis_ingestion_lag_seconds) > (2 * 24 * 60 * 60)
+        expr: |
+          max by (dataflow) (au_kpis_ingestion_lag_seconds)
+          > on (dataflow)
+          (2 * max by (dataflow) (au_kpis_ingestion_freshness_budget_seconds))
         for: 15m
         labels:
           severity: page
@@ -81,7 +84,10 @@ groups:
           description: Dataflow {{ $labels.dataflow }} is older than twice its expected cadence.
 
       - alert: AuKpisFreshnessSlowBurn
-        expr: max by (dataflow) (avg_over_time(au_kpis_ingestion_lag_seconds[6h])) > (2 * 24 * 60 * 60)
+        expr: |
+          max by (dataflow) (avg_over_time(au_kpis_ingestion_lag_seconds[6h]))
+          > on (dataflow)
+          (2 * max by (dataflow) (au_kpis_ingestion_freshness_budget_seconds))
         for: 1h
         labels:
           severity: page
@@ -93,12 +99,7 @@ groups:
           description: Dataflow {{ $labels.dataflow }} has stayed stale across the slow burn window.
 
       - alert: AuKpisIngestionErrorFastBurn
-        expr: |
-          (
-            sum by (source) (rate(au_kpis_fetch_errors_total[5m]))
-            /
-            clamp_min(sum by (source) (rate(au_kpis_fetch_requests_total[5m])), 1)
-          ) > 0.2
+        expr: au_kpis_ingestion_generation_failures_recent > 0
         for: 5m
         labels:
           severity: page
@@ -107,16 +108,11 @@ groups:
           window: fast
         annotations:
           summary: Ingestion error-rate fast burn
-          description: Source {{ $labels.source }} fetch errors are above 20% in the fast window.
+          description: A generation was rejected or failed during the last 15 minutes.
 
       - alert: AuKpisIngestionErrorSlowBurn
-        expr: |
-          (
-            sum by (source) (rate(au_kpis_fetch_errors_total[1h]))
-            /
-            clamp_min(sum by (source) (rate(au_kpis_fetch_requests_total[1h])), 1)
-          ) > 0.05
-        for: 30m
+        expr: au_kpis_queue_oldest_pending_age_seconds > 900
+        for: 15m
         labels:
           severity: page
           team: data-platform
@@ -124,7 +120,7 @@ groups:
           window: slow
         annotations:
           summary: Ingestion error-rate slow burn
-          description: Source {{ $labels.source }} fetch errors remain elevated over the slow window.
+          description: The oldest pending durable ingestion job has waited more than 15 minutes.
 
       - alert: AuKpisSchemaHashDrift
         expr: |
@@ -142,7 +138,7 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum(rate(au_kpis_parquet_stream_duration_seconds_bucket[5m])) by (le)
+            sum(rate(au_kpis_stream_duration_seconds_bucket{format="parquet"}[5m])) by (le)
           ) > 30
         for: 5m
         labels:
@@ -154,17 +150,152 @@ groups:
           summary: Parquet stream duration exceeded SLO
           description: The 1M-row Parquet stream p95 is above 30 seconds.
 
-      - alert: AuKpisParquetHeapTooHigh
-        expr: max_over_time(au_kpis_parquet_stream_peak_heap_bytes[5m]) > 104857600
+      - alert: AuKpisDatabasePoolSaturation
+        expr: |
+          sum(au_kpis_db_pool_connections{state="in_use"})
+          /
+          clamp_min(sum(au_kpis_db_pool_connections{state="maximum"}), 1) > 0.8
         for: 5m
         labels:
           severity: page
           team: data-platform
-          slo: parquet-memory
+          slo: database-capacity
           window: fast
         annotations:
-          summary: Parquet stream heap exceeded SLO
-          description: The 1M-row Parquet stream peak heap is above 100 MB.
+          summary: Database connection pool saturation
+          description: API database pool use is above 80% for five minutes.
+
+      - alert: AuKpisDatabaseReplicationLag
+        expr: max(au_kpis_db_replication_lag_seconds) > 300
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: database-rpo
+        annotations:
+          summary: Database replication lag exceeded RPO
+          description: Database replay lag is above the five-minute RPO.
+
+      - alert: AuKpisRedisUnavailable
+        expr: min(au_kpis_redis_up) == 0
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: dependency-health
+        annotations:
+          summary: Redis unavailable to API replicas
+          description: Public reads are degraded and protected writes are unavailable.
+
+      - alert: AuKpisMetricsCollectionFailed
+        expr: min(au_kpis_metrics_collection_success) == 0
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: telemetry
+        annotations:
+          summary: Durable-state metrics collection failed
+          description: API metrics could not query one or more production state tables.
+
+      - alert: AuKpisQueueDeadLetters
+        expr: sum(au_kpis_queue_depth{status="dead"}) > 0
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: ingestion-durability
+        annotations:
+          summary: Durable ingestion jobs are dead-lettered
+          description: At least one queue job exhausted its retry policy.
+
+      - alert: AuKpisApsSnapshotMissing
+        expr: max(au_kpis_aps_snapshot_present) == 0
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: aps-publication
+        annotations:
+          summary: APS snapshot is missing
+          description: No immutable APS snapshot is available.
+
+      - alert: AuKpisApsSnapshotStale
+        expr: max(au_kpis_aps_snapshot_age_seconds) > 129600
+        for: 15m
+        labels:
+          severity: page
+          team: data-platform
+          slo: aps-publication
+        annotations:
+          summary: APS snapshot is stale
+          description: The newest APS snapshot is more than 36 hours old.
+
+      - alert: AuKpisApsCoverageInsufficient
+        expr: max(au_kpis_aps_coverage_percent) < 70
+        for: 15m
+        labels:
+          severity: page
+          team: data-platform
+          slo: aps-coverage
+        annotations:
+          summary: APS coverage is below the publication threshold
+          description: Overall APS usable scored weight is below 70%.
+
+      - alert: AuKpisWebhookBacklog
+        expr: max(au_kpis_webhook_oldest_due_age_seconds) > 300
+        for: 5m
+        labels:
+          severity: page
+          team: data-platform
+          slo: webhook-delivery
+        annotations:
+          summary: Webhook delivery backlog is stale
+          description: A due webhook has waited more than five minutes.
+
+      - alert: AuKpisWebhookDeadLetters
+        expr: max(au_kpis_webhook_dead_letters_recent) > 0
+        for: 0m
+        labels:
+          severity: page
+          team: data-platform
+          slo: webhook-delivery
+        annotations:
+          summary: Webhook delivery entered a terminal failure state
+          description: A webhook was dead-lettered or failed in the last 15 minutes.
+
+      - alert: AuKpisSchedulerLeaderMissing
+        expr: sum(au_kpis_scheduler_leader_active) != 1
+        for: 2m
+        labels:
+          severity: page
+          team: data-platform
+          slo: scheduler-availability
+        annotations:
+          summary: Scheduler leader count is invalid
+          description: Exactly one active scheduler leader is required.
+
+      - alert: AuKpisSyntheticApiUnavailable
+        expr: min_over_time(probe_success{job="au-kpis-api-production"}[2m]) == 0
+        for: 2m
+        labels:
+          severity: page
+          team: data-platform
+          slo: edge-availability
+        annotations:
+          summary: Production API synthetic is failing
+          description: The one-minute public API readiness check has failed for two minutes.
+
+      - alert: AuKpisSyntheticWebUnavailable
+        expr: min_over_time(probe_success{job="au-kpis-web-production"}[2m]) == 0
+        for: 2m
+        labels:
+          severity: page
+          team: data-platform
+          slo: edge-availability
+        annotations:
+          summary: Production web synthetic is failing
+          description: The one-minute public web check has failed for two minutes.
 
       - alert: AuKpisChaosDrillCanaryFiring
         expr: au_kpis_chaos_error_ratio > 0.01
