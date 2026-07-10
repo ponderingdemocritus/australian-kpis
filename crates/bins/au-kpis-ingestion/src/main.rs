@@ -38,10 +38,13 @@ use au_kpis_domain::{
     Dataflow, Frequency, License, Source,
     ids::{DataflowId, SourceId},
 };
+#[cfg(test)]
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_ingestion_core::{IngestionPipeline, PipelineContexts, PipelineOptions, fetch_ctx};
 use au_kpis_pdf_client::PdfClient;
-use au_kpis_queue::{ApalisPgQueue, JobKind, LeasedJob, Nack, Queue, QueueStage, WorkerId};
+#[cfg(test)]
+use au_kpis_queue::JobKind;
+use au_kpis_queue::{ApalisPgQueue, LeasedJob, Nack, Queue, QueueStage, WorkerId};
 use au_kpis_scorecard::{CoverageStatus as ScorecardCoverageStatus, load_aps_v1_config};
 use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
@@ -52,6 +55,7 @@ use tokio::{net::TcpListener, signal, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 mod coverage_report;
+mod durable_worker;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
@@ -193,6 +197,7 @@ struct WorkerMetrics {
     worker_loops_total: AtomicU64,
     jobs_completed_total: AtomicU64,
     jobs_failed_total: AtomicU64,
+    staging_recoveries_total: AtomicU64,
     once_runs_total: AtomicU64,
     schema_hash_drifts_total: Mutex<BTreeMap<SchemaHashDriftMetricKey, u64>>,
 }
@@ -209,12 +214,16 @@ impl WorkerMetrics {
              # HELP au_kpis_ingestion_jobs_failed_total Queue jobs failed by the worker.\n\
              # TYPE au_kpis_ingestion_jobs_failed_total counter\n\
              au_kpis_ingestion_jobs_failed_total {}\n\
+             # HELP au_kpis_ingestion_staging_recoveries_total Generations reset after unlogged staging loss.\n\
+             # TYPE au_kpis_ingestion_staging_recoveries_total counter\n\
+             au_kpis_ingestion_staging_recoveries_total {}\n\
              # HELP au_kpis_ingestion_once_runs_total One-shot ingestion runs completed.\n\
              # TYPE au_kpis_ingestion_once_runs_total counter\n\
              au_kpis_ingestion_once_runs_total {}\n",
             self.worker_loops_total.load(Ordering::Relaxed),
             self.jobs_completed_total.load(Ordering::Relaxed),
             self.jobs_failed_total.load(Ordering::Relaxed),
+            self.staging_recoveries_total.load(Ordering::Relaxed),
             self.once_runs_total.load(Ordering::Relaxed)
         );
         body.push_str(
@@ -238,10 +247,13 @@ impl WorkerMetrics {
     }
 
     fn record_ingestion_error(&self, err: &au_kpis_ingestion_core::IngestionError) {
-        if let au_kpis_ingestion_core::IngestionError::Adapter(AdapterError::SchemaHashDrift(
-            drift,
-        )) = err
-        {
+        if let au_kpis_ingestion_core::IngestionError::Adapter(err) = err {
+            self.record_adapter_error(err);
+        }
+    }
+
+    fn record_adapter_error(&self, err: &AdapterError) {
+        if let AdapterError::SchemaHashDrift(drift) = err {
             let key = SchemaHashDriftMetricKey {
                 source: drift.source_id.as_str().to_string(),
                 dataflow: drift.dataflow_id.as_str().to_string(),
@@ -880,7 +892,23 @@ fn catalog_label(id: &str) -> String {
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 async fn run_worker(runtime: Runtime) -> anyhow::Result<()> {
+    let recovered = au_kpis_db::recover_lost_observation_stages(&runtime.db)
+        .await
+        .context("recover lost unlogged observation staging")?;
+    runtime
+        .metrics
+        .staging_recoveries_total
+        .fetch_add(recovered, Ordering::Relaxed);
+    if recovered > 0 {
+        tracing::warn!(recovered, "reset generations after unlogged staging loss");
+    }
     let queue = ApalisPgQueue::new(runtime.db.clone());
+    let reconciled = durable_worker::reconcile_durable_jobs(&runtime, &queue)
+        .await
+        .context("reconcile durable ingestion stage jobs")?;
+    if reconciled > 0 {
+        tracing::info!(reconciled, "recreated durable ingestion stage jobs");
+    }
     let worker_id = WorkerId::new(runtime.worker_id.clone()).context("build queue worker id")?;
     let shutdown = runtime.shutdown.clone();
     let metrics = Arc::clone(&runtime.metrics);
@@ -933,7 +961,13 @@ async fn process_one_job(
     worker_id: WorkerId,
 ) -> anyhow::Result<WorkerStep> {
     let mut leased = None;
-    for stage in [QueueStage::Discover, QueueStage::Backfill] {
+    for stage in [
+        QueueStage::Load,
+        QueueStage::Parse,
+        QueueStage::Fetch,
+        QueueStage::Discover,
+        QueueStage::Backfill,
+    ] {
         if let Some(job) = queue
             .pop(stage, worker_id.clone())
             .await
@@ -947,24 +981,10 @@ async fn process_one_job(
         return Ok(WorkerStep::Idle);
     };
 
-    let request = match job_run_request(job.job().kind(), job.trace_parent()) {
-        Ok(request) => request,
-        Err(err) => {
-            queue
-                .nack(&job, invalid_job_nack(err))
-                .await
-                .context("nack invalid queue job")?;
-            runtime
-                .metrics
-                .jobs_failed_total
-                .fetch_add(1, Ordering::Relaxed);
-            return Ok(WorkerStep::Processed);
-        }
-    };
     let renewal_interval = lease_renewal_interval(queue.lease_timeout());
-    let worker_shutdown = runtime.shutdown.child_token();
+    let work_job = job.clone();
     let (job, result) = run_with_lease_renewal(queue, job, renewal_interval, async {
-        run_source_once(runtime, &request, worker_shutdown).await
+        durable_worker::process_job(runtime, queue, &work_job).await
     })
     .await?;
 
@@ -980,17 +1000,16 @@ async fn process_one_job(
                 discovered = stats.discovered,
                 fetched = stats.fetched,
                 parsed = stats.parsed,
-                loaded = stats.loaded.observations_loaded,
-                "queue ingestion job completed"
+                loaded = stats.loaded,
+                "durable queue stage completed"
             );
         }
         Err(err) => {
-            runtime.metrics.record_ingestion_error(&err);
-            let class = ingestion_error_class(&err);
-            queue
-                .nack(&job, Nack::new(class, err.to_string()))
-                .await
-                .context("nack queue job")?;
+            let mut nack = Nack::new(err.class(), err.to_string());
+            if let Some(retry_after) = err.retry_after() {
+                nack = nack.with_retry_after(retry_after);
+            }
+            queue.nack(&job, nack).await.context("nack queue job")?;
             runtime
                 .metrics
                 .jobs_failed_total
@@ -1041,10 +1060,12 @@ fn lease_renewal_interval(lease_timeout: Duration) -> Duration {
     std::cmp::max(lease_timeout / 2, Duration::from_secs(1))
 }
 
+#[cfg(test)]
 fn invalid_job_nack(err: anyhow::Error) -> Nack {
     Nack::new(ErrorClass::Permanent, err.to_string())
 }
 
+#[cfg(test)]
 fn ingestion_error_class(err: &au_kpis_ingestion_core::IngestionError) -> ErrorClass {
     match err {
         au_kpis_ingestion_core::IngestionError::Adapter(err) => err.class(),
@@ -1061,11 +1082,13 @@ fn ingestion_error_class(err: &au_kpis_ingestion_core::IngestionError) -> ErrorC
     }
 }
 
+#[cfg(test)]
 fn load_error_class(err: &au_kpis_loader::LoadError) -> ErrorClass {
     match err {
         au_kpis_loader::LoadError::Validation(_) => ErrorClass::Validation,
         au_kpis_loader::LoadError::Json(_) => ErrorClass::Permanent,
         au_kpis_loader::LoadError::Db(_) => ErrorClass::Transient,
+        au_kpis_loader::LoadError::Durable(err) => err.class(),
     }
 }
 
@@ -1646,13 +1669,20 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
     })
 }
 
+#[cfg(test)]
 fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result<RunRequest> {
     match kind {
-        JobKind::Discover { source_id } => {
+        JobKind::Discover {
+            source_id,
+            dataflow_id,
+        } => {
             validate_supported_source(source_id.as_str())?;
+            if let Some(dataflow_id) = dataflow_id {
+                validate_supported_dataflow_id(source_id.as_str(), dataflow_id.as_str())?;
+            }
             Ok(RunRequest {
                 source_id: source_id.clone(),
-                dataflow_id: None,
+                dataflow_id: dataflow_id.clone(),
                 trace_parent: trace_parent.map(str::to_owned),
             })
         }
@@ -1698,6 +1728,7 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Result<()> {
     if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
         return Ok(());

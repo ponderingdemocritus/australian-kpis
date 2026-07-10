@@ -13,6 +13,10 @@ use sqlx::{Acquire, PgPool, Postgres, Transaction, pool::PoolConnection};
 use thiserror::Error;
 use tracing::instrument;
 
+mod generation;
+
+pub use generation::{GenerationPublication, publish_ingestion_generation};
+
 const DEFAULT_MAX_ROWS: usize = 1_000;
 const DEFAULT_MAX_BYTES: usize = 10 * 1024 * 1024;
 const WEBHOOK_EVENT_DATA_UPDATED: &str = "data.updated";
@@ -114,6 +118,10 @@ pub enum LoadError {
     /// A database operation failed.
     #[error("loader db: {0}")]
     Db(#[from] sqlx::Error),
+
+    /// Durable ingestion state was invalid or unavailable.
+    #[error("loader durable state: {0}")]
+    Durable(#[from] au_kpis_db::DbError),
 }
 
 /// Load observations using the spec default 1000-row / 10 MB batch limits.

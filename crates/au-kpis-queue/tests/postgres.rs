@@ -6,7 +6,9 @@ use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::ErrorClass;
 use au_kpis_queue::{ApalisPgQueue, CronSchedule, Job, JobKind, Nack, Queue, QueueStage, WorkerId};
 use au_kpis_testing::timescale::{TimescaleHarness, start_timescale};
+use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 struct QueueDb {
     _timescale: TimescaleHarness,
@@ -74,7 +76,7 @@ async fn push_pop_ack_preserves_payload_and_trace_parent() {
 async fn nack_retries_then_dead_letters_after_attempt_budget() {
     let pool = migrated_pool("au_kpis_queue_retry").await;
     let queue = ApalisPgQueue::new(pool.pool);
-    let job = Job::fetch("abs-cpi-2024-q1", SourceId::new("abs").unwrap())
+    let job = Job::fetch(Uuid::from_u128(1))
         .with_max_attempts(2)
         .with_trace_parent("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01");
 
@@ -123,6 +125,35 @@ async fn nack_retries_then_dead_letters_after_attempt_budget() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_stage_jobs_deduplicate_only_while_active() {
+    let pool = migrated_pool("au_kpis_queue_dedupe").await;
+    let queue = ApalisPgQueue::new(pool.pool);
+    let work_id = Uuid::from_u128(0xfeed);
+    let first = queue.push(Job::fetch(work_id)).await.expect("push Fetch");
+    let duplicate = queue
+        .push(Job::fetch(work_id))
+        .await
+        .expect("deduplicate active Fetch");
+    assert_eq!(first, duplicate);
+
+    let leased = queue
+        .pop(QueueStage::Fetch, WorkerId::new("worker-a").unwrap())
+        .await
+        .expect("pop Fetch")
+        .expect("Fetch should be ready");
+    queue.ack(&leased).await.expect("complete Fetch");
+
+    let replay = queue
+        .push(Job::fetch(work_id))
+        .await
+        .expect("enqueue completed Fetch replay");
+    assert_ne!(
+        first, replay,
+        "completed jobs must not block audited replay"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn load_job_group_key_serializes_same_dataflow() {
     let pool = migrated_pool("au_kpis_queue_group").await;
     let queue = ApalisPgQueue::new(pool.pool);
@@ -130,11 +161,11 @@ async fn load_job_group_key_serializes_same_dataflow() {
     let worker = WorkerId::new("worker-a").unwrap();
 
     let first = queue
-        .push(Job::load(dataflow_id.clone(), "artifact-a"))
+        .push(Job::load(dataflow_id.clone(), Uuid::from_u128(1)))
         .await
         .expect("push first load");
     queue
-        .push(Job::load(dataflow_id, "artifact-b"))
+        .push(Job::load(dataflow_id, Uuid::from_u128(2)))
         .await
         .expect("push second load");
 
@@ -170,11 +201,11 @@ async fn concurrent_load_pops_cannot_lease_same_dataflow_group() {
     let dataflow_id = DataflowId::new("abs.cpi").unwrap();
 
     queue
-        .push(Job::load(dataflow_id.clone(), "artifact-a"))
+        .push(Job::load(dataflow_id.clone(), Uuid::from_u128(1)))
         .await
         .expect("push first load");
     queue
-        .push(Job::load(dataflow_id, "artifact-b"))
+        .push(Job::load(dataflow_id, Uuid::from_u128(2)))
         .await
         .expect("push second load");
 
@@ -200,15 +231,15 @@ async fn load_pop_skips_blocked_group_and_leases_ready_group() {
     let wages = DataflowId::new("abs.wpi").unwrap();
 
     queue
-        .push(Job::load(cpi.clone(), "artifact-a").with_priority(10))
+        .push(Job::load(cpi.clone(), Uuid::from_u128(1)).with_priority(10))
         .await
         .expect("push first CPI load");
     queue
-        .push(Job::load(cpi, "artifact-b").with_priority(9))
+        .push(Job::load(cpi, Uuid::from_u128(2)).with_priority(9))
         .await
         .expect("push blocked CPI load");
     let wages_id = queue
-        .push(Job::load(wages.clone(), "artifact-c").with_priority(8))
+        .push(Job::load(wages.clone(), Uuid::from_u128(3)).with_priority(8))
         .await
         .expect("push WPI load");
 
@@ -238,7 +269,10 @@ async fn stale_running_jobs_are_reclaimed_after_lease_timeout() {
     let pool = migrated_pool("au_kpis_queue_reclaim").await;
     let queue = ApalisPgQueue::new(pool.pool).with_lease_timeout(Duration::from_millis(1));
     let id = queue
-        .push(Job::load(DataflowId::new("abs.cpi").unwrap(), "artifact-a"))
+        .push(Job::load(
+            DataflowId::new("abs.cpi").unwrap(),
+            Uuid::from_u128(1),
+        ))
         .await
         .expect("push load");
 
@@ -268,11 +302,7 @@ async fn renew_extends_lease_and_invalidates_old_handle() {
     let pool = migrated_pool("au_kpis_queue_renew").await;
     let queue = ApalisPgQueue::new(pool.pool);
     let id = queue
-        .push(Job::parse(
-            SourceId::new("abs").unwrap(),
-            "artifact-a",
-            "raw/abs/a.pdf",
-        ))
+        .push(Job::parse(Uuid::from_u128(1)))
         .await
         .expect("push parse job");
 
@@ -307,6 +337,8 @@ async fn schedule_upserts_cron_registration() {
         "0 8 * * *",
         Job::discover(SourceId::new("abs").unwrap()),
     )
+    .unwrap()
+    .with_timezone("Australia/Sydney")
     .unwrap();
 
     queue
@@ -324,5 +356,91 @@ async fn schedule_upserts_cron_registration() {
         .expect("read schedule")
         .expect("schedule should exist");
     assert_eq!(saved.cron_expression(), "0 9 * * *");
+    assert_eq!(saved.timezone(), "Australia/Sydney");
+    assert!(saved.next_run_at().is_some());
+    assert!(saved.last_enqueued_at().is_none());
     assert!(matches!(saved.job().kind(), JobKind::Discover { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_schedulers_enqueue_one_durable_occurrence() {
+    let db = migrated_pool("au_kpis_queue_due_schedule").await;
+    let first = ApalisPgQueue::new(db.pool.clone());
+    let second = ApalisPgQueue::new(db.pool.clone());
+    let schedule = CronSchedule::new(
+        "abs-cpi-discovery",
+        "15 0 * * *",
+        Job::discover_dataflow(
+            SourceId::new("abs").unwrap(),
+            DataflowId::new("abs.cpi").unwrap(),
+        ),
+    )
+    .unwrap()
+    .with_timezone("Australia/Sydney")
+    .unwrap();
+    first.schedule(schedule).await.expect("register schedule");
+
+    let scheduled_for = Utc.with_ymd_and_hms(2026, 7, 10, 14, 15, 0).unwrap();
+    sqlx::query(
+        "UPDATE queue_cron_schedules
+         SET next_run_at = $2
+         WHERE id = $1",
+    )
+    .bind("abs-cpi-discovery")
+    .bind(scheduled_for)
+    .execute(&db.pool)
+    .await
+    .expect("make schedule due");
+
+    let now = scheduled_for + chrono::Duration::minutes(1);
+    let (first_result, second_result) = tokio::join!(
+        first.enqueue_due_schedules(now, 100),
+        second.enqueue_due_schedules(now, 100)
+    );
+    let mut occurrences = first_result.expect("first scheduler");
+    occurrences.extend(second_result.expect("second scheduler"));
+    assert_eq!(occurrences.len(), 1);
+    assert_eq!(occurrences[0].schedule_id(), "abs-cpi-discovery");
+    assert_eq!(occurrences[0].scheduled_for(), scheduled_for);
+
+    let occurrence_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM queue_schedule_occurrences")
+            .fetch_one(&db.pool)
+            .await
+            .expect("count occurrences");
+    let job_count: i64 = sqlx::query_scalar("SELECT count(*) FROM queue_jobs")
+        .fetch_one(&db.pool)
+        .await
+        .expect("count jobs");
+    assert_eq!(occurrence_count, 1);
+    assert_eq!(job_count, 1);
+
+    let leased = first
+        .pop(
+            QueueStage::Discover,
+            WorkerId::new("discovery-worker").unwrap(),
+        )
+        .await
+        .expect("lease occurrence job")
+        .expect("occurrence job exists");
+    assert_eq!(leased.id(), occurrences[0].job_id());
+    first.ack(&leased).await.expect("complete occurrence job");
+    let occurrence_status: String = sqlx::query_scalar(
+        "SELECT status
+         FROM queue_schedule_occurrences
+         WHERE id = $1",
+    )
+    .bind(occurrences[0].id())
+    .fetch_one(&db.pool)
+    .await
+    .expect("load occurrence status");
+    assert_eq!(occurrence_status, "completed");
+
+    let saved = first
+        .schedule_by_id("abs-cpi-discovery")
+        .await
+        .expect("load schedule")
+        .expect("schedule exists");
+    assert_eq!(saved.last_enqueued_at(), Some(scheduled_for));
+    assert!(saved.next_run_at().unwrap() > scheduled_for);
 }
