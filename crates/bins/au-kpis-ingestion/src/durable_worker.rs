@@ -447,6 +447,7 @@ async fn process_parse(
     if row_no == 0 {
         let message = "parser emitted zero observations";
         record_generation_parse_error(runtime, &context, message).await?;
+        pause_generation_dataflow(runtime, generation_id, message).await?;
         reject_ingestion_generation(&runtime.db, generation_id, message)
             .await
             .map_err(|error| DurableJobError::classified(&error, error.to_string()))?;
@@ -467,6 +468,7 @@ async fn process_parse(
             validation.max_series_cardinality
         );
         record_generation_parse_error(runtime, &context, &message).await?;
+        pause_generation_dataflow(runtime, generation_id, &message).await?;
         reject_ingestion_generation(&runtime.db, generation_id, &message)
             .await
             .map_err(|error| DurableJobError::classified(&error, error.to_string()))?;
@@ -568,9 +570,75 @@ async fn finish_failed_parse(
     let result = if class.is_retryable() {
         fail_ingestion_generation(&runtime.db, generation_id, reason).await
     } else {
+        pause_generation_dataflow(runtime, generation_id, reason).await?;
         reject_ingestion_generation(&runtime.db, generation_id, reason).await
     };
     result.map_err(|error| DurableJobError::classified(&error, error.to_string()))
+}
+
+async fn pause_generation_dataflow(
+    runtime: &Runtime,
+    generation_id: Uuid,
+    reason: &str,
+) -> Result<(), DurableJobError> {
+    let mut transaction =
+        runtime.db.begin().await.map_err(|error| {
+            DurableJobError::classified_db(&error, "begin automatic source pause")
+        })?;
+    let dataflow_id: String = sqlx::query_scalar(
+        "SELECT dataflow_id FROM ingestion_generations WHERE id = $1 FOR UPDATE",
+    )
+    .bind(generation_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| DurableJobError::classified_db(&error, "load generation for source pause"))?;
+    sqlx::query(
+        r#"INSERT INTO source_dataflow_controls
+           (dataflow_id, paused, actor, reason, paused_at, resumed_at)
+           VALUES ($1, true, 'system:ingestion', $2, now(), NULL)
+           ON CONFLICT (dataflow_id) DO UPDATE
+           SET paused = true,
+               actor = EXCLUDED.actor,
+               reason = EXCLUDED.reason,
+               paused_at = CASE
+                   WHEN source_dataflow_controls.paused
+                   THEN source_dataflow_controls.paused_at
+                   ELSE now()
+               END,
+               resumed_at = NULL,
+               updated_at = now()"#,
+    )
+    .bind(&dataflow_id)
+    .bind(reason)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| DurableJobError::classified_db(&error, "pause failed dataflow"))?;
+    sqlx::query(
+        "UPDATE queue_cron_schedules
+         SET enabled = false, updated_at = now()
+         WHERE payload #>> '{kind,dataflow_id}' = $1",
+    )
+    .bind(&dataflow_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| DurableJobError::classified_db(&error, "disable failed dataflow schedule"))?;
+    sqlx::query(
+        r#"INSERT INTO operator_audit_log
+           (action, target_type, target_id, actor, reason, details)
+           VALUES ('source.auto_pause', 'dataflow', $1, 'system:ingestion', $2,
+                   jsonb_build_object('generation_id', $3::text))"#,
+    )
+    .bind(&dataflow_id)
+    .bind(reason)
+    .bind(generation_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| DurableJobError::classified_db(&error, "audit automatic source pause"))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| DurableJobError::classified_db(&error, "commit automatic source pause"))?;
+    Ok(())
 }
 
 async fn record_generation_parse_error(
@@ -980,6 +1048,48 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(staged_after, 0);
+
+        let context = get_ingestion_generation_context(&pool, generation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let rejected = create_ingestion_generation(
+            &pool,
+            GenerationInput {
+                discovered_work_id: context.discovered_work_id,
+                artifact_fetch_id: context.artifact.fetch_id.unwrap(),
+                source_id: &context.source_id,
+                dataflow_id: &context.dataflow_id,
+                parser_version: "synthetic-format-error-v1",
+                transform_version: "identity-v1",
+                job_id: None,
+                trace_parent: None,
+                actor: "test",
+                reason: Some("verify automatic source pause"),
+            },
+        )
+        .await
+        .unwrap();
+        begin_ingestion_parse(&pool, rejected.id).await.unwrap();
+        finish_failed_parse(
+            &runtime,
+            rejected.id,
+            ErrorClass::Permanent,
+            "synthetic schema drift",
+        )
+        .await
+        .unwrap();
+        let paused: (bool, String, i64) = sqlx::query_as(
+            "SELECT control.paused, control.actor,
+                    (SELECT count(*) FROM operator_audit_log
+                     WHERE action = 'source.auto_pause' AND target_id = control.dataflow_id)
+             FROM source_dataflow_controls control
+             WHERE control.dataflow_id = 'abs.cpi'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(paused, (true, "system:ingestion".to_string(), 1));
         drop(timescale);
     }
 

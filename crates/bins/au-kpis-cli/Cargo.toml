@@ -13,10 +13,25 @@ au-kpis-auth = { workspace = true }
 au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-db = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-queue = { workspace = true }
+au-kpis-source-register = { workspace = true }
+au-kpis-storage = { workspace = true }
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+object_store = { version = "0.12", features = ["aws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "uuid",
+] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+url = "2"
 uuid = { version = "1", features = ["serde"] }
 
 [dev-dependencies]

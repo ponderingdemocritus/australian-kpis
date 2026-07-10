@@ -28,8 +28,8 @@ fn issue_63_chaos_suite_contract_is_wired() {
         "workflow_dispatch",
         "environment: staging",
         "tests/chaos/run.sh",
-        "chaos-results",
-        "target/chaos",
+        "release-chaos-report",
+        "target/release-chaos-report",
         "GITHUB_STEP_SUMMARY",
     ] {
         assert!(
@@ -39,11 +39,15 @@ fn issue_63_chaos_suite_contract_is_wired() {
     }
 
     for scenario in [
-        "kill-ingestion-mid-load",
-        "sever-db-connection",
-        "fill-queue-capacity",
-        "source-5xx-circuit-breaker",
-        "vacuum-heavy-writes",
+        "redis-loss",
+        "process-kill",
+        "db-disconnect",
+        "upstream-429",
+        "parser-panic",
+        "malformed-artifacts",
+        "object-corruption",
+        "scheduler-failover",
+        "slow-clients",
     ] {
         let script = root.join(format!("tests/chaos/{scenario}.sh"));
         assert!(
@@ -54,7 +58,7 @@ fn issue_63_chaos_suite_contract_is_wired() {
         assert!(
             fs::read_to_string(&script)
                 .expect("read scenario script")
-                .contains("record_result"),
+                .contains("run_step"),
             "scenario `{scenario}` should write a machine-readable result"
         );
         assert!(
@@ -73,10 +77,10 @@ fn issue_63_chaos_suite_contract_is_wired() {
     for invariant in [
         "no duplicates/no gaps",
         "reconnection",
-        "backpressure",
-        "circuit breaker opens and recovers",
-        "no deadlocks",
-        "chaos-results",
+        "Retry-After",
+        "SHA-256",
+        "standby takes over",
+        "release-chaos-report",
     ] {
         assert!(
             docs.contains(invariant),
@@ -109,11 +113,15 @@ fn issue_63_chaos_suite_dry_run_surfaces_reviewable_results() {
     let jsonl = fs::read_to_string(temp_dir.join("results.jsonl")).expect("read result jsonl");
 
     for scenario in [
-        "kill-ingestion-mid-load",
-        "sever-db-connection",
-        "fill-queue-capacity",
-        "source-5xx-circuit-breaker",
-        "vacuum-heavy-writes",
+        "redis-loss",
+        "process-kill",
+        "db-disconnect",
+        "upstream-429",
+        "parser-panic",
+        "malformed-artifacts",
+        "object-corruption",
+        "scheduler-failover",
+        "slow-clients",
     ] {
         assert!(
             summary.contains(scenario),
@@ -126,7 +134,7 @@ fn issue_63_chaos_suite_dry_run_surfaces_reviewable_results() {
             .lines()
             .filter(|line| line.contains(r#""status":"dry-run""#))
             .count(),
-        5,
+        9,
         "dry-run should record one result per scenario"
     );
 

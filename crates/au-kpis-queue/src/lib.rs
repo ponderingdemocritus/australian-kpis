@@ -934,7 +934,12 @@ impl Queue for ApalisPgQueue {
                  timezone = EXCLUDED.timezone,
                  payload = EXCLUDED.payload,
                  trace_parent = EXCLUDED.trace_parent,
-                 enabled = EXCLUDED.enabled,
+                 enabled = EXCLUDED.enabled AND NOT EXISTS (
+                     SELECT 1
+                     FROM source_dataflow_controls control
+                     WHERE control.dataflow_id = EXCLUDED.payload #>> '{kind,dataflow_id}'
+                       AND control.paused
+                 ),
                  next_run_at = CASE
                      WHEN queue_cron_schedules.cron_expression <> EXCLUDED.cron_expression
                        OR queue_cron_schedules.timezone <> EXCLUDED.timezone
@@ -976,6 +981,12 @@ impl Queue for ApalisPgQueue {
                FROM queue_cron_schedules
                WHERE enabled
                  AND next_run_at <= $1
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM source_dataflow_controls control
+                     WHERE control.dataflow_id = queue_cron_schedules.payload #>> '{kind,dataflow_id}'
+                       AND control.paused
+                 )
                ORDER BY next_run_at, id
                LIMIT $2
                FOR UPDATE SKIP LOCKED"#,

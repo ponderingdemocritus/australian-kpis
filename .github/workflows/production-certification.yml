@@ -1,0 +1,54 @@
+name: Production Certification
+
+on:
+  schedule:
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: production-certification
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  seven-day-soak:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify seven-day green history
+        id: soak
+        continue-on-error: true
+        env:
+          AU_KPIS_SOAK_REPLICA_QUERIES_JSON: ${{ vars.SOAK_REPLICA_QUERIES_JSON }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_CLOUD_INSTANCE_ID: ${{ secrets.GRAFANA_CLOUD_INSTANCE_ID }}
+          GRAFANA_CLOUD_PROMETHEUS_QUERY_URL: ${{ vars.GRAFANA_CLOUD_PROMETHEUS_QUERY_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/build-soak-report.sh
+      - name: Surface soak report
+        if: always()
+        run: cat target/release-soak-report/summary.md >> "${GITHUB_STEP_SUMMARY}"
+      - name: Verify retained scale, restore, chaos, and security evidence
+        id: evidence
+        if: steps.soak.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/verify-certification-evidence.sh
+      - name: Surface evidence index
+        if: steps.evidence.outcome == 'success'
+        run: tail -n 8 target/release-soak-report/summary.md >> "${GITHUB_STEP_SUMMARY}"
+      - name: Retain soak evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-soak-report
+          path: target/release-soak-report/**
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce soak gate
+        if: steps.soak.outcome == 'failure' || steps.evidence.outcome == 'failure'
+        run: exit 1
