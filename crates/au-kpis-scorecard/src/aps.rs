@@ -24,6 +24,8 @@ pub struct IndicatorObservation {
     pub series_key: Option<String>,
     /// Source artifact id, when resolved.
     pub source_artifact_id: Option<String>,
+    /// Ingestion generation id, when resolved.
+    pub ingestion_generation_id: Option<String>,
     /// Optional runtime note.
     pub notes: Option<String>,
 }
@@ -38,6 +40,7 @@ impl IndicatorObservation {
             latest_period: None,
             series_key: None,
             source_artifact_id: None,
+            ingestion_generation_id: None,
             notes: None,
         }
     }
@@ -51,6 +54,7 @@ impl IndicatorObservation {
             latest_period: None,
             series_key: None,
             source_artifact_id: None,
+            ingestion_generation_id: None,
             notes: None,
         }
     }
@@ -207,8 +211,12 @@ pub fn score_aps_snapshot(
         as_of: as_of.into(),
         latest_period,
         score,
-        zone: score_zone(score),
-        trend: trend_from_scores(score, previous_score),
+        zone: score_zone_with_thresholds(
+            score,
+            config.zone_thresholds.scarcity_max,
+            config.zone_thresholds.mixed_max,
+        ),
+        trend: trend_from_scores_with_threshold(score, previous_score, config.trend_threshold),
         confidence_band: score_band,
         confidence,
         coverage_pct: snapshot_coverage_pct,
@@ -282,6 +290,8 @@ fn contribution_row(
         dimensions: indicator.dimension_selector.clone(),
         series_key: observation.and_then(|value| value.series_key.clone()),
         source_artifact_id: observation.and_then(|value| value.source_artifact_id.clone()),
+        ingestion_generation_id: observation
+            .and_then(|value| value.ingestion_generation_id.clone()),
         latest_period: observation.and_then(|value| value.latest_period.clone()),
         unit: indicator.unit.clone(),
         raw_value,
@@ -336,17 +346,12 @@ fn normalized_value(
 fn config_status_blocks_scoring(status: CoverageStatus) -> bool {
     matches!(
         status,
-        CoverageStatus::CoverageGap
-            | CoverageStatus::ManualPending
-            | CoverageStatus::VisibleUnscored
+        CoverageStatus::CoverageGap | CoverageStatus::VisibleUnscored
     )
 }
 
 fn config_status_suppresses_observation(status: CoverageStatus) -> bool {
-    matches!(
-        status,
-        CoverageStatus::CoverageGap | CoverageStatus::ManualPending
-    )
+    matches!(status, CoverageStatus::CoverageGap)
 }
 
 fn status_affects_score_model(status: CoverageStatus) -> bool {
@@ -418,14 +423,19 @@ fn coverage_pct(resolved_weight: f64, expected_weight: f64) -> f64 {
 pub fn aps_score(throughput: f64, orientation: f64) -> f64 {
     let throughput = throughput.clamp(0.0, 1.0);
     let orientation = orientation.clamp(-1.0, 1.0);
-    (100.0 * throughput * (0.5 + 0.5 * orientation)).clamp(0.0, 100.0)
+    let score = (100.0 * throughput * (0.5 + 0.5 * orientation)).clamp(0.0, 100.0);
+    (score * 10.0).round() / 10.0
 }
 
 /// Assign an inclusive score zone.
 pub fn score_zone(score: f64) -> ScoreZone {
-    if score <= 33.0 {
+    score_zone_with_thresholds(score, 33.0, 66.0)
+}
+
+fn score_zone_with_thresholds(score: f64, scarcity_max: f64, mixed_max: f64) -> ScoreZone {
+    if score <= scarcity_max {
         ScoreZone::Red
-    } else if score <= 66.0 {
+    } else if score <= mixed_max {
         ScoreZone::Yellow
     } else {
         ScoreZone::Green
@@ -434,13 +444,17 @@ pub fn score_zone(score: f64) -> ScoreZone {
 
 /// Compute the trend arrow from latest and prior comparable scores.
 pub fn trend_from_scores(latest: f64, previous: Option<f64>) -> Trend {
+    trend_from_scores_with_threshold(latest, previous, 1.0)
+}
+
+fn trend_from_scores_with_threshold(latest: f64, previous: Option<f64>, threshold: f64) -> Trend {
     let Some(previous) = previous else {
         return Trend::Unavailable;
     };
     let delta = latest - previous;
-    if delta >= 1.0 {
+    if delta >= threshold {
         Trend::Up
-    } else if delta <= -1.0 {
+    } else if delta <= -threshold {
         Trend::Down
     } else {
         Trend::Flat
@@ -474,9 +488,20 @@ mod tests {
         ScorecardConfig {
             id: "aps".into(),
             version: "test".into(),
+            digest: String::new(),
             label: "APS".into(),
             description: "test config".into(),
             formula: "APS = 100 * T * (0.5 + 0.5 * O)".into(),
+            methodology_citation: "test methodology".into(),
+            coverage_thresholds: crate::CoverageThresholds {
+                overall_pct: 70.0,
+                axis_pct: 50.0,
+            },
+            zone_thresholds: crate::ZoneThresholds {
+                scarcity_max: 33.0,
+                mixed_max: 66.0,
+            },
+            trend_threshold: 1.0,
             license: "Apache-2.0".into(),
             attribution: "test".into(),
             indicators: vec![
@@ -559,6 +584,8 @@ mod tests {
             confidence: fixture.confidence,
             coverage_status: fixture.coverage_status,
             cadence: "monthly".into(),
+            soft_after_seconds: 45 * 86_400,
+            hard_after_seconds: 90 * 86_400,
             provenance: Provenance {
                 source_url: "https://example.test/source".into(),
                 license: "CC-BY-4.0".into(),
@@ -919,7 +946,7 @@ mod tests {
         )
         .expect("baseline score snapshot");
 
-        assert_eq!(snapshot.score, 56.25);
+        assert_eq!(snapshot.score, 56.3);
         assert_eq!(snapshot.score, baseline.score);
         assert_eq!(snapshot.coverage_pct, 50.0);
         assert!(snapshot.confidence_band.low < snapshot.score);
@@ -1062,6 +1089,10 @@ mod tests {
         missing_url.indicators[0].provenance.source_url.clear();
         assert_invalid_config_contains(&missing_url, "provenance.source_url");
 
+        let mut unknown_cadence = test_config();
+        unknown_cadence.indicators[0].cadence = "ad hoc".to_string();
+        assert_invalid_config_contains(&unknown_cadence, "unknown cadence");
+
         let mut missing_review = test_config();
         missing_review.indicators[0].source_dataflow_id = "curated.oversight_strength".into();
         missing_review.indicators[0].coverage_status = CoverageStatus::ManualPending;
@@ -1202,7 +1233,7 @@ mod tests {
     }
 
     #[test]
-    fn config_manual_pending_overrides_resolved_runtime_observation() {
+    fn resolved_manual_input_overrides_config_pending_status() {
         let mut config = test_config();
         config.indicators[0].coverage_status = CoverageStatus::ManualPending;
 
@@ -1219,20 +1250,17 @@ mod tests {
         )
         .expect("config manual-pending input");
 
-        let pending = snapshot
+        let resolved = snapshot
             .contributions
             .iter()
             .find(|row| row.indicator_id == "throughput.fast")
-            .expect("pending contribution");
-        assert_eq!(pending.raw_value, None);
-        assert_eq!(pending.series_key, None);
-        assert_eq!(pending.source_artifact_id, None);
-        assert_eq!(pending.latest_period, None);
-        assert_eq!(pending.coverage_status, CoverageStatus::ManualPending);
-        assert_eq!(pending.normalized_value, None);
-        assert_eq!(snapshot.coverage_pct, 75.0);
-        assert!(snapshot.confidence_band.low < snapshot.score);
-        assert!(snapshot.confidence_band.high >= snapshot.score);
+            .expect("resolved manual contribution");
+        assert_eq!(resolved.raw_value, Some(100.0));
+        assert_eq!(resolved.coverage_status, CoverageStatus::Resolved);
+        assert_eq!(resolved.normalized_value, Some(1.0));
+        assert_eq!(snapshot.coverage_pct, 100.0);
+        assert_eq!(snapshot.confidence_band.low, snapshot.score);
+        assert_eq!(snapshot.confidence_band.high, snapshot.score);
     }
 
     #[test]

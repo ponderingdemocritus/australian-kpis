@@ -87,10 +87,13 @@ impl CoverageStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ScoreZone {
     /// Score in `0..33`.
+    #[serde(rename = "scarcity")]
     Red,
     /// Score in `34..66`.
+    #[serde(rename = "mixed")]
     Yellow,
     /// Score in `67..100`.
+    #[serde(rename = "abundance")]
     Green,
 }
 
@@ -174,8 +177,32 @@ pub struct IndicatorConfig {
     pub coverage_status: CoverageStatus,
     /// Expected update cadence.
     pub cadence: String,
+    /// Age in seconds after which the value remains usable but becomes stale.
+    #[serde(default)]
+    pub soft_after_seconds: u64,
+    /// Age in seconds after which the value is excluded from scoring.
+    #[serde(default)]
+    pub hard_after_seconds: u64,
     /// Source and licensing metadata.
     pub provenance: Provenance,
+}
+
+/// Coverage gates required for a numeric APS publication.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CoverageThresholds {
+    /// Minimum overall usable scored weight percentage.
+    pub overall_pct: f64,
+    /// Minimum usable scored weight percentage on each axis.
+    pub axis_pct: f64,
+}
+
+/// Inclusive upper bounds for the first two APS zones.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ZoneThresholds {
+    /// Maximum scarcity score.
+    pub scarcity_max: f64,
+    /// Maximum mixed score.
+    pub mixed_max: f64,
 }
 
 /// APS config metadata and indicator list.
@@ -185,12 +212,23 @@ pub struct ScorecardConfig {
     pub id: String,
     /// Versioned config id.
     pub version: String,
+    /// SHA-256 digest of the canonical config with this field empty.
+    #[serde(default)]
+    pub digest: String,
     /// User-facing label.
     pub label: String,
     /// User-facing description.
     pub description: String,
     /// Formula metadata.
     pub formula: String,
+    /// Public methodology citation.
+    pub methodology_citation: String,
+    /// Numeric publication coverage gates.
+    pub coverage_thresholds: CoverageThresholds,
+    /// Rounded-score zone thresholds.
+    pub zone_thresholds: ZoneThresholds,
+    /// Absolute movement required for an up/down trend.
+    pub trend_threshold: f64,
     /// Indicator definitions.
     pub indicators: Vec<IndicatorConfig>,
     /// License note for the derived scorecard config.
@@ -259,6 +297,8 @@ pub struct IndicatorContribution {
     pub series_key: Option<String>,
     /// Resolved source artifact id, when available.
     pub source_artifact_id: Option<String>,
+    /// Ingestion generation that published the resolved observation.
+    pub ingestion_generation_id: Option<String>,
     /// Latest resolved period, when available.
     pub latest_period: Option<String>,
     /// Display unit.
@@ -320,6 +360,9 @@ pub enum ScorecardError {
     /// TOML config parse failure.
     #[error("scorecard config parse failed: {0}")]
     ConfigParse(#[from] toml::de::Error),
+    /// Config could not be serialized for canonical digesting.
+    #[error("scorecard config serialization failed: {0}")]
+    ConfigSerialize(#[from] serde_json::Error),
     /// Config failed semantic validation.
     #[error("invalid scorecard config: {0}")]
     InvalidConfig(String),

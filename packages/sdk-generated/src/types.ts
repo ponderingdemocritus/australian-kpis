@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/livez": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /livez`. */
+        get: operations["liveness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /readyz`. */
+        get: operations["readiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/dataflows": {
         parameters: {
             query?: never;
@@ -157,6 +191,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scorecards/aps/snapshots/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/scorecards/aps/snapshots/{id}`. */
+        get: operations["getApsScorecardSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/search": {
         parameters: {
             query?: never;
@@ -246,6 +297,66 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Compact APS point returned by history endpoints. */
+        ApsSnapshotSummary: {
+            /**
+             * Format: date-time
+             * @description End of the represented Sydney calendar day, expressed in UTC.
+             */
+            as_of: string;
+            /** @description Overall confidence label. */
+            confidence: components["schemas"]["Confidence"];
+            /** @description Missing-input lower and upper APS bounds. */
+            confidence_band: components["schemas"]["ConfidenceBand"];
+            /** @description SHA-256 digest of the canonical config JSON. */
+            config_digest: string;
+            /** @description Immutable config version. */
+            config_version: string;
+            /**
+             * Format: double
+             * @description Overall usable scored weight percentage.
+             */
+            coverage_pct: number;
+            /**
+             * Format: uuid
+             * @description Stable snapshot revision identity.
+             */
+            id: string;
+            /** @description Coverage-gated publication state. */
+            publication_state: components["schemas"]["PublicationState"];
+            /**
+             * Format: date-time
+             * @description Immutable database publication time.
+             */
+            published_at: string;
+            /**
+             * Format: int32
+             * @description Zero-based correction revision.
+             */
+            revision: number;
+            /**
+             * Format: double
+             * @description Numeric APS value only when coverage gates pass.
+             */
+            score?: number | null;
+            /** @description Scorecard id. */
+            scorecard_id: string;
+            /**
+             * Format: date
+             * @description Sydney calendar date represented by this publication.
+             */
+            snapshot_date: string;
+            /** @description Axis-level values and coverage. */
+            sub_indexes: components["schemas"]["SubIndexScore"][];
+            /**
+             * Format: uuid
+             * @description Prior snapshot revision superseded by this correction.
+             */
+            supersedes_snapshot_id?: string | null;
+            /** @description Movement against the nearest comparable numeric snapshot. */
+            trend: components["schemas"]["Trend"];
+            zone?: null | components["schemas"]["ScoreZone"];
+        };
         /**
          * Format: sha256-hex
          * @description Lowercase hex-encoded SHA-256 digest (64 chars).
@@ -322,6 +433,19 @@ export interface components {
          * @enum {string}
          */
         CoverageStatus: "resolved" | "stale" | "missing_expected" | "coverage_gap" | "manual_pending" | "visible_unscored";
+        /** @description Coverage gates required for a numeric APS publication. */
+        CoverageThresholds: {
+            /**
+             * Format: double
+             * @description Minimum usable scored weight percentage on each axis.
+             */
+            axis_pct: number;
+            /**
+             * Format: double
+             * @description Minimum overall usable scored weight percentage.
+             */
+            overall_pct: number;
+        };
         /** @description Request body for `POST /v1/subscriptions`. */
         CreateSubscriptionRequest: {
             /** @description Optional dataflow filter. Empty means every dataflow update. */
@@ -379,6 +503,16 @@ export interface components {
             /** @description Matching dataflows, ordered by source then dataflow id. */
             dataflows: components["schemas"]["Dataflow"][];
         };
+        /** @description One dependency status in the production readiness response. */
+        DependencyHealth: {
+            /**
+             * Format: int64
+             * @description Probe latency in whole milliseconds when a probe was attempted.
+             */
+            latency_ms?: number | null;
+            /** @description `up`, `down`, or `degraded`. */
+            status: string;
+        };
         /**
          * @description A single dimension within a dataflow. Binds a dimension id to a codelist
          *     that enumerates the permitted values.
@@ -410,11 +544,25 @@ export interface components {
          * @enum {string}
          */
         Frequency: "daily" | "weekly" | "monthly" | "quarterly" | "annual" | "irregular";
+        /** @description Dependency collection in the production readiness response. */
+        HealthDependencies: {
+            /** @description Timescale/Postgres and schema state. */
+            database: components["schemas"]["DependencyHealth"];
+            /** @description Disposable Redis cache/rate-limit state. */
+            redis: components["schemas"]["DependencyHealth"];
+            /** @description OTLP exporter configuration state. */
+            telemetry: components["schemas"]["DependencyHealth"];
+        };
         /** @description Health endpoint response. */
         HealthResponse: {
             /** @description Current service health. */
             status: string;
         };
+        /**
+         * @description Revision view used by APS history reads.
+         * @enum {string}
+         */
+        HistoryView: "as_published" | "latest";
         /** @description Static config for one APS indicator. */
         IndicatorConfig: {
             /** @description APS axis. */
@@ -437,6 +585,11 @@ export interface components {
             direction: components["schemas"]["Direction"];
             /** @description User-facing indicator label. */
             display_label: string;
+            /**
+             * Format: int64
+             * @description Age in seconds after which the value is excluded from scoring.
+             */
+            hard_after_seconds?: number;
             /** @description Stable indicator id. */
             indicator_id: string;
             /** @description Source measure id. */
@@ -445,6 +598,11 @@ export interface components {
             normalization: components["schemas"]["Normalization"];
             /** @description Source and licensing metadata. */
             provenance: components["schemas"]["Provenance"];
+            /**
+             * Format: int64
+             * @description Age in seconds after which the value remains usable but becomes stale.
+             */
+            soft_after_seconds?: number;
             /** @description Canonical source dataflow id. */
             source_dataflow_id: string;
             /** @description Display unit. */
@@ -475,6 +633,8 @@ export interface components {
             direction: components["schemas"]["Direction"];
             /** @description Indicator id. */
             indicator_id: string;
+            /** @description Ingestion generation that published the resolved observation. */
+            ingestion_generation_id?: string | null;
             /** @description Indicator label. */
             label: string;
             /** @description Latest resolved period, when available. */
@@ -670,16 +830,95 @@ export interface components {
             source_url: string;
         };
         /**
+         * @description Snapshot publication result after applying coverage gates.
+         * @enum {string}
+         */
+        PublicationState: "published" | "insufficient_coverage";
+        /** @description Immutable APS API snapshot persisted as one publication revision. */
+        PublishedApsSnapshot: {
+            /**
+             * Format: date-time
+             * @description End of the represented Sydney calendar day, expressed in UTC.
+             */
+            as_of: string;
+            /** @description Overall confidence label. */
+            confidence: components["schemas"]["Confidence"];
+            /** @description Missing-input lower and upper APS bounds. */
+            confidence_band: components["schemas"]["ConfidenceBand"];
+            /** @description SHA-256 digest of the canonical config JSON. */
+            config_digest: string;
+            /** @description Immutable config version. */
+            config_version: string;
+            /** @description Full contribution and provenance detail. */
+            contributions: components["schemas"]["IndicatorContribution"][];
+            /**
+             * Format: double
+             * @description Overall usable scored weight percentage.
+             */
+            coverage_pct: number;
+            /**
+             * Format: uuid
+             * @description Stable snapshot revision identity.
+             */
+            id: string;
+            /** @description Coverage-gated publication state. */
+            publication_state: components["schemas"]["PublicationState"];
+            /**
+             * Format: date-time
+             * @description Immutable database publication time.
+             */
+            published_at: string;
+            /**
+             * Format: int32
+             * @description Zero-based correction revision.
+             */
+            revision: number;
+            /**
+             * Format: double
+             * @description Numeric APS value only when coverage gates pass.
+             */
+            score?: number | null;
+            /** @description Scorecard id. */
+            scorecard_id: string;
+            /**
+             * Format: date
+             * @description Sydney calendar date represented by this publication.
+             */
+            snapshot_date: string;
+            /** @description Axis-level values and coverage. */
+            sub_indexes: components["schemas"]["SubIndexScore"][];
+            /**
+             * Format: uuid
+             * @description Prior snapshot revision superseded by this correction.
+             */
+            supersedes_snapshot_id?: string | null;
+            /** @description Movement against the nearest comparable numeric snapshot. */
+            trend: components["schemas"]["Trend"];
+            zone?: null | components["schemas"]["ScoreZone"];
+        };
+        /** @description Production liveness/readiness response. */
+        RuntimeHealthResponse: {
+            dependencies?: null | components["schemas"]["HealthDependencies"];
+            /** @description `live`, `ready`, `degraded`, or `not_ready`. */
+            status: string;
+            /** @description Immutable build version or git SHA. */
+            version: string;
+        };
+        /**
          * @description APS score zone.
          * @enum {string}
          */
-        ScoreZone: "red" | "yellow" | "green";
+        ScoreZone: "scarcity" | "mixed" | "abundance";
         /** @description APS config metadata and indicator list. */
         ScorecardConfig: {
             /** @description Attribution note for the derived scorecard config. */
             attribution: string;
+            /** @description Numeric publication coverage gates. */
+            coverage_thresholds: components["schemas"]["CoverageThresholds"];
             /** @description User-facing description. */
             description: string;
+            /** @description SHA-256 digest of the canonical config with this field empty. */
+            digest?: string;
             /** @description Formula metadata. */
             formula: string;
             /** @description Scorecard id. */
@@ -690,15 +929,41 @@ export interface components {
             label: string;
             /** @description License note for the derived scorecard config. */
             license: string;
+            /** @description Public methodology citation. */
+            methodology_citation: string;
+            /**
+             * Format: double
+             * @description Absolute movement required for an up/down trend.
+             */
+            trend_threshold: number;
             /** @description Versioned config id. */
             version: string;
+            /** @description Rounded-score zone thresholds. */
+            zone_thresholds: components["schemas"]["ZoneThresholds"];
+        };
+        /** @description Query string selecting an immutable APS config version. */
+        ScorecardConfigQuery: {
+            /** @description Config version; omitted selects the current version. */
+            version?: string | null;
         };
         /** @description Query string for APS history snapshots. */
         ScorecardHistoryQuery: {
+            /**
+             * Format: int32
+             * @description Maximum points returned, from 1 through 1,000.
+             */
+            limit?: number | null;
             /** @description Inclusive lower snapshot date in `YYYY-MM-DD` form. */
             since?: string | null;
             /** @description Inclusive upper snapshot date in `YYYY-MM-DD` form. */
             until?: string | null;
+            /** @description Revision view, defaulting to original as-published values. */
+            view?: components["schemas"]["HistoryView"];
+        };
+        /** @description Query string for the latest APS snapshot. */
+        ScorecardLatestQuery: {
+            /** @description Revision view, defaulting to original as-published values. */
+            view?: components["schemas"]["HistoryView"];
         };
         /** @description Full APS snapshot produced by the pure scorer. */
         ScorecardSnapshot: {
@@ -979,6 +1244,19 @@ export interface components {
          * @enum {string}
          */
         Trend: "up" | "down" | "flat" | "unavailable";
+        /** @description Inclusive upper bounds for the first two APS zones. */
+        ZoneThresholds: {
+            /**
+             * Format: double
+             * @description Maximum mixed score.
+             */
+            mixed_max: number;
+            /**
+             * Format: double
+             * @description Maximum scarcity score.
+             */
+            scarcity_max: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -988,6 +1266,55 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    liveness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Process is live. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeHealthResponse"];
+                };
+            };
+        };
+    };
+    readiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Process is ready or ready with disposable dependency degradation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeHealthResponse"];
+                };
+            };
+            /** @description Durable database/schema dependency is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeHealthResponse"];
+                };
+            };
+        };
+    };
     listDataflows: {
         parameters: {
             query?: {
@@ -1298,7 +1625,10 @@ export interface operations {
     };
     getApsScorecardConfig: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Config version; omitted selects the current version. */
+                version?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1347,6 +1677,10 @@ export interface operations {
                 since?: string | null;
                 /** @description Inclusive upper snapshot date in `YYYY-MM-DD` form. */
                 until?: string | null;
+                /** @description Revision view, defaulting to original as-published values. */
+                view?: components["schemas"]["HistoryView"];
+                /** @description Maximum points returned, from 1 through 1,000. */
+                limit?: number | null;
             };
             header?: never;
             path?: never;
@@ -1364,7 +1698,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScorecardSnapshot"][];
+                    "application/json": components["schemas"]["ApsSnapshotSummary"][];
                 };
             };
             /** @description The client's cached history response is still fresh. */
@@ -1417,7 +1751,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScorecardSnapshot"];
+                    "application/json": components["schemas"]["PublishedApsSnapshot"];
                 };
             };
             /** @description The client's cached latest snapshot is still fresh. */
@@ -1433,6 +1767,38 @@ export interface operations {
             };
             /** @description Internal server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getApsScorecardSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Snapshot revision UUID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable APS snapshot revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedApsSnapshot"];
+                };
+            };
+            /** @description Snapshot not found. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

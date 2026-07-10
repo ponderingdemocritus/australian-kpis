@@ -306,6 +306,12 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "observations_rollup_weekly_points",
         "parse_errors",
         "queue_schedule_occurrences",
+        "scorecard_configs",
+        "scorecard_snapshot_contributions",
+        "scorecard_snapshot_generations",
+        "scorecard_snapshots",
+        "scorecard_snapshots_as_published",
+        "scorecard_snapshots_latest",
         "series",
         "sources",
         "webhook_deliveries",
@@ -336,6 +342,8 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "observations_generation_idx",
         "queue_cron_schedules_due_idx",
         "queue_jobs_active_dedupe_idx",
+        "scorecard_snapshot_contributions_generation_idx",
+        "scorecard_snapshots_latest_idx",
     ] {
         assert!(
             index_exists(&pool, expected).await,

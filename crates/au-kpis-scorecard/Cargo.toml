@@ -5,15 +5,33 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Pure APS scorecard config validation and scoring logic."
+description = "APS scorecard config, scoring, and immutable snapshot persistence."
 
 [dependencies]
+au-kpis-db = { workspace = true }
+au-kpis-domain = { workspace = true }
+au-kpis-source-register = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+chrono-tz = "0.10.4"
+hex = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "chrono",
+    "json",
+    "uuid",
+] }
 thiserror = "2"
-utoipa = "5"
+utoipa = { version = "5", features = ["chrono", "uuid"] }
 # Used only to parse the checked-in, versioned APS scorecard config file.
 toml = "0.8"
+uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+au-kpis-testing.workspace = true
 proptest = "1"
-serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

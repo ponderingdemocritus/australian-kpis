@@ -1,7 +1,8 @@
 import type {
+  ApsSnapshotSummary,
   ObservationsResponse,
+  PublishedApsSnapshot,
   ScorecardConfig,
-  ScorecardSnapshot,
 } from '@au-kpis/sdk-generated/client'
 import { ApiRequestError, ApiValidationError, createClient } from './index.js'
 
@@ -236,7 +237,7 @@ await run('observations.latest calls the series lookup endpoint', async () => {
 await run('scorecard helpers call APS endpoints and serialize history bounds', async () => {
   const config = scorecardConfig()
   const latest = scorecardSnapshot()
-  const history = [scorecardSnapshot({ asOf: '2024-01-01', score: 40 })]
+  const history = [scorecardSummary({ snapshotDate: '2024-01-01', score: 40 })]
   const mock = mockFetch([jsonResponse(config), jsonResponse(latest), jsonResponse(history)])
   const client = createClient({ baseUrl: 'https://api.example.test', fetch: mock.fetch })
 
@@ -261,7 +262,7 @@ await run('validate true accepts scorecard config latest and history responses',
   const mock = mockFetch([
     jsonResponse(scorecardConfig()),
     jsonResponse(scorecardSnapshot()),
-    jsonResponse([scorecardSnapshot()]),
+    jsonResponse([scorecardSummary()]),
   ])
   const client = createClient({
     baseUrl: 'https://api.example.test',
@@ -438,7 +439,9 @@ function dataflow() {
 function scorecardConfig(): ScorecardConfig {
   return {
     attribution: 'Derived scorecard configuration maintained by australian-kpis.',
+    coverage_thresholds: { axis_pct: 50, overall_pct: 70 },
     description: 'National Australia scorecard.',
+    digest: 'c'.repeat(64),
     formula: 'APS = 100 * T * (0.5 + 0.5 * O)',
     id: 'aps',
     indicators: [
@@ -461,21 +464,30 @@ function scorecardConfig(): ScorecardConfig {
           source_url: 'https://www.abs.gov.au/',
         },
         source_dataflow_id: 'abs.building_approvals',
+        hard_after_seconds: 7_776_000,
+        soft_after_seconds: 3_888_000,
         unit: 'dwellings',
         weight: 0.35,
       },
     ],
     label: 'Abundance Position Score',
     license: 'Apache-2.0',
+    methodology_citation: 'APS v1 methodology.',
+    trend_threshold: 1,
     version: 'aps.v1',
+    zone_thresholds: { mixed_max: 66, scarcity_max: 33 },
   }
 }
 
-function scorecardSnapshot(options: { asOf?: string; score?: number } = {}): ScorecardSnapshot {
+function scorecardSnapshot(
+  options: { score?: number; snapshotDate?: string } = {},
+): PublishedApsSnapshot {
+  const snapshotDate = options.snapshotDate ?? '2024-02-01'
   return {
-    as_of: options.asOf ?? '2024-02-01',
+    as_of: `${snapshotDate}T12:59:59.999Z`,
     confidence: 'medium',
     confidence_band: { high: 100, low: 0 },
+    config_digest: 'c'.repeat(64),
     config_version: 'aps.v1',
     contributions: [
       {
@@ -502,9 +514,13 @@ function scorecardSnapshot(options: { asOf?: string; score?: number } = {}): Sco
       },
     ],
     coverage_pct: 40,
-    latest_period: '2024-02-01',
+    id: '11111111-1111-4111-8111-111111111111',
+    publication_state: 'published',
+    published_at: '2024-02-02T00:15:00Z',
+    revision: 0,
     score: options.score ?? 100,
     scorecard_id: 'aps',
+    snapshot_date: snapshotDate,
     sub_indexes: [
       {
         axis: 'throughput',
@@ -523,8 +539,15 @@ function scorecardSnapshot(options: { asOf?: string; score?: number } = {}): Sco
       },
     ],
     trend: 'up',
-    zone: 'green',
+    zone: 'abundance',
   }
+}
+
+function scorecardSummary(
+  options: { score?: number; snapshotDate?: string } = {},
+): ApsSnapshotSummary {
+  const { contributions: _contributions, ...summary } = scorecardSnapshot(options)
+  return summary
 }
 
 function dimension() {

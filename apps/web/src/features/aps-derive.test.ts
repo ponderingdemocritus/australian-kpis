@@ -1,16 +1,15 @@
-import type { ScorecardSnapshot } from '@au-kpis/sdk'
+import type { ApsSnapshotSummary, PublishedApsSnapshot } from '@au-kpis/sdk'
 import { describe, expect, it } from 'vitest'
 import {
   deriveApsConstraints,
   deriveApsCoverageDonut,
   deriveApsRadar,
   deriveApsScatter,
-  deriveApsUplift,
 } from './aps-derive'
 
-type Sub = ScorecardSnapshot['sub_indexes'][number]
+type Sub = PublishedApsSnapshot['sub_indexes'][number]
 type Component = Sub['components'][number]
-type Contribution = ScorecardSnapshot['contributions'][number]
+type Contribution = PublishedApsSnapshot['contributions'][number]
 
 function component(overrides: Partial<Component>): Component {
   return { component: 'housing', coverage_pct: 100, score: 0.5, weight: 0.1, ...overrides }
@@ -55,27 +54,37 @@ function contribution(overrides: Partial<Contribution>): Contribution {
   } as Contribution
 }
 
-function snapshot(overrides: Partial<ScorecardSnapshot>): ScorecardSnapshot {
+function snapshot(overrides: Partial<PublishedApsSnapshot>): PublishedApsSnapshot {
   return {
-    as_of: '2026-06-23',
+    as_of: '2026-06-23T13:59:59.999Z',
     confidence: 'medium',
     confidence_band: { high: 83, low: 58 },
+    config_digest: 'c'.repeat(64),
     config_version: 'aps.v1',
     contributions: [],
     coverage_pct: 84,
-    latest_period: '2026-05-01',
+    id: '11111111-1111-4111-8111-111111111111',
+    publication_state: 'published',
+    published_at: '2026-06-24T00:15:00Z',
+    revision: 0,
     score: 72.4,
     scorecard_id: 'aps',
+    snapshot_date: '2026-06-23',
     sub_indexes: [],
     trend: 'up',
-    zone: 'green',
+    zone: 'abundance',
     ...overrides,
-  } as ScorecardSnapshot
+  } as PublishedApsSnapshot
+}
+
+function summary(value: PublishedApsSnapshot): ApsSnapshotSummary {
+  const { contributions: _contributions, ...point } = value
+  return point
 }
 
 // A representative snapshot: T sub-index 0.73 (housing 0.78, planning 0.66),
 // O sub-index 0.59 (ai 0.62, governance 0.50). Orientation values are in [-1,1].
-function baseSnapshot(): ScorecardSnapshot {
+function baseSnapshot(): PublishedApsSnapshot {
   return snapshot({
     score: 72.4,
     sub_indexes: [
@@ -158,20 +167,24 @@ describe('deriveApsScatter', () => {
 
   it('builds an oldest->newest trail ending at the current point', () => {
     const history = [
-      snapshot({
-        as_of: '2026-04-01',
-        sub_indexes: [
-          subIndex({ axis: 'throughput', score: 0.6 }),
-          subIndex({ axis: 'orientation', score: 0.2 }),
-        ],
-      }),
-      snapshot({
-        as_of: '2026-02-01',
-        sub_indexes: [
-          subIndex({ axis: 'throughput', score: 0.5 }),
-          subIndex({ axis: 'orientation', score: 0 }),
-        ],
-      }),
+      summary(
+        snapshot({
+          snapshot_date: '2026-04-01',
+          sub_indexes: [
+            subIndex({ axis: 'throughput', score: 0.6 }),
+            subIndex({ axis: 'orientation', score: 0.2 }),
+          ],
+        }),
+      ),
+      summary(
+        snapshot({
+          snapshot_date: '2026-02-01',
+          sub_indexes: [
+            subIndex({ axis: 'throughput', score: 0.5 }),
+            subIndex({ axis: 'orientation', score: 0 }),
+          ],
+        }),
+      ),
     ]
     const { trail } = deriveApsScatter(baseSnapshot(), history)
     expect(trail.map((p) => p.asOf)).toEqual(['2026-02-01', '2026-04-01', '2026-06-23'])
@@ -202,7 +215,7 @@ describe('deriveApsRadar', () => {
     expect(points.find((p) => p.component === 'planning')?.score).toBeCloseTo(66, 5)
     // orientation components use (0.5 + 0.5*s) * 100
     expect(points.find((p) => p.component === 'ai')?.score).toBeCloseTo(81, 5)
-    expect(points.find((p) => p.component === 'governance')?.score).toBeCloseTo(75, 5)
+    expect(points.find((p) => p.component === 'governance')?.score).toBeNull()
   })
 
   it('carries axis + coverage so low-coverage spokes can be dimmed', () => {
@@ -232,24 +245,6 @@ describe('deriveApsConstraints', () => {
 
   it('respects the topN limit', () => {
     expect(deriveApsConstraints(baseSnapshot(), 1)).toHaveLength(1)
-  })
-})
-
-describe('deriveApsUplift', () => {
-  it('ranks by estimated APS gain, which differs from raw drag order', () => {
-    const uplift = deriveApsUplift(baseSnapshot())
-    // ai gain ~25.6 (orientation, full axis share) > planning ~14.5 > housing ~10.1
-    expect(uplift.map((u) => u.indicatorId)).toEqual([
-      'ai.adoption',
-      'planning.time',
-      'housing.approvals',
-    ])
-    expect(uplift[0]?.estimatedApsGain).toBeGreaterThan(uplift[1]?.estimatedApsGain ?? 0)
-  })
-
-  it('excludes unscored rows', () => {
-    const ids = deriveApsUplift(baseSnapshot()).map((u) => u.indicatorId)
-    expect(ids).not.toContain('oversight')
   })
 })
 

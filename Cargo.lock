@@ -984,6 +984,7 @@ dependencies = [
  "au-kpis-testing",
  "axum 0.7.9",
  "chrono",
+ "chrono-tz",
  "clap",
  "reqwest",
  "serde",
@@ -1002,12 +1003,23 @@ version = "0.1.0"
 name = "au-kpis-scorecard"
 version = "0.1.0"
 dependencies = [
+ "au-kpis-db",
+ "au-kpis-domain",
+ "au-kpis-source-register",
+ "au-kpis-testing",
+ "chrono",
+ "chrono-tz",
+ "hex",
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
  "thiserror 2.0.18",
+ "tokio",
  "toml",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]

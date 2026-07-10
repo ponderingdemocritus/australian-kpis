@@ -1,4 +1,5 @@
 import type {
+  ApsSnapshotSummary,
   DataflowCodelistResponse,
   DataflowDetailResponse,
   DataflowsResponse,
@@ -6,8 +7,8 @@ import type {
   ListDataflowsParams,
   ObservationsResponse,
   ObservationsRow,
+  PublishedApsSnapshot,
   ScorecardConfig,
-  ScorecardSnapshot,
   SearchCatalogParams,
   SearchResponse,
   SeriesLookupResponse,
@@ -62,9 +63,15 @@ export type ObservationLatestParams = {
 }
 
 export type ScorecardHistoryParams = {
+  limit?: number
   since?: string
   until?: string
+  view?: 'as_published' | 'latest'
 }
+
+export type ScorecardConfigParams = { version?: string }
+
+export type ScorecardLatestParams = { view?: 'as_published' | 'latest' }
 
 export type AuKpisClient = {
   dataflows: {
@@ -85,9 +92,10 @@ export type AuKpisClient = {
   }
   scorecards: {
     aps: {
-      config: () => Promise<ScorecardConfig>
-      history: (params?: ScorecardHistoryParams) => Promise<ScorecardSnapshot[]>
-      latest: () => Promise<ScorecardSnapshot>
+      config: (params?: ScorecardConfigParams) => Promise<ScorecardConfig>
+      get: (id: string) => Promise<PublishedApsSnapshot>
+      history: (params?: ScorecardHistoryParams) => Promise<ApsSnapshotSummary[]>
+      latest: (params?: ScorecardLatestParams) => Promise<PublishedApsSnapshot>
     }
   }
 }
@@ -124,8 +132,8 @@ type SchemaName =
   | 'ObservationsResponse'
   | 'SearchResponse'
   | 'ScorecardConfig'
-  | 'ScorecardSnapshot'
-  | 'ScorecardSnapshotList'
+  | 'ApsSnapshotSummaryList'
+  | 'PublishedApsSnapshot'
   | 'SeriesLookupResponse'
 
 type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
@@ -211,21 +219,28 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
     },
     scorecards: {
       aps: {
-        config: () =>
+        config: (params) =>
           requestJson<ScorecardConfig>(context, {
             path: '/v1/scorecards/aps/config',
+            query: params,
             schema: 'ScorecardConfig',
           }),
+        get: (id) =>
+          requestJson<PublishedApsSnapshot>(context, {
+            path: `/v1/scorecards/aps/snapshots/${encodePathSegment(id)}`,
+            schema: 'PublishedApsSnapshot',
+          }),
         history: (params) =>
-          requestJson<ScorecardSnapshot[]>(context, {
+          requestJson<ApsSnapshotSummary[]>(context, {
             path: '/v1/scorecards/aps/history',
             query: params,
-            schema: 'ScorecardSnapshotList',
+            schema: 'ApsSnapshotSummaryList',
           }),
-        latest: () =>
-          requestJson<ScorecardSnapshot>(context, {
+        latest: (params) =>
+          requestJson<PublishedApsSnapshot>(context, {
             path: '/v1/scorecards/aps/latest',
-            schema: 'ScorecardSnapshot',
+            query: params,
+            schema: 'PublishedApsSnapshot',
           }),
       },
     },

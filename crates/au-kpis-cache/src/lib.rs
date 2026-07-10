@@ -308,6 +308,11 @@ impl CacheClient {
         self.backend.delete(key).await
     }
 
+    /// Probe Redis/cache availability without mutating durable or caller-visible state.
+    pub async fn health_check(&self) -> Result<(), CacheError> {
+        self.backend.get("__au_kpis_health__").await.map(|_| ())
+    }
+
     /// Atomically take tokens from a bucket keyed in Redis.
     ///
     /// `capacity`, `refill_per_second`, and `requested` must all be positive,

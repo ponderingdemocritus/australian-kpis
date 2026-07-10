@@ -10,6 +10,54 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/livez": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /livez`.",
+        "operationId": "liveness",
+        "responses": {
+          "200": {
+            "description": "Process is live.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /readyz`.",
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "description": "Process is ready or ready with disposable dependency degradation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Durable database/schema dependency is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/dataflows": {
       "get": {
         "tags": ["dataflows"],
@@ -497,6 +545,17 @@
         "tags": ["scorecards"],
         "summary": "`GET /v1/scorecards/aps/config`.",
         "operationId": "getApsScorecardConfig",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Config version; omitted selects the current version.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Versioned APS scorecard config.",
@@ -575,6 +634,26 @@
             "schema": {
               "type": ["string", "null"]
             }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "description": "Revision view, defaulting to original as-published values.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryView"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum points returned, from 1 through 1,000.",
+            "required": false,
+            "schema": {
+              "type": ["integer", "null"],
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -599,7 +678,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/ScorecardSnapshot"
+                    "$ref": "#/components/schemas/ApsSnapshotSummary"
                   }
                 }
               }
@@ -670,7 +749,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScorecardSnapshot"
+                  "$ref": "#/components/schemas/PublishedApsSnapshot"
                 }
               }
             }
@@ -694,6 +773,47 @@
           },
           "500": {
             "description": "Internal server error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/scorecards/aps/snapshots/{id}": {
+      "get": {
+        "tags": ["scorecards"],
+        "summary": "`GET /v1/scorecards/aps/snapshots/{id}`.",
+        "operationId": "getApsScorecardSnapshot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Snapshot revision UUID.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Immutable APS snapshot revision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedApsSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Snapshot not found.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1014,6 +1134,115 @@
   },
   "components": {
     "schemas": {
+      "ApsSnapshotSummary": {
+        "type": "object",
+        "description": "Compact APS point returned by history endpoints.",
+        "required": [
+          "id",
+          "scorecard_id",
+          "config_version",
+          "config_digest",
+          "snapshot_date",
+          "revision",
+          "as_of",
+          "published_at",
+          "publication_state",
+          "trend",
+          "confidence_band",
+          "confidence",
+          "coverage_pct",
+          "sub_indexes"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the represented Sydney calendar day, expressed in UTC."
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Overall confidence label."
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand",
+            "description": "Missing-input lower and upper APS bounds."
+          },
+          "config_digest": {
+            "type": "string",
+            "description": "SHA-256 digest of the canonical config JSON."
+          },
+          "config_version": {
+            "type": "string",
+            "description": "Immutable config version."
+          },
+          "coverage_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Overall usable scored weight percentage."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable snapshot revision identity."
+          },
+          "publication_state": {
+            "$ref": "#/components/schemas/PublicationState",
+            "description": "Coverage-gated publication state."
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Immutable database publication time."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based correction revision.",
+            "minimum": 0
+          },
+          "score": {
+            "type": ["number", "null"],
+            "format": "double",
+            "description": "Numeric APS value only when coverage gates pass."
+          },
+          "scorecard_id": {
+            "type": "string",
+            "description": "Scorecard id."
+          },
+          "snapshot_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Sydney calendar date represented by this publication."
+          },
+          "sub_indexes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubIndexScore"
+            },
+            "description": "Axis-level values and coverage."
+          },
+          "supersedes_snapshot_id": {
+            "type": ["string", "null"],
+            "format": "uuid",
+            "description": "Prior snapshot revision superseded by this correction."
+          },
+          "trend": {
+            "$ref": "#/components/schemas/Trend",
+            "description": "Movement against the nearest comparable numeric snapshot."
+          },
+          "zone": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScoreZone",
+                "description": "Score zone only when coverage gates pass."
+              }
+            ]
+          }
+        }
+      },
       "ArtifactId": {
         "type": "string",
         "format": "sha256-hex",
@@ -1146,6 +1375,23 @@
           "manual_pending",
           "visible_unscored"
         ]
+      },
+      "CoverageThresholds": {
+        "type": "object",
+        "description": "Coverage gates required for a numeric APS publication.",
+        "required": ["overall_pct", "axis_pct"],
+        "properties": {
+          "axis_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Minimum usable scored weight percentage on each axis."
+          },
+          "overall_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Minimum overall usable scored weight percentage."
+          }
+        }
       },
       "CreateSubscriptionRequest": {
         "type": "object",
@@ -1316,6 +1562,23 @@
           }
         }
       },
+      "DependencyHealth": {
+        "type": "object",
+        "description": "One dependency status in the production readiness response.",
+        "required": ["status"],
+        "properties": {
+          "latency_ms": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Probe latency in whole milliseconds when a probe was attempted.",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "description": "`up`, `down`, or `degraded`."
+          }
+        }
+      },
       "Dimension": {
         "type": "object",
         "description": "A single dimension within a dataflow. Binds a dimension id to a codelist\nthat enumerates the permitted values.",
@@ -1355,6 +1618,25 @@
         "description": "Cadence at which a dataflow publishes new observations. Informational —\nused by the scheduler to pick discovery intervals and by the SLO alerting\nrule `dataflow-no-new-observations`.",
         "enum": ["daily", "weekly", "monthly", "quarterly", "annual", "irregular"]
       },
+      "HealthDependencies": {
+        "type": "object",
+        "description": "Dependency collection in the production readiness response.",
+        "required": ["database", "redis", "telemetry"],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DependencyHealth",
+            "description": "Timescale/Postgres and schema state."
+          },
+          "redis": {
+            "$ref": "#/components/schemas/DependencyHealth",
+            "description": "Disposable Redis cache/rate-limit state."
+          },
+          "telemetry": {
+            "$ref": "#/components/schemas/DependencyHealth",
+            "description": "OTLP exporter configuration state."
+          }
+        }
+      },
       "HealthResponse": {
         "type": "object",
         "description": "Health endpoint response.",
@@ -1365,6 +1647,11 @@
             "description": "Current service health."
           }
         }
+      },
+      "HistoryView": {
+        "type": "string",
+        "description": "Revision view used by APS history reads.",
+        "enum": ["as_published", "latest"]
       },
       "IndicatorConfig": {
         "type": "object",
@@ -1429,6 +1716,12 @@
             "type": "string",
             "description": "User-facing indicator label."
           },
+          "hard_after_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age in seconds after which the value is excluded from scoring.",
+            "minimum": 0
+          },
           "indicator_id": {
             "type": "string",
             "description": "Stable indicator id."
@@ -1444,6 +1737,12 @@
           "provenance": {
             "$ref": "#/components/schemas/Provenance",
             "description": "Source and licensing metadata."
+          },
+          "soft_after_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age in seconds after which the value remains usable but becomes stale.",
+            "minimum": 0
           },
           "source_dataflow_id": {
             "type": "string",
@@ -1518,6 +1817,10 @@
           "indicator_id": {
             "type": "string",
             "description": "Indicator id."
+          },
+          "ingestion_generation_id": {
+            "type": ["string", "null"],
+            "description": "Ingestion generation that published the resolved observation."
           },
           "label": {
             "type": "string",
@@ -1903,10 +2206,158 @@
           }
         }
       },
+      "PublicationState": {
+        "type": "string",
+        "description": "Snapshot publication result after applying coverage gates.",
+        "enum": ["published", "insufficient_coverage"]
+      },
+      "PublishedApsSnapshot": {
+        "type": "object",
+        "description": "Immutable APS API snapshot persisted as one publication revision.",
+        "required": [
+          "id",
+          "scorecard_id",
+          "config_version",
+          "config_digest",
+          "snapshot_date",
+          "revision",
+          "as_of",
+          "published_at",
+          "publication_state",
+          "trend",
+          "confidence_band",
+          "confidence",
+          "coverage_pct",
+          "sub_indexes",
+          "contributions"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the represented Sydney calendar day, expressed in UTC."
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Overall confidence label."
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand",
+            "description": "Missing-input lower and upper APS bounds."
+          },
+          "config_digest": {
+            "type": "string",
+            "description": "SHA-256 digest of the canonical config JSON."
+          },
+          "config_version": {
+            "type": "string",
+            "description": "Immutable config version."
+          },
+          "contributions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndicatorContribution"
+            },
+            "description": "Full contribution and provenance detail."
+          },
+          "coverage_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Overall usable scored weight percentage."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable snapshot revision identity."
+          },
+          "publication_state": {
+            "$ref": "#/components/schemas/PublicationState",
+            "description": "Coverage-gated publication state."
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Immutable database publication time."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based correction revision.",
+            "minimum": 0
+          },
+          "score": {
+            "type": ["number", "null"],
+            "format": "double",
+            "description": "Numeric APS value only when coverage gates pass."
+          },
+          "scorecard_id": {
+            "type": "string",
+            "description": "Scorecard id."
+          },
+          "snapshot_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Sydney calendar date represented by this publication."
+          },
+          "sub_indexes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubIndexScore"
+            },
+            "description": "Axis-level values and coverage."
+          },
+          "supersedes_snapshot_id": {
+            "type": ["string", "null"],
+            "format": "uuid",
+            "description": "Prior snapshot revision superseded by this correction."
+          },
+          "trend": {
+            "$ref": "#/components/schemas/Trend",
+            "description": "Movement against the nearest comparable numeric snapshot."
+          },
+          "zone": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScoreZone",
+                "description": "Score zone only when coverage gates pass."
+              }
+            ]
+          }
+        }
+      },
+      "RuntimeHealthResponse": {
+        "type": "object",
+        "description": "Production liveness/readiness response.",
+        "required": ["status", "version"],
+        "properties": {
+          "dependencies": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HealthDependencies",
+                "description": "Dependency details. Liveness omits dependency probes."
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`live`, `ready`, `degraded`, or `not_ready`."
+          },
+          "version": {
+            "type": "string",
+            "description": "Immutable build version or git SHA."
+          }
+        }
+      },
       "ScoreZone": {
         "type": "string",
         "description": "APS score zone.",
-        "enum": ["red", "yellow", "green"]
+        "enum": ["scarcity", "mixed", "abundance"]
       },
       "ScorecardConfig": {
         "type": "object",
@@ -1917,6 +2368,10 @@
           "label",
           "description",
           "formula",
+          "methodology_citation",
+          "coverage_thresholds",
+          "zone_thresholds",
+          "trend_threshold",
           "indicators",
           "license",
           "attribution"
@@ -1926,9 +2381,17 @@
             "type": "string",
             "description": "Attribution note for the derived scorecard config."
           },
+          "coverage_thresholds": {
+            "$ref": "#/components/schemas/CoverageThresholds",
+            "description": "Numeric publication coverage gates."
+          },
           "description": {
             "type": "string",
             "description": "User-facing description."
+          },
+          "digest": {
+            "type": "string",
+            "description": "SHA-256 digest of the canonical config with this field empty."
           },
           "formula": {
             "type": "string",
@@ -1953,9 +2416,32 @@
             "type": "string",
             "description": "License note for the derived scorecard config."
           },
+          "methodology_citation": {
+            "type": "string",
+            "description": "Public methodology citation."
+          },
+          "trend_threshold": {
+            "type": "number",
+            "format": "double",
+            "description": "Absolute movement required for an up/down trend."
+          },
           "version": {
             "type": "string",
             "description": "Versioned config id."
+          },
+          "zone_thresholds": {
+            "$ref": "#/components/schemas/ZoneThresholds",
+            "description": "Rounded-score zone thresholds."
+          }
+        }
+      },
+      "ScorecardConfigQuery": {
+        "type": "object",
+        "description": "Query string selecting an immutable APS config version.",
+        "properties": {
+          "version": {
+            "type": ["string", "null"],
+            "description": "Config version; omitted selects the current version."
           }
         }
       },
@@ -1963,6 +2449,12 @@
         "type": "object",
         "description": "Query string for APS history snapshots.",
         "properties": {
+          "limit": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Maximum points returned, from 1 through 1,000.",
+            "minimum": 0
+          },
           "since": {
             "type": ["string", "null"],
             "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form."
@@ -1970,6 +2462,20 @@
           "until": {
             "type": ["string", "null"],
             "description": "Inclusive upper snapshot date in `YYYY-MM-DD` form."
+          },
+          "view": {
+            "$ref": "#/components/schemas/HistoryView",
+            "description": "Revision view, defaulting to original as-published values."
+          }
+        }
+      },
+      "ScorecardLatestQuery": {
+        "type": "object",
+        "description": "Query string for the latest APS snapshot.",
+        "properties": {
+          "view": {
+            "$ref": "#/components/schemas/HistoryView",
+            "description": "Revision view, defaulting to original as-published values."
           }
         }
       },
@@ -2540,6 +3046,23 @@
         "type": "string",
         "description": "Trend arrow comparing the latest score to a prior comparable snapshot.",
         "enum": ["up", "down", "flat", "unavailable"]
+      },
+      "ZoneThresholds": {
+        "type": "object",
+        "description": "Inclusive upper bounds for the first two APS zones.",
+        "required": ["scarcity_max", "mixed_max"],
+        "properties": {
+          "mixed_max": {
+            "type": "number",
+            "format": "double",
+            "description": "Maximum mixed score."
+          },
+          "scarcity_max": {
+            "type": "number",
+            "format": "double",
+            "description": "Maximum scarcity score."
+          }
+        }
       }
     },
     "securitySchemes": {

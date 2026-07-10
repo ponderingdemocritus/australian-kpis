@@ -1,8 +1,8 @@
-import type { ScorecardConfig, ScorecardSnapshot } from '@au-kpis/sdk'
+import type { PublishedApsSnapshot, ScorecardConfig } from '@au-kpis/sdk'
 
 export type ApsIndicatorConfig = ScorecardConfig['indicators'][number]
-export type ApsContribution = ScorecardSnapshot['contributions'][number]
-export type ApsSubIndex = ScorecardSnapshot['sub_indexes'][number]
+export type ApsContribution = PublishedApsSnapshot['contributions'][number]
+export type ApsSubIndex = PublishedApsSnapshot['sub_indexes'][number]
 
 const scoreFormatter = new Intl.NumberFormat('en-AU', {
   maximumFractionDigits: 1,
@@ -51,17 +51,11 @@ export function apsAxisDisplayScore(axis: ApsSubIndex['axis'], score: number): n
   return axis === 'orientation' ? 100 * (0.5 + 0.5 * score) : score * 100
 }
 
-export function zoneLabel(zone: ScorecardSnapshot['zone']): string {
-  if (zone === 'green') {
-    return 'abundance'
-  }
-  if (zone === 'yellow') {
-    return 'mixed'
-  }
-  return 'scarcity'
+export function zoneLabel(zone: PublishedApsSnapshot['zone']): string {
+  return zone ?? 'unavailable'
 }
 
-export function trendLabel(trend: ScorecardSnapshot['trend']): string {
+export function trendLabel(trend: PublishedApsSnapshot['trend']): string {
   if (trend === 'up') {
     return 'improving'
   }
@@ -119,40 +113,42 @@ export function sortedContributions(contributions: ApsContribution[]): ApsContri
  * One-line plain-language definitions for each APS zone, used by the score
  * explainer so a first-time reader knows how to read the headline number.
  */
-export function zoneDescription(zone: ScorecardSnapshot['zone']): string {
-  if (zone === 'green') {
+export function zoneDescription(zone: PublishedApsSnapshot['zone']): string {
+  if (zone === 'abundance') {
     return 'Abundance — the nation is positioned closer to abundance than scarcity.'
   }
-  if (zone === 'yellow') {
+  if (zone === 'mixed') {
     return 'Mixed — abundance and scarcity signals are roughly balanced.'
   }
   return 'Scarcity — the nation is positioned closer to scarcity than abundance.'
 }
 
 /** Solid zone color + white text for the zone badge and score marker pill. */
-export function zoneSolidClass(zone: ScorecardSnapshot['zone']): string {
-  if (zone === 'green') {
+export function zoneSolidClass(zone: PublishedApsSnapshot['zone']): string {
+  if (zone === 'abundance') {
     return 'bg-emerald-700 text-white'
   }
-  if (zone === 'yellow') {
+  if (zone === 'mixed') {
     return 'bg-amber-700 text-white'
   }
   return 'bg-red-700 text-white'
 }
 
 /** Vivid zone color for the marker dot icon (icon, not text — contrast rule N/A). */
-export function zoneDotClass(zone: ScorecardSnapshot['zone']): string {
-  if (zone === 'green') {
+export function zoneDotClass(zone: PublishedApsSnapshot['zone']): string {
+  if (zone === 'abundance') {
     return 'text-emerald-600'
   }
-  if (zone === 'yellow') {
+  if (zone === 'mixed') {
     return 'text-amber-600'
   }
   return 'text-red-600'
 }
 
 /** Directional tone for trend, used to pick an arrow color (paired with text). */
-export function trendTone(trend: ScorecardSnapshot['trend']): 'positive' | 'negative' | 'neutral' {
+export function trendTone(
+  trend: PublishedApsSnapshot['trend'],
+): 'positive' | 'negative' | 'neutral' {
   if (trend === 'up') {
     return 'positive'
   }

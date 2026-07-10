@@ -97,16 +97,16 @@ function extractSchemasOnly(rawSource) {
 
 function withDerivedSchemas(source) {
   const exportMarker = '\nexport const schemas = {'
-  if (!source.includes('const ScorecardSnapshot:') || !source.includes(exportMarker)) {
+  if (!source.includes('const ApsSnapshotSummary:') || !source.includes(exportMarker)) {
     throw new Error('generated schemas did not contain the APS snapshot schema export')
   }
 
   return source
     .replace(
       exportMarker,
-      '\nconst ScorecardSnapshotList = z.array(ScorecardSnapshot);\n\nexport const schemas = {',
+      '\nconst ApsSnapshotSummaryList = z.array(ApsSnapshotSummary);\n\nexport const schemas = {',
     )
-    .replace('  ScorecardSnapshot,\n', '  ScorecardSnapshot,\n  ScorecardSnapshotList,\n')
+    .replace('  ApsSnapshotSummary,\n', '  ApsSnapshotSummary,\n  ApsSnapshotSummaryList,\n')
 }
 
 function normalizeTextFile(file) {

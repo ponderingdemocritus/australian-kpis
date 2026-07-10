@@ -31,6 +31,8 @@ use au_kpis_source_register::{SourceStatus, load_source_register};
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
 use chrono::Utc;
+use chrono::{DateTime, NaiveDate, NaiveTime};
+use chrono_tz::Australia::Sydney;
 use clap::{Parser, Subcommand};
 use sqlx::{Pool, Postgres, pool::PoolConnection};
 use tokio::{net::TcpListener, signal};
@@ -435,6 +437,7 @@ async fn run_scheduler(runtime: Runtime) -> anyhow::Result<()> {
 }
 
 async fn run_leader_loop(runtime: &Runtime, queue: &ApalisPgQueue) -> anyhow::Result<()> {
+    let mut materialized_through = None;
     loop {
         runtime
             .metrics
@@ -448,12 +451,40 @@ async fn run_leader_loop(runtime: &Runtime, queue: &ApalisPgQueue) -> anyhow::Re
             .metrics
             .discovery_jobs_emitted_total
             .fetch_add(emitted.len() as u64, Ordering::Relaxed);
+        let due_snapshot_date = due_aps_snapshot_date(Utc::now());
+        if materialized_through != Some(due_snapshot_date) {
+            let snapshot =
+                au_kpis_scorecard::materialize_aps_snapshot(&runtime.db, due_snapshot_date, None)
+                    .await
+                    .context("materialize daily APS snapshot")?;
+            tracing::info!(
+                snapshot_id = %snapshot.id,
+                snapshot_date = %snapshot.snapshot_date,
+                revision = snapshot.revision,
+                publication_state = ?snapshot.publication_state,
+                "daily APS snapshot materialized"
+            );
+            materialized_through = Some(due_snapshot_date);
+        }
 
         tokio::select! {
             () = runtime.shutdown.cancelled() => return Ok(()),
             () = tokio::time::sleep(runtime.tick) => {}
         }
     }
+}
+
+fn due_aps_snapshot_date(now: DateTime<Utc>) -> NaiveDate {
+    let local = now.with_timezone(&Sydney);
+    let days_back = if local.time() >= NaiveTime::from_hms_opt(0, 15, 0).expect("valid APS time") {
+        1
+    } else {
+        2
+    };
+    local
+        .date_naive()
+        .checked_sub_days(chrono::Days::new(days_back))
+        .expect("current date supports APS lookback")
 }
 
 async fn register_schedules(
@@ -606,7 +637,7 @@ mod tests {
     use au_kpis_scheduler::source_location_audit::{
         SourceAuditFinding, SourceAuditSeverity, SourceAuditStatus, SourceLocationAuditReport,
     };
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
 
     use super::*;
 
@@ -628,6 +659,20 @@ mod tests {
                 dataflow_id: Some(dataflow_id)
             } if source_id.as_str() == "abs" && dataflow_id.as_str() == "abs.cpi"
         ));
+    }
+
+    #[test]
+    fn aps_daily_cutoff_uses_sydney_calendar_across_dst() {
+        let before_cutoff = Utc.with_ymd_and_hms(2026, 10, 4, 13, 14, 59).unwrap();
+        let after_cutoff = Utc.with_ymd_and_hms(2026, 10, 4, 13, 15, 0).unwrap();
+        assert_eq!(
+            due_aps_snapshot_date(before_cutoff),
+            NaiveDate::from_ymd_opt(2026, 10, 3).unwrap()
+        );
+        assert_eq!(
+            due_aps_snapshot_date(after_cutoff),
+            NaiveDate::from_ymd_opt(2026, 10, 4).unwrap()
+        );
     }
 
     #[test]

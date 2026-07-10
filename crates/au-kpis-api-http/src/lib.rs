@@ -49,7 +49,10 @@ pub use observations::{
     list_observations,
 };
 pub use rate_limit::rate_limit;
-pub use routes::{HealthResponse, health, openapi};
+pub use routes::{
+    DependencyHealth, HealthDependencies, HealthResponse, RuntimeHealthResponse, health, livez,
+    openapi, readyz,
+};
 pub use scorecards::{ScorecardHistoryQuery, aps_config, aps_history, aps_latest};
 pub use search::{SearchQuery, SearchResponse, SearchResult, SearchResultKind, search_catalog};
 pub use series::{SeriesLookupResponse, SeriesRevisionMetadata, get_series};
@@ -98,6 +101,8 @@ pub fn router_with(routes: Router<AppState>, state: AppState) -> Result<Router, 
 pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
     router_with(
         Router::<AppState>::new()
+            .route("/livez", get(livez))
+            .route("/readyz", get(readyz))
             .route("/v1/health", get(health))
             .route("/v1/sources", get(sources::list_sources))
             .route("/v1/sources/:source_id", get(sources::get_source))
@@ -111,6 +116,10 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
             .route("/v1/scorecards/aps/config", get(scorecards::aps_config))
             .route("/v1/scorecards/aps/latest", get(scorecards::aps_latest))
             .route("/v1/scorecards/aps/history", get(scorecards::aps_history))
+            .route(
+                "/v1/scorecards/aps/snapshots/:id",
+                get(scorecards::aps_snapshot),
+            )
             .route("/v1/series/:dataflow/:series_key", get(series::get_series))
             .route("/v1/search", get(search::search_catalog))
             .route(

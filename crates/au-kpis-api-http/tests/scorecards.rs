@@ -6,12 +6,13 @@ use au_kpis_config::{
     AppConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig, TelemetryConfig,
 };
 use au_kpis_domain::ids::{ArtifactId, DataflowId, MeasureId, SeriesKey};
+use au_kpis_scorecard::materialize_aps_snapshot;
 use au_kpis_telemetry::Telemetry;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use chrono::{TimeZone, Utc};
+use chrono::{NaiveDate, TimeZone, Utc};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio_util::sync::CancellationToken;
@@ -212,6 +213,15 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let db = TestDb::start("au_kpis_api_scorecards").await;
     seed_scorecard_inputs(db.pool()).await;
+    for date in [(2024, 1, 1), (2024, 2, 1)] {
+        materialize_aps_snapshot(
+            db.pool(),
+            NaiveDate::from_ymd_opt(date.0, date.1, date.2).expect("valid snapshot date"),
+            None,
+        )
+        .await
+        .expect("materialize official APS fixture snapshot");
+    }
     let app = router(test_state(db.pool().clone())).expect("router");
 
     let latest = app
@@ -232,8 +242,8 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     assert_eq!(snapshot["scorecard_id"], "aps");
     assert_eq!(snapshot["config_version"], "aps.v1");
-    assert_eq!(snapshot["zone"], "green");
-    assert_eq!(snapshot["trend"], "unavailable");
+    assert_eq!(snapshot["zone"], "abundance");
+    assert_eq!(snapshot["trend"], "up");
     assert_eq!(snapshot["score"], 100.0);
     let contributions = snapshot["contributions"].as_array().expect("contributions");
     assert_eq!(contributions.len(), 21);
@@ -338,15 +348,12 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let productive_infrastructure =
         contribution(contributions, "capital.super-productive-infrastructure");
-    assert!(productive_infrastructure["raw_value"].is_null());
-    assert!(productive_infrastructure["normalized_value"].is_null());
-    assert_eq!(
-        productive_infrastructure["coverage_status"],
-        "manual_pending"
-    );
-    assert!(productive_infrastructure["series_key"].is_null());
-    assert!(productive_infrastructure["source_artifact_id"].is_null());
-    assert!(productive_infrastructure["latest_period"].is_null());
+    assert_eq!(productive_infrastructure["raw_value"], 30000.0);
+    assert_eq!(productive_infrastructure["normalized_value"], 1.0);
+    assert_eq!(productive_infrastructure["coverage_status"], "resolved");
+    assert!(productive_infrastructure["series_key"].is_string());
+    assert!(productive_infrastructure["source_artifact_id"].is_string());
+    assert_eq!(productive_infrastructure["latest_period"], "2024-02-01");
     assert_eq!(
         productive_infrastructure["dimensions"]["mapping"],
         "productive_infrastructure_onshore"
@@ -364,8 +371,8 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let energy_price = contribution(contributions, "energy.price");
     assert_eq!(energy_price["raw_value"], 0.0);
-    assert_eq!(energy_price["normalized_value"], 1.0);
-    assert_eq!(energy_price["coverage_status"], "resolved");
+    assert!(energy_price["normalized_value"].is_null());
+    assert_eq!(energy_price["coverage_status"], "missing_expected");
     assert_eq!(energy_price["source_dataflow_id"], "aemo.dispatch");
     assert_eq!(
         energy_price["dimensions"]["metric"],
@@ -374,8 +381,8 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let renewable_generation = contribution(contributions, "energy.renewable-generation");
     assert_eq!(renewable_generation["raw_value"], 5000.0);
-    assert_eq!(renewable_generation["normalized_value"], 1.0);
-    assert_eq!(renewable_generation["coverage_status"], "resolved");
+    assert!(renewable_generation["normalized_value"].is_null());
+    assert_eq!(renewable_generation["coverage_status"], "missing_expected");
     assert_eq!(
         renewable_generation["source_dataflow_id"],
         "aemo.generation_mix"
@@ -385,8 +392,8 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
 
     let dispatchable_capacity = contribution(contributions, "energy.dispatchable-capacity");
     assert_eq!(dispatchable_capacity["raw_value"], 15000.0);
-    assert_eq!(dispatchable_capacity["normalized_value"], 1.0);
-    assert_eq!(dispatchable_capacity["coverage_status"], "resolved");
+    assert!(dispatchable_capacity["normalized_value"].is_null());
+    assert_eq!(dispatchable_capacity["coverage_status"], "missing_expected");
     assert_eq!(
         dispatchable_capacity["source_dataflow_id"],
         "aemo.dispatchability_capacity"
@@ -465,19 +472,19 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     assert!(visible["normalized_value"].is_null());
 
     let oversight = contribution(contributions, "oversight.reviewed-strength");
-    assert!(oversight["raw_value"].is_null());
-    assert!(oversight["normalized_value"].is_null());
-    assert_eq!(oversight["coverage_status"], "manual_pending");
-    assert!(oversight["series_key"].is_null());
-    assert!(oversight["source_artifact_id"].is_null());
+    assert_eq!(oversight["raw_value"], 100.0);
+    assert_eq!(oversight["normalized_value"], 1.0);
+    assert_eq!(oversight["coverage_status"], "stale");
+    assert!(oversight["series_key"].is_string());
+    assert!(oversight["source_artifact_id"].is_string());
     assert_eq!(oversight["confidence"], "medium");
 
     let compute = contribution(contributions, "compute.datacentre-capacity");
-    assert!(compute["raw_value"].is_null());
-    assert!(compute["normalized_value"].is_null());
-    assert_eq!(compute["coverage_status"], "manual_pending");
-    assert!(compute["series_key"].is_null());
-    assert!(compute["source_artifact_id"].is_null());
+    assert_eq!(compute["raw_value"], 1000.0);
+    assert_eq!(compute["normalized_value"], 1.0);
+    assert_eq!(compute["coverage_status"], "resolved");
+    assert!(compute["series_key"].is_string());
+    assert!(compute["source_artifact_id"].is_string());
     assert_eq!(compute["confidence"], "low");
 
     let surveillance = contribution(contributions, "surveillance.intensity");
@@ -502,9 +509,9 @@ async fn aps_latest_and_history_score_seeded_inputs_with_provenance() {
     let snapshots: Value = serde_json::from_slice(&body).expect("history json");
     let snapshots = snapshots.as_array().expect("snapshot array");
     assert_eq!(snapshots.len(), 2);
-    assert_eq!(snapshots[0]["as_of"], "2024-01-01");
+    assert_eq!(snapshots[0]["snapshot_date"], "2024-01-01");
     assert_eq!(snapshots[0]["trend"], "unavailable");
-    assert_eq!(snapshots[1]["as_of"], "2024-02-01");
+    assert_eq!(snapshots[1]["snapshot_date"], "2024-02-01");
     assert_eq!(snapshots[1]["trend"], "up");
     assert_eq!(snapshots[1]["score"], 100.0);
 }

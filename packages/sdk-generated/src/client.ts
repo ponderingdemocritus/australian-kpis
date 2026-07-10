@@ -6,6 +6,60 @@
  * OpenAPI spec version: 0.1.0
  */
 /**
+ * Numeric APS value only when coverage gates pass.
+ */
+export type ApsSnapshotSummaryScore = number | null;
+
+/**
+ * Prior snapshot revision superseded by this correction.
+ */
+export type ApsSnapshotSummarySupersedesSnapshotId = string | null;
+
+export type ApsSnapshotSummaryZone = null | ScoreZone;
+
+/**
+ * Compact APS point returned by history endpoints.
+ */
+export interface ApsSnapshotSummary {
+  /** End of the represented Sydney calendar day, expressed in UTC. */
+  as_of: string;
+  /** Overall confidence label. */
+  confidence: Confidence;
+  /** Missing-input lower and upper APS bounds. */
+  confidence_band: ConfidenceBand;
+  /** SHA-256 digest of the canonical config JSON. */
+  config_digest: string;
+  /** Immutable config version. */
+  config_version: string;
+  /** Overall usable scored weight percentage. */
+  coverage_pct: number;
+  /** Stable snapshot revision identity. */
+  id: string;
+  /** Coverage-gated publication state. */
+  publication_state: PublicationState;
+  /** Immutable database publication time. */
+  published_at: string;
+  /**
+   * Zero-based correction revision.
+   * @minimum 0
+   */
+  revision: number;
+  /** Numeric APS value only when coverage gates pass. */
+  score?: ApsSnapshotSummaryScore;
+  /** Scorecard id. */
+  scorecard_id: string;
+  /** Sydney calendar date represented by this publication. */
+  snapshot_date: string;
+  /** Axis-level values and coverage. */
+  sub_indexes: SubIndexScore[];
+  /** Prior snapshot revision superseded by this correction. */
+  supersedes_snapshot_id?: ApsSnapshotSummarySupersedesSnapshotId;
+  /** Movement against the nearest comparable numeric snapshot. */
+  trend: Trend;
+  zone?: ApsSnapshotSummaryZone;
+}
+
+/**
  * Lowercase hex-encoded SHA-256 digest (64 chars).
  * @minLength 64
  * @maxLength 64
@@ -117,6 +171,16 @@ export const CoverageStatus = {
 } as const;
 
 /**
+ * Coverage gates required for a numeric APS publication.
+ */
+export interface CoverageThresholds {
+  /** Minimum usable scored weight percentage on each axis. */
+  axis_pct: number;
+  /** Minimum overall usable scored weight percentage. */
+  overall_pct: number;
+}
+
+/**
  * Request body for `POST /v1/subscriptions`.
  */
 export interface CreateSubscriptionRequest {
@@ -203,6 +267,25 @@ export interface DataflowsResponse {
   dataflows: Dataflow[];
 }
 
+/**
+ * Probe latency in whole milliseconds when a probe was attempted.
+ * @minimum 0
+ */
+export type DependencyHealthLatencyMs = number | null;
+
+/**
+ * One dependency status in the production readiness response.
+ */
+export interface DependencyHealth {
+  /**
+   * Probe latency in whole milliseconds when a probe was attempted.
+   * @minimum 0
+   */
+  latency_ms?: DependencyHealthLatencyMs;
+  /** `up`, `down`, or `degraded`. */
+  status: string;
+}
+
 export type DimensionDescription = string | null;
 
 /**
@@ -259,12 +342,36 @@ export const Frequency = {
 } as const;
 
 /**
+ * Dependency collection in the production readiness response.
+ */
+export interface HealthDependencies {
+  /** Timescale/Postgres and schema state. */
+  database: DependencyHealth;
+  /** Disposable Redis cache/rate-limit state. */
+  redis: DependencyHealth;
+  /** OTLP exporter configuration state. */
+  telemetry: DependencyHealth;
+}
+
+/**
  * Health endpoint response.
  */
 export interface HealthResponse {
   /** Current service health. */
   status: string;
 }
+
+/**
+ * Revision view used by APS history reads.
+ */
+export type HistoryView = typeof HistoryView[keyof typeof HistoryView];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const HistoryView = {
+  as_published: 'as_published',
+  latest: 'latest',
+} as const;
 
 /**
  * Exact dimension selector for the intended APS series.
@@ -293,6 +400,11 @@ export interface IndicatorConfig {
   direction: Direction;
   /** User-facing indicator label. */
   display_label: string;
+  /**
+   * Age in seconds after which the value is excluded from scoring.
+   * @minimum 0
+   */
+  hard_after_seconds?: number;
   /** Stable indicator id. */
   indicator_id: string;
   /** Source measure id. */
@@ -301,6 +413,11 @@ export interface IndicatorConfig {
   normalization: Normalization;
   /** Source and licensing metadata. */
   provenance: Provenance;
+  /**
+   * Age in seconds after which the value remains usable but becomes stale.
+   * @minimum 0
+   */
+  soft_after_seconds?: number;
   /** Canonical source dataflow id. */
   source_dataflow_id: string;
   /** Display unit. */
@@ -313,6 +430,11 @@ export interface IndicatorConfig {
  * Dimension selector used for this input.
  */
 export type IndicatorContributionDimensions = {[key: string]: string};
+
+/**
+ * Ingestion generation that published the resolved observation.
+ */
+export type IndicatorContributionIngestionGenerationId = string | null;
 
 /**
  * Latest resolved period, when available.
@@ -364,6 +486,8 @@ export interface IndicatorContribution {
   direction: Direction;
   /** Indicator id. */
   indicator_id: string;
+  /** Ingestion generation that published the resolved observation. */
+  ingestion_generation_id?: IndicatorContributionIngestionGenerationId;
   /** Indicator label. */
   label: string;
   /** Latest resolved period, when available. */
@@ -630,6 +754,87 @@ export interface Provenance {
 }
 
 /**
+ * Snapshot publication result after applying coverage gates.
+ */
+export type PublicationState = typeof PublicationState[keyof typeof PublicationState];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const PublicationState = {
+  published: 'published',
+  insufficient_coverage: 'insufficient_coverage',
+} as const;
+
+/**
+ * Numeric APS value only when coverage gates pass.
+ */
+export type PublishedApsSnapshotScore = number | null;
+
+/**
+ * Prior snapshot revision superseded by this correction.
+ */
+export type PublishedApsSnapshotSupersedesSnapshotId = string | null;
+
+export type PublishedApsSnapshotZone = null | ScoreZone;
+
+/**
+ * Immutable APS API snapshot persisted as one publication revision.
+ */
+export interface PublishedApsSnapshot {
+  /** End of the represented Sydney calendar day, expressed in UTC. */
+  as_of: string;
+  /** Overall confidence label. */
+  confidence: Confidence;
+  /** Missing-input lower and upper APS bounds. */
+  confidence_band: ConfidenceBand;
+  /** SHA-256 digest of the canonical config JSON. */
+  config_digest: string;
+  /** Immutable config version. */
+  config_version: string;
+  /** Full contribution and provenance detail. */
+  contributions: IndicatorContribution[];
+  /** Overall usable scored weight percentage. */
+  coverage_pct: number;
+  /** Stable snapshot revision identity. */
+  id: string;
+  /** Coverage-gated publication state. */
+  publication_state: PublicationState;
+  /** Immutable database publication time. */
+  published_at: string;
+  /**
+   * Zero-based correction revision.
+   * @minimum 0
+   */
+  revision: number;
+  /** Numeric APS value only when coverage gates pass. */
+  score?: PublishedApsSnapshotScore;
+  /** Scorecard id. */
+  scorecard_id: string;
+  /** Sydney calendar date represented by this publication. */
+  snapshot_date: string;
+  /** Axis-level values and coverage. */
+  sub_indexes: SubIndexScore[];
+  /** Prior snapshot revision superseded by this correction. */
+  supersedes_snapshot_id?: PublishedApsSnapshotSupersedesSnapshotId;
+  /** Movement against the nearest comparable numeric snapshot. */
+  trend: Trend;
+  zone?: PublishedApsSnapshotZone;
+}
+
+export type RuntimeHealthResponseDependencies = null | HealthDependencies;
+
+/**
+ * Production liveness/readiness response.
+ */
+export interface RuntimeHealthResponse {
+  dependencies?: RuntimeHealthResponseDependencies;
+  /** `live`, `ready`, `degraded`, or `not_ready`. */
+  status: string;
+  /** Immutable build version or git SHA. */
+  version: string;
+}
+
+/**
  * APS score zone.
  */
 export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
@@ -637,9 +842,9 @@ export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const ScoreZone = {
-  red: 'red',
-  yellow: 'yellow',
-  green: 'green',
+  scarcity: 'scarcity',
+  mixed: 'mixed',
+  abundance: 'abundance',
 } as const;
 
 /**
@@ -648,8 +853,12 @@ export const ScoreZone = {
 export interface ScorecardConfig {
   /** Attribution note for the derived scorecard config. */
   attribution: string;
+  /** Numeric publication coverage gates. */
+  coverage_thresholds: CoverageThresholds;
   /** User-facing description. */
   description: string;
+  /** SHA-256 digest of the canonical config with this field empty. */
+  digest?: string;
   /** Formula metadata. */
   formula: string;
   /** Scorecard id. */
@@ -660,9 +869,34 @@ export interface ScorecardConfig {
   label: string;
   /** License note for the derived scorecard config. */
   license: string;
+  /** Public methodology citation. */
+  methodology_citation: string;
+  /** Absolute movement required for an up/down trend. */
+  trend_threshold: number;
   /** Versioned config id. */
   version: string;
+  /** Rounded-score zone thresholds. */
+  zone_thresholds: ZoneThresholds;
 }
+
+/**
+ * Config version; omitted selects the current version.
+ */
+export type ScorecardConfigQueryVersion = string | null;
+
+/**
+ * Query string selecting an immutable APS config version.
+ */
+export interface ScorecardConfigQuery {
+  /** Config version; omitted selects the current version. */
+  version?: ScorecardConfigQueryVersion;
+}
+
+/**
+ * Maximum points returned, from 1 through 1,000.
+ * @minimum 0
+ */
+export type ScorecardHistoryQueryLimit = number | null;
 
 /**
  * Inclusive lower snapshot date in `YYYY-MM-DD` form.
@@ -678,10 +912,25 @@ export type ScorecardHistoryQueryUntil = string | null;
  * Query string for APS history snapshots.
  */
 export interface ScorecardHistoryQuery {
+  /**
+   * Maximum points returned, from 1 through 1,000.
+   * @minimum 0
+   */
+  limit?: ScorecardHistoryQueryLimit;
   /** Inclusive lower snapshot date in `YYYY-MM-DD` form. */
   since?: ScorecardHistoryQuerySince;
   /** Inclusive upper snapshot date in `YYYY-MM-DD` form. */
   until?: ScorecardHistoryQueryUntil;
+  /** Revision view, defaulting to original as-published values. */
+  view?: HistoryView;
+}
+
+/**
+ * Query string for the latest APS snapshot.
+ */
+export interface ScorecardLatestQuery {
+  /** Revision view, defaulting to original as-published values. */
+  view?: HistoryView;
 }
 
 /**
@@ -1057,6 +1306,16 @@ export const Trend = {
   unavailable: 'unavailable',
 } as const;
 
+/**
+ * Inclusive upper bounds for the first two APS zones.
+ */
+export interface ZoneThresholds {
+  /** Maximum mixed score. */
+  mixed_max: number;
+  /** Maximum scarcity score. */
+  scarcity_max: number;
+}
+
 export type ListDataflowsParams = {
 /**
  * Optional source id filter, e.g. abs.
@@ -1121,6 +1380,13 @@ limit?: number;
 
 export type Openapi200 = { [key: string]: unknown };
 
+export type GetApsScorecardConfigParams = {
+/**
+ * Config version; omitted selects the current version.
+ */
+version?: string | null;
+};
+
 export type ListApsScorecardHistoryParams = {
 /**
  * Inclusive lower snapshot date in `YYYY-MM-DD` form.
@@ -1130,6 +1396,15 @@ since?: string | null;
  * Inclusive upper snapshot date in `YYYY-MM-DD` form.
  */
 until?: string | null;
+/**
+ * Revision view, defaulting to original as-published values.
+ */
+view?: HistoryView;
+/**
+ * Maximum points returned, from 1 through 1,000.
+ * @minimum 0
+ */
+limit?: number | null;
 };
 
 export type SearchCatalogParams = {
@@ -1145,6 +1420,97 @@ q: string;
  */
 limit?: number;
 };
+
+/**
+ * @summary `GET /livez`.
+ */
+export type livenessResponse200 = {
+  data: RuntimeHealthResponse
+  status: 200
+}
+
+export type livenessResponseSuccess = (livenessResponse200) & {
+  headers: Headers;
+};
+;
+
+export type livenessResponse = (livenessResponseSuccess)
+
+export const getLivenessUrl = () => {
+
+
+
+
+  return `/livez`
+}
+
+export const liveness = async ( options?: RequestInit): Promise<livenessResponse> => {
+
+  const res = await fetch(getLivenessUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: livenessResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as livenessResponse
+}
+
+
+
+/**
+ * @summary `GET /readyz`.
+ */
+export type readinessResponse200 = {
+  data: RuntimeHealthResponse
+  status: 200
+}
+
+export type readinessResponse503 = {
+  data: RuntimeHealthResponse
+  status: 503
+}
+
+export type readinessResponseSuccess = (readinessResponse200) & {
+  headers: Headers;
+};
+export type readinessResponseError = (readinessResponse503) & {
+  headers: Headers;
+};
+
+export type readinessResponse = (readinessResponseSuccess | readinessResponseError)
+
+export const getReadinessUrl = () => {
+
+
+
+
+  return `/readyz`
+}
+
+export const readiness = async ( options?: RequestInit): Promise<readinessResponse> => {
+
+  const res = await fetch(getReadinessUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: readinessResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as readinessResponse
+}
+
+
 
 /**
  * @summary `GET /v1/dataflows`.
@@ -1546,17 +1912,24 @@ export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse3
 
 export type getApsScorecardConfigResponse = (getApsScorecardConfigResponseSuccess | getApsScorecardConfigResponseError)
 
-export const getGetApsScorecardConfigUrl = () => {
+export const getGetApsScorecardConfigUrl = (params?: GetApsScorecardConfigParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/v1/scorecards/aps/config`
+  return stringifiedParams.length > 0 ? `/v1/scorecards/aps/config?${stringifiedParams}` : `/v1/scorecards/aps/config`
 }
 
-export const getApsScorecardConfig = async ( options?: RequestInit): Promise<getApsScorecardConfigResponse> => {
+export const getApsScorecardConfig = async (params?: GetApsScorecardConfigParams, options?: RequestInit): Promise<getApsScorecardConfigResponse> => {
 
-  const res = await fetch(getGetApsScorecardConfigUrl(),
+  const res = await fetch(getGetApsScorecardConfigUrl(params),
   {
     ...options,
     method: 'GET'
@@ -1577,7 +1950,7 @@ export const getApsScorecardConfig = async ( options?: RequestInit): Promise<get
  * @summary `GET /v1/scorecards/aps/history`.
  */
 export type listApsScorecardHistoryResponse200 = {
-  data: ScorecardSnapshot[]
+  data: ApsSnapshotSummary[]
   status: 200
 }
 
@@ -1643,7 +2016,7 @@ export const listApsScorecardHistory = async (params?: ListApsScorecardHistoryPa
  * @summary `GET /v1/scorecards/aps/latest`.
  */
 export type getApsScorecardLatestResponse200 = {
-  data: ScorecardSnapshot
+  data: PublishedApsSnapshot
   status: 200
 }
 
@@ -1689,6 +2062,55 @@ export const getApsScorecardLatest = async ( options?: RequestInit): Promise<get
 
   const data: getApsScorecardLatestResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as getApsScorecardLatestResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/snapshots/{id}`.
+ */
+export type getApsScorecardSnapshotResponse200 = {
+  data: PublishedApsSnapshot
+  status: 200
+}
+
+export type getApsScorecardSnapshotResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getApsScorecardSnapshotResponseSuccess = (getApsScorecardSnapshotResponse200) & {
+  headers: Headers;
+};
+export type getApsScorecardSnapshotResponseError = (getApsScorecardSnapshotResponse404) & {
+  headers: Headers;
+};
+
+export type getApsScorecardSnapshotResponse = (getApsScorecardSnapshotResponseSuccess | getApsScorecardSnapshotResponseError)
+
+export const getGetApsScorecardSnapshotUrl = (id: string,) => {
+
+
+
+
+  return `/v1/scorecards/aps/snapshots/${id}`
+}
+
+export const getApsScorecardSnapshot = async (id: string, options?: RequestInit): Promise<getApsScorecardSnapshotResponse> => {
+
+  const res = await fetch(getGetApsScorecardSnapshotUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getApsScorecardSnapshotResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getApsScorecardSnapshotResponse
 }
 
 

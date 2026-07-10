@@ -122,6 +122,53 @@ async fn health_route_returns_ok_json_and_request_id() {
 }
 
 #[tokio::test]
+async fn liveness_does_not_require_database_or_redis() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/livez")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("liveness body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("liveness json");
+    assert_eq!(parsed["status"], "live");
+    assert!(parsed["version"].is_string());
+    assert!(parsed.get("dependencies").is_none());
+}
+
+#[tokio::test]
+async fn readiness_fails_closed_when_database_is_unavailable() {
+    let response = router(test_state())
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("readiness body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("readiness json");
+    assert_eq!(parsed["status"], "not_ready");
+    assert_eq!(parsed["dependencies"]["database"]["status"], "down");
+    assert_eq!(parsed["dependencies"]["redis"]["status"], "up");
+    assert_eq!(parsed["dependencies"]["telemetry"]["status"], "degraded");
+}
+
+#[tokio::test]
 async fn openapi_route_serves_generated_spec() {
     let response = router(test_state())
         .expect("router")
@@ -148,6 +195,11 @@ async fn openapi_route_serves_generated_spec() {
     assert_eq!(
         parsed["paths"]["/v1/health"]["get"]["operationId"],
         "health"
+    );
+    assert_eq!(parsed["paths"]["/livez"]["get"]["operationId"], "liveness");
+    assert_eq!(
+        parsed["paths"]["/readyz"]["get"]["operationId"],
+        "readiness"
     );
     assert_eq!(
         parsed["paths"]["/v1/openapi.json"]["get"]["operationId"],

@@ -1,4 +1,4 @@
-import type { ScorecardSnapshot } from '@au-kpis/sdk'
+import type { ApsSnapshotSummary, PublishedApsSnapshot } from '@au-kpis/sdk'
 import {
   ALL_COVERAGE_STATUSES,
   type ApsContribution,
@@ -27,7 +27,9 @@ function axisScoreTo100(score: number, axis: Axis): number {
   return scoreOffset(toUnit(score, axis) * 100)
 }
 
-function findAxis(snapshot: ScorecardSnapshot, axis: Axis): ApsSubIndex | undefined {
+type SnapshotPoint = PublishedApsSnapshot | ApsSnapshotSummary
+
+function findAxis(snapshot: SnapshotPoint, axis: Axis): ApsSubIndex | undefined {
   return snapshot.sub_indexes.find((sub) => sub.axis === axis)
 }
 
@@ -47,12 +49,6 @@ function scoredContributions(contributions: ApsContribution[]): ApsContribution[
   )
 }
 
-function sumWeights(contributions: ApsContribution[], axis: Axis): number {
-  return contributions
-    .filter((contribution) => contribution.axis === axis)
-    .reduce((total, contribution) => total + contribution.weight, 0)
-}
-
 /* ---------------------------------------------------------------- scatter -- */
 
 export interface ApsScatterPoint {
@@ -67,16 +63,16 @@ export interface ApsScatterData {
   trail: ApsScatterPoint[] // oldest → newest, includes current as last element
 }
 
-function scatterPoint(snapshot: ScorecardSnapshot): ApsScatterPoint | null {
+function scatterPoint(snapshot: SnapshotPoint): ApsScatterPoint | null {
   const throughput = findAxis(snapshot, 'throughput')
   const orientation = findAxis(snapshot, 'orientation')
-  if (!throughput || !orientation) {
+  if (!throughput || !orientation || snapshot.score === null || snapshot.score === undefined) {
     return null
   }
   return {
     x: axisScoreTo100(throughput.score, 'throughput'),
     y: axisScoreTo100(orientation.score, 'orientation'),
-    asOf: snapshot.as_of,
+    asOf: snapshot.snapshot_date,
     score: scoreOffset(snapshot.score),
   }
 }
@@ -87,8 +83,8 @@ function scatterPoint(snapshot: ScorecardSnapshot): ApsScatterPoint | null {
  * at the current point (de-duped if history already includes "now").
  */
 export function deriveApsScatter(
-  snapshot: ScorecardSnapshot,
-  history: ScorecardSnapshot[] = [],
+  snapshot: PublishedApsSnapshot,
+  history: ApsSnapshotSummary[] = [],
 ): ApsScatterData {
   const current = scatterPoint(snapshot)
   const trail = history
@@ -108,7 +104,7 @@ export function deriveApsScatter(
 export interface ApsRadarPoint {
   component: string
   label: string
-  score: number // 0–100, axis-correct
+  score: number | null // 0–100, axis-correct; null renders as a gap
   axis: Axis
   coveragePct: number
 }
@@ -120,14 +116,14 @@ const AXIS_ORDER: Record<Axis, number> = { throughput: 0, orientation: 1 }
  * mapped axis-correctly via (0.5 + 0.5*s)*100. Zero-coverage spokes are kept
  * (the radar needs a stable axis set) but expose `coveragePct` for dimming.
  */
-export function deriveApsRadar(snapshot: ScorecardSnapshot): ApsRadarPoint[] {
+export function deriveApsRadar(snapshot: PublishedApsSnapshot): ApsRadarPoint[] {
   const points: ApsRadarPoint[] = []
   for (const sub of snapshot.sub_indexes) {
     for (const component of sub.components) {
       points.push({
         component: component.component,
         label: tokenLabel(component.component),
-        score: axisScoreTo100(component.score, sub.axis),
+        score: component.coverage_pct > 0 ? axisScoreTo100(component.score, sub.axis) : null,
         axis: sub.axis,
         coveragePct: component.coverage_pct,
       })
@@ -158,7 +154,7 @@ export interface ApsConstraint {
  * Indicators dragging the score down now, ranked by weighted shortfall from
  * best (weight * headroom). Direction is already baked into normalized_value.
  */
-export function deriveApsConstraints(snapshot: ScorecardSnapshot, topN = 5): ApsConstraint[] {
+export function deriveApsConstraints(snapshot: PublishedApsSnapshot, topN = 5): ApsConstraint[] {
   return scoredContributions(snapshot.contributions)
     .map((contribution) => {
       const normalizedValue = contribution.normalized_value as number
@@ -184,74 +180,6 @@ export function deriveApsConstraints(snapshot: ScorecardSnapshot, topN = 5): Aps
     .slice(0, topN)
 }
 
-/* ---------------------------------------------------------------- uplift -- */
-
-export interface ApsUplift {
-  indicatorId: string
-  label: string
-  component: string
-  axis: Axis
-  upliftScore: number
-  estimatedApsGain: number // approx APS points if this indicator reached best
-  headroom: number
-  weight: number
-  unit: string
-}
-
-/**
- * "What would move APS?" — estimated APS-point gain from closing each
- * indicator's gap to best, ranked descending. This is a local linear
- * approximation of APS = 100*T*(0.5+0.5*O) at the current operating point:
- *   throughput row: gain ≈ (w/RW_T) * headroom * 100 * (0.5 + 0.5*O)
- *   orientation row: gain ≈ (w/RW_O) * headroom * 100 * T
- * It differs from `deriveApsConstraints` (raw current drag) because it folds in
- * each indicator's share of its axis and the axis sensitivity — so when T is
- * low, throughput fixes correctly dominate.
- */
-export function deriveApsUplift(snapshot: ScorecardSnapshot, topN = 5): ApsUplift[] {
-  const throughputSub = findAxis(snapshot, 'throughput')
-  const orientationSub = findAxis(snapshot, 'orientation')
-  const throughput = throughputSub ? toUnit(throughputSub.score, 'throughput') : 0
-  const orientation = orientationSub ? orientationSub.score : 0
-  const scored = scoredContributions(snapshot.contributions)
-  const resolvedWeightThroughput = sumWeights(scored, 'throughput')
-  const resolvedWeightOrientation = sumWeights(scored, 'orientation')
-
-  return scored
-    .map((contribution) => {
-      const normalizedValue = contribution.normalized_value as number
-      const headroom = 1 - toUnit(normalizedValue, contribution.axis)
-      let gain = 0
-      if (contribution.axis === 'throughput' && resolvedWeightThroughput > 0) {
-        gain =
-          (contribution.weight / resolvedWeightThroughput) *
-          headroom *
-          100 *
-          (0.5 + 0.5 * orientation)
-      } else if (contribution.axis === 'orientation' && resolvedWeightOrientation > 0) {
-        gain = (contribution.weight / resolvedWeightOrientation) * headroom * 100 * throughput
-      }
-      return {
-        indicatorId: contribution.indicator_id,
-        label: contribution.label,
-        component: contribution.component,
-        axis: contribution.axis,
-        upliftScore: gain,
-        estimatedApsGain: gain,
-        headroom,
-        weight: contribution.weight,
-        unit: contribution.unit,
-      }
-    })
-    .sort(
-      (left, right) =>
-        right.upliftScore - left.upliftScore ||
-        right.weight - left.weight ||
-        left.label.localeCompare(right.label),
-    )
-    .slice(0, topN)
-}
-
 /* ------------------------------------------------------------------ donut -- */
 
 export interface ApsCoverageSlice {
@@ -267,7 +195,7 @@ export interface ApsCoverageDonut {
 }
 
 /** Coverage-status breakdown for the donut, with the total for the centre. */
-export function deriveApsCoverageDonut(snapshot: ScorecardSnapshot): ApsCoverageDonut {
+export function deriveApsCoverageDonut(snapshot: PublishedApsSnapshot): ApsCoverageDonut {
   const counts = new Map<CoverageStatus, number>()
   for (const contribution of snapshot.contributions) {
     counts.set(contribution.coverage_status, (counts.get(contribution.coverage_status) ?? 0) + 1)
