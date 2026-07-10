@@ -88,6 +88,7 @@ pub async fn publish_ingestion_generation(
     let series_upserted = upsert_generation_series(&mut tx, generation_id).await?;
     let observations_loaded = insert_generation_observations(&mut tx, generation_id).await?;
     write_publication_audit(&mut tx, &meta, observations_loaded).await?;
+    enqueue_generation_webhooks(&mut tx, &meta, observations_loaded).await?;
 
     sqlx::query(
         "UPDATE discovered_work
@@ -121,6 +122,59 @@ pub async fn publish_ingestion_generation(
         series_upserted,
         observations_loaded,
     })
+}
+
+async fn enqueue_generation_webhooks(
+    tx: &mut Transaction<'_, Postgres>,
+    meta: &GenerationMeta,
+    observations_loaded: u64,
+) -> Result<(), LoadError> {
+    if observations_loaded == 0 {
+        return Ok(());
+    }
+    let observations_loaded = i64::try_from(observations_loaded)
+        .map_err(|_| LoadError::Validation("observations loaded exceeds BIGINT".to_string()))?;
+    let rows = sqlx::query(
+        r#"INSERT INTO webhook_deliveries (
+               subscription_id, event_id, generation_id, event_type, dataflow_id,
+               artifact_id, payload, status, attempts, max_attempts,
+               next_attempt_at, expires_at
+           )
+           SELECT subscription.id, $1, $1, 'data.updated', $2, $3,
+                  jsonb_build_object(
+                      'id', $1,
+                      'schema_version', '1',
+                      'type', 'data.updated',
+                      'occurred_at', now(),
+                      'generation_id', $1,
+                      'dataflow_id', $2,
+                      'artifact_id', encode($3, 'hex'),
+                      'observations_loaded', $4
+                  ),
+                  'pending', 0, 12, now(), now() + INTERVAL '24 hours'
+           FROM webhook_subscriptions AS subscription
+           WHERE subscription.status = 'active'
+             AND (
+                 cardinality(subscription.dataflow_ids) = 0
+                 OR $2 = ANY(subscription.dataflow_ids)
+             )
+           ON CONFLICT (event_id, subscription_id) DO NOTHING"#,
+    )
+    .bind(meta.id)
+    .bind(&meta.dataflow_id)
+    .bind(&meta.artifact_id)
+    .bind(observations_loaded)
+    .execute(&mut **tx)
+    .await?;
+    if rows.rows_affected() > 0 {
+        tracing::info!(
+            generation_id = %meta.id,
+            dataflow_id = %meta.dataflow_id,
+            deliveries_enqueued = rows.rows_affected(),
+            "durable webhook outbox rows enqueued"
+        );
+    }
+    Ok(())
 }
 
 async fn load_generation_for_update(

@@ -64,15 +64,17 @@ type CreateSubscriptionRequest = {
 };
 type DataflowId = string;
 type CreateSubscriptionResponse = {
+  signing_secret: string;
   subscription: SubscriptionDetails;
 };
 type SubscriptionDetails = {
   created_at: string;
   dataflow_ids: Array<DataflowId>;
   id: string;
-  signing_secret: string;
   status: string;
+  updated_at: string;
   url: string;
+  verified_at?: (string | null) | undefined;
 };
 type Dataflow = {
   attribution: string;
@@ -201,6 +203,9 @@ type IndicatorContribution = {
   unit: string;
   weight: number;
 };
+type ListSubscriptionsResponse = {
+  subscriptions: Array<SubscriptionDetails>;
+};
 type Observation = {
   attributes: {};
   ingested_at: string;
@@ -271,6 +276,10 @@ type PublishedApsSnapshot = {
   supersedes_snapshot_id?: (string | null) | undefined;
   trend: Trend;
   zone?: (null | ScoreZone) | undefined;
+};
+type RotateSubscriptionSecretResponse = {
+  signing_secret: string;
+  subscription: SubscriptionDetails;
 };
 type RuntimeHealthResponse = {
   dependencies?: (null | HealthDependencies) | undefined;
@@ -818,30 +827,20 @@ const SourceCatalogEntry: z.ZodType<SourceCatalogEntry> = z
 const SourcesResponse: z.ZodType<SourcesResponse> = z
   .object({ sources: z.array(SourceCatalogEntry) })
   .passthrough();
-const CreateSubscriptionRequest: z.ZodType<CreateSubscriptionRequest> = z
-  .object({ dataflow_ids: z.array(DataflowId).optional(), url: z.string() })
-  .passthrough();
 const SubscriptionDetails: z.ZodType<SubscriptionDetails> = z
   .object({
     created_at: z.string().datetime({ offset: true }),
     dataflow_ids: z.array(DataflowId),
     id: z.string().uuid(),
-    signing_secret: z.string(),
     status: z.string(),
+    updated_at: z.string().datetime({ offset: true }),
     url: z.string(),
+    verified_at: z.union([z.string(), z.null()]).optional(),
   })
   .passthrough();
-const CreateSubscriptionResponse: z.ZodType<CreateSubscriptionResponse> = z
-  .object({ subscription: SubscriptionDetails })
+const ListSubscriptionsResponse: z.ZodType<ListSubscriptionsResponse> = z
+  .object({ subscriptions: z.array(SubscriptionDetails) })
   .passthrough();
-const DataflowsQuery: z.ZodType<DataflowsQuery> = z
-  .object({
-    frequency: z.union([z.null(), Frequency]),
-    source: z.union([z.null(), SourceId]),
-  })
-  .partial()
-  .passthrough();
-const HistoryView = z.enum(["as_published", "latest"]);
 const ProblemDetails = z
   .object({
     detail: z.union([z.string(), z.null()]).optional(),
@@ -851,6 +850,24 @@ const ProblemDetails = z
     type: z.string(),
   })
   .passthrough();
+const CreateSubscriptionRequest: z.ZodType<CreateSubscriptionRequest> = z
+  .object({ dataflow_ids: z.array(DataflowId).optional(), url: z.string() })
+  .passthrough();
+const CreateSubscriptionResponse: z.ZodType<CreateSubscriptionResponse> = z
+  .object({ signing_secret: z.string(), subscription: SubscriptionDetails })
+  .passthrough();
+const RotateSubscriptionSecretResponse: z.ZodType<RotateSubscriptionSecretResponse> =
+  z
+    .object({ signing_secret: z.string(), subscription: SubscriptionDetails })
+    .passthrough();
+const DataflowsQuery: z.ZodType<DataflowsQuery> = z
+  .object({
+    frequency: z.union([z.null(), Frequency]),
+    source: z.union([z.null(), SourceId]),
+  })
+  .partial()
+  .passthrough();
+const HistoryView = z.enum(["as_published", "latest"]);
 const ScorecardConfigQuery = z
   .object({ version: z.union([z.string(), z.null()]) })
   .partial()
@@ -954,12 +971,14 @@ export const schemas = {
   SourceCatalogDataflow,
   SourceCatalogEntry,
   SourcesResponse,
-  CreateSubscriptionRequest,
   SubscriptionDetails,
+  ListSubscriptionsResponse,
+  ProblemDetails,
+  CreateSubscriptionRequest,
   CreateSubscriptionResponse,
+  RotateSubscriptionSecretResponse,
   DataflowsQuery,
   HistoryView,
-  ProblemDetails,
   ScorecardConfigQuery,
   ScorecardHistoryQuery,
   ScorecardLatestQuery,

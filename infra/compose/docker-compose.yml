@@ -155,6 +155,27 @@ services:
       retries: 20
       start_period: 10s
 
+  webhook-worker:
+    profiles: ["observability"]
+    build:
+      context: ../..
+      dockerfile: infra/docker/au-kpis-webhook-worker.Dockerfile
+      target: runtime
+    environment:
+      AU_KPIS_DATABASE__URL: postgres://au_kpis:au_kpis@postgres:5432/au_kpis
+      AU_KPIS_CACHE__URL: redis://redis:6379
+      AU_KPIS_WEBHOOK_ENCRYPTION_KEY: QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE
+      AU_KPIS_WEBHOOK_ENCRYPTION_KEY_VERSION: "1"
+      AU_KPIS_TELEMETRY__SERVICE_NAME: au-kpis-webhook-worker
+      AU_KPIS_TELEMETRY__LOG_FORMAT: json
+      AU_KPIS_TELEMETRY__LOG_LEVEL: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
   otel-collector:
     profiles: ["observability"]
     image: otel/opentelemetry-collector-contrib:0.114.0

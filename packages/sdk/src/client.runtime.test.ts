@@ -56,6 +56,83 @@ await run('dataflow methods call catalog endpoints and attach api key', async ()
   assertEqual(new Headers(mock.calls[0]?.init?.headers).get('x-api-key'), 'test-key')
 })
 
+await run('source and subscription helpers cover the production lifecycle', async () => {
+  const subscription = {
+    created_at: '2026-07-10T00:00:00Z',
+    dataflow_ids: ['abs.cpi'],
+    id: '11111111-1111-4111-8111-111111111111',
+    status: 'pending_verification',
+    updated_at: '2026-07-10T00:00:00Z',
+    url: 'https://receiver.example.test/hook',
+    verified_at: null,
+  }
+  const created = { signing_secret: 'secret-v1', subscription }
+  const rotated = { signing_secret: 'secret-v2', subscription }
+  const source = { id: 'abs' }
+  const mock = mockFetch([
+    jsonResponse({ sources: [source] }),
+    jsonResponse(source),
+    jsonResponse(created, 202),
+    jsonResponse({ subscriptions: [subscription] }),
+    jsonResponse(subscription),
+    jsonResponse(subscription),
+    jsonResponse(rotated),
+    new Response(null, { status: 204 }),
+  ])
+  const client = createClient({
+    apiKey: 'subscription-key',
+    baseUrl: 'https://api.example.test',
+    fetch: mock.fetch,
+  })
+
+  await client.sources.list()
+  await client.sources.get('abs')
+  assertEqual(
+    await client.subscriptions.create({
+      dataflow_ids: ['abs.cpi'],
+      url: 'https://receiver.example.test/hook',
+    }),
+    created,
+  )
+  await client.subscriptions.list()
+  await client.subscriptions.get(subscription.id)
+  await client.subscriptions.verify(subscription.id)
+  await client.subscriptions.rotateSecret(subscription.id)
+  await client.subscriptions.revoke(subscription.id)
+
+  assertPath(mock.calls[0], '/v1/sources')
+  assertPath(mock.calls[1], '/v1/sources/abs')
+  assertPath(mock.calls[2], '/v1/subscriptions')
+  assertEqual(mock.calls[2]?.init?.method, 'POST')
+  assertEqual(JSON.parse(String(mock.calls[2]?.init?.body)), {
+    dataflow_ids: ['abs.cpi'],
+    url: 'https://receiver.example.test/hook',
+  })
+  assertPath(mock.calls[5], `/v1/subscriptions/${subscription.id}/verify`)
+  assertPath(mock.calls[6], `/v1/subscriptions/${subscription.id}/rotate-secret`)
+  assertEqual(mock.calls[7]?.init?.method, 'DELETE')
+})
+
+await run('non-idempotent subscription commands are never retried', async () => {
+  const mock = mockFetch([
+    jsonResponse({ status: 503, title: 'Unavailable', type: 'about:blank' }, 503),
+  ])
+  const client = createClient({
+    baseUrl: 'https://api.example.test',
+    fetch: mock.fetch,
+    retry: { maxAttempts: 3, sleep: async () => undefined },
+  })
+
+  await assertRejects(
+    client.subscriptions.create({
+      dataflow_ids: [],
+      url: 'https://receiver.example.test/hook',
+    }),
+    ApiRequestError,
+  )
+  assertEqual(mock.calls.length, 1)
+})
+
 await run('search.catalog calls the search endpoint', async () => {
   const response = {
     query: 'cpi',

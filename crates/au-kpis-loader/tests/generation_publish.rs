@@ -64,6 +64,34 @@ async fn seed_catalog(pool: &PgPool) {
     .expect("seed dataflow");
 }
 
+async fn seed_active_webhook_subscription(pool: &PgPool) {
+    let api_key_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO api_keys (id, key_hash, name, scopes, rate_limit_tier)
+         VALUES ($1, 'generation-webhook-key', 'generation webhook',
+                 ARRAY['subscriptions:read', 'subscriptions:write'], 'free')",
+    )
+    .bind(api_key_id)
+    .execute(pool)
+    .await
+    .expect("seed webhook API key");
+    sqlx::query(
+        "INSERT INTO webhook_subscriptions (
+             id, api_key_id, target_url, dataflow_ids, status,
+             secret_ciphertext, secret_nonce, secret_key_version, verified_at
+         )
+         VALUES ($1, $2, 'https://receiver.example.test/hook', ARRAY['abs.cpi'],
+                 'active', $3, $4, 1, now())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(api_key_id)
+    .bind(vec![0x11_u8; 48])
+    .bind(vec![0x22_u8; 12])
+    .execute(pool)
+    .await
+    .expect("seed active webhook subscription");
+}
+
 async fn seed_fetch(pool: &PgPool, byte: u8) -> (ArtifactId, i64) {
     let artifact_id = ArtifactId::from_digest(Sha256Digest::from_bytes([byte; 32]));
     let source_url = format!("https://example.test/releases/{byte}");
@@ -199,6 +227,7 @@ async fn stage_generation(
 async fn publication_is_atomic_idempotent_and_serializes_revisions() {
     let (_timescale, pool) = migrated_pool("au_kpis_generation_publish").await;
     seed_catalog(&pool).await;
+    seed_active_webhook_subscription(&pool).await;
     let time_a = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
 
     let (artifact_a, fetch_a) = seed_fetch(&pool, 0x21).await;
@@ -209,10 +238,34 @@ async fn publication_is_atomic_idempotent_and_serializes_revisions() {
         .expect("publish first generation");
     assert_eq!(published.observations_loaded, 1);
     assert_eq!(published.series_upserted, 1);
+    let event = sqlx::query(
+        "SELECT event_id, generation_id, payload, max_attempts, expires_at - created_at AS window
+         FROM webhook_deliveries",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("fetch atomic webhook outbox row");
+    assert_eq!(event.get::<Uuid, _>("event_id"), generation_a);
+    assert_eq!(event.get::<Uuid, _>("generation_id"), generation_a);
+    assert_eq!(event.get::<i32, _>("max_attempts"), 12);
+    let payload = event.get::<serde_json::Value, _>("payload");
+    assert_eq!(payload["id"], generation_a.to_string());
+    assert_eq!(payload["generation_id"], generation_a.to_string());
+    assert_eq!(payload["schema_version"], "1");
+    assert_eq!(payload["type"], "data.updated");
+    assert_eq!(payload["artifact_id"], artifact_a.to_string());
+    assert_eq!(payload["observations_loaded"], 1);
     let replayed = publish_ingestion_generation(&pool, generation_a)
         .await
         .expect("replay published generation");
     assert_eq!(replayed.observations_loaded, 1);
+    let replay_delivery_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM webhook_deliveries WHERE generation_id = $1")
+            .bind(generation_a)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(replay_delivery_count, 1);
 
     let parser_replay = create_generation(&pool, fetch_a, "2026-q1", "parser-v2").await;
     assert_ne!(parser_replay, generation_a);

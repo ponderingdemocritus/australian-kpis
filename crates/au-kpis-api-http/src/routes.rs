@@ -32,7 +32,7 @@ pub struct HealthResponse {
             body = HealthResponse
         ),
         (
-            status = 408,
+            status = 504,
             description = "Request timed out.",
             content_type = "application/problem+json",
             body = crate::error::ProblemDetails
@@ -224,7 +224,7 @@ fn build_version() -> String {
             body = Object
         ),
         (
-            status = 408,
+            status = 504,
             description = "Request timed out.",
             content_type = "application/problem+json",
             body = crate::error::ProblemDetails

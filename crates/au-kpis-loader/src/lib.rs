@@ -19,8 +19,6 @@ pub use generation::{GenerationPublication, publish_ingestion_generation};
 
 const DEFAULT_MAX_ROWS: usize = 1_000;
 const DEFAULT_MAX_BYTES: usize = 10 * 1024 * 1024;
-const WEBHOOK_EVENT_DATA_UPDATED: &str = "data.updated";
-const WEBHOOK_DELIVERY_MAX_ATTEMPTS: i32 = 5;
 
 /// A parsed observation paired with the series metadata needed by the loader.
 #[derive(Debug, Clone, PartialEq)]
@@ -855,7 +853,6 @@ async fn upsert_observations(
     } else {
         inserted + upsert_observation_revisions(tx).await?
     };
-    enqueue_webhook_deliveries_for_observations(tx, observations_loaded).await?;
     Ok(observations_loaded)
 }
 
@@ -968,7 +965,6 @@ async fn upsert_observations_in_chunk_transactions(
         last_stage_row_id = max_stage_row_id;
 
         if last_stage_row_id >= final_stage_row_id {
-            enqueue_webhook_deliveries_for_observations(&mut tx, observations_loaded).await?;
             tx.commit().await?;
             break;
         }
@@ -1087,70 +1083,6 @@ async fn upsert_next_observation_chunk(
         .map_err(|_| LoadError::Validation("loaded observation count exceeded u64 range".into()))?;
 
     Ok((max_stage_row_id, chunk_rows_loaded, had_rows))
-}
-
-async fn enqueue_webhook_deliveries_for_observations(
-    tx: &mut Transaction<'_, Postgres>,
-    observations_loaded: u64,
-) -> Result<(), LoadError> {
-    let deliveries_enqueued = enqueue_webhook_deliveries_for_staging(tx).await?;
-    if deliveries_enqueued > 0 {
-        tracing::info!(
-            observations_loaded,
-            deliveries_enqueued,
-            "webhook deliveries enqueued for loaded observations"
-        );
-    }
-
-    Ok(())
-}
-
-async fn enqueue_webhook_deliveries_for_staging(
-    tx: &mut Transaction<'_, Postgres>,
-) -> Result<u64, LoadError> {
-    let rows = sqlx::query(
-        "WITH loaded_events AS (
-             SELECT series.dataflow_id,
-                    decode(observations.source_artifact_hex, 'hex') AS artifact_id,
-                    count(*)::BIGINT AS observations_loaded,
-                    max(observations.ingested_at) AS occurred_at
-             FROM staging_observations observations
-             JOIN staging_series series
-               ON series.series_key_hex = observations.series_key_hex
-             GROUP BY series.dataflow_id, observations.source_artifact_hex
-         ),
-         event_payloads AS (
-             SELECT dataflow_id,
-                    artifact_id,
-                    jsonb_build_object(
-                        'event', $1,
-                        'dataflow_id', dataflow_id,
-                        'artifact_id', encode(artifact_id, 'hex'),
-                        'observations_loaded', observations_loaded,
-                        'occurred_at', occurred_at
-                    ) AS payload
-             FROM loaded_events
-         )
-         INSERT INTO webhook_deliveries (
-             subscription_id, event_type, dataflow_id, artifact_id, payload,
-             status, attempts, max_attempts, next_attempt_at
-         )
-         SELECT subscriptions.id, $1, events.dataflow_id, events.artifact_id,
-                events.payload, 'pending', 0, $2, now()
-         FROM event_payloads events
-         JOIN webhook_subscriptions subscriptions
-           ON subscriptions.status = 'active'
-          AND (
-              cardinality(subscriptions.dataflow_ids) = 0
-              OR events.dataflow_id = ANY(subscriptions.dataflow_ids)
-          )",
-    )
-    .bind(WEBHOOK_EVENT_DATA_UPDATED)
-    .bind(WEBHOOK_DELIVERY_MAX_ATTEMPTS)
-    .execute(&mut **tx)
-    .await?;
-
-    Ok(rows.rows_affected())
 }
 
 /// Record a parser failure against the source artifact for audit and reprocessing.

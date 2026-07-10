@@ -28,6 +28,7 @@ pub mod dataflows;
 pub mod docs;
 pub mod error;
 pub mod observations;
+pub mod origin_auth;
 pub mod rate_limit;
 pub mod routes;
 pub mod scorecards;
@@ -63,9 +64,11 @@ pub use sources::{
 pub use state::AppState;
 pub use subscriptions::{
     CreateSubscriptionRequest, CreateSubscriptionResponse, DeliveryOptions, DeliveryRunOutcome,
-    SubscriptionDetails, SubscriptionError, WebhookDeliveryEvent, create_subscription,
-    deliver_due_webhooks, enqueue_data_update_event, run_webhook_delivery_worker,
-    spawn_webhook_delivery_worker,
+    ListSubscriptionsResponse, RotateSubscriptionSecretResponse, SubscriptionDetails,
+    SubscriptionError, WebhookDeliveryEvent, create_subscription, deliver_due_webhooks,
+    enqueue_data_update_event, get_subscription, list_subscriptions, revoke_subscription,
+    rotate_subscription_secret, run_webhook_delivery_worker, spawn_webhook_delivery_worker,
+    verify_subscription,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -83,10 +86,13 @@ pub enum RouterBuildError {
 pub fn router_with(routes: Router<AppState>, state: AppState) -> Result<Router, RouterBuildError> {
     let cors = cors_layer(&state.config)?;
     let rate_limit = middleware::from_fn_with_state(state.clone(), rate_limit::rate_limit);
+    let origin_auth =
+        middleware::from_fn_with_state(state.clone(), origin_auth::require_trusted_origin);
 
     Ok(routes.with_state(state).layer(
         ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
+            .layer(origin_auth)
             .layer(rate_limit)
             .layer(cors)
             .layer(CompressionLayer::new())
@@ -124,7 +130,19 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
             .route("/v1/search", get(search::search_catalog))
             .route(
                 "/v1/subscriptions",
-                post(subscriptions::create_subscription),
+                get(subscriptions::list_subscriptions).post(subscriptions::create_subscription),
+            )
+            .route(
+                "/v1/subscriptions/:id",
+                get(subscriptions::get_subscription).delete(subscriptions::revoke_subscription),
+            )
+            .route(
+                "/v1/subscriptions/:id/verify",
+                post(subscriptions::verify_subscription),
+            )
+            .route(
+                "/v1/subscriptions/:id/rotate-secret",
+                post(subscriptions::rotate_subscription_secret),
             )
             .route("/v1/openapi.json", get(openapi)),
         state,
@@ -142,7 +160,7 @@ async fn handle_timeout_error(err: BoxError) -> impl IntoResponse {
 
 fn cors_layer(config: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
     let mut layer = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers([
             header::ACCEPT,
             header::ACCEPT_ENCODING,

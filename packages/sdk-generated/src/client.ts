@@ -194,6 +194,8 @@ export interface CreateSubscriptionRequest {
  * Response body for `POST /v1/subscriptions`.
  */
 export interface CreateSubscriptionResponse {
+  /** HMAC signing secret shown exactly once. */
+  signing_secret: string;
   /** Created subscription. */
   subscription: SubscriptionDetails;
 }
@@ -531,6 +533,14 @@ export type LicenseOneOf = {
 export type License = 'CC-BY-4.0' | 'CC-BY-ND-4.0' | 'CC-BY-SA-4.0' | 'public-domain' | LicenseOneOf;
 
 /**
+ * Collection response for subscriptions owned by one API key.
+ */
+export interface ListSubscriptionsResponse {
+  /** Subscriptions owned by the authenticated key. */
+  subscriptions: SubscriptionDetails[];
+}
+
+/**
  * Identifier for a measure (e.g. `unemployment_rate`).
  */
 export type MeasureId = string;
@@ -819,6 +829,16 @@ export interface PublishedApsSnapshot {
   /** Movement against the nearest comparable numeric snapshot. */
   trend: Trend;
   zone?: PublishedApsSnapshotZone;
+}
+
+/**
+ * One-time secret returned by a rotation command.
+ */
+export interface RotateSubscriptionSecretResponse {
+  /** New signing secret shown exactly once. */
+  signing_secret: string;
+  /** Updated subscription. */
+  subscription: SubscriptionDetails;
 }
 
 export type RuntimeHealthResponseDependencies = null | HealthDependencies;
@@ -1258,6 +1278,11 @@ export interface SubIndexScore {
 }
 
 /**
+ * UTC endpoint verification time.
+ */
+export type SubscriptionDetailsVerifiedAt = string | null;
+
+/**
  * Created webhook subscription details.
  */
 export interface SubscriptionDetails {
@@ -1267,12 +1292,14 @@ export interface SubscriptionDetails {
   dataflow_ids: DataflowId[];
   /** Stable subscription id. */
   id: string;
-  /** HMAC signing secret shown once at creation. */
-  signing_secret: string;
   /** Current subscription status. */
   status: string;
+  /** UTC last-update timestamp. */
+  updated_at: string;
   /** Delivery target URL. */
   url: string;
+  /** UTC endpoint verification time. */
+  verified_at?: SubscriptionDetailsVerifiedAt;
 }
 
 /**
@@ -1701,15 +1728,15 @@ export type healthResponse200 = {
   status: 200
 }
 
-export type healthResponse408 = {
+export type healthResponse504 = {
   data: ProblemDetails
-  status: 408
+  status: 504
 }
 
 export type healthResponseSuccess = (healthResponse200) & {
   headers: Headers;
 };
-export type healthResponseError = (healthResponse408) & {
+export type healthResponseError = (healthResponse504) & {
   headers: Headers;
 };
 
@@ -1770,9 +1797,9 @@ export type listObservationsResponse404 = {
   status: 404
 }
 
-export type listObservationsResponse408 = {
+export type listObservationsResponse429 = {
   data: ProblemDetails
-  status: 408
+  status: 429
 }
 
 export type listObservationsResponse500 = {
@@ -1780,10 +1807,20 @@ export type listObservationsResponse500 = {
   status: 500
 }
 
+export type listObservationsResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type listObservationsResponse504 = {
+  data: ProblemDetails
+  status: 504
+}
+
 export type listObservationsResponseSuccess = (listObservationsResponse200ApplicationJson | listObservationsResponse200TextCsv) & {
   headers: Headers;
 };
-export type listObservationsResponseError = (listObservationsResponse304 | listObservationsResponse400 | listObservationsResponse404 | listObservationsResponse408 | listObservationsResponse500) & {
+export type listObservationsResponseError = (listObservationsResponse304 | listObservationsResponse400 | listObservationsResponse404 | listObservationsResponse429 | listObservationsResponse500 | listObservationsResponse503 | listObservationsResponse504) & {
   headers: Headers;
 };
 
@@ -1839,20 +1876,20 @@ export type openapiResponse200 = {
   status: 200
 }
 
-export type openapiResponse408 = {
-  data: ProblemDetails
-  status: 408
-}
-
 export type openapiResponse500 = {
   data: ProblemDetails
   status: 500
 }
 
+export type openapiResponse504 = {
+  data: ProblemDetails
+  status: 504
+}
+
 export type openapiResponseSuccess = (openapiResponse200) & {
   headers: Headers;
 };
-export type openapiResponseError = (openapiResponse408 | openapiResponse500) & {
+export type openapiResponseError = (openapiResponse500 | openapiResponse504) & {
   headers: Headers;
 };
 
@@ -2341,11 +2378,70 @@ export const getSource = async (sourceId: string, options?: RequestInit): Promis
 
 
 /**
+ * @summary `GET /v1/subscriptions`.
+ */
+export type listSubscriptionsResponse200 = {
+  data: ListSubscriptionsResponse
+  status: 200
+}
+
+export type listSubscriptionsResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type listSubscriptionsResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type listSubscriptionsResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type listSubscriptionsResponseSuccess = (listSubscriptionsResponse200) & {
+  headers: Headers;
+};
+export type listSubscriptionsResponseError = (listSubscriptionsResponse401 | listSubscriptionsResponse403 | listSubscriptionsResponse503) & {
+  headers: Headers;
+};
+
+export type listSubscriptionsResponse = (listSubscriptionsResponseSuccess | listSubscriptionsResponseError)
+
+export const getListSubscriptionsUrl = () => {
+
+
+
+
+  return `/v1/subscriptions`
+}
+
+export const listSubscriptions = async ( options?: RequestInit): Promise<listSubscriptionsResponse> => {
+
+  const res = await fetch(getListSubscriptionsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listSubscriptionsResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listSubscriptionsResponse
+}
+
+
+
+/**
  * @summary `POST /v1/subscriptions`.
  */
-export type createSubscriptionResponse201 = {
+export type createSubscriptionResponse202 = {
   data: CreateSubscriptionResponse
-  status: 201
+  status: 202
 }
 
 export type createSubscriptionResponse400 = {
@@ -2358,15 +2454,25 @@ export type createSubscriptionResponse401 = {
   status: 401
 }
 
+export type createSubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
 export type createSubscriptionResponse500 = {
   data: ProblemDetails
   status: 500
 }
 
-export type createSubscriptionResponseSuccess = (createSubscriptionResponse201) & {
+export type createSubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type createSubscriptionResponseSuccess = (createSubscriptionResponse202) & {
   headers: Headers;
 };
-export type createSubscriptionResponseError = (createSubscriptionResponse400 | createSubscriptionResponse401 | createSubscriptionResponse500) & {
+export type createSubscriptionResponseError = (createSubscriptionResponse400 | createSubscriptionResponse401 | createSubscriptionResponse403 | createSubscriptionResponse500 | createSubscriptionResponse503) & {
   headers: Headers;
 };
 
@@ -2396,4 +2502,265 @@ export const createSubscription = async (createSubscriptionRequest: CreateSubscr
 
   const data: createSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as createSubscriptionResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/subscriptions/{id}`.
+ */
+export type getSubscriptionResponse200 = {
+  data: SubscriptionDetails
+  status: 200
+}
+
+export type getSubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type getSubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type getSubscriptionResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getSubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type getSubscriptionResponseSuccess = (getSubscriptionResponse200) & {
+  headers: Headers;
+};
+export type getSubscriptionResponseError = (getSubscriptionResponse401 | getSubscriptionResponse403 | getSubscriptionResponse404 | getSubscriptionResponse503) & {
+  headers: Headers;
+};
+
+export type getSubscriptionResponse = (getSubscriptionResponseSuccess | getSubscriptionResponseError)
+
+export const getGetSubscriptionUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}`
+}
+
+export const getSubscription = async (id: string, options?: RequestInit): Promise<getSubscriptionResponse> => {
+
+  const res = await fetch(getGetSubscriptionUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getSubscriptionResponse
+}
+
+
+
+/**
+ * @summary `DELETE /v1/subscriptions/{id}`.
+ */
+export type revokeSubscriptionResponse204 = {
+  data: void
+  status: 204
+}
+
+export type revokeSubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type revokeSubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type revokeSubscriptionResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type revokeSubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type revokeSubscriptionResponseSuccess = (revokeSubscriptionResponse204) & {
+  headers: Headers;
+};
+export type revokeSubscriptionResponseError = (revokeSubscriptionResponse401 | revokeSubscriptionResponse403 | revokeSubscriptionResponse404 | revokeSubscriptionResponse503) & {
+  headers: Headers;
+};
+
+export type revokeSubscriptionResponse = (revokeSubscriptionResponseSuccess | revokeSubscriptionResponseError)
+
+export const getRevokeSubscriptionUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}`
+}
+
+export const revokeSubscription = async (id: string, options?: RequestInit): Promise<revokeSubscriptionResponse> => {
+
+  const res = await fetch(getRevokeSubscriptionUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: revokeSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as revokeSubscriptionResponse
+}
+
+
+
+/**
+ * @summary `POST /v1/subscriptions/{id}/rotate-secret`.
+ */
+export type rotateSubscriptionSecretResponse200 = {
+  data: RotateSubscriptionSecretResponse
+  status: 200
+}
+
+export type rotateSubscriptionSecretResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type rotateSubscriptionSecretResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type rotateSubscriptionSecretResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type rotateSubscriptionSecretResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type rotateSubscriptionSecretResponseSuccess = (rotateSubscriptionSecretResponse200) & {
+  headers: Headers;
+};
+export type rotateSubscriptionSecretResponseError = (rotateSubscriptionSecretResponse401 | rotateSubscriptionSecretResponse403 | rotateSubscriptionSecretResponse404 | rotateSubscriptionSecretResponse503) & {
+  headers: Headers;
+};
+
+export type rotateSubscriptionSecretResponse = (rotateSubscriptionSecretResponseSuccess | rotateSubscriptionSecretResponseError)
+
+export const getRotateSubscriptionSecretUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}/rotate-secret`
+}
+
+export const rotateSubscriptionSecret = async (id: string, options?: RequestInit): Promise<rotateSubscriptionSecretResponse> => {
+
+  const res = await fetch(getRotateSubscriptionSecretUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: rotateSubscriptionSecretResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as rotateSubscriptionSecretResponse
+}
+
+
+
+/**
+ * @summary `POST /v1/subscriptions/{id}/verify`.
+ */
+export type verifySubscriptionResponse200 = {
+  data: SubscriptionDetails
+  status: 200
+}
+
+export type verifySubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type verifySubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type verifySubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type verifySubscriptionResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type verifySubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type verifySubscriptionResponseSuccess = (verifySubscriptionResponse200) & {
+  headers: Headers;
+};
+export type verifySubscriptionResponseError = (verifySubscriptionResponse400 | verifySubscriptionResponse401 | verifySubscriptionResponse403 | verifySubscriptionResponse404 | verifySubscriptionResponse503) & {
+  headers: Headers;
+};
+
+export type verifySubscriptionResponse = (verifySubscriptionResponseSuccess | verifySubscriptionResponseError)
+
+export const getVerifySubscriptionUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}/verify`
+}
+
+export const verifySubscription = async (id: string, options?: RequestInit): Promise<verifySubscriptionResponse> => {
+
+  const res = await fetch(getVerifySubscriptionUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: verifySubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as verifySubscriptionResponse
 }

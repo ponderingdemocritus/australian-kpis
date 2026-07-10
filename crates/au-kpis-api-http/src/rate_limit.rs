@@ -7,7 +7,7 @@ use au_kpis_cache::TokenBucketConfig;
 use au_kpis_config::{RateLimitConfig, RateLimitQuotaConfig, RateLimitTierConfig};
 use axum::{
     extract::{Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -32,6 +32,19 @@ pub async fn rate_limit(
 
     let outcome = match check_request_limit(&state, client_ip.as_deref(), verified.as_ref()).await {
         Ok(outcome) => outcome,
+        Err(ApiError::Cache(error)) if request.method() == Method::GET => {
+            tracing::warn!(%error, "Redis rate limits unavailable; serving public read degraded");
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(
+                HeaderName::from_static("x-au-kpis-degraded"),
+                HeaderValue::from_static("redis"),
+            );
+            return response;
+        }
+        Err(ApiError::Cache(error)) => {
+            tracing::warn!(%error, "Redis rate limits unavailable; rejecting protected write");
+            return ApiError::DependencyUnavailable("redis").into_response();
+        }
         Err(err) => return err.into_response(),
     };
 
@@ -62,6 +75,8 @@ async fn verified_key(
             Ok(Some(verified))
         }
         Err(AuthError::InvalidApiKey | AuthError::Validation(_)) => Ok(None),
+        Err(AuthError::Db(error)) => Err(ApiError::Db(error)),
+        Err(AuthError::Cache(error)) => Err(ApiError::Cache(error)),
         Err(err) => {
             tracing::error!(error = %err, "api key verification failed during rate limiting");
             Err(ApiError::Internal)
@@ -218,12 +233,20 @@ fn insert_header<T: std::fmt::Display>(headers: &mut HeaderMap, name: HeaderName
 
 fn client_ip(headers: &HeaderMap) -> Option<String> {
     headers
-        .get("x-forwarded-for")
+        .get("x-au-kpis-client-ip")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+        .or_else(|| {
+            headers
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(',').next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
         .or_else(|| {
             headers
                 .get("x-real-ip")

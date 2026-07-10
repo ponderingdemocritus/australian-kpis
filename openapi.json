@@ -296,7 +296,7 @@
               }
             }
           },
-          "408": {
+          "504": {
             "description": "Request timed out.",
             "content": {
               "application/problem+json": {
@@ -478,8 +478,8 @@
               }
             }
           },
-          "408": {
-            "description": "Request timed out.",
+          "429": {
+            "description": "Bulk stream admission capacity is exhausted.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -490,6 +490,26 @@
           },
           "500": {
             "description": "Internal server error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Short-request admission or a durable dependency is unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Request timed out.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -517,8 +537,8 @@
               }
             }
           },
-          "408": {
-            "description": "Request timed out.",
+          "500": {
+            "description": "OpenAPI generation failed.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -527,8 +547,8 @@
               }
             }
           },
-          "500": {
-            "description": "OpenAPI generation failed.",
+          "504": {
+            "description": "Request timed out.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1068,6 +1088,58 @@
       }
     },
     "/v1/subscriptions": {
+      "get": {
+        "tags": ["subscriptions"],
+        "summary": "`GET /v1/subscriptions`.",
+        "operationId": "listSubscriptions",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSubscriptionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      },
       "post": {
         "tags": ["subscriptions"],
         "summary": "`POST /v1/subscriptions`.",
@@ -1083,8 +1155,8 @@
           "required": true
         },
         "responses": {
-          "201": {
-            "description": "Subscription created.",
+          "202": {
+            "description": "Subscription pending endpoint verification.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1113,10 +1185,331 @@
               }
             }
           },
+          "403": {
+            "description": "API key lacks subscriptions:write.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal error.",
             "content": {
               "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Redis or another required dependency is unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/subscriptions/{id}": {
+      "get": {
+        "tags": ["subscriptions"],
+        "summary": "`GET /v1/subscriptions/{id}`.",
+        "operationId": "getSubscription",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": ["subscriptions"],
+        "summary": "`DELETE /v1/subscriptions/{id}`.",
+        "operationId": "revokeSubscription",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Subscription revoked without deleting audit history."
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/subscriptions/{id}/rotate-secret": {
+      "post": {
+        "tags": ["subscriptions"],
+        "summary": "`POST /v1/subscriptions/{id}/rotate-secret`.",
+        "operationId": "rotateSubscriptionSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateSubscriptionSecretResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/subscriptions/{id}/verify": {
+      "post": {
+        "tags": ["subscriptions"],
+        "summary": "`POST /v1/subscriptions/{id}/verify`.",
+        "operationId": "verifySubscription",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDetails"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
@@ -1414,8 +1807,12 @@
       "CreateSubscriptionResponse": {
         "type": "object",
         "description": "Response body for `POST /v1/subscriptions`.",
-        "required": ["subscription"],
+        "required": ["subscription", "signing_secret"],
         "properties": {
+          "signing_secret": {
+            "type": "string",
+            "description": "HMAC signing secret shown exactly once."
+          },
           "subscription": {
             "$ref": "#/components/schemas/SubscriptionDetails",
             "description": "Created subscription."
@@ -1911,6 +2308,20 @@
         ],
         "description": "Canonical license identifier. Ingestion refuses to load a dataflow whose\n`license` field is absent (see `Spec.md § Data licensing and attribution`)."
       },
+      "ListSubscriptionsResponse": {
+        "type": "object",
+        "description": "Collection response for subscriptions owned by one API key.",
+        "required": ["subscriptions"],
+        "properties": {
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionDetails"
+            },
+            "description": "Subscriptions owned by the authenticated key."
+          }
+        }
+      },
       "MeasureId": {
         "type": "string",
         "description": "Identifier for a measure (e.g. `unemployment_rate`)."
@@ -2325,6 +2736,21 @@
                 "description": "Score zone only when coverage gates pass."
               }
             ]
+          }
+        }
+      },
+      "RotateSubscriptionSecretResponse": {
+        "type": "object",
+        "description": "One-time secret returned by a rotation command.",
+        "required": ["subscription", "signing_secret"],
+        "properties": {
+          "signing_secret": {
+            "type": "string",
+            "description": "New signing secret shown exactly once."
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionDetails",
+            "description": "Updated subscription."
           }
         }
       },
@@ -3004,7 +3430,7 @@
       "SubscriptionDetails": {
         "type": "object",
         "description": "Created webhook subscription details.",
-        "required": ["id", "url", "dataflow_ids", "status", "created_at", "signing_secret"],
+        "required": ["id", "url", "dataflow_ids", "status", "created_at", "updated_at"],
         "properties": {
           "created_at": {
             "type": "string",
@@ -3023,17 +3449,23 @@
             "format": "uuid",
             "description": "Stable subscription id."
           },
-          "signing_secret": {
-            "type": "string",
-            "description": "HMAC signing secret shown once at creation."
-          },
           "status": {
             "type": "string",
             "description": "Current subscription status."
           },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC last-update timestamp."
+          },
           "url": {
             "type": "string",
             "description": "Delivery target URL."
+          },
+          "verified_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "UTC endpoint verification time."
           }
         }
       },

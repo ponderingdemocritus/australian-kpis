@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use au_kpis_api_http::{AppState, router_with};
 use au_kpis_auth::{ApiKeyManager, CreateApiKeyRequest};
-use au_kpis_cache::CacheClient;
+use au_kpis_cache::{CacheBackend, CacheClient, CacheError, RateLimitDecision, TokenBucketConfig};
 use au_kpis_config::{
     AppConfig, CacheConfig, DatabaseConfig, HttpConfig, LogFormat, RateLimitConfig,
     RateLimitQuotaConfig, TelemetryConfig,
@@ -17,7 +18,7 @@ use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode, header},
-    routing::get,
+    routing::{get, post},
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio_util::sync::CancellationToken;
@@ -184,6 +185,72 @@ async fn authenticated_requests_are_limited_by_key_even_across_ips() {
         limited.headers().get(header::RETRY_AFTER).is_some(),
         "key limit should return Retry-After"
     );
+}
+
+#[tokio::test]
+async fn redis_failure_degrades_public_gets_and_rejects_writes() {
+    let state = test_state(
+        lazy_pool(),
+        Arc::new(CacheClient::from_backend(FailingCacheBackend)),
+        test_config_with_limits(RateLimitConfig::default()),
+    );
+    let app = router_with(
+        Router::<AppState>::new()
+            .route("/public", get(|| async { "ok" }))
+            .route("/protected", post(|| async { StatusCode::NO_CONTENT })),
+        state,
+    )
+    .expect("router");
+
+    let public = app
+        .clone()
+        .oneshot(request("/public", None, "203.0.113.30"))
+        .await
+        .expect("degraded public response");
+    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(public.headers().get("x-au-kpis-degraded").unwrap(), "redis");
+
+    let write = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/protected")
+                .header("x-au-kpis-client-ip", "203.0.113.30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("rejected write response");
+    assert_eq!(write.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(write.headers().get(header::RETRY_AFTER).unwrap(), "1");
+}
+
+#[derive(Debug)]
+struct FailingCacheBackend;
+
+#[async_trait]
+impl CacheBackend for FailingCacheBackend {
+    async fn get(&self, _key: &str) -> Result<Option<String>, CacheError> {
+        Err(CacheError::Timeout)
+    }
+
+    async fn set(&self, _key: &str, _value: String, _ttl: Duration) -> Result<(), CacheError> {
+        Err(CacheError::Timeout)
+    }
+
+    async fn delete(&self, _key: &str) -> Result<bool, CacheError> {
+        Err(CacheError::Timeout)
+    }
+
+    async fn take_token_bucket(
+        &self,
+        _key: &str,
+        _config: TokenBucketConfig,
+        _requested: u32,
+        _now_ms: u64,
+    ) -> Result<RateLimitDecision, CacheError> {
+        Err(CacheError::Timeout)
+    }
 }
 
 fn public_router(state: AppState) -> Router {

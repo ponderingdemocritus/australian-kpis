@@ -230,7 +230,7 @@ async fn openapi_route_serves_generated_spec() {
         "searchCatalog"
     );
     assert_eq!(
-        parsed["paths"]["/v1/health"]["get"]["responses"]["408"]["content"]["application/problem+json"]
+        parsed["paths"]["/v1/health"]["get"]["responses"]["504"]["content"]["application/problem+json"]
             ["schema"]["$ref"],
         "#/components/schemas/ProblemDetails"
     );
@@ -630,7 +630,7 @@ async fn timeout_middleware_returns_problem_json_through_router_stack() {
     .await
     .expect("response");
 
-    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "application/problem+json"
@@ -644,6 +644,6 @@ async fn timeout_middleware_returns_problem_json_through_router_stack() {
         .await
         .expect("body bytes");
     let parsed: ProblemDetails = serde_json::from_slice(&body).expect("problem details json");
-    assert_eq!(parsed.title, "Request Timeout");
-    assert_eq!(parsed.status, 408);
+    assert_eq!(parsed.title, "Gateway Timeout");
+    assert_eq!(parsed.status, 504);
 }

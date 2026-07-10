@@ -28,8 +28,10 @@ use crate::{
         SourcesResponse,
     },
     subscriptions::{
-        __path_create_subscription, CreateSubscriptionRequest, CreateSubscriptionResponse,
-        SubscriptionDetails,
+        __path_create_subscription, __path_get_subscription, __path_list_subscriptions,
+        __path_revoke_subscription, __path_rotate_subscription_secret, __path_verify_subscription,
+        CreateSubscriptionRequest, CreateSubscriptionResponse, ListSubscriptionsResponse,
+        RotateSubscriptionSecretResponse, SubscriptionDetails,
     },
 };
 
@@ -58,7 +60,12 @@ use crate::{
         aps_snapshot,
         get_series,
         search_catalog,
-        create_subscription
+        create_subscription,
+        list_subscriptions,
+        get_subscription,
+        verify_subscription,
+        rotate_subscription_secret,
+        revoke_subscription
     ),
     components(schemas(
         au_kpis_domain::Code,
@@ -119,6 +126,8 @@ use crate::{
         SourcesResponse,
         CreateSubscriptionRequest,
         CreateSubscriptionResponse,
+        ListSubscriptionsResponse,
+        RotateSubscriptionSecretResponse,
         SubscriptionDetails
     )),
     modifiers(&SecurityAddon),

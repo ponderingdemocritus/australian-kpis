@@ -283,10 +283,63 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** `GET /v1/subscriptions`. */
+        get: operations["listSubscriptions"];
         put?: never;
         /** `POST /v1/subscriptions`. */
         post: operations["createSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/subscriptions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/subscriptions/{id}`. */
+        get: operations["getSubscription"];
+        put?: never;
+        post?: never;
+        /** `DELETE /v1/subscriptions/{id}`. */
+        delete: operations["revokeSubscription"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/subscriptions/{id}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /v1/subscriptions/{id}/rotate-secret`. */
+        post: operations["rotateSubscriptionSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/subscriptions/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /v1/subscriptions/{id}/verify`. */
+        post: operations["verifySubscription"];
         delete?: never;
         options?: never;
         head?: never;
@@ -455,6 +508,8 @@ export interface components {
         };
         /** @description Response body for `POST /v1/subscriptions`. */
         CreateSubscriptionResponse: {
+            /** @description HMAC signing secret shown exactly once. */
+            signing_secret: string;
             /** @description Created subscription. */
             subscription: components["schemas"]["SubscriptionDetails"];
         };
@@ -679,6 +734,11 @@ export interface components {
             /** @description Escape hatch for licenses not yet enumerated. Carries the SPDX-style id. */
             other: string;
         };
+        /** @description Collection response for subscriptions owned by one API key. */
+        ListSubscriptionsResponse: {
+            /** @description Subscriptions owned by the authenticated key. */
+            subscriptions: components["schemas"]["SubscriptionDetails"][];
+        };
         /** @description Identifier for a measure (e.g. `unemployment_rate`). */
         MeasureId: string;
         /** @description Linear normalization references for one indicator. */
@@ -895,6 +955,13 @@ export interface components {
             /** @description Movement against the nearest comparable numeric snapshot. */
             trend: components["schemas"]["Trend"];
             zone?: null | components["schemas"]["ScoreZone"];
+        };
+        /** @description One-time secret returned by a rotation command. */
+        RotateSubscriptionSecretResponse: {
+            /** @description New signing secret shown exactly once. */
+            signing_secret: string;
+            /** @description Updated subscription. */
+            subscription: components["schemas"]["SubscriptionDetails"];
         };
         /** @description Production liveness/readiness response. */
         RuntimeHealthResponse: {
@@ -1226,12 +1293,20 @@ export interface components {
              * @description Stable subscription id.
              */
             id: string;
-            /** @description HMAC signing secret shown once at creation. */
-            signing_secret: string;
             /** @description Current subscription status. */
             status: string;
+            /**
+             * Format: date-time
+             * @description UTC last-update timestamp.
+             */
+            updated_at: string;
             /** @description Delivery target URL. */
             url: string;
+            /**
+             * Format: date-time
+             * @description UTC endpoint verification time.
+             */
+            verified_at?: string | null;
         };
         /**
          * @description Temporal granularity of an observation's timestamp. Matches the SDMX
@@ -1485,7 +1560,7 @@ export interface operations {
                 };
             };
             /** @description Request timed out. */
-            408: {
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1565,8 +1640,8 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Request timed out. */
-            408: {
+            /** @description Bulk stream admission capacity is exhausted. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1576,6 +1651,24 @@ export interface operations {
             };
             /** @description Internal server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Short-request admission or a durable dependency is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Request timed out. */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1603,8 +1696,8 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
-            /** @description Request timed out. */
-            408: {
+            /** @description OpenAPI generation failed. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1612,8 +1705,8 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description OpenAPI generation failed. */
-            500: {
+            /** @description Request timed out. */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1979,6 +2072,49 @@ export interface operations {
             };
         };
     };
+    listSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSubscriptionsResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     createSubscription: {
         parameters: {
             query?: never;
@@ -1992,8 +2128,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Subscription created. */
-            201: {
+            /** @description Subscription pending endpoint verification. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2019,6 +2155,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description API key lacks subscriptions:write. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Internal error. */
             500: {
                 headers: {
@@ -2026,6 +2171,234 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Redis or another required dependency is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionDetails"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    revokeSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscription revoked without deleting audit history. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    rotateSubscriptionSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateSubscriptionSecretResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    verifySubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionDetails"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
         };

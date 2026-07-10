@@ -6,7 +6,7 @@
 use std::{env, ffi::OsString, future::IntoFuture, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use au_kpis_api_http::{AppState, router, spawn_webhook_delivery_worker};
+use au_kpis_api_http::{AppState, router};
 use au_kpis_cache::CacheClient;
 use au_kpis_config::load;
 use au_kpis_db::connect as connect_db;
@@ -27,7 +27,6 @@ async fn main() -> anyhow::Result<()> {
             .context("connect redis cache")?,
     );
     let shutdown = CancellationToken::new();
-    let webhook_worker = spawn_webhook_delivery_worker(db.clone(), shutdown.clone());
     let state = AppState::new(db, cache, config.clone(), telemetry, shutdown.clone());
 
     let app = router(state).context("build router")?;
@@ -65,12 +64,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     shutdown.cancel();
-    if let Err(err) = webhook_worker.await {
-        if !err.is_cancelled() {
-            tracing::warn!(error = %err, "webhook delivery worker join failed");
-        }
-    }
-
     Ok(())
 }
 

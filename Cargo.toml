@@ -37,6 +37,7 @@ members = [
     "crates/bins/au-kpis-api",
     "crates/bins/au-kpis-ingestion",
     "crates/bins/au-kpis-scheduler",
+    "crates/bins/au-kpis-webhook-worker",
     "crates/bins/au-kpis-cli",
 ]
 
