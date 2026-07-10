@@ -87,6 +87,12 @@ pub struct ScorecardConfigQuery {
             )
         ),
         (
+            status = 400,
+            description = "Invalid APS config query.",
+            content_type = "application/problem+json",
+            body = crate::error::ProblemDetails
+        ),
+        (
             status = 404,
             description = "Requested APS config version was not found.",
             content_type = "application/problem+json",
@@ -142,6 +148,12 @@ pub async fn aps_config(
                 ("ETag" = String, description = "Strong entity tag for the latest snapshot JSON."),
                 ("Cache-Control" = String, description = "Public CDN cache policy.")
             )
+        ),
+        (
+            status = 400,
+            description = "Invalid latest snapshot query.",
+            content_type = "application/problem+json",
+            body = crate::error::ProblemDetails
         ),
         (
             status = 404,

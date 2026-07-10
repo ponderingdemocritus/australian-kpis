@@ -2909,6 +2909,16 @@ expression: emitted_spec()
               }
             }
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid APS config query."
+          },
           "404": {
             "content": {
               "application/problem+json": {
@@ -3096,6 +3106,16 @@ expression: emitted_spec()
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid latest snapshot query."
           },
           "404": {
             "content": {

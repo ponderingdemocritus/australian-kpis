@@ -1936,6 +1936,11 @@ export type getApsScorecardConfigResponse304 = {
   status: 304
 }
 
+export type getApsScorecardConfigResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type getApsScorecardConfigResponse404 = {
   data: ProblemDetails
   status: 404
@@ -1949,7 +1954,7 @@ export type getApsScorecardConfigResponse500 = {
 export type getApsScorecardConfigResponseSuccess = (getApsScorecardConfigResponse200) & {
   headers: Headers;
 };
-export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse304 | getApsScorecardConfigResponse404 | getApsScorecardConfigResponse500) & {
+export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse304 | getApsScorecardConfigResponse400 | getApsScorecardConfigResponse404 | getApsScorecardConfigResponse500) & {
   headers: Headers;
 };
 
@@ -2068,6 +2073,11 @@ export type getApsScorecardLatestResponse304 = {
   status: 304
 }
 
+export type getApsScorecardLatestResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
 export type getApsScorecardLatestResponse404 = {
   data: ProblemDetails
   status: 404
@@ -2081,7 +2091,7 @@ export type getApsScorecardLatestResponse500 = {
 export type getApsScorecardLatestResponseSuccess = (getApsScorecardLatestResponse200) & {
   headers: Headers;
 };
-export type getApsScorecardLatestResponseError = (getApsScorecardLatestResponse304 | getApsScorecardLatestResponse404 | getApsScorecardLatestResponse500) & {
+export type getApsScorecardLatestResponseError = (getApsScorecardLatestResponse304 | getApsScorecardLatestResponse400 | getApsScorecardLatestResponse404 | getApsScorecardLatestResponse500) & {
   headers: Headers;
 };
 

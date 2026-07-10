@@ -628,6 +628,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid APS config query.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Requested APS config version was not found.",
             "content": {
@@ -813,6 +823,16 @@
                   "type": "string"
                 },
                 "description": "Strong entity tag for the latest snapshot JSON."
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid latest snapshot query.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
               }
             }
           },

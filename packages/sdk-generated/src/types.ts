@@ -1752,6 +1752,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Invalid APS config query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Requested APS config version was not found. */
             404: {
                 headers: {
@@ -1866,6 +1875,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Invalid latest snapshot query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
             };
             /** @description No official APS snapshot has been published. */
             404: {
