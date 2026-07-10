@@ -16,6 +16,11 @@ use crate::{
     scorecards::{__path_aps_config, __path_aps_history, __path_aps_latest, ScorecardHistoryQuery},
     search::{__path_search_catalog, SearchQuery, SearchResponse, SearchResult, SearchResultKind},
     series::{__path_get_series, SeriesLookupResponse, SeriesRevisionMetadata},
+    sources::{
+        __path_get_source, __path_list_sources, SourceCatalogDataflow, SourceCatalogEntry,
+        SourceFreshnessPolicy, SourceRequestPolicy, SourceSchedule, SourceValidationPolicy,
+        SourcesResponse,
+    },
     subscriptions::{
         __path_create_subscription, CreateSubscriptionRequest, CreateSubscriptionResponse,
         SubscriptionDetails,
@@ -33,6 +38,8 @@ use crate::{
     paths(
         health,
         openapi,
+        list_sources,
+        get_source,
         list_dataflows,
         get_dataflow,
         get_dataflow_codelist,
@@ -83,12 +90,20 @@ use crate::{
         SearchResultKind,
         SeriesLookupResponse,
         SeriesRevisionMetadata,
+        SourceCatalogDataflow,
+        SourceCatalogEntry,
+        SourceFreshnessPolicy,
+        SourceRequestPolicy,
+        SourceSchedule,
+        SourceValidationPolicy,
+        SourcesResponse,
         CreateSubscriptionRequest,
         CreateSubscriptionResponse,
         SubscriptionDetails
     )),
     modifiers(&SecurityAddon),
     tags(
+        (name = "sources", description = "Governed source catalog"),
         (name = "dataflows", description = "Dataflow catalog and codelists"),
         (name = "observations", description = "Time-series observations"),
         (name = "scorecards", description = "Derived scorecards"),

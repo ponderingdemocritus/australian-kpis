@@ -666,6 +666,7 @@ dependencies = [
  "au-kpis-domain",
  "au-kpis-error",
  "au-kpis-scorecard",
+ "au-kpis-source-register",
  "au-kpis-telemetry",
  "au-kpis-testing",
  "axum 0.7.9",

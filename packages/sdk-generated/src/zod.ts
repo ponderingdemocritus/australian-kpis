@@ -67,114 +67,6 @@ type DataflowCodelistResponse = {
   dataflow_id: DataflowId;
   dimension_id: DimensionId;
 };
-type Axis = "throughput" | "orientation";
-type Direction = "higher_is_better" | "lower_is_better";
-type Confidence = "high" | "medium" | "low";
-type CoverageStatus =
-  | "resolved"
-  | "stale"
-  | "missing_expected"
-  | "coverage_gap"
-  | "manual_pending"
-  | "visible_unscored";
-type ScoreZone = "red" | "yellow" | "green";
-type Trend = "up" | "down" | "flat" | "unavailable";
-type Normalization = {
-  best: number;
-  worst: number;
-};
-type Provenance = {
-  attribution: string;
-  license: string;
-  notes?: (string | null) | undefined;
-  retrieved_at?: (string | null) | undefined;
-  reviewed_at?: (string | null) | undefined;
-  reviewed_by?: (string | null) | undefined;
-  source_url: string;
-};
-type IndicatorConfig = {
-  axis: Axis;
-  cadence: string;
-  component: string;
-  confidence: Confidence;
-  coverage_status: CoverageStatus;
-  description: string;
-  dimension_selector?: Record<string, string> | undefined;
-  direction: Direction;
-  display_label: string;
-  indicator_id: string;
-  measure_id: string;
-  normalization: Normalization;
-  provenance: Provenance;
-  source_dataflow_id: string;
-  unit: string;
-  weight: number;
-};
-type ScorecardConfig = {
-  attribution: string;
-  description: string;
-  formula: string;
-  id: string;
-  indicators: Array<IndicatorConfig>;
-  label: string;
-  license: string;
-  version: string;
-};
-type ConfidenceBand = {
-  high: number;
-  low: number;
-};
-type ComponentScore = {
-  component: string;
-  coverage_pct: number;
-  score: number;
-  weight: number;
-};
-type SubIndexScore = {
-  axis: Axis;
-  components: Array<ComponentScore>;
-  confidence_band: ConfidenceBand;
-  coverage_pct: number;
-  score: number;
-  weight: number;
-};
-type IndicatorContribution = {
-  attribution: string;
-  axis: Axis;
-  component: string;
-  confidence: Confidence;
-  coverage_status: CoverageStatus;
-  dimensions: Record<string, string>;
-  direction: Direction;
-  indicator_id: string;
-  label: string;
-  latest_period?: (string | null) | undefined;
-  license: string;
-  measure_id: string;
-  normalized_value?: (number | null) | undefined;
-  notes?: (string | null) | undefined;
-  raw_value?: (number | null) | undefined;
-  series_key?: (string | null) | undefined;
-  source_artifact_id?: (string | null) | undefined;
-  source_dataflow_id: string;
-  source_url: string;
-  unit: string;
-  weight: number;
-};
-type ScorecardSnapshot = {
-  as_of: string;
-  confidence: Confidence;
-  confidence_band: ConfidenceBand;
-  config_version: string;
-  contributions: Array<IndicatorContribution>;
-  coverage_pct: number;
-  latest_period?: (string | null) | undefined;
-  score: number;
-  scorecard_id: string;
-  sub_indexes: Array<SubIndexScore>;
-  trend: Trend;
-  zone: ScoreZone;
-};
 type DataflowDetailResponse = {
   dataflow: Dataflow;
   dimensions: Array<Dimension>;
@@ -192,6 +84,70 @@ type DataflowsQuery = Partial<{
 }>;
 type DataflowsResponse = {
   dataflows: Array<Dataflow>;
+};
+type IndicatorConfig = {
+  axis: Axis;
+  cadence: string;
+  component: string;
+  confidence: Confidence;
+  coverage_status: CoverageStatus;
+  description: string;
+  dimension_selector?: {} | undefined;
+  direction: Direction;
+  display_label: string;
+  indicator_id: string;
+  measure_id: string;
+  normalization: Normalization;
+  provenance: Provenance;
+  source_dataflow_id: string;
+  unit: string;
+  weight: number;
+};
+type Axis = "throughput" | "orientation";
+type Confidence = "high" | "medium" | "low";
+type CoverageStatus =
+  | "resolved"
+  | "stale"
+  | "missing_expected"
+  | "coverage_gap"
+  | "manual_pending"
+  | "visible_unscored";
+type Direction = "higher_is_better" | "lower_is_better";
+type Normalization = {
+  best: number;
+  worst: number;
+};
+type Provenance = {
+  attribution: string;
+  license: string;
+  notes?: (string | null) | undefined;
+  retrieved_at?: (string | null) | undefined;
+  reviewed_at?: (string | null) | undefined;
+  reviewed_by?: (string | null) | undefined;
+  source_url: string;
+};
+type IndicatorContribution = {
+  attribution: string;
+  axis: Axis;
+  component: string;
+  confidence: Confidence;
+  coverage_status: CoverageStatus;
+  dimensions: {};
+  direction: Direction;
+  indicator_id: string;
+  label: string;
+  latest_period?: (string | null) | undefined;
+  license: string;
+  measure_id: string;
+  normalized_value?: (number | null) | undefined;
+  notes?: (string | null) | undefined;
+  raw_value?: (number | null) | undefined;
+  series_key?: (string | null) | undefined;
+  source_artifact_id?: (string | null) | undefined;
+  source_dataflow_id: string;
+  source_url: string;
+  unit: string;
+  weight: number;
 };
 type Observation = {
   attributes: {};
@@ -215,7 +171,7 @@ type ObservationStatus =
   | "provisional"
   | "revised"
   | "break";
-type TimePrecision = "day" | "week" | "month" | "quarter" | "year";
+type TimePrecision = "minute" | "day" | "week" | "month" | "quarter" | "year";
 type ObservationsMetadata = {
   attribution: string;
   dataflow: DataflowId;
@@ -244,6 +200,50 @@ type ObservationsRow = {
 type PaginationMetadata = Partial<{
   next_cursor: string | null;
 }>;
+type ScorecardConfig = {
+  attribution: string;
+  description: string;
+  formula: string;
+  id: string;
+  indicators: Array<IndicatorConfig>;
+  label: string;
+  license: string;
+  version: string;
+};
+type ScorecardSnapshot = {
+  as_of: string;
+  confidence: Confidence;
+  confidence_band: ConfidenceBand;
+  config_version: string;
+  contributions: Array<IndicatorContribution>;
+  coverage_pct: number;
+  latest_period?: (string | null) | undefined;
+  score: number;
+  scorecard_id: string;
+  sub_indexes: Array<SubIndexScore>;
+  trend: Trend;
+  zone: ScoreZone;
+};
+type ConfidenceBand = {
+  high: number;
+  low: number;
+};
+type SubIndexScore = {
+  axis: Axis;
+  components: Array<ComponentScore>;
+  confidence_band: ConfidenceBand;
+  coverage_pct: number;
+  score: number;
+  weight: number;
+};
+type ComponentScore = {
+  component: string;
+  coverage_pct: number;
+  score: number;
+  weight: number;
+};
+type Trend = "up" | "down" | "flat" | "unavailable";
+type ScoreZone = "red" | "yellow" | "green";
 type SearchResponse = {
   query: string;
   results: Array<SearchResult>;
@@ -278,6 +278,47 @@ type SeriesRevisionMetadata = {
   is_revision: boolean;
   revision_no: number;
   source_artifact_id: ArtifactId;
+};
+type SourceCatalogDataflow = {
+  attribution: string;
+  cadence: string;
+  coverage_state: string;
+  dataflow_id: string;
+  fixture_reference?: (string | null) | undefined;
+  freshness_policy?: (null | SourceFreshnessPolicy) | undefined;
+  license: string;
+  owner_area: string;
+  owner_role?: (string | null) | undefined;
+  request_policy?: (null | SourceRequestPolicy) | undefined;
+  schedule?: (null | SourceSchedule) | undefined;
+  source_url: string;
+  status: string;
+  validation_policy?: (null | SourceValidationPolicy) | undefined;
+};
+type SourceFreshnessPolicy = {
+  hard_after_seconds: number;
+  soft_after_seconds: number;
+};
+type SourceRequestPolicy = {
+  burst: number;
+  max_requests_per_minute: number;
+  timeout_seconds: number;
+};
+type SourceSchedule = {
+  cron: string;
+  timezone: string;
+};
+type SourceValidationPolicy = {
+  allow_partial_rows: boolean;
+  max_series_cardinality: number;
+  range_rule: string;
+};
+type SourceCatalogEntry = {
+  dataflows: Array<SourceCatalogDataflow>;
+  source_id: string;
+};
+type SourcesResponse = {
+  sources: Array<SourceCatalogEntry>;
 };
 
 const DimensionId = z.string();
@@ -354,8 +395,63 @@ const DataflowCodelistResponse: z.ZodType<DataflowCodelistResponse> = z
     dimension_id: DimensionId,
   })
   .passthrough();
+const HealthResponse = z.object({ status: z.string() }).passthrough();
+const ObservationsMetadata: z.ZodType<ObservationsMetadata> = z
+  .object({
+    attribution: z.string(),
+    dataflow: DataflowId,
+    license: z.string(),
+    source_url: z.string(),
+  })
+  .passthrough();
+const SeriesKey = z.string();
+const ArtifactId = z.string();
+const ObservationStatus = z.enum([
+  "normal",
+  "estimated",
+  "forecast",
+  "imputed",
+  "missing",
+  "provisional",
+  "revised",
+  "break",
+]);
+const TimePrecision = z.enum([
+  "minute",
+  "day",
+  "week",
+  "month",
+  "quarter",
+  "year",
+]);
+const ObservationsRow: z.ZodType<ObservationsRow> = z
+  .object({
+    attributes: z.record(z.string()),
+    dimensions: z.record(z.string()),
+    ingested_at: z.string().datetime({ offset: true }),
+    measure_id: z.string(),
+    revision_no: z.number().int().gte(0),
+    series_key: SeriesKey.min(64).max(64),
+    source_artifact_id: ArtifactId.min(64).max(64),
+    status: ObservationStatus,
+    time: z.string().datetime({ offset: true }),
+    time_precision: TimePrecision,
+    unit: z.string(),
+    value: z.union([z.number(), z.null()]).optional(),
+  })
+  .passthrough();
+const PaginationMetadata: z.ZodType<PaginationMetadata> = z
+  .object({ next_cursor: z.union([z.string(), z.null()]) })
+  .partial()
+  .passthrough();
+const ObservationsResponse: z.ZodType<ObservationsResponse> = z
+  .object({
+    metadata: ObservationsMetadata,
+    observations: z.array(ObservationsRow),
+    pagination: PaginationMetadata,
+  })
+  .passthrough();
 const Axis = z.enum(["throughput", "orientation"]);
-const Direction = z.enum(["higher_is_better", "lower_is_better"]);
 const Confidence = z.enum(["high", "medium", "low"]);
 const CoverageStatus = z.enum([
   "resolved",
@@ -365,8 +461,7 @@ const CoverageStatus = z.enum([
   "manual_pending",
   "visible_unscored",
 ]);
-const ScoreZone = z.enum(["red", "yellow", "green"]);
-const Trend = z.enum(["up", "down", "flat", "unavailable"]);
+const Direction = z.enum(["higher_is_better", "lower_is_better"]);
 const Normalization: z.ZodType<Normalization> = z
   .object({ best: z.number(), worst: z.number() })
   .passthrough();
@@ -413,26 +508,9 @@ const ScorecardConfig: z.ZodType<ScorecardConfig> = z
     version: z.string(),
   })
   .passthrough();
+const since = z.union([z.string(), z.null()]).optional();
 const ConfidenceBand: z.ZodType<ConfidenceBand> = z
   .object({ high: z.number(), low: z.number() })
-  .passthrough();
-const ComponentScore: z.ZodType<ComponentScore> = z
-  .object({
-    component: z.string(),
-    coverage_pct: z.number(),
-    score: z.number(),
-    weight: z.number(),
-  })
-  .passthrough();
-const SubIndexScore: z.ZodType<SubIndexScore> = z
-  .object({
-    axis: Axis,
-    components: z.array(ComponentScore),
-    confidence_band: ConfidenceBand,
-    coverage_pct: z.number(),
-    score: z.number(),
-    weight: z.number(),
-  })
   .passthrough();
 const IndicatorContribution: z.ZodType<IndicatorContribution> = z
   .object({
@@ -459,6 +537,26 @@ const IndicatorContribution: z.ZodType<IndicatorContribution> = z
     weight: z.number(),
   })
   .passthrough();
+const ComponentScore: z.ZodType<ComponentScore> = z
+  .object({
+    component: z.string(),
+    coverage_pct: z.number(),
+    score: z.number(),
+    weight: z.number(),
+  })
+  .passthrough();
+const SubIndexScore: z.ZodType<SubIndexScore> = z
+  .object({
+    axis: Axis,
+    components: z.array(ComponentScore),
+    confidence_band: ConfidenceBand,
+    coverage_pct: z.number(),
+    score: z.number(),
+    weight: z.number(),
+  })
+  .passthrough();
+const Trend = z.enum(["up", "down", "flat", "unavailable"]);
+const ScoreZone = z.enum(["red", "yellow", "green"]);
 const ScorecardSnapshot: z.ZodType<ScorecardSnapshot> = z
   .object({
     as_of: z.string(),
@@ -473,56 +571,6 @@ const ScorecardSnapshot: z.ZodType<ScorecardSnapshot> = z
     sub_indexes: z.array(SubIndexScore),
     trend: Trend,
     zone: ScoreZone,
-  })
-  .passthrough();
-const ScorecardSnapshotList = z.array(ScorecardSnapshot);
-const HealthResponse = z.object({ status: z.string() }).passthrough();
-const ObservationsMetadata: z.ZodType<ObservationsMetadata> = z
-  .object({
-    attribution: z.string(),
-    dataflow: DataflowId,
-    license: z.string(),
-    source_url: z.string(),
-  })
-  .passthrough();
-const SeriesKey = z.string();
-const ArtifactId = z.string();
-const ObservationStatus = z.enum([
-  "normal",
-  "estimated",
-  "forecast",
-  "imputed",
-  "missing",
-  "provisional",
-  "revised",
-  "break",
-]);
-const TimePrecision = z.enum(["day", "week", "month", "quarter", "year"]);
-const ObservationsRow: z.ZodType<ObservationsRow> = z
-  .object({
-    attributes: z.record(z.string()),
-    dimensions: z.record(z.string()),
-    ingested_at: z.string().datetime({ offset: true }),
-    measure_id: z.string(),
-    revision_no: z.number().int().gte(0),
-    series_key: SeriesKey.min(64).max(64),
-    source_artifact_id: ArtifactId.min(64).max(64),
-    status: ObservationStatus,
-    time: z.string().datetime({ offset: true }),
-    time_precision: TimePrecision,
-    unit: z.string(),
-    value: z.union([z.number(), z.null()]).optional(),
-  })
-  .passthrough();
-const PaginationMetadata: z.ZodType<PaginationMetadata> = z
-  .object({ next_cursor: z.union([z.string(), z.null()]) })
-  .partial()
-  .passthrough();
-const ObservationsResponse: z.ZodType<ObservationsResponse> = z
-  .object({
-    metadata: ObservationsMetadata,
-    observations: z.array(ObservationsRow),
-    pagination: PaginationMetadata,
   })
   .passthrough();
 const SearchResultKind = z.enum(["dataflow", "measure"]);
@@ -580,6 +628,53 @@ const SeriesLookupResponse: z.ZodType<SeriesLookupResponse> = z
     series: Series,
   })
   .passthrough();
+const SourceFreshnessPolicy: z.ZodType<SourceFreshnessPolicy> = z
+  .object({
+    hard_after_seconds: z.number().int().gte(0),
+    soft_after_seconds: z.number().int().gte(0),
+  })
+  .passthrough();
+const SourceRequestPolicy: z.ZodType<SourceRequestPolicy> = z
+  .object({
+    burst: z.number().int().gte(0),
+    max_requests_per_minute: z.number().int().gte(0),
+    timeout_seconds: z.number().int().gte(0),
+  })
+  .passthrough();
+const SourceSchedule: z.ZodType<SourceSchedule> = z
+  .object({ cron: z.string(), timezone: z.string() })
+  .passthrough();
+const SourceValidationPolicy: z.ZodType<SourceValidationPolicy> = z
+  .object({
+    allow_partial_rows: z.boolean(),
+    max_series_cardinality: z.number().int().gte(0),
+    range_rule: z.string(),
+  })
+  .passthrough();
+const SourceCatalogDataflow: z.ZodType<SourceCatalogDataflow> = z
+  .object({
+    attribution: z.string(),
+    cadence: z.string(),
+    coverage_state: z.string(),
+    dataflow_id: z.string(),
+    fixture_reference: z.union([z.string(), z.null()]).optional(),
+    freshness_policy: z.union([z.null(), SourceFreshnessPolicy]).optional(),
+    license: z.string(),
+    owner_area: z.string(),
+    owner_role: z.union([z.string(), z.null()]).optional(),
+    request_policy: z.union([z.null(), SourceRequestPolicy]).optional(),
+    schedule: z.union([z.null(), SourceSchedule]).optional(),
+    source_url: z.string(),
+    status: z.string(),
+    validation_policy: z.union([z.null(), SourceValidationPolicy]).optional(),
+  })
+  .passthrough();
+const SourceCatalogEntry: z.ZodType<SourceCatalogEntry> = z
+  .object({ dataflows: z.array(SourceCatalogDataflow), source_id: z.string() })
+  .passthrough();
+const SourcesResponse: z.ZodType<SourcesResponse> = z
+  .object({ sources: z.array(SourceCatalogEntry) })
+  .passthrough();
 const CreateSubscriptionRequest: z.ZodType<CreateSubscriptionRequest> = z
   .object({ dataflow_ids: z.array(DataflowId).optional(), url: z.string() })
   .passthrough();
@@ -612,9 +707,18 @@ const ProblemDetails = z
     type: z.string(),
   })
   .passthrough();
+const ScorecardHistoryQuery = z
+  .object({
+    since: z.union([z.string(), z.null()]),
+    until: z.union([z.string(), z.null()]),
+  })
+  .partial()
+  .passthrough();
 const SearchQuery = z
   .object({ limit: z.union([z.number(), z.null()]).optional(), q: z.string() })
   .passthrough();
+
+const ScorecardSnapshotList = z.array(ScorecardSnapshot);
 
 export const schemas = {
   DimensionId,
@@ -632,22 +736,6 @@ export const schemas = {
   Code,
   Codelist,
   DataflowCodelistResponse,
-  Axis,
-  Direction,
-  Confidence,
-  CoverageStatus,
-  ScoreZone,
-  Trend,
-  Normalization,
-  Provenance,
-  IndicatorConfig,
-  ScorecardConfig,
-  ConfidenceBand,
-  ComponentScore,
-  SubIndexScore,
-  IndicatorContribution,
-  ScorecardSnapshot,
-  ScorecardSnapshotList,
   HealthResponse,
   ObservationsMetadata,
   SeriesKey,
@@ -657,6 +745,23 @@ export const schemas = {
   ObservationsRow,
   PaginationMetadata,
   ObservationsResponse,
+  Axis,
+  Confidence,
+  CoverageStatus,
+  Direction,
+  Normalization,
+  Provenance,
+  IndicatorConfig,
+  ScorecardConfig,
+  since,
+  ConfidenceBand,
+  IndicatorContribution,
+  ComponentScore,
+  SubIndexScore,
+  Trend,
+  ScoreZone,
+  ScorecardSnapshot,
+  ScorecardSnapshotList,
   SearchResultKind,
   SearchResult,
   SearchResponse,
@@ -664,10 +769,18 @@ export const schemas = {
   SeriesRevisionMetadata,
   Series,
   SeriesLookupResponse,
+  SourceFreshnessPolicy,
+  SourceRequestPolicy,
+  SourceSchedule,
+  SourceValidationPolicy,
+  SourceCatalogDataflow,
+  SourceCatalogEntry,
+  SourcesResponse,
   CreateSubscriptionRequest,
   SubscriptionDetails,
   CreateSubscriptionResponse,
   DataflowsQuery,
   ProblemDetails,
+  ScorecardHistoryQuery,
   SearchQuery,
 };

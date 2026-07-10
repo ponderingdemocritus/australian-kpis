@@ -106,6 +106,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scorecards/aps/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/scorecards/aps/config`. */
+        get: operations["getApsScorecardConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scorecards/aps/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/scorecards/aps/history`. */
+        get: operations["listApsScorecardHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scorecards/aps/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/scorecards/aps/latest`. */
+        get: operations["getApsScorecardLatest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/search": {
         parameters: {
             query?: never;
@@ -140,6 +191,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/sources`. */
+        get: operations["listSources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /v1/sources/{source_id}`. */
+        get: operations["getSource"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/subscriptions": {
         parameters: {
             query?: never;
@@ -166,6 +251,11 @@ export interface components {
          * @description Lowercase hex-encoded SHA-256 digest (64 chars).
          */
         ArtifactId: string;
+        /**
+         * @description Scorecard axis used by APS v1.
+         * @enum {string}
+         */
+        Axis: "throughput" | "orientation";
         /** @description A single code within a codelist (e.g. `VIC` → "Victoria"). */
         Code: {
             /**
@@ -189,6 +279,49 @@ export interface components {
         };
         /** @description Identifier for a codelist (e.g. `CL_STATE_AU`). */
         CodelistId: string;
+        /** @description Component-level score inside a sub-index. */
+        ComponentScore: {
+            /** @description Component name. */
+            component: string;
+            /**
+             * Format: double
+             * @description Weight-aware coverage percentage.
+             */
+            coverage_pct: number;
+            /**
+             * Format: double
+             * @description Component score in the axis scale.
+             */
+            score: number;
+            /**
+             * Format: double
+             * @description Weight represented by this component.
+             */
+            weight: number;
+        };
+        /**
+         * @description Confidence label exposed for configs, contributions, and snapshots.
+         * @enum {string}
+         */
+        Confidence: "high" | "medium" | "low";
+        /** @description Lower and upper score bounds. */
+        ConfidenceBand: {
+            /**
+             * Format: double
+             * @description Best-case score.
+             */
+            high: number;
+            /**
+             * Format: double
+             * @description Worst-case score.
+             */
+            low: number;
+        };
+        /**
+         * @description Contribution coverage state.
+         * @enum {string}
+         */
+        CoverageStatus: "resolved" | "stale" | "missing_expected" | "coverage_gap" | "manual_pending" | "visible_unscored";
         /** @description Request body for `POST /v1/subscriptions`. */
         CreateSubscriptionRequest: {
             /** @description Optional dataflow filter. Empty means every dataflow update. */
@@ -266,6 +399,11 @@ export interface components {
         /** @description Identifier for a dimension within a dataflow (e.g. `region`). */
         DimensionId: string;
         /**
+         * @description Direction used to normalize raw indicator values.
+         * @enum {string}
+         */
+        Direction: "higher_is_better" | "lower_is_better";
+        /**
          * @description Cadence at which a dataflow publishes new observations. Informational —
          *     used by the scheduler to pick discovery intervals and by the SLO alerting
          *     rule `dataflow-no-new-observations`.
@@ -277,6 +415,102 @@ export interface components {
             /** @description Current service health. */
             status: string;
         };
+        /** @description Static config for one APS indicator. */
+        IndicatorConfig: {
+            /** @description APS axis. */
+            axis: components["schemas"]["Axis"];
+            /** @description Expected update cadence. */
+            cadence: string;
+            /** @description Display grouping within the axis. */
+            component: string;
+            /** @description Confidence for this input. */
+            confidence: components["schemas"]["Confidence"];
+            /** @description Default configured coverage status. */
+            coverage_status: components["schemas"]["CoverageStatus"];
+            /** @description User-facing indicator description. */
+            description: string;
+            /** @description Exact dimension selector for the intended APS series. */
+            dimension_selector?: {
+                [key: string]: string;
+            };
+            /** @description Direction-aware normalization rule. */
+            direction: components["schemas"]["Direction"];
+            /** @description User-facing indicator label. */
+            display_label: string;
+            /** @description Stable indicator id. */
+            indicator_id: string;
+            /** @description Source measure id. */
+            measure_id: string;
+            /** @description Normalization references. */
+            normalization: components["schemas"]["Normalization"];
+            /** @description Source and licensing metadata. */
+            provenance: components["schemas"]["Provenance"];
+            /** @description Canonical source dataflow id. */
+            source_dataflow_id: string;
+            /** @description Display unit. */
+            unit: string;
+            /**
+             * Format: double
+             * @description Scored weight within the axis. Visible-unscored inputs may use zero.
+             */
+            weight: number;
+        };
+        /** @description Contribution row for one indicator. */
+        IndicatorContribution: {
+            /** @description Attribution metadata. */
+            attribution: string;
+            /** @description APS axis. */
+            axis: components["schemas"]["Axis"];
+            /** @description Component name. */
+            component: string;
+            /** @description Contribution confidence. */
+            confidence: components["schemas"]["Confidence"];
+            /** @description Coverage status. */
+            coverage_status: components["schemas"]["CoverageStatus"];
+            /** @description Dimension selector used for this input. */
+            dimensions: {
+                [key: string]: string;
+            };
+            /** @description Normalization direction. */
+            direction: components["schemas"]["Direction"];
+            /** @description Indicator id. */
+            indicator_id: string;
+            /** @description Indicator label. */
+            label: string;
+            /** @description Latest resolved period, when available. */
+            latest_period?: string | null;
+            /** @description License metadata. */
+            license: string;
+            /** @description Source measure id. */
+            measure_id: string;
+            /**
+             * Format: double
+             * @description Normalized value in the axis scale, when scored.
+             */
+            normalized_value?: number | null;
+            /** @description Optional notes. */
+            notes?: string | null;
+            /**
+             * Format: double
+             * @description Raw observation value, when resolved.
+             */
+            raw_value?: number | null;
+            /** @description Resolved series key, when available. */
+            series_key?: string | null;
+            /** @description Resolved source artifact id, when available. */
+            source_artifact_id?: string | null;
+            /** @description Source dataflow id. */
+            source_dataflow_id: string;
+            /** @description Source URL. */
+            source_url: string;
+            /** @description Display unit. */
+            unit: string;
+            /**
+             * Format: double
+             * @description Configured weight.
+             */
+            weight: number;
+        };
         /**
          * @description Canonical license identifier. Ingestion refuses to load a dataflow whose
          *     `license` field is absent (see `Spec.md § Data licensing and attribution`).
@@ -287,6 +521,19 @@ export interface components {
         };
         /** @description Identifier for a measure (e.g. `unemployment_rate`). */
         MeasureId: string;
+        /** @description Linear normalization references for one indicator. */
+        Normalization: {
+            /**
+             * Format: double
+             * @description Best reference value for this indicator.
+             */
+            best: number;
+            /**
+             * Format: double
+             * @description Worst reference value for this indicator.
+             */
+            worst: number;
+        };
         /** @description One observation — a single row in the `observations` hypertable. */
         Observation: {
             /**
@@ -405,6 +652,87 @@ export interface components {
             /** @description Problem type URI. */
             type: string;
         };
+        /** @description Source and licensing metadata for a scorecard input. */
+        Provenance: {
+            /** @description Attribution text shown in API/UI responses. */
+            attribution: string;
+            /** @description License identifier or source-specific license note. */
+            license: string;
+            /** @description Optional source or review notes. */
+            notes?: string | null;
+            /** @description Optional retrieval date for curated/manual inputs. */
+            retrieved_at?: string | null;
+            /** @description Optional review date for curated/manual inputs. */
+            reviewed_at?: string | null;
+            /** @description Optional reviewer identifier for curated/manual inputs. */
+            reviewed_by?: string | null;
+            /** @description Canonical source URL for this input. */
+            source_url: string;
+        };
+        /**
+         * @description APS score zone.
+         * @enum {string}
+         */
+        ScoreZone: "red" | "yellow" | "green";
+        /** @description APS config metadata and indicator list. */
+        ScorecardConfig: {
+            /** @description Attribution note for the derived scorecard config. */
+            attribution: string;
+            /** @description User-facing description. */
+            description: string;
+            /** @description Formula metadata. */
+            formula: string;
+            /** @description Scorecard id. */
+            id: string;
+            /** @description Indicator definitions. */
+            indicators: components["schemas"]["IndicatorConfig"][];
+            /** @description User-facing label. */
+            label: string;
+            /** @description License note for the derived scorecard config. */
+            license: string;
+            /** @description Versioned config id. */
+            version: string;
+        };
+        /** @description Query string for APS history snapshots. */
+        ScorecardHistoryQuery: {
+            /** @description Inclusive lower snapshot date in `YYYY-MM-DD` form. */
+            since?: string | null;
+            /** @description Inclusive upper snapshot date in `YYYY-MM-DD` form. */
+            until?: string | null;
+        };
+        /** @description Full APS snapshot produced by the pure scorer. */
+        ScorecardSnapshot: {
+            /** @description Snapshot timestamp or date chosen by the caller. */
+            as_of: string;
+            /** @description Snapshot confidence label. */
+            confidence: components["schemas"]["Confidence"];
+            /** @description Worst/best APS confidence band. */
+            confidence_band: components["schemas"]["ConfidenceBand"];
+            /** @description Config version used for the score. */
+            config_version: string;
+            /** @description Indicator-level contribution rows. */
+            contributions: components["schemas"]["IndicatorContribution"][];
+            /**
+             * Format: double
+             * @description Weight-aware coverage percentage.
+             */
+            coverage_pct: number;
+            /** @description Latest period represented by resolved inputs. */
+            latest_period?: string | null;
+            /**
+             * Format: double
+             * @description APS score in `0..100`.
+             */
+            score: number;
+            /** @description Scorecard id. */
+            scorecard_id: string;
+            /** @description Axis-level scores. */
+            sub_indexes: components["schemas"]["SubIndexScore"][];
+            /** @description Trend relative to prior comparable score. */
+            trend: components["schemas"]["Trend"];
+            /** @description Score zone. */
+            zone: components["schemas"]["ScoreZone"];
+        };
         /** @description Query parameters for `GET /v1/search`. */
         SearchQuery: {
             /**
@@ -448,7 +776,8 @@ export interface components {
         SearchResultKind: "dataflow" | "measure";
         /**
          * @description One time series within a dataflow. `dimensions` is the sorted bag of
-         *     `(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
+         *     `(key, value)` pairs that, together with `dataflow_id` and `measure_id`,
+         *     seeds `series_key`.
          */
         Series: {
             /**
@@ -503,8 +832,121 @@ export interface components {
             /** @description Source artifact that produced this revision. */
             source_artifact_id: components["schemas"]["ArtifactId"];
         };
+        /** @description Governed source-dataflow metadata. */
+        SourceCatalogDataflow: {
+            /** @description Required attribution. */
+            attribution: string;
+            /** @description Expected source cadence. */
+            cadence: string;
+            /** @description Coverage state exposed to catalog consumers. */
+            coverage_state: string;
+            /** @description Stable dataflow id. */
+            dataflow_id: string;
+            /** @description Repository-relative representative fixture or reviewed snapshot. */
+            fixture_reference?: string | null;
+            freshness_policy?: null | components["schemas"]["SourceFreshnessPolicy"];
+            /** @description Source licence or terms identifier. */
+            license: string;
+            /** @description Owning implementation area. */
+            owner_area: string;
+            /** @description Accountable production role, when assigned. */
+            owner_role?: string | null;
+            request_policy?: null | components["schemas"]["SourceRequestPolicy"];
+            schedule?: null | components["schemas"]["SourceSchedule"];
+            /** @description Canonical source and citation URL. */
+            source_url: string;
+            /** @description Source-register governance status. */
+            status: string;
+            validation_policy?: null | components["schemas"]["SourceValidationPolicy"];
+        };
+        /** @description One source and its governed dataflows. */
+        SourceCatalogEntry: {
+            /** @description Dataflows governed for this source. */
+            dataflows: components["schemas"]["SourceCatalogDataflow"][];
+            /** @description Stable source id. */
+            source_id: string;
+        };
+        /** @description Public source freshness policy. */
+        SourceFreshnessPolicy: {
+            /**
+             * Format: int64
+             * @description Age in seconds after which data is hard-expired.
+             */
+            hard_after_seconds: number;
+            /**
+             * Format: int64
+             * @description Age in seconds after which data is soft-stale.
+             */
+            soft_after_seconds: number;
+        };
         /** @description Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`). */
         SourceId: string;
+        /** @description Public upstream request policy. */
+        SourceRequestPolicy: {
+            /**
+             * Format: int32
+             * @description Maximum short request burst.
+             */
+            burst: number;
+            /**
+             * Format: int32
+             * @description Maximum steady-state requests per minute.
+             */
+            max_requests_per_minute: number;
+            /**
+             * Format: int64
+             * @description Per-request timeout in seconds.
+             */
+            timeout_seconds: number;
+        };
+        /** @description Public source discovery schedule. */
+        SourceSchedule: {
+            /** @description Five-field cron expression. */
+            cron: string;
+            /** @description IANA timezone name. */
+            timezone: string;
+        };
+        /** @description Public source validation policy. */
+        SourceValidationPolicy: {
+            /** @description Whether partial rows may publish. */
+            allow_partial_rows: boolean;
+            /**
+             * Format: int64
+             * @description Maximum series cardinality for one generation.
+             */
+            max_series_cardinality: number;
+            /** @description Named adapter range rule. */
+            range_rule: string;
+        };
+        /** @description Response envelope for `GET /v1/sources`. */
+        SourcesResponse: {
+            /** @description Governed sources ordered by source id. */
+            sources: components["schemas"]["SourceCatalogEntry"][];
+        };
+        /** @description Axis-level sub-index score. */
+        SubIndexScore: {
+            /** @description Axis name. */
+            axis: components["schemas"]["Axis"];
+            /** @description Component scores for this axis. */
+            components: components["schemas"]["ComponentScore"][];
+            /** @description Axis confidence band in the axis scale. */
+            confidence_band: components["schemas"]["ConfidenceBand"];
+            /**
+             * Format: double
+             * @description Weight-aware coverage percentage.
+             */
+            coverage_pct: number;
+            /**
+             * Format: double
+             * @description Axis score (`0..1` for throughput, `-1..1` for orientation).
+             */
+            score: number;
+            /**
+             * Format: double
+             * @description Expected scored weight for this axis.
+             */
+            weight: number;
+        };
         /** @description Created webhook subscription details. */
         SubscriptionDetails: {
             /**
@@ -531,7 +973,12 @@ export interface components {
          *     `@FREQ` facet on a coarse scale.
          * @enum {string}
          */
-        TimePrecision: "day" | "week" | "month" | "quarter" | "year";
+        TimePrecision: "minute" | "day" | "week" | "month" | "quarter" | "year";
+        /**
+         * @description Trend arrow comparing the latest score to a prior comparable snapshot.
+         * @enum {string}
+         */
+        Trend: "up" | "down" | "flat" | "unavailable";
     };
     responses: never;
     parameters: never;
@@ -738,7 +1185,7 @@ export interface operations {
                 format?: string;
                 /** @description Opaque cursor from the previous page. */
                 cursor?: string;
-                /** @description Page size, maximum 10000. */
+                /** @description Page size. JSON/CSV are capped at 10000 rows; Parquet bulk exports are capped at 1000000 rows. */
                 limit?: number;
             };
             header?: never;
@@ -849,6 +1296,152 @@ export interface operations {
             };
         };
     };
+    getApsScorecardConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned APS scorecard config. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag for the config JSON. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScorecardConfig"];
+                };
+            };
+            /** @description The client's cached config is still fresh. */
+            304: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag for the config JSON. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    listApsScorecardHistory: {
+        parameters: {
+            query?: {
+                /** @description Inclusive lower snapshot date in `YYYY-MM-DD` form. */
+                since?: string | null;
+                /** @description Inclusive upper snapshot date in `YYYY-MM-DD` form. */
+                until?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Time-ordered APS scorecard snapshots. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag for the history JSON. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScorecardSnapshot"][];
+                };
+            };
+            /** @description The client's cached history response is still fresh. */
+            304: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag for the history JSON. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query string. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getApsScorecardLatest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest APS scorecard snapshot. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag for the latest snapshot JSON. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScorecardSnapshot"];
+                };
+            };
+            /** @description The client's cached latest snapshot is still fresh. */
+            304: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Strong entity tag for the latest snapshot JSON. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     searchCatalog: {
         parameters: {
             query: {
@@ -936,6 +1529,80 @@ export interface operations {
                 };
             };
             /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    listSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Governed source catalog. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcesResponse"];
+                };
+            };
+            /** @description Invalid server source register. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    getSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source id. */
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Governed source details. */
+            200: {
+                headers: {
+                    /** @description Public CDN cache policy. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceCatalogEntry"];
+                };
+            };
+            /** @description Source not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Invalid server source register. */
             500: {
                 headers: {
                     [name: string]: unknown;

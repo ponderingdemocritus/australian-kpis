@@ -12,6 +12,18 @@
  */
 export type ArtifactId = string;
 
+/**
+ * Scorecard axis used by APS v1.
+ */
+export type Axis = typeof Axis[keyof typeof Axis];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Axis = {
+  throughput: 'throughput',
+  orientation: 'orientation',
+} as const;
+
 export type CodeDescription = string | null;
 
 export type CodeParentId = null | CodeId;
@@ -50,6 +62,59 @@ export interface Codelist {
  * Identifier for a codelist (e.g. `CL_STATE_AU`).
  */
 export type CodelistId = string;
+
+/**
+ * Component-level score inside a sub-index.
+ */
+export interface ComponentScore {
+  /** Component name. */
+  component: string;
+  /** Weight-aware coverage percentage. */
+  coverage_pct: number;
+  /** Component score in the axis scale. */
+  score: number;
+  /** Weight represented by this component. */
+  weight: number;
+}
+
+/**
+ * Confidence label exposed for configs, contributions, and snapshots.
+ */
+export type Confidence = typeof Confidence[keyof typeof Confidence];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Confidence = {
+  high: 'high',
+  medium: 'medium',
+  low: 'low',
+} as const;
+
+/**
+ * Lower and upper score bounds.
+ */
+export interface ConfidenceBand {
+  /** Best-case score. */
+  high: number;
+  /** Worst-case score. */
+  low: number;
+}
+
+/**
+ * Contribution coverage state.
+ */
+export type CoverageStatus = typeof CoverageStatus[keyof typeof CoverageStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const CoverageStatus = {
+  resolved: 'resolved',
+  stale: 'stale',
+  missing_expected: 'missing_expected',
+  coverage_gap: 'coverage_gap',
+  manual_pending: 'manual_pending',
+  visible_unscored: 'visible_unscored',
+} as const;
 
 /**
  * Request body for `POST /v1/subscriptions`.
@@ -164,6 +229,18 @@ stable across codebases (see `Spec.md § Data model`).
 export type DimensionId = string;
 
 /**
+ * Direction used to normalize raw indicator values.
+ */
+export type Direction = typeof Direction[keyof typeof Direction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Direction = {
+  higher_is_better: 'higher_is_better',
+  lower_is_better: 'lower_is_better',
+} as const;
+
+/**
  * Cadence at which a dataflow publishes new observations. Informational —
 used by the scheduler to pick discovery intervals and by the SLO alerting
 rule `dataflow-no-new-observations`.
@@ -190,246 +267,129 @@ export interface HealthResponse {
 }
 
 /**
- * Scorecard axis used by APS v1.
+ * Exact dimension selector for the intended APS series.
  */
-export type Axis = typeof Axis[keyof typeof Axis];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Axis = {
-  throughput: 'throughput',
-  orientation: 'orientation',
-} as const;
-
-/**
- * Direction used to normalize raw indicator values.
- */
-export type Direction = typeof Direction[keyof typeof Direction];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Direction = {
-  higher_is_better: 'higher_is_better',
-  lower_is_better: 'lower_is_better',
-} as const;
-
-/**
- * Confidence label exposed for configs, contributions, and snapshots.
- */
-export type Confidence = typeof Confidence[keyof typeof Confidence];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Confidence = {
-  high: 'high',
-  medium: 'medium',
-  low: 'low',
-} as const;
-
-/**
- * Contribution coverage state.
- */
-export type CoverageStatus = typeof CoverageStatus[keyof typeof CoverageStatus];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const CoverageStatus = {
-  resolved: 'resolved',
-  stale: 'stale',
-  missing_expected: 'missing_expected',
-  coverage_gap: 'coverage_gap',
-  manual_pending: 'manual_pending',
-  visible_unscored: 'visible_unscored',
-} as const;
-
-/**
- * APS score zone.
- */
-export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const ScoreZone = {
-  red: 'red',
-  yellow: 'yellow',
-  green: 'green',
-} as const;
-
-/**
- * Trend arrow comparing the latest score to a prior comparable snapshot.
- */
-export type Trend = typeof Trend[keyof typeof Trend];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Trend = {
-  up: 'up',
-  down: 'down',
-  flat: 'flat',
-  unavailable: 'unavailable',
-} as const;
-
-/**
- * Linear normalization references for one indicator.
- */
-export interface Normalization {
-  /** Best reference value for this indicator. */
-  best: number;
-  /** Worst reference value for this indicator. */
-  worst: number;
-}
-
-export type ProvenanceNotes = string | null;
-
-export type ProvenanceRetrievedAt = string | null;
-
-export type ProvenanceReviewedAt = string | null;
-
-export type ProvenanceReviewedBy = string | null;
-
-/**
- * Source and licensing metadata for a scorecard input.
- */
-export interface Provenance {
-  /** Attribution text shown in API/UI responses. */
-  attribution: string;
-  /** License identifier or source-specific license note. */
-  license: string;
-  /** Optional source or review notes. */
-  notes?: ProvenanceNotes;
-  /** Optional retrieval date for curated/manual inputs. */
-  retrieved_at?: ProvenanceRetrievedAt;
-  /** Optional review date for curated/manual inputs. */
-  reviewed_at?: ProvenanceReviewedAt;
-  /** Optional reviewer identifier for curated/manual inputs. */
-  reviewed_by?: ProvenanceReviewedBy;
-  /** Canonical source URL for this input. */
-  source_url: string;
-}
-
 export type IndicatorConfigDimensionSelector = {[key: string]: string};
 
 /**
  * Static config for one APS indicator.
  */
 export interface IndicatorConfig {
+  /** APS axis. */
   axis: Axis;
+  /** Expected update cadence. */
   cadence: string;
+  /** Display grouping within the axis. */
   component: string;
+  /** Confidence for this input. */
   confidence: Confidence;
+  /** Default configured coverage status. */
   coverage_status: CoverageStatus;
+  /** User-facing indicator description. */
   description: string;
+  /** Exact dimension selector for the intended APS series. */
   dimension_selector?: IndicatorConfigDimensionSelector;
+  /** Direction-aware normalization rule. */
   direction: Direction;
+  /** User-facing indicator label. */
   display_label: string;
+  /** Stable indicator id. */
   indicator_id: string;
+  /** Source measure id. */
   measure_id: string;
+  /** Normalization references. */
   normalization: Normalization;
+  /** Source and licensing metadata. */
   provenance: Provenance;
+  /** Canonical source dataflow id. */
   source_dataflow_id: string;
+  /** Display unit. */
   unit: string;
+  /** Scored weight within the axis. Visible-unscored inputs may use zero. */
   weight: number;
 }
 
 /**
- * APS config metadata and indicator list.
+ * Dimension selector used for this input.
  */
-export interface ScorecardConfig {
-  attribution: string;
-  description: string;
-  formula: string;
-  id: string;
-  indicators: IndicatorConfig[];
-  label: string;
-  license: string;
-  version: string;
-}
-
-/**
- * Lower and upper score bounds.
- */
-export interface ConfidenceBand {
-  /** Best-case score. */
-  high: number;
-  /** Worst-case score. */
-  low: number;
-}
-
-/**
- * Component-level score inside a sub-index.
- */
-export interface ComponentScore {
-  component: string;
-  coverage_pct: number;
-  score: number;
-  weight: number;
-}
-
-/**
- * Axis-level sub-index score.
- */
-export interface SubIndexScore {
-  axis: Axis;
-  components: ComponentScore[];
-  confidence_band: ConfidenceBand;
-  coverage_pct: number;
-  score: number;
-  weight: number;
-}
-
 export type IndicatorContributionDimensions = {[key: string]: string};
 
+/**
+ * Latest resolved period, when available.
+ */
 export type IndicatorContributionLatestPeriod = string | null;
 
+/**
+ * Normalized value in the axis scale, when scored.
+ */
 export type IndicatorContributionNormalizedValue = number | null;
 
+/**
+ * Optional notes.
+ */
 export type IndicatorContributionNotes = string | null;
 
+/**
+ * Raw observation value, when resolved.
+ */
 export type IndicatorContributionRawValue = number | null;
 
+/**
+ * Resolved series key, when available.
+ */
 export type IndicatorContributionSeriesKey = string | null;
 
+/**
+ * Resolved source artifact id, when available.
+ */
 export type IndicatorContributionSourceArtifactId = string | null;
 
 /**
  * Contribution row for one indicator.
  */
 export interface IndicatorContribution {
+  /** Attribution metadata. */
   attribution: string;
+  /** APS axis. */
   axis: Axis;
+  /** Component name. */
   component: string;
+  /** Contribution confidence. */
   confidence: Confidence;
+  /** Coverage status. */
   coverage_status: CoverageStatus;
+  /** Dimension selector used for this input. */
   dimensions: IndicatorContributionDimensions;
+  /** Normalization direction. */
   direction: Direction;
+  /** Indicator id. */
   indicator_id: string;
+  /** Indicator label. */
   label: string;
+  /** Latest resolved period, when available. */
   latest_period?: IndicatorContributionLatestPeriod;
+  /** License metadata. */
   license: string;
+  /** Source measure id. */
   measure_id: string;
+  /** Normalized value in the axis scale, when scored. */
   normalized_value?: IndicatorContributionNormalizedValue;
+  /** Optional notes. */
   notes?: IndicatorContributionNotes;
+  /** Raw observation value, when resolved. */
   raw_value?: IndicatorContributionRawValue;
+  /** Resolved series key, when available. */
   series_key?: IndicatorContributionSeriesKey;
+  /** Resolved source artifact id, when available. */
   source_artifact_id?: IndicatorContributionSourceArtifactId;
+  /** Source dataflow id. */
   source_dataflow_id: string;
+  /** Source URL. */
   source_url: string;
+  /** Display unit. */
   unit: string;
+  /** Configured weight. */
   weight: number;
-}
-
-export type ScorecardSnapshotLatestPeriod = string | null;
-
-/**
- * Full APS snapshot produced by the pure scorer.
- */
-export interface ScorecardSnapshot {
-  as_of: string;
-  confidence: Confidence;
-  confidence_band: ConfidenceBand;
-  config_version: string;
-  contributions: IndicatorContribution[];
-  coverage_pct: number;
-  latest_period?: ScorecardSnapshotLatestPeriod;
-  score: number;
-  scorecard_id: string;
-  sub_indexes: SubIndexScore[];
-  trend: Trend;
-  zone: ScoreZone;
 }
 
 /**
@@ -450,6 +410,16 @@ export type License = 'CC-BY-4.0' | 'CC-BY-ND-4.0' | 'CC-BY-SA-4.0' | 'public-do
  * Identifier for a measure (e.g. `unemployment_rate`).
  */
 export type MeasureId = string;
+
+/**
+ * Linear normalization references for one indicator.
+ */
+export interface Normalization {
+  /** Best reference value for this indicator. */
+  best: number;
+  /** Worst reference value for this indicator. */
+  worst: number;
+}
 
 /**
  * Free-form attributes attached to this observation (e.g. SDMX `OBS_STATUS`
@@ -620,6 +590,136 @@ export interface ProblemDetails {
 }
 
 /**
+ * Optional source or review notes.
+ */
+export type ProvenanceNotes = string | null;
+
+/**
+ * Optional retrieval date for curated/manual inputs.
+ */
+export type ProvenanceRetrievedAt = string | null;
+
+/**
+ * Optional review date for curated/manual inputs.
+ */
+export type ProvenanceReviewedAt = string | null;
+
+/**
+ * Optional reviewer identifier for curated/manual inputs.
+ */
+export type ProvenanceReviewedBy = string | null;
+
+/**
+ * Source and licensing metadata for a scorecard input.
+ */
+export interface Provenance {
+  /** Attribution text shown in API/UI responses. */
+  attribution: string;
+  /** License identifier or source-specific license note. */
+  license: string;
+  /** Optional source or review notes. */
+  notes?: ProvenanceNotes;
+  /** Optional retrieval date for curated/manual inputs. */
+  retrieved_at?: ProvenanceRetrievedAt;
+  /** Optional review date for curated/manual inputs. */
+  reviewed_at?: ProvenanceReviewedAt;
+  /** Optional reviewer identifier for curated/manual inputs. */
+  reviewed_by?: ProvenanceReviewedBy;
+  /** Canonical source URL for this input. */
+  source_url: string;
+}
+
+/**
+ * APS score zone.
+ */
+export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ScoreZone = {
+  red: 'red',
+  yellow: 'yellow',
+  green: 'green',
+} as const;
+
+/**
+ * APS config metadata and indicator list.
+ */
+export interface ScorecardConfig {
+  /** Attribution note for the derived scorecard config. */
+  attribution: string;
+  /** User-facing description. */
+  description: string;
+  /** Formula metadata. */
+  formula: string;
+  /** Scorecard id. */
+  id: string;
+  /** Indicator definitions. */
+  indicators: IndicatorConfig[];
+  /** User-facing label. */
+  label: string;
+  /** License note for the derived scorecard config. */
+  license: string;
+  /** Versioned config id. */
+  version: string;
+}
+
+/**
+ * Inclusive lower snapshot date in `YYYY-MM-DD` form.
+ */
+export type ScorecardHistoryQuerySince = string | null;
+
+/**
+ * Inclusive upper snapshot date in `YYYY-MM-DD` form.
+ */
+export type ScorecardHistoryQueryUntil = string | null;
+
+/**
+ * Query string for APS history snapshots.
+ */
+export interface ScorecardHistoryQuery {
+  /** Inclusive lower snapshot date in `YYYY-MM-DD` form. */
+  since?: ScorecardHistoryQuerySince;
+  /** Inclusive upper snapshot date in `YYYY-MM-DD` form. */
+  until?: ScorecardHistoryQueryUntil;
+}
+
+/**
+ * Latest period represented by resolved inputs.
+ */
+export type ScorecardSnapshotLatestPeriod = string | null;
+
+/**
+ * Full APS snapshot produced by the pure scorer.
+ */
+export interface ScorecardSnapshot {
+  /** Snapshot timestamp or date chosen by the caller. */
+  as_of: string;
+  /** Snapshot confidence label. */
+  confidence: Confidence;
+  /** Worst/best APS confidence band. */
+  confidence_band: ConfidenceBand;
+  /** Config version used for the score. */
+  config_version: string;
+  /** Indicator-level contribution rows. */
+  contributions: IndicatorContribution[];
+  /** Weight-aware coverage percentage. */
+  coverage_pct: number;
+  /** Latest period represented by resolved inputs. */
+  latest_period?: ScorecardSnapshotLatestPeriod;
+  /** APS score in `0..100`. */
+  score: number;
+  /** Scorecard id. */
+  scorecard_id: string;
+  /** Axis-level scores. */
+  sub_indexes: SubIndexScore[];
+  /** Trend relative to prior comparable score. */
+  trend: Trend;
+  /** Score zone. */
+  zone: ScoreZone;
+}
+
+/**
  * Maximum number of catalog results to return.
  * @minimum 0
  */
@@ -699,7 +799,8 @@ export type SeriesLastObserved = string | null;
 
 /**
  * One time series within a dataflow. `dimensions` is the sorted bag of
-`(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
+`(key, value)` pairs that, together with `dataflow_id` and `measure_id`,
+seeds `series_key`.
  */
 export interface Series {
   /** Whether the upstream source still publishes this series. Inactive
@@ -757,9 +858,155 @@ export interface SeriesRevisionMetadata {
 }
 
 /**
+ * Repository-relative representative fixture or reviewed snapshot.
+ */
+export type SourceCatalogDataflowFixtureReference = string | null;
+
+export type SourceCatalogDataflowFreshnessPolicy = null | SourceFreshnessPolicy;
+
+/**
+ * Accountable production role, when assigned.
+ */
+export type SourceCatalogDataflowOwnerRole = string | null;
+
+export type SourceCatalogDataflowRequestPolicy = null | SourceRequestPolicy;
+
+export type SourceCatalogDataflowSchedule = null | SourceSchedule;
+
+export type SourceCatalogDataflowValidationPolicy = null | SourceValidationPolicy;
+
+/**
+ * Governed source-dataflow metadata.
+ */
+export interface SourceCatalogDataflow {
+  /** Required attribution. */
+  attribution: string;
+  /** Expected source cadence. */
+  cadence: string;
+  /** Coverage state exposed to catalog consumers. */
+  coverage_state: string;
+  /** Stable dataflow id. */
+  dataflow_id: string;
+  /** Repository-relative representative fixture or reviewed snapshot. */
+  fixture_reference?: SourceCatalogDataflowFixtureReference;
+  freshness_policy?: SourceCatalogDataflowFreshnessPolicy;
+  /** Source licence or terms identifier. */
+  license: string;
+  /** Owning implementation area. */
+  owner_area: string;
+  /** Accountable production role, when assigned. */
+  owner_role?: SourceCatalogDataflowOwnerRole;
+  request_policy?: SourceCatalogDataflowRequestPolicy;
+  schedule?: SourceCatalogDataflowSchedule;
+  /** Canonical source and citation URL. */
+  source_url: string;
+  /** Source-register governance status. */
+  status: string;
+  validation_policy?: SourceCatalogDataflowValidationPolicy;
+}
+
+/**
+ * One source and its governed dataflows.
+ */
+export interface SourceCatalogEntry {
+  /** Dataflows governed for this source. */
+  dataflows: SourceCatalogDataflow[];
+  /** Stable source id. */
+  source_id: string;
+}
+
+/**
+ * Public source freshness policy.
+ */
+export interface SourceFreshnessPolicy {
+  /**
+   * Age in seconds after which data is hard-expired.
+   * @minimum 0
+   */
+  hard_after_seconds: number;
+  /**
+   * Age in seconds after which data is soft-stale.
+   * @minimum 0
+   */
+  soft_after_seconds: number;
+}
+
+/**
  * Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`).
  */
 export type SourceId = string;
+
+/**
+ * Public upstream request policy.
+ */
+export interface SourceRequestPolicy {
+  /**
+   * Maximum short request burst.
+   * @minimum 0
+   */
+  burst: number;
+  /**
+   * Maximum steady-state requests per minute.
+   * @minimum 0
+   */
+  max_requests_per_minute: number;
+  /**
+   * Per-request timeout in seconds.
+   * @minimum 0
+   */
+  timeout_seconds: number;
+}
+
+/**
+ * Public source discovery schedule.
+ */
+export interface SourceSchedule {
+  /** Five-field cron expression. */
+  cron: string;
+  /** IANA timezone name. */
+  timezone: string;
+}
+
+/**
+ * Public source validation policy.
+ */
+export interface SourceValidationPolicy {
+  /** Whether partial rows may publish. */
+  allow_partial_rows: boolean;
+  /**
+   * Maximum series cardinality for one generation.
+   * @minimum 0
+   */
+  max_series_cardinality: number;
+  /** Named adapter range rule. */
+  range_rule: string;
+}
+
+/**
+ * Response envelope for `GET /v1/sources`.
+ */
+export interface SourcesResponse {
+  /** Governed sources ordered by source id. */
+  sources: SourceCatalogEntry[];
+}
+
+/**
+ * Axis-level sub-index score.
+ */
+export interface SubIndexScore {
+  /** Axis name. */
+  axis: Axis;
+  /** Component scores for this axis. */
+  components: ComponentScore[];
+  /** Axis confidence band in the axis scale. */
+  confidence_band: ConfidenceBand;
+  /** Weight-aware coverage percentage. */
+  coverage_pct: number;
+  /** Axis score (`0..1` for throughput, `-1..1` for orientation). */
+  score: number;
+  /** Expected scored weight for this axis. */
+  weight: number;
+}
 
 /**
  * Created webhook subscription details.
@@ -788,11 +1035,26 @@ export type TimePrecision = typeof TimePrecision[keyof typeof TimePrecision];
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const TimePrecision = {
+  minute: 'minute',
   day: 'day',
   week: 'week',
   month: 'month',
   quarter: 'quarter',
   year: 'year',
+} as const;
+
+/**
+ * Trend arrow comparing the latest score to a prior comparable snapshot.
+ */
+export type Trend = typeof Trend[keyof typeof Trend];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Trend = {
+  up: 'up',
+  down: 'down',
+  flat: 'flat',
+  unavailable: 'unavailable',
 } as const;
 
 export type ListDataflowsParams = {
@@ -850,14 +1112,25 @@ format?: string;
  */
 cursor?: string;
 /**
- * Page size, maximum 10000.
+ * Page size. JSON/CSV are capped at 10000 rows; Parquet bulk exports are capped at 1000000 rows.
  * @minimum 0
- * @maximum 10000
+ * @maximum 1000000
  */
 limit?: number;
 };
 
 export type Openapi200 = { [key: string]: unknown };
+
+export type ListApsScorecardHistoryParams = {
+/**
+ * Inclusive lower snapshot date in `YYYY-MM-DD` form.
+ */
+since?: string | null;
+/**
+ * Inclusive upper snapshot date in `YYYY-MM-DD` form.
+ */
+until?: string | null;
+};
 
 export type SearchCatalogParams = {
 /**
@@ -1247,6 +1520,180 @@ export const openapi = async ( options?: RequestInit): Promise<openapiResponse> 
 
 
 /**
+ * @summary `GET /v1/scorecards/aps/config`.
+ */
+export type getApsScorecardConfigResponse200 = {
+  data: ScorecardConfig
+  status: 200
+}
+
+export type getApsScorecardConfigResponse304 = {
+  data: void
+  status: 304
+}
+
+export type getApsScorecardConfigResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type getApsScorecardConfigResponseSuccess = (getApsScorecardConfigResponse200) & {
+  headers: Headers;
+};
+export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse304 | getApsScorecardConfigResponse500) & {
+  headers: Headers;
+};
+
+export type getApsScorecardConfigResponse = (getApsScorecardConfigResponseSuccess | getApsScorecardConfigResponseError)
+
+export const getGetApsScorecardConfigUrl = () => {
+
+
+
+
+  return `/v1/scorecards/aps/config`
+}
+
+export const getApsScorecardConfig = async ( options?: RequestInit): Promise<getApsScorecardConfigResponse> => {
+
+  const res = await fetch(getGetApsScorecardConfigUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getApsScorecardConfigResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getApsScorecardConfigResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/history`.
+ */
+export type listApsScorecardHistoryResponse200 = {
+  data: ScorecardSnapshot[]
+  status: 200
+}
+
+export type listApsScorecardHistoryResponse304 = {
+  data: void
+  status: 304
+}
+
+export type listApsScorecardHistoryResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type listApsScorecardHistoryResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type listApsScorecardHistoryResponseSuccess = (listApsScorecardHistoryResponse200) & {
+  headers: Headers;
+};
+export type listApsScorecardHistoryResponseError = (listApsScorecardHistoryResponse304 | listApsScorecardHistoryResponse400 | listApsScorecardHistoryResponse500) & {
+  headers: Headers;
+};
+
+export type listApsScorecardHistoryResponse = (listApsScorecardHistoryResponseSuccess | listApsScorecardHistoryResponseError)
+
+export const getListApsScorecardHistoryUrl = (params?: ListApsScorecardHistoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/v1/scorecards/aps/history?${stringifiedParams}` : `/v1/scorecards/aps/history`
+}
+
+export const listApsScorecardHistory = async (params?: ListApsScorecardHistoryParams, options?: RequestInit): Promise<listApsScorecardHistoryResponse> => {
+
+  const res = await fetch(getListApsScorecardHistoryUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listApsScorecardHistoryResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listApsScorecardHistoryResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/latest`.
+ */
+export type getApsScorecardLatestResponse200 = {
+  data: ScorecardSnapshot
+  status: 200
+}
+
+export type getApsScorecardLatestResponse304 = {
+  data: void
+  status: 304
+}
+
+export type getApsScorecardLatestResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type getApsScorecardLatestResponseSuccess = (getApsScorecardLatestResponse200) & {
+  headers: Headers;
+};
+export type getApsScorecardLatestResponseError = (getApsScorecardLatestResponse304 | getApsScorecardLatestResponse500) & {
+  headers: Headers;
+};
+
+export type getApsScorecardLatestResponse = (getApsScorecardLatestResponseSuccess | getApsScorecardLatestResponseError)
+
+export const getGetApsScorecardLatestUrl = () => {
+
+
+
+
+  return `/v1/scorecards/aps/latest`
+}
+
+export const getApsScorecardLatest = async ( options?: RequestInit): Promise<getApsScorecardLatestResponse> => {
+
+  const res = await fetch(getGetApsScorecardLatestUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getApsScorecardLatestResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getApsScorecardLatestResponse
+}
+
+
+
+/**
  * @summary `GET /v1/search`.
  */
 export type searchCatalogResponse200 = {
@@ -1364,6 +1811,109 @@ export const getSeries = async (dataflow: string,
 
   const data: getSeriesResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as getSeriesResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/sources`.
+ */
+export type listSourcesResponse200 = {
+  data: SourcesResponse
+  status: 200
+}
+
+export type listSourcesResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type listSourcesResponseSuccess = (listSourcesResponse200) & {
+  headers: Headers;
+};
+export type listSourcesResponseError = (listSourcesResponse500) & {
+  headers: Headers;
+};
+
+export type listSourcesResponse = (listSourcesResponseSuccess | listSourcesResponseError)
+
+export const getListSourcesUrl = () => {
+
+
+
+
+  return `/v1/sources`
+}
+
+export const listSources = async ( options?: RequestInit): Promise<listSourcesResponse> => {
+
+  const res = await fetch(getListSourcesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listSourcesResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listSourcesResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/sources/{source_id}`.
+ */
+export type getSourceResponse200 = {
+  data: SourceCatalogEntry
+  status: 200
+}
+
+export type getSourceResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getSourceResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type getSourceResponseSuccess = (getSourceResponse200) & {
+  headers: Headers;
+};
+export type getSourceResponseError = (getSourceResponse404 | getSourceResponse500) & {
+  headers: Headers;
+};
+
+export type getSourceResponse = (getSourceResponseSuccess | getSourceResponseError)
+
+export const getGetSourceUrl = (sourceId: string,) => {
+
+
+
+
+  return `/v1/sources/${sourceId}`
+}
+
+export const getSource = async (sourceId: string, options?: RequestInit): Promise<getSourceResponse> => {
+
+  const res = await fetch(getGetSourceUrl(sourceId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getSourceResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getSourceResponse
 }
 
 

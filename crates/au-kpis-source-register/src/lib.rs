@@ -82,6 +82,10 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
         &dataflow.dataflow_id,
     )?;
 
+    if dataflow.status == SourceStatus::Active {
+        validate_active_runtime_contract(dataflow)?;
+    }
+
     if matches!(
         dataflow.status,
         SourceStatus::ManualPending | SourceStatus::VisibleUnscored
@@ -165,6 +169,95 @@ fn validate_dataflow(dataflow: &SourceRegisterDataflow) -> Result<(), SourceRegi
             &additional.policy,
             &dataflow.dataflow_id,
         )?;
+    }
+
+    Ok(())
+}
+
+fn validate_active_runtime_contract(
+    dataflow: &SourceRegisterDataflow,
+) -> Result<(), SourceRegisterError> {
+    let id = &dataflow.dataflow_id;
+    let owner_role = dataflow.owner_role.ok_or_else(|| {
+        SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must declare owner_role"
+        ))
+    })?;
+    if owner_role != OwnerRole::Data {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active source dataflow `{id}` must be owned by the data role"
+        )));
+    }
+
+    let schedule = dataflow.schedule.as_ref().ok_or_else(|| {
+        SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must declare schedule"
+        ))
+    })?;
+    require_text("schedule.cron", &schedule.cron)?;
+    if schedule.cron.split_ascii_whitespace().count() != 5 {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` schedule.cron must use five-field cron syntax"
+        )));
+    }
+    require_text("schedule.timezone", &schedule.timezone)?;
+    if schedule.timezone.contains(char::is_whitespace) || !schedule.timezone.contains('/') {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` schedule.timezone must be an IANA timezone"
+        )));
+    }
+
+    let request = dataflow.request_policy.as_ref().ok_or_else(|| {
+        SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must declare request_policy"
+        ))
+    })?;
+    if request.timeout_seconds == 0 || request.max_requests_per_minute == 0 || request.burst == 0 {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` request policy limits must be positive"
+        )));
+    }
+
+    let freshness = dataflow.freshness_policy.as_ref().ok_or_else(|| {
+        SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must declare freshness_policy"
+        ))
+    })?;
+    if freshness.soft_after_seconds == 0
+        || freshness.hard_after_seconds <= freshness.soft_after_seconds
+    {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` freshness hard threshold must exceed its positive soft threshold"
+        )));
+    }
+
+    let validation = dataflow.validation_policy.as_ref().ok_or_else(|| {
+        SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must declare validation_policy"
+        ))
+    })?;
+    require_text("validation_policy.range_rule", &validation.range_rule)?;
+    if validation.max_series_cardinality == 0 {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` max_series_cardinality must be positive"
+        )));
+    }
+    if validation.allow_partial_rows {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must set allow_partial_rows = false for production v1"
+        )));
+    }
+
+    let fixture = dataflow.fixture_reference.as_deref().ok_or_else(|| {
+        SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` must declare fixture_reference"
+        ))
+    })?;
+    require_text("fixture_reference", fixture)?;
+    if fixture.starts_with('/') || fixture.split('/').any(|segment| segment == "..") {
+        return Err(SourceRegisterError::InvalidRegister(format!(
+            "active dataflow `{id}` fixture_reference must be a repository-relative path"
+        )));
     }
 
     Ok(())
@@ -408,6 +501,9 @@ pub struct SourceRegisterDataflow {
     pub status: SourceStatus,
     /// Ownership area.
     pub owner_area: OwnerArea,
+    /// Accountable production owner role.
+    #[serde(default)]
+    pub owner_role: Option<OwnerRole>,
     /// Canonical audit/citation URL.
     pub canonical_url: String,
     /// License id or source-specific license note.
@@ -426,6 +522,21 @@ pub struct SourceRegisterDataflow {
     /// Source validation requirements.
     #[serde(default)]
     pub validation_requirements: Vec<String>,
+    /// Durable discovery schedule for active dataflows.
+    #[serde(default)]
+    pub schedule: Option<SchedulePolicy>,
+    /// Upstream request timeout and rate policy.
+    #[serde(default)]
+    pub request_policy: Option<RequestPolicy>,
+    /// Soft and hard freshness thresholds.
+    #[serde(default)]
+    pub freshness_policy: Option<FreshnessPolicy>,
+    /// Range, cardinality, and partial-row validation policy.
+    #[serde(default)]
+    pub validation_policy: Option<ValidationPolicy>,
+    /// Repository-relative representative fixture or reviewed snapshot.
+    #[serde(default)]
+    pub fixture_reference: Option<String>,
     /// Optional expected missing reason.
     #[serde(default)]
     pub expected_missing_reason: Option<String>,
@@ -493,6 +604,66 @@ pub enum OwnerArea {
     Licensed,
     /// Experimental source.
     Experimental,
+}
+
+/// Accountable role for production source ownership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerRole {
+    /// Platform infrastructure and runtime ownership.
+    Platform,
+    /// Source data, adapters, freshness, and quality ownership.
+    Data,
+    /// Public API ownership.
+    Api,
+    /// Reference web client ownership.
+    Web,
+    /// APS methodology and reviewed manual-input ownership.
+    ProductMethodology,
+}
+
+/// Durable discovery schedule for an active source dataflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulePolicy {
+    /// Five-field cron expression evaluated in the configured timezone.
+    pub cron: String,
+    /// IANA timezone name.
+    pub timezone: String,
+}
+
+/// Upstream request limits for an active source dataflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestPolicy {
+    /// Per-request timeout in seconds.
+    pub timeout_seconds: u64,
+    /// Maximum steady-state requests per minute.
+    pub max_requests_per_minute: u32,
+    /// Maximum short request burst.
+    pub burst: u32,
+}
+
+/// Freshness thresholds for an active source dataflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FreshnessPolicy {
+    /// Age in seconds after which data is soft-stale.
+    pub soft_after_seconds: u64,
+    /// Age in seconds after which data is hard-expired.
+    pub hard_after_seconds: u64,
+}
+
+/// Data validation limits for an active source dataflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValidationPolicy {
+    /// Named range rule implemented by the source adapter and its fixtures.
+    pub range_rule: String,
+    /// Maximum allowed series cardinality for one dataflow generation.
+    pub max_series_cardinality: u64,
+    /// Whether individually invalid rows may publish with a partial generation.
+    pub allow_partial_rows: bool,
 }
 
 /// Source-location audit policy.
@@ -578,6 +749,8 @@ pub struct AdditionalAuditPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -597,6 +770,67 @@ mod tests {
                 .iter()
                 .any(|dataflow| dataflow.dataflow_id == "curated.oversight_strength")
         );
+    }
+
+    #[test]
+    fn active_entries_declare_production_runtime_contracts() {
+        let document = SOURCE_REGISTER_V1_TOML
+            .parse::<toml::Table>()
+            .expect("parse checked-in source register as TOML");
+        let dataflows = document["dataflows"]
+            .as_array()
+            .expect("dataflows must be an array");
+
+        for dataflow in dataflows.iter().filter_map(toml::Value::as_table) {
+            if dataflow["status"].as_str() != Some("active") {
+                continue;
+            }
+
+            let id = dataflow["dataflow_id"]
+                .as_str()
+                .expect("active dataflow must have an id");
+            for required in [
+                "owner_role",
+                "schedule",
+                "request_policy",
+                "freshness_policy",
+                "validation_policy",
+                "fixture_reference",
+            ] {
+                assert!(
+                    dataflow.contains_key(required),
+                    "active dataflow `{id}` must declare `{required}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn launch_register_has_twenty_active_dataflows_with_existing_fixtures() {
+        let register = load_source_register().expect("load checked-in register");
+        let active = register
+            .dataflows
+            .iter()
+            .filter(|dataflow| dataflow.status == SourceStatus::Active)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            active.len(),
+            20,
+            "production v1 has exactly 20 active dataflows"
+        );
+
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for dataflow in active {
+            let fixture = dataflow
+                .fixture_reference
+                .as_deref()
+                .expect("active dataflow has a fixture reference");
+            assert!(
+                repository_root.join(fixture).is_file(),
+                "active dataflow `{}` fixture `{fixture}` must exist",
+                dataflow.dataflow_id
+            );
+        }
     }
 
     #[test]
@@ -620,6 +854,7 @@ source_id = "abs"
 dataflow_id = "abs.cpi"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://example.test/a"
 license = "CC-BY-4.0"
 attribution = "Source: ABS"
@@ -628,6 +863,11 @@ review_frequency = "weekly"
 source_scope = "test"
 provenance_requirements = ["Preserve source provenance."]
 validation_requirements = ["Validate source semantics."]
+fixture_reference = "crates/adapters/abs/tests/fixtures/cpi_sdmx.json"
+schedule = { cron = "15 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 3600, hard_after_seconds = 7200 }
+validation_policy = { range_rule = "test", max_series_cardinality = 100, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -639,6 +879,7 @@ source_id = "abs"
 dataflow_id = "abs.cpi"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://example.test/b"
 license = "CC-BY-4.0"
 attribution = "Source: ABS"
@@ -647,6 +888,11 @@ review_frequency = "weekly"
 source_scope = "test"
 provenance_requirements = ["Preserve source provenance."]
 validation_requirements = ["Validate source semantics."]
+fixture_reference = "crates/adapters/abs/tests/fixtures/cpi_sdmx.json"
+schedule = { cron = "15 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 3600, hard_after_seconds = 7200 }
+validation_policy = { range_rule = "test", max_series_cardinality = 100, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -783,6 +1029,26 @@ recommendation = "Review source."
     }
 
     #[test]
+    fn active_runtime_contracts_are_validated() {
+        let missing_owner = active_contains_any_fixture().replace("owner_role = \"data\"\n", "");
+        let err = parse_source_register(&missing_owner).expect_err("missing owner should fail");
+        assert!(err.to_string().contains("owner_role"));
+
+        let partial = active_contains_any_fixture()
+            .replace("allow_partial_rows = false", "allow_partial_rows = true");
+        let err = parse_source_register(&partial).expect_err("partial launch source should fail");
+        assert!(err.to_string().contains("allow_partial_rows"));
+
+        let invalid_freshness = active_contains_any_fixture().replace(
+            "soft_after_seconds = 3600, hard_after_seconds = 7200",
+            "soft_after_seconds = 7200, hard_after_seconds = 3600",
+        );
+        let err =
+            parse_source_register(&invalid_freshness).expect_err("inverted freshness should fail");
+        assert!(err.to_string().contains("freshness"));
+    }
+
+    #[test]
     fn unknown_dataflow_keys_are_rejected() {
         let raw = valid_register_fixture().replace(
             "manual_review_due_at = \"2027-06-22\"",
@@ -832,6 +1098,7 @@ source_id = "abs"
 dataflow_id = "abs.cpi"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://example.test/a"
 license = "CC-BY-4.0"
 attribution = "Source: ABS"
@@ -840,6 +1107,11 @@ review_frequency = "weekly"
 source_scope = "test"
 provenance_requirements = ["Preserve source provenance."]
 validation_requirements = ["Validate source semantics."]
+fixture_reference = "crates/adapters/abs/tests/fixtures/cpi_sdmx.json"
+schedule = { cron = "15 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 3600, hard_after_seconds = 7200 }
+validation_policy = { range_rule = "test", max_series_cardinality = 100, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -858,6 +1130,7 @@ source_id = "rba"
 dataflow_id = "rba.statistical_tables"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://example.test/a"
 license = "RBA Copyright and Disclaimer Notice"
 attribution = "Source: Reserve Bank of Australia"
@@ -866,6 +1139,11 @@ review_frequency = "weekly"
 source_scope = "test"
 provenance_requirements = ["Preserve source provenance."]
 validation_requirements = ["Validate source semantics."]
+fixture_reference = "crates/adapters/rba/tests/fixtures/a1_balance_sheet_weekly.xlsx"
+schedule = { cron = "15 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 3600, hard_after_seconds = 7200 }
+validation_policy = { range_rule = "test", max_series_cardinality = 100, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "bot_filtered"

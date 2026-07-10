@@ -850,6 +850,103 @@
         }
       }
     },
+    "/v1/sources": {
+      "get": {
+        "tags": ["sources"],
+        "summary": "`GET /v1/sources`.",
+        "operationId": "listSources",
+        "responses": {
+          "200": {
+            "description": "Governed source catalog.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Invalid server source register.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sources/{source_id}": {
+      "get": {
+        "tags": ["sources"],
+        "summary": "`GET /v1/sources/{source_id}`.",
+        "operationId": "getSource",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "description": "Source id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Governed source details.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Public CDN cache policy."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCatalogEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Invalid server source register.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/subscriptions": {
       "post": {
         "tags": ["subscriptions"],
@@ -2145,9 +2242,221 @@
           }
         }
       },
+      "SourceCatalogDataflow": {
+        "type": "object",
+        "description": "Governed source-dataflow metadata.",
+        "required": [
+          "dataflow_id",
+          "status",
+          "coverage_state",
+          "owner_area",
+          "source_url",
+          "license",
+          "attribution",
+          "cadence"
+        ],
+        "properties": {
+          "attribution": {
+            "type": "string",
+            "description": "Required attribution."
+          },
+          "cadence": {
+            "type": "string",
+            "description": "Expected source cadence."
+          },
+          "coverage_state": {
+            "type": "string",
+            "description": "Coverage state exposed to catalog consumers."
+          },
+          "dataflow_id": {
+            "type": "string",
+            "description": "Stable dataflow id."
+          },
+          "fixture_reference": {
+            "type": ["string", "null"],
+            "description": "Repository-relative representative fixture or reviewed snapshot."
+          },
+          "freshness_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceFreshnessPolicy",
+                "description": "Soft and hard freshness thresholds for active sources."
+              }
+            ]
+          },
+          "license": {
+            "type": "string",
+            "description": "Source licence or terms identifier."
+          },
+          "owner_area": {
+            "type": "string",
+            "description": "Owning implementation area."
+          },
+          "owner_role": {
+            "type": ["string", "null"],
+            "description": "Accountable production role, when assigned."
+          },
+          "request_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRequestPolicy",
+                "description": "Upstream timeout and rate policy for active sources."
+              }
+            ]
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceSchedule",
+                "description": "Durable discovery schedule for active sources."
+              }
+            ]
+          },
+          "source_url": {
+            "type": "string",
+            "description": "Canonical source and citation URL."
+          },
+          "status": {
+            "type": "string",
+            "description": "Source-register governance status."
+          },
+          "validation_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceValidationPolicy",
+                "description": "Range, cardinality, and partial-row policy for active sources."
+              }
+            ]
+          }
+        }
+      },
+      "SourceCatalogEntry": {
+        "type": "object",
+        "description": "One source and its governed dataflows.",
+        "required": ["source_id", "dataflows"],
+        "properties": {
+          "dataflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceCatalogDataflow"
+            },
+            "description": "Dataflows governed for this source."
+          },
+          "source_id": {
+            "type": "string",
+            "description": "Stable source id."
+          }
+        }
+      },
+      "SourceFreshnessPolicy": {
+        "type": "object",
+        "description": "Public source freshness policy.",
+        "required": ["soft_after_seconds", "hard_after_seconds"],
+        "properties": {
+          "hard_after_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age in seconds after which data is hard-expired.",
+            "minimum": 0
+          },
+          "soft_after_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age in seconds after which data is soft-stale.",
+            "minimum": 0
+          }
+        }
+      },
       "SourceId": {
         "type": "string",
         "description": "Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`)."
+      },
+      "SourceRequestPolicy": {
+        "type": "object",
+        "description": "Public upstream request policy.",
+        "required": ["timeout_seconds", "max_requests_per_minute", "burst"],
+        "properties": {
+          "burst": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum short request burst.",
+            "minimum": 0
+          },
+          "max_requests_per_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum steady-state requests per minute.",
+            "minimum": 0
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Per-request timeout in seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "SourceSchedule": {
+        "type": "object",
+        "description": "Public source discovery schedule.",
+        "required": ["cron", "timezone"],
+        "properties": {
+          "cron": {
+            "type": "string",
+            "description": "Five-field cron expression."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone name."
+          }
+        }
+      },
+      "SourceValidationPolicy": {
+        "type": "object",
+        "description": "Public source validation policy.",
+        "required": ["range_rule", "max_series_cardinality", "allow_partial_rows"],
+        "properties": {
+          "allow_partial_rows": {
+            "type": "boolean",
+            "description": "Whether partial rows may publish."
+          },
+          "max_series_cardinality": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum series cardinality for one generation.",
+            "minimum": 0
+          },
+          "range_rule": {
+            "type": "string",
+            "description": "Named adapter range rule."
+          }
+        }
+      },
+      "SourcesResponse": {
+        "type": "object",
+        "description": "Response envelope for `GET /v1/sources`.",
+        "required": ["sources"],
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceCatalogEntry"
+            },
+            "description": "Governed sources ordered by source id."
+          }
+        }
       },
       "SubIndexScore": {
         "type": "object",
@@ -2242,6 +2551,10 @@
     }
   },
   "tags": [
+    {
+      "name": "sources",
+      "description": "Governed source catalog"
+    },
     {
       "name": "dataflows",
       "description": "Dataflow catalog and codelists"

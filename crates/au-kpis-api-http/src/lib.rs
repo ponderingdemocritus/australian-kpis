@@ -33,6 +33,7 @@ pub mod routes;
 pub mod scorecards;
 pub mod search;
 pub mod series;
+pub mod sources;
 pub mod state;
 pub mod subscriptions;
 
@@ -52,6 +53,10 @@ pub use routes::{HealthResponse, health, openapi};
 pub use scorecards::{ScorecardHistoryQuery, aps_config, aps_history, aps_latest};
 pub use search::{SearchQuery, SearchResponse, SearchResult, SearchResultKind, search_catalog};
 pub use series::{SeriesLookupResponse, SeriesRevisionMetadata, get_series};
+pub use sources::{
+    SourceCatalogDataflow, SourceCatalogEntry, SourceFreshnessPolicy, SourceRequestPolicy,
+    SourceSchedule, SourceValidationPolicy, SourcesResponse, get_source, list_sources,
+};
 pub use state::AppState;
 pub use subscriptions::{
     CreateSubscriptionRequest, CreateSubscriptionResponse, DeliveryOptions, DeliveryRunOutcome,
@@ -94,6 +99,8 @@ pub fn router(state: AppState) -> Result<Router, RouterBuildError> {
     router_with(
         Router::<AppState>::new()
             .route("/v1/health", get(health))
+            .route("/v1/sources", get(sources::list_sources))
+            .route("/v1/sources/:source_id", get(sources::get_source))
             .route("/v1/dataflows", get(dataflows::list_dataflows))
             .route("/v1/dataflows/:id", get(dataflows::get_dataflow))
             .route(

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Document** | `Spec.md` |
-| **Version** | `v0.1.7` |
+| **Version** | `v1.0.0-rc.1` |
 | **Status** | Approved |
-| **Last updated** | 2026-06-26 |
+| **Last updated** | 2026-07-10 |
 | **Owner** | Platform team |
 | **Audience** | Engineers, data partners, SDK consumers, operators |
 
@@ -17,32 +17,33 @@
 
 1. [Context](#context)
 2. [Confirmed decisions](#confirmed-decisions)
-3. [Stack (locked)](#stack-locked)
-4. [Monorepo layout](#monorepo-layout)
-5. [Async architecture (baked-in best practices)](#async-architecture-baked-in-best-practices)
-6. [Data model (SDMX-inspired)](#data-model-sdmx-inspired)
-7. [Source adapters](#source-adapters)
-8. [Ingestion pipeline](#ingestion-pipeline)
-9. [PDF extractor service (Python)](#pdf-extractor-service-python)
-10. [API surface](#api-surface)
-11. [Derived scorecards](#derived-scorecards)
-12. [TypeScript SDK](#typescript-sdk)
-13. [Reference client (apps/web)](#reference-client-appsweb)
-14. [Observability](#observability)
-15. [Testing strategy](#testing-strategy)
-16. [CI/CD pipeline](#cicd-pipeline)
-17. [Benchmarking](#benchmarking)
-18. [Security posture](#security-posture)
-19. [Data licensing and attribution](#data-licensing-and-attribution)
-20. [Deployment](#deployment)
-21. [Phased rollout](#phased-rollout)
-22. [Critical files/modules to create (Phase 1 + 2)](#critical-filesmodules-to-create-phase-1--2)
-23. [Verification plan](#verification-plan)
-24. [Review findings — best practices + abstraction checks](#review-findings--best-practices--abstraction-checks)
-25. [Decisions log](#decisions-log)
-26. [Glossary](#glossary)
-27. [References](#references)
-28. [Changelog](#changelog)
+3. [Production v1 release contract](#production-v1-release-contract)
+4. [Stack (locked)](#stack-locked)
+5. [Monorepo layout](#monorepo-layout)
+6. [Async architecture (baked-in best practices)](#async-architecture-baked-in-best-practices)
+7. [Data model (SDMX-inspired)](#data-model-sdmx-inspired)
+8. [Source adapters](#source-adapters)
+9. [Ingestion pipeline](#ingestion-pipeline)
+10. [PDF extractor service (Python)](#pdf-extractor-service-python)
+11. [API surface](#api-surface)
+12. [Derived scorecards](#derived-scorecards)
+13. [TypeScript SDK](#typescript-sdk)
+14. [Reference client (apps/web)](#reference-client-appsweb)
+15. [Observability](#observability)
+16. [Testing strategy](#testing-strategy)
+17. [CI/CD pipeline](#cicd-pipeline)
+18. [Benchmarking](#benchmarking)
+19. [Security posture](#security-posture)
+20. [Data licensing and attribution](#data-licensing-and-attribution)
+21. [Deployment](#deployment)
+22. [Phased rollout](#phased-rollout)
+23. [Critical files/modules to create (Phase 1 + 2)](#critical-filesmodules-to-create-phase-1--2)
+24. [Verification plan](#verification-plan)
+25. [Review findings — best practices + abstraction checks](#review-findings--best-practices--abstraction-checks)
+26. [Decisions log](#decisions-log)
+27. [Glossary](#glossary)
+28. [References](#references)
+29. [Changelog](#changelog)
 
 ---
 
@@ -75,17 +76,276 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 
 ## Confirmed decisions
 
-- Hosting: **Fly.io** phase 1-3; re-evaluate at scale.
+- Hosting: **Railway stateless compute in Singapore**. GitHub Actions is the
+  only deployment authority; Railway repository auto-deploy is disabled.
 - DB: **Timescale Cloud** (managed — backups, HA, compression policies).
 - Licensing model: **Free tier** — generous default rate limits, API keys for abuse prevention + attribution.
 - SDK: **TypeScript first**; Python/Go SDKs later via same OpenAPI codegen.
 - First dataflow: **ABS CPI** (higher public demand than Labour Force; monthly + quarterly releases).
 - Raw artifacts: **retained in S3/R2 indefinitely** — lifecycle policy moves >1yr objects to cold storage. Streaming uploads land first in `artifacts-staging/<uuid>` and are copied to `artifacts/<sha256>` once the hash is known; a second lifecycle rule expires `artifacts-staging/` after 7 days so any rare delete-failure leak from the storage crate is bounded. The declarative policy lives in `infra/r2/lifecycle.json`.
 - Rust: **2024 edition, MSRV 1.85**.
-- Migrations: **`sqlx migrate`** (sync-at-startup).
+- Migrations: **`sqlx migrate` from a dedicated deployment job** using
+  DDL-only credentials before immutable application promotion. Application
+  processes never migrate production at startup.
 - PDF extraction: **deterministic first, model-assisted fallback**. Open-source
   document models are allowed, but only as pinned local sidecar backends whose
   output passes the same source-specific validation as non-model extraction.
+
+## Production v1 release contract
+
+This section is the production-v1 amendment. It supersedes conflicting
+phase-oriented examples and historical deployment notes elsewhere in this
+document. The older phase checklists remain as implementation history, not as
+the production architecture.
+
+### Scope and service objectives
+
+Production v1 includes the public read API, generated TypeScript SDK, Next.js
+reference client, all 20 source-register entries marked `active`, the national
+21-indicator APS beta, verified API-key subscriptions, and durable webhooks.
+Kafka, Kubernetes, ClickHouse, OpenSearch, new unregistered sources, licensed
+ASX announcement/EOD acquisition, and an APS formula redesign are out of scope.
+
+The launch objectives are:
+
+- Monthly availability of at least 99.9%.
+- Database RPO at most five minutes and RTO at most thirty minutes.
+- Warm and cold single-series API p95 at most 200 ms and 500 ms respectively.
+- Error rate below 0.1% under the certified workload.
+- APS latest p95 at most 200 ms and ten-year history p95 at most 500 ms.
+- One-million-row Parquet under 30 seconds and under 100 MB peak route heap.
+
+Availability is measured at the Cloudflare edge. Eligible traffic is public
+`/v1` GET requests plus web GET/HEAD requests. A good request returns 2xx/3xx
+before the route deadline. Caller-caused 4xx, quota 429, synthetic requests,
+and tagged operator drills are excluded. Origin failures, 5xx, dependency 503,
+504, and deploy downtime are included. Planned maintenance is not excluded.
+
+### Public observation and source APIs
+
+`GET /v1/observations` is the only canonical observation query. The redundant,
+unimplemented `/v1/observations/latest` route is removed before production.
+JSON and CSV default to 1,000 rows and cap at 10,000. Parquet caps at 1,000,000
+rows. A raw latest query may match at most 512 series; broader requests require
+additional dimensions or a rollup.
+
+Unknown parameters, duplicate singleton parameters, malformed dimensions,
+cursor/query mismatch, and stale dataflow watermarks return RFC 7807 `400`.
+Only a bounded first JSON page may have an ETag and public cache headers. Cursor
+pages, large JSON, CSV, and Parquet use `Cache-Control: no-store` without an
+ETag. Parquet is not recompressed by HTTP gzip or Brotli.
+
+Database reads use `sqlx::fetch` and every format streams without buffering the
+complete result. Each API replica admits 256 short requests and four bulk
+streams. Bulk streams have a 120-second total deadline and a 15-second idle
+write deadline. Short-admission overflow is `503 Retry-After: 1`; bulk overflow
+is `429 Retry-After: 5`; dependency exhaustion is `503`; timeout is `504`.
+
+The source catalog adds `GET /v1/sources` and `GET /v1/sources/{source_id}`.
+Responses include governed dataflows, status, licence, attribution, cadence,
+owner area and role, schedule, request limits, freshness limits, validation
+policy, fixture reference, and coverage state.
+
+Cursor query hashes sort parameter names and dimension keys by UTF-8 byte order,
+normalize timestamps to UTC milliseconds, serialize compact canonical JSON,
+and hash it with SHA-256. A cursor contains its version, canonical query hash,
+dataflow generation watermark, last timestamp, and last series key. The wire
+format is base64url without padding over the version byte, compact JSON, and an
+HMAC-SHA256 signature. The active signing key and one prior key are accepted for
+24 hours. A changed watermark returns the `stale-cursor` problem type.
+
+### APS publication and APIs
+
+The platform publishes one official APS snapshot at 00:15
+`Australia/Sydney` for the previous local calendar date. A numeric score is
+published only when at least 70% of total scored weight and 50% of each axis is
+usable. All 20 active dataflows must pass launch readiness.
+`apra.super_asset_allocation` and `curated.oversight_strength` are additional
+reviewed manual blockers. Published snapshots are immutable; a correction
+appends a revision linked by `supersedes_snapshot_id`.
+
+For each usable input, normalize and clamp to `[0, 1]`:
+
+```text
+higher_is_better = clamp((raw - worst) / (best - worst), 0, 1)
+lower_is_better  = clamp((worst - raw) / (worst - best), 0, 1)
+
+T = sum(throughput value * weight) / sum(usable throughput weight)
+orientation_unit = sum(orientation value * weight) /
+                   sum(usable orientation weight)
+O = 2 * orientation_unit - 1
+APS = round(clamp(100 * T * (0.5 + 0.5 * O), 0, 100) * 10) / 10
+```
+
+Configuration validation rejects non-finite values, equal best/worst bounds,
+negative weights, unknown cadence, duplicate indicator IDs, missing provenance,
+and an axis with zero scored weight. Coverage is usable scored weight divided
+by configured scored weight. Resolved and soft-stale inputs are usable;
+hard-expired, missing, gap, and manual-pending inputs are excluded. Visible
+unscored inputs are excluded from numerator and denominator. Soft-stale inputs
+drop one confidence level.
+
+Missing-data bounds rerun the formula with missing throughput and orientation
+at both zero and one. Zones use the rounded score: `0..=33.0` is `scarcity`,
+`>33.0..=66.0` is `mixed`, and `>66.0` is `abundance`. Trend compares the
+nearest prior numeric snapshot with the same config version and history view;
+movement of at least one point is up/down, otherwise flat.
+
+Public APS enums are `PublicationState`, `ScoreZone`, `CoverageStatus`, and
+`HistoryView` as defined by the generated OpenAPI schema. The routes are:
+
+- `GET /v1/scorecards/aps/config?version=`.
+- `GET /v1/scorecards/aps/latest?view=`.
+- `GET /v1/scorecards/aps/history?since=&until=&view=&limit=&cursor=`.
+- `GET /v1/scorecards/aps/snapshots/{id}`.
+
+History returns summary points without contribution arrays. It defaults to 365
+days and 365 points, caps the date span at ten years, and caps pages at 1,000.
+The default view is original as-published data; `latest` resolves corrections.
+
+The web application server-renders the latest headline and hydrates interactive
+charts. It performs no browser-side score or uplift calculation. Missing radar
+inputs render as gaps, insufficient coverage never renders as zero scarcity,
+and bounds are labelled "missing-data bounds". Every chart has a table/download
+equivalent. The client exposes config, weights, evidence, and provenance,
+detects config/snapshot mismatches, enables SDK runtime validation, and meets
+WCAG 2.2 AA with no serious or critical axe findings.
+
+### Durable ingestion and publication
+
+Migrations `0014`, `0015`, and `0016` introduce durable ingestion, scorecard
+snapshots, and webhook hardening. Statuses use database checks; SHA-256 digests
+are 32 bytes; counters are non-negative; ownership and uniqueness are enforced
+by the database. Empty/staging schemas must pass up/down/up tests. Production
+rollback is forward-only after data is accepted.
+
+`queue_cron_schedules` stores an IANA timezone, `next_run_at`, and
+`last_enqueued_at`. `queue_schedule_occurrences` uniquely identifies
+`(schedule_id, scheduled_for)`. A leader retains the advisory lock for
+efficiency, then selects due schedules `FOR UPDATE SKIP LOCKED`, creates the
+occurrence and Discover job, advances `next_run_at`, and commits atomically.
+Occurrence uniqueness, rather than leader lifetime, provides correctness.
+
+Durable work is represented by `discovered_work` and
+`ingestion_generations`. Work identity is SHA-256 over canonical source ID,
+dataflow ID, normalized source URL, and upstream revision. A generation is
+unique by artifact fetch, dataflow, parser version, and transform version. It
+records provenance, actor/reason, counts, stage digest, trace context, and
+lifecycle timestamps. The state machine is:
+
+```text
+pending_parse -> parsing -> parsed_clean | parsed_partial | rejected
+parsed_* -> pending_load -> loading -> published | failed
+```
+
+Unlogged `observation_stage` is keyed by `(generation_id, row_no)` and contains
+complete typed rows. Observations reference a non-null generation; pre-v1 rows
+are assigned explicit legacy published generations. No stage relies on an
+in-memory predecessor payload. Lost staging resets a non-published generation
+to `pending_parse`. Format/schema drift, digest mismatch, and invalid provenance
+do not retry automatically and pause the affected dataflow. Every v1 launch
+source has `allow_partial_rows = false`.
+
+Load takes a transaction-scoped advisory lock by dataflow. In one transaction
+it verifies stage count/digest, upserts series, assigns revisions set-wise,
+inserts observations with generation ID, writes load/publication audit records,
+marks upstream work handled, creates webhook outbox rows, and commits. Changed
+revisions never use `ON CONFLICT DO NOTHING`; unexpected conflicts are retryable
+invariant failures. A rollback exposes no observation, publication, or event.
+
+Maximum attempts are Discover 5, Fetch 8, Parse 3, Load 5, and Backfill 3.
+Transient retries use full jitter with a 30-second base and six-hour cap. Fetch
+honours `Retry-After` up to 24 hours. Cleanup runs daily in 5,000-row batches:
+completed jobs are retained 30 days, dead letters and parse errors one year,
+terminal webhook delivery state 90 days, and generation/audit records forever.
+
+Audited CLI operations are `source pause`, `source resume`, `queue retry-dlq`,
+`artifact reparse --parser-version`, `generation inspect`, and
+`manual-input load`. Manual input creates a canonical artifact and follows the
+same Parse/Load path. APRA super allocation and oversight strength require a
+source URL, licence, retrieval date, reviewer role/date, evidence notes, and
+audit reason.
+
+APS persistence uses immutable `scorecard_configs`, append-only
+`scorecard_snapshots`, `scorecard_snapshot_contributions`, and
+`scorecard_snapshot_generations`. Formula, weights, normalization, or threshold
+changes require a new config version. Daily materialization is idempotent by
+scorecard/config/date/revision; restatement requires a reason and predecessor.
+
+### Subscriptions and webhooks
+
+Subscription routes require `subscriptions:read` or `subscriptions:write` as
+appropriate. Status is `pending_verification`, `active`, `paused`, or `revoked`.
+Creation returns `202`, pending status, and a random 32-byte signing secret once.
+List, get, verify, rotate-secret, and revoke routes are part of `/v1`.
+
+Destinations must be HTTPS hostnames on port 443 without userinfo, fragments,
+redirects, or IP literals. Every A/AAAA answer must be globally routable. The
+worker re-resolves before every request, pins the connection to validated
+addresses, and preserves TLS hostname verification. Activation requires echoing
+a signed challenge. A key may own at most five active/pending subscriptions and
+each subscription at most 20 active dataflows; an empty selector means all 20.
+
+Webhook events have stable UUIDs and include schema version, event type,
+occurrence time, generation ID, dataflow ID, artifact SHA-256, and loaded count.
+Headers carry webhook ID, timestamp, and HMAC-SHA256/base64url signature over
+`id + "." + unix_seconds + "." + exact_body_bytes`.
+
+Delivery is at least once with a renewable 60-second fenced lease, two
+concurrent requests per destination, and 32 per worker. Any 2xx succeeds.
+`408`, `409`, `425`, `429`, and 5xx retry; redirects and other 4xx fail
+permanently. Twelve full-jitter attempts span at most 24 hours and honour
+`Retry-After` within that window. Five dead-lettered deliveries without a
+success pause the subscription; success resets consecutive failures.
+
+Secrets are AES-256-GCM encrypted with a random 96-bit nonce and AAD containing
+subscription UUID plus key version. Rotation accepts old and new signatures for
+24 hours. Plaintext is never stored or logged after the create/rotate response.
+
+### Edge, runtime, deployment, and certification
+
+Cloudflare is the only public edge. It removes caller forwarding/internal
+headers, applies coarse IP limits, and signs origin ID, client IP, timestamp,
+request ID, method, and path/query using HMAC-SHA256. Cloudflare and the web BFF
+have distinct IDs/secrets. Railway rejects invalid origin signatures, timestamps
+outside 30 seconds, and 60-second replay. Argon2 runs on a bounded blocking pool
+after cheap admission.
+
+Railway Redis stores only disposable cache and rate-limit state with a 50 ms
+command timeout. During Redis failure public GETs bypass cache, API keys verify
+against Timescale, responses include `X-AU-KPIS-Degraded: redis`, and readiness
+stays `200 degraded`. Protected subscription writes return `503 Retry-After`.
+
+`/livez` has a 250 ms deadline and no dependency checks. `/readyz` has a
+one-second total deadline, a 500 ms database/schema check, and a 100 ms Redis
+check. Database/schema failure is `503`; Redis or telemetry failure is degraded
+`200`. Health responses expose version and database, Redis, and telemetry status
+with dependency latency.
+
+Stateless compute runs in Railway `asia-southeast1-eqsg3a`: API 2x2 vCPU/2 GiB,
+web 2x1 vCPU/1 GiB, PDF 2x2 vCPU/4 GiB, ingestion 2x2 vCPU/4 GiB, scheduler two
+active/passive 0.5 vCPU/512 MiB, webhook 2x1 vCPU/1 GiB, and OTEL collector
+2x1 vCPU/1 GiB. Timescale Cloud runs HA/PITR in `ap-southeast-1` with at least
+4 vCPU, 16 GiB, 500 GiB, and 100 connections. Separate staging/production R2
+buckets use APAC placement; runtime permissions exclude delete. Grafana Cloud
+receives telemetry and runs one-minute synthetics.
+
+GitHub Actions builds every image once, generates an SBOM, scans and signs it,
+publishes immutable GHCR digests, migrates staging, deploys the exact digests,
+runs API/APS/webhook/BFF/data-quality smoke, requires protected production
+approval, applies the same expand migration, deploys with rolling overlap, and
+runs post-deploy smoke. Application digests roll back automatically on smoke
+failure, eligible-request 5xx above 1% for five minutes, route p95 above twice
+baseline for five minutes, no ready replica for two minutes, or reconciliation
+difference.
+
+Launch requires all active dataflows fresh and quality-covered, both manual APS
+blockers reviewed, a numeric APS snapshot, no partial-generation visibility,
+all latency/memory/availability/RPO/RTO gates, hardened webhooks, live Grafana
+signals, successful alert drills, two-replica seven-day staging soak, no P0/P1
+or `release:blocker` issues, and complete deploy, replay, DLQ, and restoration
+runbooks. Evidence is retained as scale, restore, chaos, security, and soak
+release reports. Production promotion is gate-based with no fixed date.
 
 ## Stack (locked)
 
@@ -108,7 +368,7 @@ returns clean, validated, SDMX-compliant time series regardless of upstream sour
 | **Lint/format** | **`rustfmt` + `clippy` (deny warnings)** + **`cargo deny`** + **`cargo audit`** | |
 | **Monorepo** | **Cargo workspace** for Rust, **pnpm workspaces + Turborepo** for TS | Polyglot root |
 | **CI** | **GitHub Actions + `sccache`** | Cached Rust builds |
-| **Migrations** | **`sqlx migrate`** — sync-at-startup, checked-in SQL files | Simple, transparent |
+| **Migrations** | **`sqlx migrate` deployment job**, checked-in SQL files | Explicit expand-before-promote authority |
 
 ---
 
@@ -165,7 +425,8 @@ australian-kpis/
 │   ├── compose/docker-compose.yml          # Local: Postgres+Timescale, Redis, Minio, PDF sidecar
 │   ├── docker/                             # Dockerfiles per binary
 │   ├── migrations/                         # sqlx migrations (Timescale-aware)
-│   └── k8s/                                # Optional helm charts (phase 5+)
+│   ├── railway/                            # Stateless Railway service config
+│   └── observability/                      # OTEL and Grafana configuration
 └── .github/workflows/                      # ci.yml, release.yml, sdk-publish.yml
 ```
 
@@ -514,6 +775,13 @@ source-location rules and source-research packets are derived from this
 register, and PR CI blocks divergence between the register, APS scorecard
 config, and scheduler audit rules.
 
+Every `active` entry additionally declares an accountable owner role, a
+five-field discovery cron and IANA timezone, request timeout/rate/burst limits,
+soft/hard freshness thresholds, a named adapter range rule, maximum generation
+series cardinality, `allow_partial_rows = false`, and a repository-relative
+fixture or reviewed snapshot. Source-register parsing rejects a missing or
+invalid production policy before scheduler or API configuration is built.
+
 | Source | Crate / path | Discovery | Fetch | Parse |
 |---|---|---|---|---|
 | **ABS** | `crates/adapters/abs` (`au-kpis-adapter-abs`) | SDMX `/dataflow` diff | SDMX-JSON | Native stream (`serde_json` + `tokio-stream`) |
@@ -720,20 +988,29 @@ GET  /v1/observations
        &frequency=monthly
        &format=json|csv|parquet
        &cursor=...&limit=10000
-GET  /v1/observations/latest
 GET  /v1/series/{dataflow}/{series_key}
 GET  /v1/search?q=unemployment
-GET  /v1/scorecards/aps/config
-GET  /v1/scorecards/aps/latest
-GET  /v1/scorecards/aps/history?since=2025-01-01&until=2026-01-01
-POST /v1/subscriptions                        # phase 5
-GET  /v1/health
+GET  /v1/scorecards/aps/config?version=
+GET  /v1/scorecards/aps/latest?view=
+GET  /v1/scorecards/aps/history?since=&until=&view=&limit=&cursor=
+GET  /v1/scorecards/aps/snapshots/{id}
+POST /v1/subscriptions
+GET  /v1/subscriptions
+GET  /v1/subscriptions/{id}
+POST /v1/subscriptions/{id}/verify
+POST /v1/subscriptions/{id}/rotate-secret
+DELETE /v1/subscriptions/{id}
+GET  /livez
+GET  /readyz
 GET  /v1/openapi.json
 ```
 
 ### Non-functional
 
-- **Auth**: `X-API-Key` header. Keys stored **argon2id-hashed** in DB; lookup cached in Redis with short TTL; constant-time compare. JWT for client app.
+- **Auth**: `X-API-Key` header. Keys are stored **argon2id-hashed** in the DB;
+  lookup is cached in Redis with a short TTL and falls back to Timescale during
+  cache failure. Subscription routes enforce `subscriptions:read` and
+  `subscriptions:write`. Argon2 verification uses a bounded blocking pool.
 - **Rate limits** (free tier defaults): 60 rps / 1000 requests per hour per key. Burst allowance of 2x. Token bucket in Redis via `fred`. Returns `429` with `Retry-After` header and `X-RateLimit-*` headers on every response. Anonymous (no key) tier: 10 rps / 100 per hour per IP.
 - **Caching**: Dataflow metadata long TTL. Cacheable first-page JSON
   observation responses use ETag + `Cache-Control: public, max-age=60,
@@ -741,8 +1018,8 @@ GET  /v1/openapi.json
   are streaming responses; they omit ETag, use `Cache-Control: no-store`, and
   must not run the full ETag fingerprint aggregate before streaming. Cloudflare
   CDN in front.
-- **Pagination and bulk export**: JSON/CSV reads are cursor-based (opaque
-  base64 of `(time, series_key)` pair) and capped at 10k rows per page. Parquet
+- **Pagination and bulk export**: JSON/CSV reads are signed cursor-based pages
+  defaulting to 1,000 and capped at 10,000 rows per page. Parquet
   is a bulk streaming export path, not a JSON page envelope; it may stream up
   to 1,000,000 rows per request under the same rate limits and query
   cardinality guardrails.
@@ -1231,19 +1508,23 @@ Any failure ejects the whole batch; fixes re-queued individually.
 Triggered on merge to `main`.
 
 ```
-1. Build multi-arch release binaries (linux/amd64, arm64)
-2. Build distroless Docker images; sign with cosign; SBOM via syft
-3. Push to GHCR
-4. Deploy to Fly staging (one region)
-5. Run post-deploy smoke against staging — FAIL = auto-rollback
-6. Run k6 sustained (abbreviated 2-min variant) against staging
-7. Manual approval gate for production
-8. Deploy to Fly prod (blue/green)
-9. Post-deploy smoke against prod — FAIL = auto-rollback
-10. Slack + PagerDuty deploy notification
+1. Run all release checks.
+2. Build each service image once.
+3. Generate SBOMs, scan, and sign images.
+4. Push immutable GHCR digests.
+5. Apply expand migrations to staging with DDL-only credentials.
+6. Deploy the exact digests to Railway staging.
+7. Run API, APS, webhook, BFF, and data-quality smoke.
+8. Require protected production approval.
+9. Apply the same expand migration to production.
+10. Deploy the same digests with rolling overlap.
+11. Run production smoke and reconciliation.
+12. Roll application digests back automatically on failure.
 ```
 
-**Rollback**: `fly releases rollback <app>` — automated on smoke failure, manual otherwise. One-click from Slack message.
+**Rollback** restores the prior Railway image digests and retains additive
+schema. After managed-data writes begin, state recovery uses Timescale PITR and
+R2 replay; state is never reverse-copied from a partially written environment.
 
 ### 4. Scheduled flows
 
@@ -1377,8 +1658,11 @@ Nightly staging load tests run on real cloud infra (Timescale Cloud staging bran
 
 ## Security posture
 
-- **TLS** terminated at Fly.io edge; internal service-to-service over private network (Fly 6PN).
-- **Secrets**: Fly secrets at runtime; no `.env` files committed. Rotation playbook documented.
+- **TLS** terminates at the Cloudflare public edge and Railway service edge;
+  private service traffic stays on Railway private networking.
+- **Secrets**: Railway runtime variables and protected GitHub environments; no
+  `.env` files committed. Rotation playbooks cover origin, cursor, API-key, R2,
+  database, and webhook encryption keys.
 - **API key storage**: argon2id-hashed (never plaintext); keys shown once on creation. Prefix `auk_live_` for discoverability in leaks; GitHub secret scanning pattern registered.
 - **SQL injection**: eliminated at compile time by `sqlx::query!` macros — all queries compile-checked against the real DB schema.
 - **Dependency hygiene**: `cargo audit` + `cargo deny` in CI (reject yanked crates, GPL-incompatible licenses, unknown sources). Renovate for weekly updates.
@@ -1400,28 +1684,29 @@ Most Australian sources publish under open licenses but require attribution. Eac
 
 ## Deployment
 
-**Target:** Fly.io (phase 1-3); migrate to GCP/AWS when we outgrow.
+**Target:** Railway stateless compute in Singapore, Timescale Cloud Singapore,
+Cloudflare R2 with APAC placement, Cloudflare public edge, and Grafana Cloud.
 
-- **api binary** — 2+ instances behind LB, autoscale on CPU. Health on `/v1/health`.
-- **ingestion binary** — N workers, horizontal scale, pull from apalis queue.
-- **scheduler binary** — singleton with leader-election (Postgres advisory lock).
-- **pdf-extractor** — 2+ instances, internal-only.
-- **postgres** — Timescale Cloud managed (backups, HA, compression policies).
-- **redis** — Upstash or Fly Redis.
-- **S3** — Cloudflare R2 (egress-free).
-- **Single Rust binary per service** — Dockerfile uses `cargo chef` for layered caching. Images <100MB.
+- **api** — two stateless replicas; public only through authenticated edge
+  traffic.
+- **web/BFF** — two replicas; signs private API origin requests separately from
+  Cloudflare.
+- **ingestion** — two durable Postgres-queue workers using R2 as artifact state.
+- **scheduler** — two active/passive replicas; occurrence uniqueness supplies
+  correctness across advisory-lock leadership changes.
+- **webhook worker** — two replicas with fenced Postgres leases.
+- **pdf-extractor** — two internal-only replicas.
+- **OTEL collector** — two replicas exporting to Grafana Cloud.
+- **postgres** — external managed Timescale Cloud with HA, PITR, and dedicated
+  runtime/DDL roles; never provisioned inside Railway.
+- **redis** — one Railway instance used only for disposable cache/rate limits.
+- **object storage** — external R2 staging and production buckets; runtime roles
+  cannot delete objects.
 
-**Railway option:** The repo also supports Railway as a single-project
-deployment path for environments that should be bootstrapped from source.
-Project-level Railway Infrastructure as Code lives in `.railway/railway.ts`
-and provisions TimescaleDB as a stateful image service with a persistent volume,
-Redis, a private artifact bucket, `pdf-extractor`, `ingestion`, `scheduler`,
-`api`, and `web`. Operators must run `railway config plan` before
-`railway config apply`; generated public domains remain a post-apply dashboard
-step for `web` and optional external `api` access. The per-service
-`infra/railway/*.toml` files remain the manual fallback and config-as-code
-reference for individual Railway services, but must not be configured as active
-service config files for services managed by `.railway/railway.ts`.
+Project IaC must not provision stateful Postgres or artifact storage in Railway.
+All service deploys use immutable GHCR digests promoted by GitHub Actions. The
+per-service `infra/railway/*.toml` files and project IaC describe the same
+stateless topology and region.
 
 ---
 
@@ -1584,15 +1869,17 @@ Pass 1 over the plan. Fixes applied in-place:
 
 ## Decisions log
 
-All confirmed 2026-04-23:
-- Hosting: Fly.io → migrate later
+Initial decisions were confirmed 2026-04-23 and amended for production v1 on
+2026-07-10:
+
+- Hosting: Railway stateless compute in Singapore behind Cloudflare.
 - DB: Timescale Cloud
 - License model: free tier, API keys
 - SDK: TypeScript first; others via OpenAPI codegen
 - First dataflow: ABS CPI
 - Raw artifacts: retain indefinitely in R2, lifecycle-to-cold after 1 year
 - Rust 2024 edition, MSRV 1.85
-- `sqlx migrate` for migrations
+- `sqlx migrate` from a dedicated deployment job.
 
 ---
 
@@ -1658,6 +1945,12 @@ All confirmed 2026-04-23:
 
 ## Changelog
 
+- **v1.0.0-rc.1 (2026-07-10)** — Added the production-v1 release contract:
+  durable schedules and generation publication, persisted APS snapshots,
+  verified encrypted webhooks, trusted Cloudflare origin authentication,
+  Railway stateless compute with external Timescale/R2, immutable GitHub
+  Actions promotion, operational certification gates, and explicit runtime
+  policies for all 20 active source-register entries.
 - **v0.1.7 (2026-06-26)** — Added Railway as a supported single-project
   deployment option with project-level Infrastructure as Code and retained the
   existing per-service Railway config files as manual fallback references.
