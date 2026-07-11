@@ -2740,6 +2740,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn queue_validation_covers_the_supported_source_dataflow_matrix() {
+        let supported = [
+            ("abs", ABS_CPI_DATAFLOW_ID),
+            ("abs", ABS_BUILDING_APPROVALS_DATAFLOW_ID),
+            ("abs", ABS_BUILDING_ACTIVITY_DATAFLOW_ID),
+            ("abs", ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID),
+            ("apra", APRA_QUARTERLY_DATAFLOW_ID),
+            ("apra", APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID),
+            ("aemo", AEMO_DISPATCH_DATAFLOW_ID),
+            ("aemo", AEMO_GENERATION_MIX_DATAFLOW_ID),
+            ("aemo", AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_OXFORD_GARI_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_NAIC_ADOPTION_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_ABS_AI_RD_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_ID),
+            ("asx", ASX_MARKET_STATISTICS_DATAFLOW_ID),
+            ("asx", ASX_ANNOUNCEMENTS_DATAFLOW_ID),
+            ("asx", ASX_EOD_DATAFLOW_ID),
+            ("nhsac", NHSAC_HOUSING_ACCORD_DATAFLOW_ID),
+            ("pc", PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID),
+            ("worldbank", WORLDBANK_BREADY_DATAFLOW_ID),
+            ("rba", RBA_STAT_TABLES_DATAFLOW_ID),
+            ("state-budgets", STATE_BUDGETS_NSW_DATAFLOW_ID),
+            ("state-budgets", STATE_BUDGETS_VIC_DATAFLOW_ID),
+            ("state-budgets", STATE_BUDGETS_QLD_DATAFLOW_ID),
+            (
+                "state_capital",
+                STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID,
+            ),
+            (
+                "state_capital",
+                STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID,
+            ),
+            (
+                "state-planning",
+                STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID,
+            ),
+            (
+                "state-planning",
+                STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID,
+            ),
+            ("treasury", TREASURY_BUDGET_DATAFLOW_ID),
+        ];
+
+        for (source, dataflow_id) in supported {
+            validate_supported_dataflow_id(source, dataflow_id)
+                .expect("configured source/dataflow pair should be accepted");
+        }
+
+        let unsupported = [
+            ("abs", "abs.unsupported"),
+            ("apra", "apra.unsupported"),
+            ("aemo", "aemo.unsupported"),
+            ("ai-readiness", "ai_readiness.unsupported"),
+            ("asx", "asx.unsupported"),
+            ("nhsac", "nhsac.unsupported"),
+            ("pc", "pc.unsupported"),
+            ("worldbank", "worldbank.unsupported"),
+            ("rba", "rba.unsupported"),
+            ("state-budgets", "state_budgets.unsupported"),
+            ("state_capital", "state_capital.unsupported"),
+            ("state-planning", "state_planning.unsupported"),
+            ("treasury", "treasury.unsupported"),
+        ];
+        for (source, dataflow_id) in unsupported {
+            validate_supported_dataflow_id(source, dataflow_id)
+                .expect_err("unknown source/dataflow pair should be rejected");
+        }
+
+        validate_supported_dataflow_id("abs", AEMO_DISPATCH_DATAFLOW_ID)
+            .expect_err("a dataflow must not be accepted under a different source");
+
+        validate_once_target("nhsac", "unsupported")
+            .expect_err("NHSAC must reject an unknown dataflow slug");
+        validate_once_target("pc", "unsupported")
+            .expect_err("PC must reject an unknown dataflow slug");
+        validate_once_target("worldbank", "unsupported")
+            .expect_err("World Bank must reject an unknown dataflow slug");
+        validate_once_target("rba", "unsupported")
+            .expect_err("RBA must reject an unknown dataflow slug");
+        validate_once_target("treasury", "unsupported")
+            .expect_err("Treasury must reject an unknown dataflow slug");
+    }
+
     #[tokio::test]
     async fn lease_renewer_keeps_latest_handle_while_work_runs() {
         let renewals = Arc::new(AtomicUsize::new(0));
