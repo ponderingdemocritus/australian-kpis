@@ -1,5 +1,11 @@
 # @au-kpis/sdk-generated
 
+## 1.1.0
+
+### Patch Changes
+
+- a24b378: Add APS scorecard config, latest, and history types plus ergonomic SDK helpers.
+
 ## 1.0.0
 
 ### Major Changes

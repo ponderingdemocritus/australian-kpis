@@ -1,5 +1,18 @@
 # @au-kpis/sdk
 
+## 1.1.0
+
+### Minor Changes
+
+- a24b378: Add an `observations.parquet()` helper for raw bulk Parquet exports.
+- fa5dcdf: Add a typed catalog search client for the `/v1/search` endpoint.
+
+### Patch Changes
+
+- a24b378: Add APS scorecard config, latest, and history types plus ergonomic SDK helpers.
+- Updated dependencies [a24b378]
+  - @au-kpis/sdk-generated@1.1.0
+
 ## 1.0.0
 
 ### Major Changes

@@ -1,6 +1,6 @@
 {
   "name": "@au-kpis/sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Typed TypeScript SDK for the Australian KPIs API.",
   "license": "Apache-2.0",
   "repository": {
