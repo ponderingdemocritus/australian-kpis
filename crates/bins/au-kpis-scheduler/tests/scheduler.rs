@@ -27,8 +27,10 @@ async fn two_schedulers_singleton_and_failover_emits_discovery_jobs() {
     let mut second = SchedulerProcess::start(db.url(), "scheduler-b").await;
 
     let leader = wait_for_single_leader(&mut first, &mut second);
+    make_schedule_due(db.pool(), "discovery:abs.cpi").await;
     wait_for_discovery_job_count(db.pool(), 1).await;
     let before_failover = discovery_job_count(db.pool()).await;
+    assert_eq!(schedule_occurrence_count(db.pool()).await, before_failover);
 
     match leader {
         Leader::First => {
@@ -43,7 +45,12 @@ async fn two_schedulers_singleton_and_failover_emits_discovery_jobs() {
         }
     }
 
+    make_schedule_due(db.pool(), "discovery:abs.cpi").await;
     wait_for_discovery_job_count(db.pool(), before_failover + 1).await;
+    assert_eq!(
+        schedule_occurrence_count(db.pool()).await,
+        before_failover + 1
+    );
 }
 
 struct SchedulerDb {
@@ -85,15 +92,7 @@ impl SchedulerProcess {
         let startup_file = unique_startup_file(worker_id);
         let mut command = Command::new(cargo_bin("au-kpis-scheduler"));
         command
-            .args([
-                "--worker-id",
-                worker_id,
-                "--tick-ms",
-                "50",
-                "--abs-interval-ms",
-                "200",
-                "run",
-            ])
+            .args(["--worker-id", worker_id, "--tick-ms", "50", "run"])
             .env("AU_KPIS_HTTP__BIND", "127.0.0.1:0")
             .env("AU_KPIS_DATABASE__URL", database_url)
             .env("AU_KPIS_STARTUP_NOTIFY_FILE", &startup_file)
@@ -241,6 +240,25 @@ async fn discovery_job_count(pool: &sqlx::PgPool) -> i64 {
         .fetch_one(pool)
         .await
         .expect("count discovery jobs")
+}
+
+async fn schedule_occurrence_count(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM queue_schedule_occurrences")
+        .fetch_one(pool)
+        .await
+        .expect("count schedule occurrences")
+}
+
+async fn make_schedule_due(pool: &sqlx::PgPool, schedule_id: &str) {
+    sqlx::query(
+        "UPDATE queue_cron_schedules
+         SET next_run_at = clock_timestamp()
+         WHERE id = $1",
+    )
+    .bind(schedule_id)
+    .execute(pool)
+    .await
+    .expect("make schedule due");
 }
 
 fn docker_available() -> bool {

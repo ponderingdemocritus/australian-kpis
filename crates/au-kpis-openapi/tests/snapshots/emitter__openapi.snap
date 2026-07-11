@@ -5,6 +5,121 @@ expression: emitted_spec()
 {
   "components": {
     "schemas": {
+      "ApsSnapshotSummary": {
+        "description": "Compact APS point returned by history endpoints.",
+        "properties": {
+          "as_of": {
+            "description": "End of the represented Sydney calendar day, expressed in UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Overall confidence label."
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand",
+            "description": "Missing-input lower and upper APS bounds."
+          },
+          "config_digest": {
+            "description": "SHA-256 digest of the canonical config JSON.",
+            "type": "string"
+          },
+          "config_version": {
+            "description": "Immutable config version.",
+            "type": "string"
+          },
+          "coverage_pct": {
+            "description": "Overall usable scored weight percentage.",
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "description": "Stable snapshot revision identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "publication_state": {
+            "$ref": "#/components/schemas/PublicationState",
+            "description": "Coverage-gated publication state."
+          },
+          "published_at": {
+            "description": "Immutable database publication time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Zero-based correction revision.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "score": {
+            "description": "Numeric APS value only when coverage gates pass.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scorecard_id": {
+            "description": "Scorecard id.",
+            "type": "string"
+          },
+          "snapshot_date": {
+            "description": "Sydney calendar date represented by this publication.",
+            "format": "date",
+            "type": "string"
+          },
+          "sub_indexes": {
+            "description": "Axis-level values and coverage.",
+            "items": {
+              "$ref": "#/components/schemas/SubIndexScore"
+            },
+            "type": "array"
+          },
+          "supersedes_snapshot_id": {
+            "description": "Prior snapshot revision superseded by this correction.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trend": {
+            "$ref": "#/components/schemas/Trend",
+            "description": "Movement against the nearest comparable numeric snapshot."
+          },
+          "zone": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScoreZone",
+                "description": "Score zone only when coverage gates pass."
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "scorecard_id",
+          "config_version",
+          "config_digest",
+          "snapshot_date",
+          "revision",
+          "as_of",
+          "published_at",
+          "publication_state",
+          "trend",
+          "confidence_band",
+          "confidence",
+          "coverage_pct",
+          "sub_indexes"
+        ],
+        "type": "object"
+      },
       "ArtifactId": {
         "description": "Lowercase hex-encoded SHA-256 digest (64 chars).",
         "format": "sha256-hex",
@@ -167,6 +282,26 @@ expression: emitted_spec()
         ],
         "type": "string"
       },
+      "CoverageThresholds": {
+        "description": "Coverage gates required for a numeric APS publication.",
+        "properties": {
+          "axis_pct": {
+            "description": "Minimum usable scored weight percentage on each axis.",
+            "format": "double",
+            "type": "number"
+          },
+          "overall_pct": {
+            "description": "Minimum overall usable scored weight percentage.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "overall_pct",
+          "axis_pct"
+        ],
+        "type": "object"
+      },
       "CreateSubscriptionRequest": {
         "description": "Request body for `POST /v1/subscriptions`.",
         "properties": {
@@ -190,13 +325,18 @@ expression: emitted_spec()
       "CreateSubscriptionResponse": {
         "description": "Response body for `POST /v1/subscriptions`.",
         "properties": {
+          "signing_secret": {
+            "description": "HMAC signing secret shown exactly once.",
+            "type": "string"
+          },
           "subscription": {
             "$ref": "#/components/schemas/SubscriptionDetails",
             "description": "Created subscription."
           }
         },
         "required": [
-          "subscription"
+          "subscription",
+          "signing_secret"
         ],
         "type": "object"
       },
@@ -352,6 +492,28 @@ expression: emitted_spec()
         ],
         "type": "object"
       },
+      "DependencyHealth": {
+        "description": "One dependency status in the production readiness response.",
+        "properties": {
+          "latency_ms": {
+            "description": "Probe latency in whole milliseconds when a probe was attempted.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`up`, `down`, or `degraded`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
       "Dimension": {
         "description": "A single dimension within a dataflow. Binds a dimension id to a codelist\nthat enumerates the permitted values.",
         "properties": {
@@ -409,6 +571,29 @@ expression: emitted_spec()
         ],
         "type": "string"
       },
+      "HealthDependencies": {
+        "description": "Dependency collection in the production readiness response.",
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DependencyHealth",
+            "description": "Timescale/Postgres and schema state."
+          },
+          "redis": {
+            "$ref": "#/components/schemas/DependencyHealth",
+            "description": "Disposable Redis cache/rate-limit state."
+          },
+          "telemetry": {
+            "$ref": "#/components/schemas/DependencyHealth",
+            "description": "OTLP exporter configuration state."
+          }
+        },
+        "required": [
+          "database",
+          "redis",
+          "telemetry"
+        ],
+        "type": "object"
+      },
       "HealthResponse": {
         "description": "Health endpoint response.",
         "properties": {
@@ -421,6 +606,14 @@ expression: emitted_spec()
           "status"
         ],
         "type": "object"
+      },
+      "HistoryView": {
+        "description": "Revision view used by APS history reads.",
+        "enum": [
+          "as_published",
+          "latest"
+        ],
+        "type": "string"
       },
       "IndicatorConfig": {
         "description": "Static config for one APS indicator.",
@@ -467,6 +660,12 @@ expression: emitted_spec()
             "description": "User-facing indicator label.",
             "type": "string"
           },
+          "hard_after_seconds": {
+            "description": "Age in seconds after which the value is excluded from scoring.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "indicator_id": {
             "description": "Stable indicator id.",
             "type": "string"
@@ -482,6 +681,12 @@ expression: emitted_spec()
           "provenance": {
             "$ref": "#/components/schemas/Provenance",
             "description": "Source and licensing metadata."
+          },
+          "soft_after_seconds": {
+            "description": "Age in seconds after which the value remains usable but becomes stale.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           },
           "source_dataflow_id": {
             "description": "Canonical source dataflow id.",
@@ -556,6 +761,13 @@ expression: emitted_spec()
           "indicator_id": {
             "description": "Indicator id.",
             "type": "string"
+          },
+          "ingestion_generation_id": {
+            "description": "Ingestion generation that published the resolved observation.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "label": {
             "description": "Indicator label.",
@@ -691,6 +903,22 @@ expression: emitted_spec()
             "type": "object"
           }
         ]
+      },
+      "ListSubscriptionsResponse": {
+        "description": "Collection response for subscriptions owned by one API key.",
+        "properties": {
+          "subscriptions": {
+            "description": "Subscriptions owned by the authenticated key.",
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionDetails"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "subscriptions"
+        ],
+        "type": "object"
       },
       "MeasureId": {
         "description": "Identifier for a measure (e.g. `unemployment_rate`).",
@@ -1034,12 +1262,190 @@ expression: emitted_spec()
         ],
         "type": "object"
       },
+      "PublicationState": {
+        "description": "Snapshot publication result after applying coverage gates.",
+        "enum": [
+          "published",
+          "insufficient_coverage"
+        ],
+        "type": "string"
+      },
+      "PublishedApsSnapshot": {
+        "description": "Immutable APS API snapshot persisted as one publication revision.",
+        "properties": {
+          "as_of": {
+            "description": "End of the represented Sydney calendar day, expressed in UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence",
+            "description": "Overall confidence label."
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand",
+            "description": "Missing-input lower and upper APS bounds."
+          },
+          "config_digest": {
+            "description": "SHA-256 digest of the canonical config JSON.",
+            "type": "string"
+          },
+          "config_version": {
+            "description": "Immutable config version.",
+            "type": "string"
+          },
+          "contributions": {
+            "description": "Full contribution and provenance detail.",
+            "items": {
+              "$ref": "#/components/schemas/IndicatorContribution"
+            },
+            "type": "array"
+          },
+          "coverage_pct": {
+            "description": "Overall usable scored weight percentage.",
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "description": "Stable snapshot revision identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "publication_state": {
+            "$ref": "#/components/schemas/PublicationState",
+            "description": "Coverage-gated publication state."
+          },
+          "published_at": {
+            "description": "Immutable database publication time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Zero-based correction revision.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "score": {
+            "description": "Numeric APS value only when coverage gates pass.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scorecard_id": {
+            "description": "Scorecard id.",
+            "type": "string"
+          },
+          "snapshot_date": {
+            "description": "Sydney calendar date represented by this publication.",
+            "format": "date",
+            "type": "string"
+          },
+          "sub_indexes": {
+            "description": "Axis-level values and coverage.",
+            "items": {
+              "$ref": "#/components/schemas/SubIndexScore"
+            },
+            "type": "array"
+          },
+          "supersedes_snapshot_id": {
+            "description": "Prior snapshot revision superseded by this correction.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trend": {
+            "$ref": "#/components/schemas/Trend",
+            "description": "Movement against the nearest comparable numeric snapshot."
+          },
+          "zone": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScoreZone",
+                "description": "Score zone only when coverage gates pass."
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "scorecard_id",
+          "config_version",
+          "config_digest",
+          "snapshot_date",
+          "revision",
+          "as_of",
+          "published_at",
+          "publication_state",
+          "trend",
+          "confidence_band",
+          "confidence",
+          "coverage_pct",
+          "sub_indexes",
+          "contributions"
+        ],
+        "type": "object"
+      },
+      "RotateSubscriptionSecretResponse": {
+        "description": "One-time secret returned by a rotation command.",
+        "properties": {
+          "signing_secret": {
+            "description": "New signing secret shown exactly once.",
+            "type": "string"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionDetails",
+            "description": "Updated subscription."
+          }
+        },
+        "required": [
+          "subscription",
+          "signing_secret"
+        ],
+        "type": "object"
+      },
+      "RuntimeHealthResponse": {
+        "description": "Production liveness/readiness response.",
+        "properties": {
+          "dependencies": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HealthDependencies",
+                "description": "Dependency details. Liveness omits dependency probes."
+              }
+            ]
+          },
+          "status": {
+            "description": "`live`, `ready`, `degraded`, or `not_ready`.",
+            "type": "string"
+          },
+          "version": {
+            "description": "Immutable build version or git SHA.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version"
+        ],
+        "type": "object"
+      },
       "ScoreZone": {
         "description": "APS score zone.",
         "enum": [
-          "red",
-          "yellow",
-          "green"
+          "scarcity",
+          "mixed",
+          "abundance"
         ],
         "type": "string"
       },
@@ -1050,8 +1456,16 @@ expression: emitted_spec()
             "description": "Attribution note for the derived scorecard config.",
             "type": "string"
           },
+          "coverage_thresholds": {
+            "$ref": "#/components/schemas/CoverageThresholds",
+            "description": "Numeric publication coverage gates."
+          },
           "description": {
             "description": "User-facing description.",
+            "type": "string"
+          },
+          "digest": {
+            "description": "SHA-256 digest of the canonical config with this field empty.",
             "type": "string"
           },
           "formula": {
@@ -1077,9 +1491,22 @@ expression: emitted_spec()
             "description": "License note for the derived scorecard config.",
             "type": "string"
           },
+          "methodology_citation": {
+            "description": "Public methodology citation.",
+            "type": "string"
+          },
+          "trend_threshold": {
+            "description": "Absolute movement required for an up/down trend.",
+            "format": "double",
+            "type": "number"
+          },
           "version": {
             "description": "Versioned config id.",
             "type": "string"
+          },
+          "zone_thresholds": {
+            "$ref": "#/components/schemas/ZoneThresholds",
+            "description": "Rounded-score zone thresholds."
           }
         },
         "required": [
@@ -1088,15 +1515,43 @@ expression: emitted_spec()
           "label",
           "description",
           "formula",
+          "methodology_citation",
+          "coverage_thresholds",
+          "zone_thresholds",
+          "trend_threshold",
           "indicators",
           "license",
           "attribution"
         ],
         "type": "object"
       },
+      "ScorecardConfigQuery": {
+        "additionalProperties": false,
+        "description": "Query string selecting an immutable APS config version.",
+        "properties": {
+          "version": {
+            "description": "Config version; omitted selects the current version.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ScorecardHistoryQuery": {
+        "additionalProperties": false,
         "description": "Query string for APS history snapshots.",
         "properties": {
+          "limit": {
+            "description": "Maximum points returned, from 1 through 1,000.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "since": {
             "description": "Inclusive lower snapshot date in `YYYY-MM-DD` form.",
             "type": [
@@ -1110,6 +1565,21 @@ expression: emitted_spec()
               "string",
               "null"
             ]
+          },
+          "view": {
+            "$ref": "#/components/schemas/HistoryView",
+            "description": "Revision view, defaulting to original as-published values."
+          }
+        },
+        "type": "object"
+      },
+      "ScorecardLatestQuery": {
+        "additionalProperties": false,
+        "description": "Query string for the latest APS snapshot.",
+        "properties": {
+          "view": {
+            "$ref": "#/components/schemas/HistoryView",
+            "description": "Revision view, defaulting to original as-published values."
           }
         },
         "type": "object"
@@ -1426,9 +1896,246 @@ expression: emitted_spec()
         ],
         "type": "object"
       },
+      "SourceCatalogDataflow": {
+        "description": "Governed source-dataflow metadata.",
+        "properties": {
+          "attribution": {
+            "description": "Required attribution.",
+            "type": "string"
+          },
+          "cadence": {
+            "description": "Expected source cadence.",
+            "type": "string"
+          },
+          "coverage_state": {
+            "description": "Coverage state exposed to catalog consumers.",
+            "type": "string"
+          },
+          "dataflow_id": {
+            "description": "Stable dataflow id.",
+            "type": "string"
+          },
+          "fixture_reference": {
+            "description": "Repository-relative representative fixture or reviewed snapshot.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "freshness_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceFreshnessPolicy",
+                "description": "Soft and hard freshness thresholds for active sources."
+              }
+            ]
+          },
+          "license": {
+            "description": "Source licence or terms identifier.",
+            "type": "string"
+          },
+          "owner_area": {
+            "description": "Owning implementation area.",
+            "type": "string"
+          },
+          "owner_role": {
+            "description": "Accountable production role, when assigned.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRequestPolicy",
+                "description": "Upstream timeout and rate policy for active sources."
+              }
+            ]
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceSchedule",
+                "description": "Durable discovery schedule for active sources."
+              }
+            ]
+          },
+          "source_url": {
+            "description": "Canonical source and citation URL.",
+            "type": "string"
+          },
+          "status": {
+            "description": "Source-register governance status.",
+            "type": "string"
+          },
+          "validation_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceValidationPolicy",
+                "description": "Range, cardinality, and partial-row policy for active sources."
+              }
+            ]
+          }
+        },
+        "required": [
+          "dataflow_id",
+          "status",
+          "coverage_state",
+          "owner_area",
+          "source_url",
+          "license",
+          "attribution",
+          "cadence"
+        ],
+        "type": "object"
+      },
+      "SourceCatalogEntry": {
+        "description": "One source and its governed dataflows.",
+        "properties": {
+          "dataflows": {
+            "description": "Dataflows governed for this source.",
+            "items": {
+              "$ref": "#/components/schemas/SourceCatalogDataflow"
+            },
+            "type": "array"
+          },
+          "source_id": {
+            "description": "Stable source id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "dataflows"
+        ],
+        "type": "object"
+      },
+      "SourceFreshnessPolicy": {
+        "description": "Public source freshness policy.",
+        "properties": {
+          "hard_after_seconds": {
+            "description": "Age in seconds after which data is hard-expired.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "soft_after_seconds": {
+            "description": "Age in seconds after which data is soft-stale.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "soft_after_seconds",
+          "hard_after_seconds"
+        ],
+        "type": "object"
+      },
       "SourceId": {
         "description": "Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`).",
         "type": "string"
+      },
+      "SourceRequestPolicy": {
+        "description": "Public upstream request policy.",
+        "properties": {
+          "burst": {
+            "description": "Maximum short request burst.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_requests_per_minute": {
+            "description": "Maximum steady-state requests per minute.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "description": "Per-request timeout in seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "timeout_seconds",
+          "max_requests_per_minute",
+          "burst"
+        ],
+        "type": "object"
+      },
+      "SourceSchedule": {
+        "description": "Public source discovery schedule.",
+        "properties": {
+          "cron": {
+            "description": "Five-field cron expression.",
+            "type": "string"
+          },
+          "timezone": {
+            "description": "IANA timezone name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron",
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "SourceValidationPolicy": {
+        "description": "Public source validation policy.",
+        "properties": {
+          "allow_partial_rows": {
+            "description": "Whether partial rows may publish.",
+            "type": "boolean"
+          },
+          "max_series_cardinality": {
+            "description": "Maximum series cardinality for one generation.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "range_rule": {
+            "description": "Named adapter range rule.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range_rule",
+          "max_series_cardinality",
+          "allow_partial_rows"
+        ],
+        "type": "object"
+      },
+      "SourcesResponse": {
+        "description": "Response envelope for `GET /v1/sources`.",
+        "properties": {
+          "sources": {
+            "description": "Governed sources ordered by source id.",
+            "items": {
+              "$ref": "#/components/schemas/SourceCatalogEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object"
       },
       "SubIndexScore": {
         "description": "Axis-level sub-index score.",
@@ -1494,17 +2201,26 @@ expression: emitted_spec()
             "format": "uuid",
             "type": "string"
           },
-          "signing_secret": {
-            "description": "HMAC signing secret shown once at creation.",
-            "type": "string"
-          },
           "status": {
             "description": "Current subscription status.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "UTC last-update timestamp.",
+            "format": "date-time",
             "type": "string"
           },
           "url": {
             "description": "Delivery target URL.",
             "type": "string"
+          },
+          "verified_at": {
+            "description": "UTC endpoint verification time.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1513,7 +2229,7 @@ expression: emitted_spec()
           "dataflow_ids",
           "status",
           "created_at",
-          "signing_secret"
+          "updated_at"
         ],
         "type": "object"
       },
@@ -1538,6 +2254,26 @@ expression: emitted_spec()
           "unavailable"
         ],
         "type": "string"
+      },
+      "ZoneThresholds": {
+        "description": "Inclusive upper bounds for the first two APS zones.",
+        "properties": {
+          "mixed_max": {
+            "description": "Maximum mixed score.",
+            "format": "double",
+            "type": "number"
+          },
+          "scarcity_max": {
+            "description": "Maximum scarcity score.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "scarcity_max",
+          "mixed_max"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1559,6 +2295,54 @@ expression: emitted_spec()
   },
   "openapi": "3.1.0",
   "paths": {
+    "/livez": {
+      "get": {
+        "operationId": "liveness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthResponse"
+                }
+              }
+            },
+            "description": "Process is live."
+          }
+        },
+        "summary": "`GET /livez`.",
+        "tags": []
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthResponse"
+                }
+              }
+            },
+            "description": "Process is ready or ready with disposable dependency degradation."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthResponse"
+                }
+              }
+            },
+            "description": "Durable database/schema dependency is unavailable."
+          }
+        },
+        "summary": "`GET /readyz`.",
+        "tags": []
+      }
+    },
     "/v1/dataflows": {
       "get": {
         "operationId": "listDataflows",
@@ -1801,7 +2585,7 @@ expression: emitted_spec()
             },
             "description": "API is healthy."
           },
-          "408": {
+          "504": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1983,7 +2767,7 @@ expression: emitted_spec()
             },
             "description": "Dataflow not found."
           },
-          "408": {
+          "429": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1991,7 +2775,7 @@ expression: emitted_spec()
                 }
               }
             },
-            "description": "Request timed out."
+            "description": "Bulk stream admission capacity is exhausted."
           },
           "500": {
             "content": {
@@ -2002,6 +2786,26 @@ expression: emitted_spec()
               }
             },
             "description": "Internal server error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Short-request admission or a durable dependency is unavailable."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
           }
         },
         "summary": "`GET /v1/observations`.",
@@ -2024,16 +2828,6 @@ expression: emitted_spec()
             },
             "description": "Current OpenAPI document."
           },
-          "408": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Request timed out."
-          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2043,6 +2837,16 @@ expression: emitted_spec()
               }
             },
             "description": "OpenAPI generation failed."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request timed out."
           }
         },
         "summary": "`GET /v1/openapi.json`.",
@@ -2052,6 +2856,17 @@ expression: emitted_spec()
     "/v1/scorecards/aps/config": {
       "get": {
         "operationId": "getApsScorecardConfig",
+        "parameters": [
+          {
+            "description": "Config version; omitted selects the current version.",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2094,6 +2909,26 @@ expression: emitted_spec()
               }
             }
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid APS config query."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Requested APS config version was not found."
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2121,10 +2956,7 @@ expression: emitted_spec()
             "name": "since",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -2133,10 +2965,28 @@ expression: emitted_spec()
             "name": "until",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision view, defaulting to original as-published values.",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryView"
+            }
+          },
+          {
+            "description": "Maximum points returned, from 1 through 1,000.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -2146,7 +2996,7 @@ expression: emitted_spec()
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ScorecardSnapshot"
+                    "$ref": "#/components/schemas/ApsSnapshotSummary"
                   },
                   "type": "array"
                 }
@@ -2220,7 +3070,7 @@ expression: emitted_spec()
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScorecardSnapshot"
+                  "$ref": "#/components/schemas/PublishedApsSnapshot"
                 }
               }
             },
@@ -2257,6 +3107,26 @@ expression: emitted_spec()
               }
             }
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid latest snapshot query."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No official APS snapshot has been published."
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2269,6 +3139,59 @@ expression: emitted_spec()
           }
         },
         "summary": "`GET /v1/scorecards/aps/latest`.",
+        "tags": [
+          "scorecards"
+        ]
+      }
+    },
+    "/v1/scorecards/aps/snapshots/{id}": {
+      "get": {
+        "operationId": "getApsScorecardSnapshot",
+        "parameters": [
+          {
+            "description": "Snapshot revision UUID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedApsSnapshot"
+                }
+              }
+            },
+            "description": "Immutable APS snapshot revision."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid snapshot UUID."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Snapshot not found."
+          }
+        },
+        "summary": "`GET /v1/scorecards/aps/snapshots/{id}`.",
         "tags": [
           "scorecards"
         ]
@@ -2423,7 +3346,162 @@ expression: emitted_spec()
         ]
       }
     },
+    "/v1/sources": {
+      "get": {
+        "operationId": "listSources",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcesResponse"
+                }
+              }
+            },
+            "description": "Governed source catalog.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public CDN cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid server source register."
+          }
+        },
+        "summary": "`GET /v1/sources`.",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/v1/sources/{source_id}": {
+      "get": {
+        "operationId": "getSource",
+        "parameters": [
+          {
+            "description": "Source id.",
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCatalogEntry"
+                }
+              }
+            },
+            "description": "Governed source details.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public CDN cache policy.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Source not found."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid server source register."
+          }
+        },
+        "summary": "`GET /v1/sources/{source_id}`.",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
     "/v1/subscriptions": {
+      "get": {
+        "operationId": "listSubscriptions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSubscriptionsResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "summary": "`GET /v1/subscriptions`.",
+        "tags": [
+          "subscriptions"
+        ]
+      },
       "post": {
         "operationId": "createSubscription",
         "requestBody": {
@@ -2437,7 +3515,7 @@ expression: emitted_spec()
           "required": true
         },
         "responses": {
-          "201": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2445,7 +3523,7 @@ expression: emitted_spec()
                 }
               }
             },
-            "description": "Subscription created."
+            "description": "Subscription pending endpoint verification."
           },
           "400": {
             "content": {
@@ -2467,6 +3545,16 @@ expression: emitted_spec()
             },
             "description": "Missing or invalid API key."
           },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "API key lacks subscriptions:write."
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2476,6 +3564,16 @@ expression: emitted_spec()
               }
             },
             "description": "Internal error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Redis or another required dependency is unavailable."
           }
         },
         "security": [
@@ -2488,9 +3586,352 @@ expression: emitted_spec()
           "subscriptions"
         ]
       }
+    },
+    "/v1/subscriptions/{id}": {
+      "delete": {
+        "operationId": "revokeSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Subscription revoked without deleting audit history."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "summary": "`DELETE /v1/subscriptions/{id}`.",
+        "tags": [
+          "subscriptions"
+        ]
+      },
+      "get": {
+        "operationId": "getSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "summary": "`GET /v1/subscriptions/{id}`.",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/v1/subscriptions/{id}/rotate-secret": {
+      "post": {
+        "operationId": "rotateSubscriptionSecret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateSubscriptionSecretResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "summary": "`POST /v1/subscriptions/{id}/rotate-secret`.",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/v1/subscriptions/{id}/verify": {
+      "post": {
+        "operationId": "verifySubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "summary": "`POST /v1/subscriptions/{id}/verify`.",
+        "tags": [
+          "subscriptions"
+        ]
+      }
     }
   },
   "tags": [
+    {
+      "description": "Governed source catalog",
+      "name": "sources"
+    },
     {
       "description": "Dataflow catalog and codelists",
       "name": "dataflows"

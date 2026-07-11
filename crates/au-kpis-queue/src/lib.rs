@@ -15,9 +15,12 @@ use async_trait::async_trait;
 use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_error::{Classify, CoreError, ErrorClass};
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
+use croner::Cron;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Result alias for queue operations.
 pub type QueueResult<T> = Result<T, QueueError>;
@@ -25,6 +28,9 @@ pub type QueueResult<T> = Result<T, QueueError>;
 /// Default lease timeout before a running job can be reclaimed by another worker.
 pub const DEFAULT_LEASE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const POP_CONFLICT_RETRIES: usize = 8;
+const RETRY_BASE: Duration = Duration::from_secs(30);
+const RETRY_CAP: Duration = Duration::from_secs(6 * 60 * 60);
+const FETCH_RETRY_AFTER_CAP: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Durable queue stage. Each variant maps to one logical ingestion queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -132,29 +138,26 @@ pub enum JobKind {
     Discover {
         /// Source to discover.
         source_id: SourceId,
+        /// Optional dataflow scope for register-derived schedules.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dataflow_id: Option<DataflowId>,
     },
     /// Fetch a source-local discovered job.
     Fetch {
-        /// Source-local discovered job id.
-        job_id: String,
-        /// Source that emitted the job.
-        source_id: SourceId,
+        /// Durable discovered-work identity.
+        discovered_work_id: Uuid,
     },
     /// Parse a stored artifact.
     Parse {
-        /// Source that produced the artifact.
-        source_id: SourceId,
-        /// Content-addressed artifact id or hex digest.
-        artifact_id: String,
-        /// Object-storage key for the artifact.
-        storage_key: String,
+        /// Durable parser generation identity.
+        generation_id: Uuid,
     },
-    /// Load parsed observations for a dataflow/artifact pair.
+    /// Load one fully staged parser generation.
     Load {
-        /// Dataflow being loaded.
+        /// Dataflow used to serialize revision assignment.
         dataflow_id: DataflowId,
-        /// Artifact being loaded.
-        artifact_id: String,
+        /// Durable parser generation identity.
+        generation_id: Uuid,
     },
     /// Historical backfill trigger.
     Backfill {
@@ -192,38 +195,39 @@ impl Job {
     /// Construct a discovery job.
     #[must_use]
     pub fn discover(source_id: SourceId) -> Self {
-        Self::new(JobKind::Discover { source_id })
+        Self::new(JobKind::Discover {
+            source_id,
+            dataflow_id: None,
+        })
+    }
+
+    /// Construct a discovery job scoped to one registered dataflow.
+    #[must_use]
+    pub fn discover_dataflow(source_id: SourceId, dataflow_id: DataflowId) -> Self {
+        Self::new(JobKind::Discover {
+            source_id,
+            dataflow_id: Some(dataflow_id),
+        })
     }
 
     /// Construct a fetch job.
     #[must_use]
-    pub fn fetch(job_id: impl Into<String>, source_id: SourceId) -> Self {
-        Self::new(JobKind::Fetch {
-            job_id: job_id.into(),
-            source_id,
-        })
+    pub fn fetch(discovered_work_id: Uuid) -> Self {
+        Self::new(JobKind::Fetch { discovered_work_id })
     }
 
     /// Construct a parse job.
     #[must_use]
-    pub fn parse(
-        source_id: SourceId,
-        artifact_id: impl Into<String>,
-        storage_key: impl Into<String>,
-    ) -> Self {
-        Self::new(JobKind::Parse {
-            source_id,
-            artifact_id: artifact_id.into(),
-            storage_key: storage_key.into(),
-        })
+    pub fn parse(generation_id: Uuid) -> Self {
+        Self::new(JobKind::Parse { generation_id })
     }
 
     /// Construct a load job.
     #[must_use]
-    pub fn load(dataflow_id: DataflowId, artifact_id: impl Into<String>) -> Self {
+    pub fn load(dataflow_id: DataflowId, generation_id: Uuid) -> Self {
         Self::new(JobKind::Load {
             dataflow_id,
-            artifact_id: artifact_id.into(),
+            generation_id,
         })
     }
 
@@ -302,6 +306,15 @@ impl Job {
         match &self.kind {
             JobKind::Load { dataflow_id, .. } => Some(format!("load:{dataflow_id}")),
             _ => None,
+        }
+    }
+
+    fn dedupe_key(&self) -> Option<String> {
+        match &self.kind {
+            JobKind::Fetch { discovered_work_id } => Some(format!("fetch:{discovered_work_id}")),
+            JobKind::Parse { generation_id } => Some(format!("parse:{generation_id}")),
+            JobKind::Load { generation_id, .. } => Some(format!("load:{generation_id}")),
+            JobKind::Discover { .. } | JobKind::Backfill { .. } => None,
         }
     }
 }
@@ -442,8 +455,11 @@ impl DeadLetteredJob {
 pub struct CronSchedule {
     id: String,
     cron_expression: String,
+    timezone: String,
     job: Job,
     enabled: bool,
+    next_run_at: Option<DateTime<Utc>>,
+    last_enqueued_at: Option<DateTime<Utc>>,
 }
 
 impl CronSchedule {
@@ -460,16 +476,15 @@ impl CronSchedule {
             ));
         }
         let cron_expression = cron_expression.into();
-        if cron_expression.trim().is_empty() {
-            return Err(QueueError::Validation(
-                "cron expression must not be empty".to_string(),
-            ));
-        }
+        validate_cron_expression(&cron_expression)?;
         Ok(Self {
             id,
             cron_expression,
+            timezone: "UTC".to_string(),
             job,
             enabled: true,
+            next_run_at: None,
+            last_enqueued_at: None,
         })
     }
 
@@ -485,6 +500,12 @@ impl CronSchedule {
         &self.cron_expression
     }
 
+    /// IANA timezone used to evaluate the cron expression.
+    #[must_use]
+    pub fn timezone(&self) -> &str {
+        &self.timezone
+    }
+
     /// Job emitted by this schedule.
     #[must_use]
     pub const fn job(&self) -> &Job {
@@ -497,17 +518,88 @@ impl CronSchedule {
         self.enabled
     }
 
+    /// Next persisted occurrence time.
+    #[must_use]
+    pub const fn next_run_at(&self) -> Option<DateTime<Utc>> {
+        self.next_run_at
+    }
+
+    /// Most recent persisted occurrence time.
+    #[must_use]
+    pub const fn last_enqueued_at(&self) -> Option<DateTime<Utc>> {
+        self.last_enqueued_at
+    }
+
     /// Return a copy with a new cron expression.
     pub fn with_cron_expression(mut self, cron_expression: impl Into<String>) -> QueueResult<Self> {
         let cron_expression = cron_expression.into();
-        if cron_expression.trim().is_empty() {
-            return Err(QueueError::Validation(
-                "cron expression must not be empty".to_string(),
-            ));
-        }
+        validate_cron_expression(&cron_expression)?;
         self.cron_expression = cron_expression;
         Ok(self)
     }
+
+    /// Return a copy evaluated in the supplied IANA timezone.
+    pub fn with_timezone(mut self, timezone: impl Into<String>) -> QueueResult<Self> {
+        let timezone = timezone.into();
+        validate_timezone(&timezone)?;
+        self.timezone = timezone;
+        Ok(self)
+    }
+}
+
+/// One schedule occurrence atomically paired with its emitted queue job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleOccurrence {
+    id: Uuid,
+    schedule_id: String,
+    scheduled_for: DateTime<Utc>,
+    job_id: JobId,
+    created_at: DateTime<Utc>,
+}
+
+impl ScheduleOccurrence {
+    /// Occurrence id.
+    #[must_use]
+    pub const fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Owning schedule id.
+    #[must_use]
+    pub fn schedule_id(&self) -> &str {
+        &self.schedule_id
+    }
+
+    /// Logical cron instant represented by this occurrence.
+    #[must_use]
+    pub const fn scheduled_for(&self) -> DateTime<Utc> {
+        self.scheduled_for
+    }
+
+    /// Queue job created in the same transaction.
+    #[must_use]
+    pub const fn job_id(&self) -> JobId {
+        self.job_id
+    }
+
+    /// Database creation timestamp.
+    #[must_use]
+    pub const fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+}
+
+/// Calculate the next cron occurrence in an IANA timezone and return it in UTC.
+pub fn next_schedule_occurrence(
+    cron_expression: &str,
+    timezone: &str,
+    after: DateTime<Utc>,
+) -> QueueResult<DateTime<Utc>> {
+    let cron = parse_cron(cron_expression)?;
+    let timezone = parse_timezone(timezone)?;
+    cron.find_next_occurrence(&after.with_timezone(&timezone), false)
+        .map(|next| next.with_timezone(&Utc))
+        .map_err(|error| QueueError::Validation(format!("cron occurrence: {error}")))
 }
 
 /// Queue operations used by scheduler and ingestion workers.
@@ -530,6 +622,13 @@ pub trait Queue: fmt::Debug + Send + Sync {
 
     /// Register or update a cron schedule.
     async fn schedule(&self, schedule: CronSchedule) -> QueueResult<()>;
+
+    /// Atomically enqueue currently due schedule occurrences.
+    async fn enqueue_due_schedules(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> QueueResult<Vec<ScheduleOccurrence>>;
 }
 
 /// Postgres-backed queue implementation.
@@ -595,23 +694,34 @@ impl ApalisPgQueue {
     /// Fetch a schedule by id.
     #[tracing::instrument(skip(self))]
     pub async fn schedule_by_id(&self, id: &str) -> QueueResult<Option<CronSchedule>> {
-        let row = sqlx::query!(
-            r#"SELECT id, cron_expression, payload AS "payload!: serde_json::Value", enabled
-             FROM queue_cron_schedules
-             WHERE id = $1"#,
-            id
+        let row = sqlx::query(
+            r#"SELECT id, cron_expression, timezone, payload, enabled,
+                      next_run_at, last_enqueued_at
+               FROM queue_cron_schedules
+               WHERE id = $1"#,
         )
+        .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(QueueError::Db)?;
 
         row.map(|row| {
             let mut schedule = CronSchedule::new(
-                row.id,
-                row.cron_expression,
-                serde_json::from_value(row.payload)?,
+                row.try_get::<String, _>("id").map_err(QueueError::Db)?,
+                row.try_get::<String, _>("cron_expression")
+                    .map_err(QueueError::Db)?,
+                serde_json::from_value(
+                    row.try_get::<serde_json::Value, _>("payload")
+                        .map_err(QueueError::Db)?,
+                )?,
+            )?
+            .with_timezone(
+                row.try_get::<String, _>("timezone")
+                    .map_err(QueueError::Db)?,
             )?;
-            schedule.enabled = row.enabled;
+            schedule.enabled = row.try_get("enabled").map_err(QueueError::Db)?;
+            schedule.next_run_at = Some(row.try_get("next_run_at").map_err(QueueError::Db)?);
+            schedule.last_enqueued_at = row.try_get("last_enqueued_at").map_err(QueueError::Db)?;
             Ok(schedule)
         })
         .transpose()
@@ -623,23 +733,27 @@ impl Queue for ApalisPgQueue {
     #[tracing::instrument(skip(self, job), fields(stage = %job.stage()))]
     async fn push(&self, job: Job) -> QueueResult<JobId> {
         let payload = serde_json::to_value(&job)?;
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"INSERT INTO queue_jobs
-                (stage, payload, priority, max_attempts, trace_parent, job_group_key)
-             VALUES ($1, $2, $3, $4, $5, $6)
+                (stage, payload, priority, max_attempts, trace_parent, job_group_key, dedupe_key)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (dedupe_key)
+                 WHERE dedupe_key IS NOT NULL AND status IN ('pending', 'running')
+             DO UPDATE SET updated_at = queue_jobs.updated_at
              RETURNING id"#,
-            job.stage().as_str(),
-            payload,
-            job.priority(),
-            job.max_attempts(),
-            job.trace_parent(),
-            job.job_group_key()
         )
+        .bind(job.stage().as_str())
+        .bind(payload)
+        .bind(job.priority())
+        .bind(job.max_attempts())
+        .bind(job.trace_parent())
+        .bind(job.job_group_key())
+        .bind(job.dedupe_key())
         .fetch_one(&self.pool)
         .await
         .map_err(QueueError::Db)?;
 
-        Ok(JobId::new(row.id))
+        Ok(JobId::new(row.try_get("id").map_err(QueueError::Db)?))
     }
 
     #[tracing::instrument(skip(self, worker_id), fields(stage = %stage, worker = worker_id.as_str()))]
@@ -722,7 +836,8 @@ impl Queue for ApalisPgQueue {
 
     #[tracing::instrument(skip(self, job), fields(job_id = %job.id()))]
     async fn ack(&self, job: &LeasedJob) -> QueueResult<()> {
-        let result = sqlx::query!(
+        let mut tx = self.pool.begin().await.map_err(QueueError::Db)?;
+        let result = sqlx::query(
             r#"UPDATE queue_jobs
              SET status = 'completed',
                  locked_by = NULL,
@@ -732,17 +847,27 @@ impl Queue for ApalisPgQueue {
                AND status = 'running'
                AND locked_by = $2
                AND lease_version = $3"#,
-            job.id().get(),
-            job.worker_id().as_str(),
-            job.lease_version()
         )
-        .execute(&self.pool)
+        .bind(job.id().get())
+        .bind(job.worker_id().as_str())
+        .bind(job.lease_version())
+        .execute(&mut *tx)
         .await
         .map_err(QueueError::Db)?;
 
         if result.rows_affected() == 0 {
             return Err(QueueError::LeaseLost(job.id()));
         }
+        sqlx::query(
+            "UPDATE queue_schedule_occurrences
+             SET status = 'completed'
+             WHERE job_id = $1",
+        )
+        .bind(job.id().get())
+        .execute(&mut *tx)
+        .await
+        .map_err(QueueError::Db)?;
+        tx.commit().await.map_err(QueueError::Db)?;
         Ok(())
     }
 
@@ -796,34 +921,190 @@ impl Queue for ApalisPgQueue {
     #[tracing::instrument(skip(self, schedule), fields(schedule = schedule.id()))]
     async fn schedule(&self, schedule: CronSchedule) -> QueueResult<()> {
         let payload = serde_json::to_value(schedule.job())?;
-        sqlx::query!(
+        let next_run_at =
+            next_schedule_occurrence(schedule.cron_expression(), schedule.timezone(), Utc::now())?;
+        sqlx::query(
             r#"INSERT INTO queue_cron_schedules
-                (id, stage, cron_expression, payload, trace_parent, enabled)
-             VALUES ($1, $2, $3, $4, $5, $6)
+                (id, stage, cron_expression, timezone, payload, trace_parent,
+                 enabled, next_run_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (id) DO UPDATE
              SET stage = EXCLUDED.stage,
                  cron_expression = EXCLUDED.cron_expression,
+                 timezone = EXCLUDED.timezone,
                  payload = EXCLUDED.payload,
                  trace_parent = EXCLUDED.trace_parent,
-                 enabled = EXCLUDED.enabled,
+                 enabled = EXCLUDED.enabled AND NOT EXISTS (
+                     SELECT 1
+                     FROM source_dataflow_controls control
+                     WHERE control.dataflow_id = EXCLUDED.payload #>> '{kind,dataflow_id}'
+                       AND control.paused
+                 ),
+                 next_run_at = CASE
+                     WHEN queue_cron_schedules.cron_expression <> EXCLUDED.cron_expression
+                       OR queue_cron_schedules.timezone <> EXCLUDED.timezone
+                       OR queue_cron_schedules.enabled <> EXCLUDED.enabled
+                     THEN EXCLUDED.next_run_at
+                     ELSE queue_cron_schedules.next_run_at
+                 END,
                  updated_at = now()"#,
-            schedule.id(),
-            schedule.job().stage().as_str(),
-            schedule.cron_expression(),
-            payload,
-            schedule.job().trace_parent(),
-            schedule.enabled()
         )
+        .bind(schedule.id())
+        .bind(schedule.job().stage().as_str())
+        .bind(schedule.cron_expression())
+        .bind(schedule.timezone())
+        .bind(payload)
+        .bind(schedule.job().trace_parent())
+        .bind(schedule.enabled())
+        .bind(next_run_at)
         .execute(&self.pool)
         .await
         .map_err(QueueError::Db)?;
         Ok(())
     }
+
+    #[tracing::instrument(skip(self))]
+    async fn enqueue_due_schedules(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> QueueResult<Vec<ScheduleOccurrence>> {
+        if limit == 0 {
+            return Err(QueueError::Validation(
+                "due schedule limit must be positive".to_string(),
+            ));
+        }
+        let limit = i64::from(limit);
+        let mut tx = self.pool.begin().await.map_err(QueueError::Db)?;
+        let rows = sqlx::query(
+            r#"SELECT id, cron_expression, timezone, payload, next_run_at
+               FROM queue_cron_schedules
+               WHERE enabled
+                 AND next_run_at <= $1
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM source_dataflow_controls control
+                     WHERE control.dataflow_id = queue_cron_schedules.payload #>> '{kind,dataflow_id}'
+                       AND control.paused
+                 )
+               ORDER BY next_run_at, id
+               LIMIT $2
+               FOR UPDATE SKIP LOCKED"#,
+        )
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(QueueError::Db)?;
+
+        let mut occurrences = Vec::with_capacity(rows.len());
+        for row in rows {
+            let schedule_id: String = row.try_get("id").map_err(QueueError::Db)?;
+            let cron_expression: String = row.try_get("cron_expression").map_err(QueueError::Db)?;
+            let timezone: String = row.try_get("timezone").map_err(QueueError::Db)?;
+            let payload: serde_json::Value = row.try_get("payload").map_err(QueueError::Db)?;
+            let scheduled_for: DateTime<Utc> =
+                row.try_get("next_run_at").map_err(QueueError::Db)?;
+            let job: Job = serde_json::from_value(payload.clone())?;
+            let next_run_at = next_schedule_occurrence(&cron_expression, &timezone, scheduled_for)?;
+
+            let job_id: i64 = sqlx::query_scalar(
+                r#"INSERT INTO queue_jobs
+                    (stage, payload, priority, max_attempts, trace_parent, job_group_key)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   RETURNING id"#,
+            )
+            .bind(job.stage().as_str())
+            .bind(payload)
+            .bind(job.priority())
+            .bind(job.max_attempts())
+            .bind(job.trace_parent())
+            .bind(job.job_group_key())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(QueueError::Db)?;
+
+            let occurrence = sqlx::query(
+                r#"INSERT INTO queue_schedule_occurrences
+                    (schedule_id, scheduled_for, job_id)
+                   VALUES ($1, $2, $3)
+                   RETURNING id, created_at"#,
+            )
+            .bind(&schedule_id)
+            .bind(scheduled_for)
+            .bind(job_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(QueueError::Db)?;
+
+            let updated = sqlx::query(
+                r#"UPDATE queue_cron_schedules
+                   SET last_enqueued_at = $2,
+                       next_run_at = $3,
+                       updated_at = now()
+                   WHERE id = $1
+                     AND next_run_at = $2"#,
+            )
+            .bind(&schedule_id)
+            .bind(scheduled_for)
+            .bind(next_run_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(QueueError::Db)?;
+            if updated.rows_affected() != 1 {
+                return Err(QueueError::Validation(format!(
+                    "schedule `{schedule_id}` lost its due-time fence"
+                )));
+            }
+
+            occurrences.push(ScheduleOccurrence {
+                id: occurrence.try_get("id").map_err(QueueError::Db)?,
+                schedule_id,
+                scheduled_for,
+                job_id: JobId::new(job_id),
+                created_at: occurrence.try_get("created_at").map_err(QueueError::Db)?,
+            });
+        }
+
+        tx.commit().await.map_err(QueueError::Db)?;
+        Ok(occurrences)
+    }
+}
+
+fn validate_cron_expression(value: &str) -> QueueResult<()> {
+    parse_cron(value).map(|_| ())
+}
+
+fn parse_cron(value: &str) -> QueueResult<Cron> {
+    if value.split_ascii_whitespace().count() != 5 {
+        return Err(QueueError::Validation(
+            "cron expression must contain five fields".to_string(),
+        ));
+    }
+    Cron::from_str(value)
+        .map_err(|error| QueueError::Validation(format!("invalid cron expression: {error}")))
+}
+
+fn validate_timezone(value: &str) -> QueueResult<()> {
+    parse_timezone(value).map(|_| ())
+}
+
+fn parse_timezone(value: &str) -> QueueResult<Tz> {
+    value
+        .parse::<Tz>()
+        .map_err(|error| QueueError::Validation(format!("invalid IANA timezone: {error}")))
 }
 
 async fn retry_job(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult<()> {
     let retry_after_ms = nack
         .retry_after
+        .map(|delay| {
+            delay.min(if matches!(job.job().kind(), JobKind::Fetch { .. }) {
+                FETCH_RETRY_AFTER_CAP
+            } else {
+                RETRY_CAP
+            })
+        })
         .unwrap_or_else(|| default_backoff(job.attempts()))
         .as_millis()
         .min(i64::MAX as u128) as i64;
@@ -904,13 +1185,37 @@ async fn dead_letter(pool: &PgPool, job: &LeasedJob, nack: &Nack) -> QueueResult
     .await
     .map_err(QueueError::Db)?;
 
+    sqlx::query(
+        "UPDATE queue_schedule_occurrences
+         SET status = 'failed'
+         WHERE job_id = $1",
+    )
+    .bind(job.id().get())
+    .execute(&mut *tx)
+    .await
+    .map_err(QueueError::Db)?;
+
     tx.commit().await.map_err(QueueError::Db)?;
     Ok(())
 }
 
 fn default_backoff(attempts: i32) -> Duration {
-    let shift = attempts.saturating_sub(1).clamp(0, 6) as u32;
-    Duration::from_secs(1_u64 << shift)
+    let cap = retry_backoff_cap(attempts);
+    let entropy = Uuid::new_v4().as_u128() as u64;
+    full_jitter(cap, entropy)
+}
+
+fn retry_backoff_cap(attempts: i32) -> Duration {
+    let shift = attempts.saturating_sub(1).clamp(0, 31) as u32;
+    let seconds = RETRY_BASE
+        .as_secs()
+        .saturating_mul(1_u64.checked_shl(shift).unwrap_or(u64::MAX));
+    Duration::from_secs(seconds.min(RETRY_CAP.as_secs()))
+}
+
+fn full_jitter(cap: Duration, entropy: u64) -> Duration {
+    let cap_millis = cap.as_millis().min(u128::from(u64::MAX)) as u64;
+    Duration::from_millis(entropy % cap_millis.saturating_add(1))
 }
 
 fn duration_millis_i64(duration: Duration) -> i64 {
@@ -978,11 +1283,13 @@ impl Classify for QueueError {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Datelike, TimeZone, Timelike};
+
     use super::*;
 
     #[test]
     fn load_jobs_have_per_dataflow_group_key() {
-        let job = Job::load(DataflowId::new("abs.cpi").unwrap(), "artifact-a");
+        let job = Job::load(DataflowId::new("abs.cpi").unwrap(), Uuid::from_u128(1));
         assert_eq!(job.job_group_key().as_deref(), Some("load:abs.cpi"));
     }
 
@@ -1023,9 +1330,9 @@ mod tests {
         let dataflow_id = DataflowId::new("abs.cpi").unwrap();
         let cases = [
             Job::discover(source_id.clone()),
-            Job::fetch("job-a", source_id.clone()),
-            Job::parse(source_id.clone(), "artifact-a", "raw/abs/a.pdf"),
-            Job::load(dataflow_id, "artifact-a"),
+            Job::fetch(Uuid::from_u128(1)),
+            Job::parse(Uuid::from_u128(2)),
+            Job::load(dataflow_id, Uuid::from_u128(3)),
             Job::backfill(source_id, None),
         ];
 
@@ -1070,12 +1377,42 @@ mod tests {
     }
 
     #[test]
-    fn default_backoff_doubles_until_capped() {
-        assert_eq!(default_backoff(0), Duration::from_secs(1));
-        assert_eq!(default_backoff(1), Duration::from_secs(1));
-        assert_eq!(default_backoff(2), Duration::from_secs(2));
-        assert_eq!(default_backoff(7), Duration::from_secs(64));
-        assert_eq!(default_backoff(99), Duration::from_secs(64));
+    fn cron_schedule_rejects_invalid_cron_and_timezone() {
+        let job = Job::discover(SourceId::new("abs").unwrap());
+        assert!(CronSchedule::new("abs-cpi", "not cron", job.clone()).is_err());
+        assert!(
+            CronSchedule::new("abs-cpi", "15 0 * * *", job)
+                .unwrap()
+                .with_timezone("Australia/NotAZone")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn sydney_daily_schedule_stays_at_local_time_across_dst_boundaries() {
+        let before_spring = Utc.with_ymd_and_hms(2026, 10, 3, 14, 30, 0).unwrap();
+        let spring = next_schedule_occurrence("15 0 * * *", "Australia/Sydney", before_spring)
+            .unwrap()
+            .with_timezone(&chrono_tz::Australia::Sydney);
+        assert_eq!((spring.year(), spring.month(), spring.day()), (2026, 10, 5));
+        assert_eq!((spring.hour(), spring.minute()), (0, 15));
+
+        let before_autumn = Utc.with_ymd_and_hms(2026, 4, 4, 14, 30, 0).unwrap();
+        let autumn = next_schedule_occurrence("15 0 * * *", "Australia/Sydney", before_autumn)
+            .unwrap()
+            .with_timezone(&chrono_tz::Australia::Sydney);
+        assert_eq!((autumn.year(), autumn.month(), autumn.day()), (2026, 4, 6));
+        assert_eq!((autumn.hour(), autumn.minute()), (0, 15));
+    }
+
+    #[test]
+    fn retry_backoff_uses_full_jitter_with_six_hour_cap() {
+        assert_eq!(retry_backoff_cap(0), Duration::from_secs(30));
+        assert_eq!(retry_backoff_cap(1), Duration::from_secs(30));
+        assert_eq!(retry_backoff_cap(2), Duration::from_secs(60));
+        assert_eq!(retry_backoff_cap(99), RETRY_CAP);
+        assert_eq!(full_jitter(Duration::from_secs(30), 0), Duration::ZERO);
+        assert!(full_jitter(Duration::from_secs(30), u64::MAX) <= Duration::from_secs(30));
     }
 
     #[test]

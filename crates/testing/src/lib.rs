@@ -68,7 +68,7 @@ pub mod timescale {
     use super::*;
 
     const IMAGE_NAME: &str = "timescale/timescaledb";
-    const IMAGE_TAG: &str = "latest-pg16";
+    const IMAGE_TAG: &str = "2.17.2-pg16";
     const POSTGRES_PORT: u16 = 5432;
     const POSTGRES_USER: &str = "postgres";
     const POSTGRES_PASSWORD: &str = "postgres";

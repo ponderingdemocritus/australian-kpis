@@ -1,11 +1,12 @@
 import type {
+  ApsSnapshotSummary,
   DataflowCodelistResponse,
   DataflowDetailResponse,
   DataflowsResponse,
   ObservationsResponse,
   ObservationsRow,
+  PublishedApsSnapshot,
   ScorecardConfig,
-  ScorecardSnapshot,
   SearchResponse,
   SeriesLookupResponse,
 } from '@au-kpis/sdk-generated/client'
@@ -52,8 +53,8 @@ const search: Promise<SearchResponse> = client.search.catalog({
   q: 'index',
 })
 const apsConfig: Promise<ScorecardConfig> = client.scorecards.aps.config()
-const apsLatest: Promise<ScorecardSnapshot> = client.scorecards.aps.latest()
-const apsHistory: Promise<ScorecardSnapshot[]> = client.scorecards.aps.history({
+const apsLatest: Promise<PublishedApsSnapshot> = client.scorecards.aps.latest()
+const apsHistory: Promise<ApsSnapshotSummary[]> = client.scorecards.aps.history({
   since: '2024-01-01',
   until: '2024-12-31',
 })

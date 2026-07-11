@@ -99,7 +99,7 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
     let second = app
         .clone()
         .oneshot(request(&format!(
-            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&cursor={cursor}&limit=10"
+            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&since=2024-01-01&until=2024-12-31&cursor={cursor}&limit=1"
         )))
         .await
         .expect("second page response");
@@ -156,7 +156,7 @@ async fn observations_endpoint_streams_latest_json_csv_and_cache_headers() {
     );
     assert_eq!(
         csv.headers().get(header::CACHE_CONTROL).unwrap(),
-        "public, max-age=60, stale-while-revalidate=300"
+        "no-store"
     );
     assert!(!csv.headers().contains_key(header::ETAG));
     let body = String::from_utf8(
@@ -197,9 +197,13 @@ async fn observations_endpoint_streams_decodable_parquet_with_headers() {
     );
     assert_eq!(
         response.headers().get(header::CACHE_CONTROL).unwrap(),
-        "public, max-age=60, stale-while-revalidate=300"
+        "no-store"
     );
     assert!(!response.headers().contains_key(header::ETAG));
+    assert_eq!(
+        response.headers().get(header::CONTENT_ENCODING).unwrap(),
+        "identity"
+    );
 
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -275,7 +279,7 @@ async fn broad_high_cardinality_observations_return_validation_error() {
 
     let db = TestDb::start("au_kpis_api_observations_high_cardinality").await;
     seed_observations(db.pool()).await;
-    for idx in 0..510 {
+    for idx in 0..511 {
         let region = format!("R{idx:03}");
         insert_series(db.pool(), &region).await;
     }
@@ -340,6 +344,41 @@ async fn paginated_observations_concatenate_to_the_full_result() {
 
         assert_eq!(paged, full, "page size {limit} did not concatenate cleanly");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observation_cursor_rejects_changed_generation_watermark() {
+    if !docker_available() {
+        eprintln!("skipping testcontainers integration test: Docker socket unavailable");
+        return;
+    }
+
+    let db = TestDb::start("au_kpis_api_observations_stale_cursor").await;
+    seed_observations(db.pool()).await;
+    let app = router(test_state(db.pool().clone())).expect("router");
+    let first = get_observations_json(
+        app.clone(),
+        "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&limit=1",
+    )
+    .await;
+    let cursor = first.pagination.next_cursor.expect("next cursor");
+
+    seed_published_generation(db.pool()).await;
+    let response = app
+        .oneshot(request(&format!(
+            "/v1/observations?dataflow=abs.cpi&dimensions[region]=AUS&limit=1&cursor={cursor}"
+        )))
+        .await
+        .expect("stale cursor response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("problem body");
+    let problem: serde_json::Value = serde_json::from_slice(&body).expect("problem json");
+    assert_eq!(
+        problem["type"],
+        "https://au-kpis.example/problems/stale-cursor"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -639,6 +678,63 @@ async fn seed_observations(pool: &PgPool) {
         ObservationSeed::new(nsw_key, artifact, (2024, 3, 1), 0, 137.1),
     )
     .await;
+}
+
+async fn seed_published_generation(pool: &PgPool) {
+    let artifact = ArtifactId::of_content(b"observation cursor watermark generation");
+    let source_url = "https://example.test/cpi-watermark.json";
+    let storage_key = format!("artifacts/{artifact}");
+    sqlx::query(
+        "INSERT INTO artifacts (
+             id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         ) VALUES ($1, 'abs', $2, 'application/json', '{}'::JSONB, 1, $3, now())",
+    )
+    .bind(artifact.digest().as_bytes().as_slice())
+    .bind(source_url)
+    .bind(&storage_key)
+    .execute(pool)
+    .await
+    .expect("seed watermark artifact");
+    let fetch_id: i64 = sqlx::query_scalar(
+        "INSERT INTO artifact_fetches (
+             artifact_id, source_id, source_url, content_type, response_headers,
+             size_bytes, storage_key, fetched_at
+         ) VALUES ($1, 'abs', $2, 'application/json', '{}'::JSONB, 1, $3, now())
+         RETURNING id",
+    )
+    .bind(artifact.digest().as_bytes().as_slice())
+    .bind(source_url)
+    .bind(storage_key)
+    .fetch_one(pool)
+    .await
+    .expect("seed watermark fetch");
+    let work_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO discovered_work (
+             id, source_id, dataflow_id, source_url, upstream_revision,
+             identity_key, status
+         ) VALUES ($1, 'abs', 'abs.cpi', $2, 'watermark-v1', $3, 'handled')",
+    )
+    .bind(work_id)
+    .bind(source_url)
+    .bind(vec![0x77_u8; 32])
+    .execute(pool)
+    .await
+    .expect("seed watermark discovered work");
+    sqlx::query(
+        "INSERT INTO ingestion_generations (
+             id, discovered_work_id, artifact_fetch_id, source_id, dataflow_id,
+             parser_version, transform_version, status, published_at
+         ) VALUES ($1, $2, $3, 'abs', 'abs.cpi', 'cursor-test-v1',
+                   'identity-v1', 'published', now())",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(work_id)
+    .bind(fetch_id)
+    .execute(pool)
+    .await
+    .expect("seed published generation");
 }
 
 async fn seed_extra_pagination_observations(pool: &PgPool, artifact: ArtifactId) {

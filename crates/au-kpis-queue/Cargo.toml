@@ -12,6 +12,10 @@ async-trait = "0.1"
 au-kpis-domain = { workspace = true }
 au-kpis-error = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+# Parse and evaluate persisted five-field cron expressions without hand-rolled calendar logic.
+croner = "3.0.1"
+# IANA timezone database used by persisted schedules, including Sydney DST transitions.
+chrono-tz = "0.10.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = [
@@ -20,9 +24,11 @@ sqlx = { version = "0.8", default-features = false, features = [
     "postgres",
     "chrono",
     "json",
+    "uuid",
 ] }
 thiserror = "2"
 tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 au-kpis-config = { workspace = true }

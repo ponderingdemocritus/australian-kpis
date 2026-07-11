@@ -12,24 +12,27 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use anyhow::Context;
 use au_kpis_config::load_ingestion;
-use au_kpis_db::{PgPool, connect as connect_db, migrate};
-use au_kpis_domain::SourceId;
+use au_kpis_db::{PgPool, connect as connect_db};
+use au_kpis_domain::{DataflowId, SourceId};
 use au_kpis_queue::{ApalisPgQueue, CronSchedule, Job, Queue};
 use au_kpis_scheduler::data_quality::{
-    PagerDutyConfig, PagerDutyOutcome, default_data_quality_rules, notify_pagerduty,
+    PagerDutyConfig, PagerDutyOutcome, launch_data_quality_rules, notify_pagerduty,
     run_data_quality_checks,
 };
 use au_kpis_scheduler::source_location_audit::{
     default_source_location_rules, run_source_location_audit,
 };
+use au_kpis_source_register::{SourceStatus, load_source_register};
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
 use chrono::Utc;
+use chrono::{DateTime, NaiveDate, NaiveTime};
+use chrono_tz::Australia::Sydney;
 use clap::{Parser, Subcommand};
 use sqlx::{Pool, Postgres, pool::PoolConnection};
 use tokio::{net::TcpListener, signal};
@@ -37,14 +40,6 @@ use tokio_util::sync::CancellationToken;
 
 const SCHEDULER_LEADER_LOCK_ID: i64 = 30_000_030;
 const DEFAULT_TICK_MS: u64 = 1_000;
-const DEFAULT_ABS_INTERVAL_MS: u64 = 60 * 60 * 1_000;
-const DEFAULT_APRA_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
-const DEFAULT_RBA_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
-const DEFAULT_TREASURY_INTERVAL_MS: u64 = 24 * 60 * 60 * 1_000;
-const ABS_DISCOVERY_CRON: &str = "0 * * * *";
-const APRA_DISCOVERY_CRON: &str = "0 0 * * 1";
-const RBA_DISCOVERY_CRON: &str = "0 0 * * 1";
-const TREASURY_DISCOVERY_CRON: &str = "0 0 * * *";
 const DEFAULT_DATA_QUALITY_REPORT_PATH: &str = "target/data-quality/data-quality-report.md";
 const DEFAULT_SOURCE_LOCATION_AUDIT_REPORT_PATH: &str =
     "target/source-location-audit/source-location-audit.md";
@@ -61,38 +56,6 @@ struct Cli {
     /// Leader-election retry and schedule scan interval.
     #[arg(long, env = "AU_KPIS_SCHEDULER_TICK_MS", default_value_t = DEFAULT_TICK_MS)]
     tick_ms: u64,
-
-    /// Test/ops override for the ABS discovery cadence.
-    #[arg(
-        long,
-        env = "AU_KPIS_SCHEDULER_ABS_INTERVAL_MS",
-        default_value_t = DEFAULT_ABS_INTERVAL_MS
-    )]
-    abs_interval_ms: u64,
-
-    /// Test/ops override for the APRA discovery cadence.
-    #[arg(
-        long,
-        env = "AU_KPIS_SCHEDULER_APRA_INTERVAL_MS",
-        default_value_t = DEFAULT_APRA_INTERVAL_MS
-    )]
-    apra_interval_ms: u64,
-
-    /// Test/ops override for the RBA discovery cadence.
-    #[arg(
-        long,
-        env = "AU_KPIS_SCHEDULER_RBA_INTERVAL_MS",
-        default_value_t = DEFAULT_RBA_INTERVAL_MS
-    )]
-    rba_interval_ms: u64,
-
-    /// Test/ops override for the Treasury discovery cadence.
-    #[arg(
-        long,
-        env = "AU_KPIS_SCHEDULER_TREASURY_INTERVAL_MS",
-        default_value_t = DEFAULT_TREASURY_INTERVAL_MS
-    )]
-    treasury_interval_ms: u64,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -139,9 +102,9 @@ enum Command {
 
 #[derive(Debug, Clone)]
 struct DiscoverySchedule {
-    id: &'static str,
-    cron_expression: &'static str,
-    emit_every: Duration,
+    id: String,
+    cron_expression: String,
+    timezone: String,
     job: Job,
 }
 
@@ -247,8 +210,6 @@ async fn main() -> anyhow::Result<()> {
     let db = connect_db(&config.database)
         .await
         .context("connect postgres database")?;
-    migrate(&db).await.context("apply database migrations")?;
-
     if let Command::DataQuality {
         report_path,
         pagerduty_routing_key,
@@ -271,12 +232,7 @@ async fn main() -> anyhow::Result<()> {
         metrics,
         shutdown: shutdown.clone(),
         tick: Duration::from_millis(cli.tick_ms),
-        schedules: default_discovery_schedules(
-            Duration::from_millis(cli.abs_interval_ms),
-            Duration::from_millis(cli.rba_interval_ms),
-            Duration::from_millis(cli.apra_interval_ms),
-            Duration::from_millis(cli.treasury_interval_ms),
-        ),
+        schedules: default_discovery_schedules()?,
         worker_id: cli.worker_id.unwrap_or_else(default_worker_id),
     };
 
@@ -331,7 +287,8 @@ async fn run_data_quality_command(
     pagerduty_routing_key: Option<String>,
     pagerduty_events_url: String,
 ) -> anyhow::Result<()> {
-    let report = run_data_quality_checks(db, default_data_quality_rules(), Utc::now())
+    let rules = launch_data_quality_rules().context("build launch data-quality rule set")?;
+    let report = run_data_quality_checks(db, &rules, Utc::now())
         .await
         .context("run data-quality checks")?;
     write_data_quality_reports(report_path, &report)
@@ -366,6 +323,14 @@ async fn run_data_quality_command(
                 "data-quality anomalies sent to PagerDuty"
             );
         }
+    }
+
+    if report.has_anomalies() {
+        anyhow::bail!(
+            "data-quality gate failed with {} anomalies; see {}",
+            report.anomalies_total(),
+            report_path.display()
+        );
     }
 
     Ok(())
@@ -479,33 +444,34 @@ async fn run_scheduler(runtime: Runtime) -> anyhow::Result<()> {
 }
 
 async fn run_leader_loop(runtime: &Runtime, queue: &ApalisPgQueue) -> anyhow::Result<()> {
-    let mut due = runtime
-        .schedules
-        .iter()
-        .map(|schedule| ScheduleState {
-            schedule,
-            next_due: tokio::time::Instant::now(),
-        })
-        .collect::<Vec<_>>();
-
+    let mut materialized_through = None;
     loop {
         runtime
             .metrics
             .scheduler_ticks_total
             .fetch_add(1, Ordering::Relaxed);
-        let now = tokio::time::Instant::now();
-        for state in &mut due {
-            if now >= state.next_due {
-                queue
-                    .push(state.schedule.job.clone().with_trace_parent(trace_parent()))
+        let emitted = queue
+            .enqueue_due_schedules(Utc::now(), 100)
+            .await
+            .context("enqueue due schedule occurrences")?;
+        runtime
+            .metrics
+            .discovery_jobs_emitted_total
+            .fetch_add(emitted.len() as u64, Ordering::Relaxed);
+        let due_snapshot_date = due_aps_snapshot_date(Utc::now());
+        if materialized_through != Some(due_snapshot_date) {
+            let snapshot =
+                au_kpis_scorecard::materialize_aps_snapshot(&runtime.db, due_snapshot_date, None)
                     .await
-                    .with_context(|| format!("emit {} discovery job", state.schedule.id))?;
-                runtime
-                    .metrics
-                    .discovery_jobs_emitted_total
-                    .fetch_add(1, Ordering::Relaxed);
-                state.next_due = now + state.schedule.emit_every;
-            }
+                    .context("materialize daily APS snapshot")?;
+            tracing::info!(
+                snapshot_id = %snapshot.id,
+                snapshot_date = %snapshot.snapshot_date,
+                revision = snapshot.revision,
+                publication_state = ?snapshot.publication_state,
+                "daily APS snapshot materialized"
+            );
+            materialized_through = Some(due_snapshot_date);
         }
 
         tokio::select! {
@@ -515,10 +481,17 @@ async fn run_leader_loop(runtime: &Runtime, queue: &ApalisPgQueue) -> anyhow::Re
     }
 }
 
-#[derive(Debug)]
-struct ScheduleState<'a> {
-    schedule: &'a DiscoverySchedule,
-    next_due: tokio::time::Instant,
+fn due_aps_snapshot_date(now: DateTime<Utc>) -> NaiveDate {
+    let local = now.with_timezone(&Sydney);
+    let days_back = if local.time() >= NaiveTime::from_hms_opt(0, 15, 0).expect("valid APS time") {
+        1
+    } else {
+        2
+    };
+    local
+        .date_naive()
+        .checked_sub_days(chrono::Days::new(days_back))
+        .expect("current date supports APS lookback")
 }
 
 async fn register_schedules(
@@ -527,49 +500,49 @@ async fn register_schedules(
 ) -> anyhow::Result<()> {
     for schedule in schedules {
         queue
-            .schedule(CronSchedule::new(
-                schedule.id,
-                schedule.cron_expression,
-                schedule.job.clone(),
-            )?)
+            .schedule(
+                CronSchedule::new(
+                    &schedule.id,
+                    &schedule.cron_expression,
+                    schedule.job.clone(),
+                )?
+                .with_timezone(&schedule.timezone)?,
+            )
             .await
             .with_context(|| format!("register {} cron schedule", schedule.id))?;
     }
     Ok(())
 }
 
-fn default_discovery_schedules(
-    abs_interval: Duration,
-    rba_interval: Duration,
-    apra_interval: Duration,
-    treasury_interval: Duration,
-) -> Vec<DiscoverySchedule> {
-    vec![
-        DiscoverySchedule {
-            id: "abs-discovery",
-            cron_expression: ABS_DISCOVERY_CRON,
-            emit_every: abs_interval,
-            job: Job::discover(SourceId::new("abs").expect("static source id is valid")),
-        },
-        DiscoverySchedule {
-            id: "rba-discovery",
-            cron_expression: RBA_DISCOVERY_CRON,
-            emit_every: rba_interval,
-            job: Job::discover(SourceId::new("rba").expect("static source id is valid")),
-        },
-        DiscoverySchedule {
-            id: "apra-discovery",
-            cron_expression: APRA_DISCOVERY_CRON,
-            emit_every: apra_interval,
-            job: Job::discover(SourceId::new("apra").expect("static source id is valid")),
-        },
-        DiscoverySchedule {
-            id: "treasury-discovery",
-            cron_expression: TREASURY_DISCOVERY_CRON,
-            emit_every: treasury_interval,
-            job: Job::discover(SourceId::new("treasury").expect("static source id is valid")),
-        },
-    ]
+fn default_discovery_schedules() -> anyhow::Result<Vec<DiscoverySchedule>> {
+    let register = load_source_register().context("load source register schedules")?;
+    register
+        .dataflows
+        .into_iter()
+        .filter(|dataflow| dataflow.status == SourceStatus::Active)
+        .map(|dataflow| {
+            let schedule = dataflow.schedule.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "active dataflow `{}` has no discovery schedule",
+                    dataflow.dataflow_id
+                )
+            })?;
+            let source_id = SourceId::new(dataflow.source_id)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let dataflow_id = DataflowId::new(dataflow.dataflow_id)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let id = format!("discovery:{dataflow_id}");
+            let job = Job::discover_dataflow(source_id, dataflow_id);
+            CronSchedule::new(&id, &schedule.cron, job.clone())?
+                .with_timezone(&schedule.timezone)?;
+            Ok(DiscoverySchedule {
+                id,
+                cron_expression: schedule.cron,
+                timezone: schedule.timezone,
+                job,
+            })
+        })
+        .collect()
 }
 
 async fn serve_metrics(
@@ -662,68 +635,51 @@ fn default_worker_id() -> String {
     format!("au-kpis-scheduler-{}", std::process::id())
 }
 
-fn trace_parent() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("system time")
-        .as_nanos();
-    let parent = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("00-{nanos:032x}-{parent:016x}-01")
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
 
     use au_kpis_queue::JobKind;
     use au_kpis_scheduler::data_quality::DataQualityReport;
     use au_kpis_scheduler::source_location_audit::{
         SourceAuditFinding, SourceAuditSeverity, SourceAuditStatus, SourceLocationAuditReport,
     };
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
 
     use super::*;
 
     #[test]
     fn default_schedule_registers_adapter_discovery_cadences() {
-        let schedules = default_discovery_schedules(
-            Duration::from_secs(3600),
-            Duration::from_secs(604_800),
-            Duration::from_secs(604_800),
-            Duration::from_secs(86_400),
-        );
+        let schedules = default_discovery_schedules().expect("load schedules");
 
-        assert_eq!(schedules.len(), 4);
-        assert_eq!(schedules[0].id, "abs-discovery");
-        assert_eq!(schedules[0].cron_expression, "0 * * * *");
-        assert_eq!(schedules[0].emit_every, Duration::from_secs(3600));
+        assert_eq!(schedules.len(), 20);
+        let abs_cpi = schedules
+            .iter()
+            .find(|schedule| schedule.id == "discovery:abs.cpi")
+            .expect("ABS CPI schedule");
+        assert_eq!(abs_cpi.cron_expression, "15 1 * * *");
+        assert_eq!(abs_cpi.timezone, "Australia/Sydney");
         assert!(matches!(
-            schedules[0].job.kind(),
-            JobKind::Discover { source_id } if source_id.as_str() == "abs"
+            abs_cpi.job.kind(),
+            JobKind::Discover {
+                source_id,
+                dataflow_id: Some(dataflow_id)
+            } if source_id.as_str() == "abs" && dataflow_id.as_str() == "abs.cpi"
         ));
-        assert_eq!(schedules[1].id, "rba-discovery");
-        assert_eq!(schedules[1].cron_expression, "0 0 * * 1");
-        assert_eq!(schedules[1].emit_every, Duration::from_secs(604_800));
-        assert!(matches!(
-            schedules[1].job.kind(),
-            JobKind::Discover { source_id } if source_id.as_str() == "rba"
-        ));
-        assert_eq!(schedules[2].id, "apra-discovery");
-        assert_eq!(schedules[2].cron_expression, "0 0 * * 1");
-        assert_eq!(schedules[2].emit_every, Duration::from_secs(604_800));
-        assert!(matches!(
-            schedules[2].job.kind(),
-            JobKind::Discover { source_id } if source_id.as_str() == "apra"
-        ));
-        assert_eq!(schedules[3].id, "treasury-discovery");
-        assert_eq!(schedules[3].cron_expression, "0 0 * * *");
-        assert_eq!(schedules[3].emit_every, Duration::from_secs(86_400));
-        assert!(matches!(
-            schedules[3].job.kind(),
-            JobKind::Discover { source_id } if source_id.as_str() == "treasury"
-        ));
+    }
+
+    #[test]
+    fn aps_daily_cutoff_uses_sydney_calendar_across_dst() {
+        let before_cutoff = Utc.with_ymd_and_hms(2026, 10, 4, 13, 14, 59).unwrap();
+        let after_cutoff = Utc.with_ymd_and_hms(2026, 10, 4, 13, 15, 0).unwrap();
+        assert_eq!(
+            due_aps_snapshot_date(before_cutoff),
+            NaiveDate::from_ymd_opt(2026, 10, 3).unwrap()
+        );
+        assert_eq!(
+            due_aps_snapshot_date(after_cutoff),
+            NaiveDate::from_ymd_opt(2026, 10, 4).unwrap()
+        );
     }
 
     #[test]
@@ -739,15 +695,6 @@ mod tests {
         assert!(body.contains("# TYPE au_kpis_scheduler_leader_active gauge"));
         assert!(body.contains("au_kpis_scheduler_leader_active 1"));
         assert!(body.contains("au_kpis_scheduler_discovery_jobs_emitted_total 3"));
-    }
-
-    #[test]
-    fn trace_parent_uses_w3c_shape() {
-        let trace = trace_parent();
-
-        assert_eq!(trace.len(), 55);
-        assert!(trace.starts_with("00-"));
-        assert!(trace.ends_with("-01"));
     }
 
     #[tokio::test]

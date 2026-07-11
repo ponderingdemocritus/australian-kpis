@@ -46,12 +46,16 @@ AU_KPIS_BASE_URL=https://staging.example.test \
   k6 run --out influxdb=https://influxdb.example.test/k6 apps/bench/burst.js
 ```
 
-`full-load.js` is the Phase 5 observation-serving validation. It drives
-`/v1/observations` at a default constant arrival rate of 1000 requests per
-second for 10 minutes and enforces:
+`full-load.js` is the production-v1 certification workload. It drives an exact
+1,000 RPS mix for 30 minutes: 45% warm single-series JSON, 15% cold/range JSON,
+10% rollups, 10% catalog/source/search, 10% APS latest, 5% APS history, and 5%
+validation/rate-limit responses. In parallel it holds four one-million-row
+Parquet exports open per API replica. It enforces:
 
-- p99 HTTP request duration below 1000 ms
-- failed request rate below 0.1%
+- warm single-series and APS latest p95 below 200 ms
+- cold/range, rollup, and APS history p95 below 500 ms
+- Parquet p95 below 30 seconds
+- server error rate below 0.1%
 - no dropped k6 iterations
 
 The setup phase validates the JSON page shape once. The load phase checks the
@@ -59,11 +63,15 @@ HTTP status and discards response bodies so client-side JSON parsing does not
 hide server-side serving capacity.
 
 ```bash
-AU_KPIS_BASE_URL=https://staging.example.test \
+mkdir -p target/release-scale-report
+AU_KPIS_BASE_URL=https://scale-staging.example.test \
   k6 run --summary-export target/k6/full-load-summary.json apps/bench/full-load.js
 ```
 
-For local smoke-downs of the same script, override
+The target must be backed by the isolated certification database seeded by
+`au-kpis-scale-seed`, have a numeric APS snapshot, and keep normal ingestion
+workers running. Set `AU_KPIS_API_REPLICAS` when the target does not have the
+production default of two replicas. For local smoke-downs, override
 `AU_KPIS_FULL_LOAD_RPS` and `AU_KPIS_FULL_LOAD_DURATION`.
 
 `.github/workflows/k6-nightly.yml` runs both long-load scenarios nightly against

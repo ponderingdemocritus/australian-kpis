@@ -28,6 +28,8 @@ type ApsIndicatorFixture = {
     source_url: string
   }
   source_dataflow_id: string
+  hard_after_seconds: number
+  soft_after_seconds: number
   unit: string
   weight: number
 }
@@ -77,10 +79,8 @@ test('APS homepage renders latest scorecard data first', async ({ page }) => {
   await expect(throughputOrientation).toContainText('79.5')
   await expect(page.getByTestId('aps-systems-radar')).toBeVisible()
 
-  // Constraints rank by drag (planning highest); uplift by APS gain (AI highest).
-  // Long axis labels wrap into tspans, so assert on a non-wrapping substring.
+  // Constraints rank by weighted shortfall, with a tabular equivalent.
   await expect(page.getByTestId('aps-constraints')).toContainText('Planning')
-  await expect(page.getByTestId('aps-uplift')).toContainText('AI adoption')
 
   const donut = page.getByTestId('aps-coverage-donut')
   await expect(donut).toContainText('5')
@@ -138,8 +138,8 @@ test('APS homepage recovers from a transient error via Retry', async ({ page }) 
 
 test('APS throughput-vs-orientation card renders with a historical trail', async ({ page }) => {
   await mockApsApi(page, [
-    { ...apsSnapshot, as_of: '2026-03-01', score: 40 },
-    { ...apsSnapshot, as_of: '2026-05-01', score: 55 },
+    { ...apsSnapshot, contributions: undefined, snapshot_date: '2026-03-01', score: 40 },
+    { ...apsSnapshot, contributions: undefined, snapshot_date: '2026-05-01', score: 55 },
   ])
   await page.goto('/')
 
@@ -266,7 +266,9 @@ async function mockApsApi(page: Page, history: unknown[] = []) {
 
 const apsConfig = {
   attribution: 'Derived scorecard configuration maintained by australian-kpis.',
+  coverage_thresholds: { axis_pct: 50, overall_pct: 70 },
   description: 'National Australia scorecard.',
+  digest: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
   formula: 'APS = 100 * T * (0.5 + 0.5 * O)',
   id: 'aps',
   indicators: [
@@ -314,13 +316,17 @@ const apsConfig = {
   ],
   label: 'Abundance Position Score',
   license: 'Apache-2.0',
+  methodology_citation: 'APS v1 methodology.',
+  trend_threshold: 1,
   version: 'aps.v1',
+  zone_thresholds: { mixed_max: 66, scarcity_max: 33 },
 }
 
 const apsSnapshot = {
-  as_of: '2026-06-23',
+  as_of: '2026-06-23T13:59:59.999Z',
   confidence: 'medium',
   confidence_band: { high: 83.1, low: 58.2 },
+  config_digest: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
   config_version: 'aps.v1',
   contributions: [
     contribution({
@@ -385,9 +391,13 @@ const apsSnapshot = {
     }),
   ],
   coverage_pct: 84,
-  latest_period: '2026-05-01',
+  id: '11111111-1111-4111-8111-111111111111',
+  publication_state: 'published',
+  published_at: '2026-06-24T00:15:00Z',
+  revision: 0,
   score: 72.4,
   scorecard_id: 'aps',
+  snapshot_date: '2026-06-23',
   sub_indexes: [
     {
       axis: 'throughput',
@@ -413,7 +423,7 @@ const apsSnapshot = {
     },
   ],
   trend: 'up',
-  zone: 'green',
+  zone: 'abundance',
 }
 
 function indicator(overrides: Partial<ApsIndicatorFixture>): ApsIndicatorFixture {
@@ -438,6 +448,8 @@ function indicator(overrides: Partial<ApsIndicatorFixture>): ApsIndicatorFixture
       source_url: 'https://example.test/source',
     },
     source_dataflow_id: 'source.dataflow',
+    hard_after_seconds: 7_776_000,
+    soft_after_seconds: 3_888_000,
     unit: 'index',
     weight: 0.1,
     ...overrides,

@@ -1,0 +1,17 @@
+[package]
+name = "au-kpis-migrate"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "One-shot production database migration job."
+
+[dependencies]
+anyhow = "1"
+au-kpis-config = { workspace = true }
+au-kpis-db = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

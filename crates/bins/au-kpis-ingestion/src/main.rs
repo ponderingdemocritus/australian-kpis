@@ -33,16 +33,20 @@ use au_kpis_adapter_state_planning::StatePlanningAdapter;
 use au_kpis_adapter_treasury::TreasuryAdapter;
 use au_kpis_adapter_worldbank::WorldbankAdapter;
 use au_kpis_config::load_ingestion;
-use au_kpis_db::{connect as connect_db, migrate};
+use au_kpis_db::connect as connect_db;
 use au_kpis_domain::{
     Dataflow, Frequency, License, Source,
     ids::{DataflowId, SourceId},
 };
+#[cfg(test)]
 use au_kpis_error::{Classify, ErrorClass};
 use au_kpis_ingestion_core::{IngestionPipeline, PipelineContexts, PipelineOptions, fetch_ctx};
 use au_kpis_pdf_client::PdfClient;
-use au_kpis_queue::{ApalisPgQueue, JobKind, LeasedJob, Nack, Queue, QueueStage, WorkerId};
+#[cfg(test)]
+use au_kpis_queue::JobKind;
+use au_kpis_queue::{ApalisPgQueue, LeasedJob, Nack, Queue, QueueStage, WorkerId};
 use au_kpis_scorecard::{CoverageStatus as ScorecardCoverageStatus, load_aps_v1_config};
+use au_kpis_source_register::{SourceRegisterDataflow, SourceStatus, load_source_register};
 use au_kpis_storage::BlobStore;
 use au_kpis_telemetry::{Telemetry, init as init_telemetry};
 use axum::{Router, http::header, response::IntoResponse, routing::get};
@@ -52,6 +56,7 @@ use tokio::{net::TcpListener, signal, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 mod coverage_report;
+mod durable_worker;
 
 const ABS_CPI_DATAFLOW_SLUG: &str = "cpi";
 const ABS_CPI_DATAFLOW_ID: &str = "abs.cpi";
@@ -163,6 +168,10 @@ enum Command {
         /// Exit non-zero when any dataflow is not fully loaded.
         #[arg(long)]
         fail_on_gaps: bool,
+
+        /// Exit non-zero unless all active dataflows and required manual inputs are launch-ready.
+        #[arg(long)]
+        fail_on_launch_blockers: bool,
     },
 }
 
@@ -178,6 +187,7 @@ enum Mode {
         output: Option<PathBuf>,
         markdown: Option<PathBuf>,
         fail_on_gaps: bool,
+        fail_on_launch_blockers: bool,
     },
 }
 
@@ -193,6 +203,7 @@ struct WorkerMetrics {
     worker_loops_total: AtomicU64,
     jobs_completed_total: AtomicU64,
     jobs_failed_total: AtomicU64,
+    staging_recoveries_total: AtomicU64,
     once_runs_total: AtomicU64,
     schema_hash_drifts_total: Mutex<BTreeMap<SchemaHashDriftMetricKey, u64>>,
 }
@@ -209,12 +220,16 @@ impl WorkerMetrics {
              # HELP au_kpis_ingestion_jobs_failed_total Queue jobs failed by the worker.\n\
              # TYPE au_kpis_ingestion_jobs_failed_total counter\n\
              au_kpis_ingestion_jobs_failed_total {}\n\
+             # HELP au_kpis_ingestion_staging_recoveries_total Generations reset after unlogged staging loss.\n\
+             # TYPE au_kpis_ingestion_staging_recoveries_total counter\n\
+             au_kpis_ingestion_staging_recoveries_total {}\n\
              # HELP au_kpis_ingestion_once_runs_total One-shot ingestion runs completed.\n\
              # TYPE au_kpis_ingestion_once_runs_total counter\n\
              au_kpis_ingestion_once_runs_total {}\n",
             self.worker_loops_total.load(Ordering::Relaxed),
             self.jobs_completed_total.load(Ordering::Relaxed),
             self.jobs_failed_total.load(Ordering::Relaxed),
+            self.staging_recoveries_total.load(Ordering::Relaxed),
             self.once_runs_total.load(Ordering::Relaxed)
         );
         body.push_str(
@@ -238,10 +253,13 @@ impl WorkerMetrics {
     }
 
     fn record_ingestion_error(&self, err: &au_kpis_ingestion_core::IngestionError) {
-        if let au_kpis_ingestion_core::IngestionError::Adapter(AdapterError::SchemaHashDrift(
-            drift,
-        )) = err
-        {
+        if let au_kpis_ingestion_core::IngestionError::Adapter(err) = err {
+            self.record_adapter_error(err);
+        }
+    }
+
+    fn record_adapter_error(&self, err: &AdapterError) {
+        if let AdapterError::SchemaHashDrift(drift) = err {
             let key = SchemaHashDriftMetricKey {
                 source: drift.source_id.as_str().to_string(),
                 dataflow: drift.dataflow_id.as_str().to_string(),
@@ -276,6 +294,7 @@ struct ObjectStoreConfig {
     secret_access_key: Option<String>,
     region: Option<String>,
     allow_http: bool,
+    delete_enabled: bool,
 }
 
 impl ObjectStoreConfig {
@@ -289,6 +308,10 @@ impl ObjectStoreConfig {
             allow_http: env::var("AU_KPIS_OBJECT_STORE__ALLOW_HTTP")
                 .ok()
                 .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes")),
+            delete_enabled: env::var("AU_KPIS_OBJECT_STORE__DELETE_ENABLED")
+                .map_or(true, |value| {
+                    matches!(value.as_str(), "1" | "true" | "TRUE" | "yes")
+                }),
         }
     }
 }
@@ -309,7 +332,6 @@ async fn main() -> anyhow::Result<()> {
     let db = connect_db(&config.database)
         .await
         .context("connect postgres database")?;
-    migrate(&db).await.context("apply database migrations")?;
     let adapters = build_adapters()?;
     sync_adapter_catalog(&db, &adapters)
         .await
@@ -318,9 +340,17 @@ async fn main() -> anyhow::Result<()> {
         output,
         markdown,
         fail_on_gaps,
+        fail_on_launch_blockers,
     } = mode
     {
-        write_coverage_report(&db, output.as_ref(), markdown.as_ref(), fail_on_gaps).await?;
+        write_coverage_report(
+            &db,
+            output.as_ref(),
+            markdown.as_ref(),
+            fail_on_gaps,
+            fail_on_launch_blockers,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -439,6 +469,7 @@ async fn write_coverage_report(
     output: Option<&PathBuf>,
     markdown: Option<&PathBuf>,
     fail_on_gaps: bool,
+    fail_on_launch_blockers: bool,
 ) -> anyhow::Result<()> {
     let report = load_coverage_report(pool).await?;
     let json = serde_json::to_string_pretty(&report).context("serialize coverage report")?;
@@ -464,6 +495,12 @@ async fn write_coverage_report(
             bail!("{gap_count} dataflows are not fully loaded; see coverage report");
         }
     }
+    if fail_on_launch_blockers && report.totals.launch_blockers > 0 {
+        bail!(
+            "{} launch-required dataflows are not loaded and fresh; see coverage report",
+            report.totals.launch_blockers
+        );
+    }
     Ok(())
 }
 
@@ -472,7 +509,13 @@ async fn load_coverage_report(
     pool: &au_kpis_db::PgPool,
 ) -> anyhow::Result<coverage_report::CoverageReport> {
     let expected_statuses = expected_coverage_statuses_by_dataflow()?;
-    let rows = sqlx::query_as::<
+    let register = load_source_register().context("load source register for coverage report")?;
+    let contracts = register
+        .dataflows
+        .into_iter()
+        .map(|dataflow| (dataflow.dataflow_id.clone(), dataflow))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = sqlx::query_as::<
         _,
         (
             String,
@@ -574,12 +617,80 @@ async fn load_coverage_report(
                 parse_errors,
                 latest_load,
                 expected_status,
+                governance_status: String::new(),
+                launch_required: false,
+                freshness_hard_seconds: None,
             }
         },
     )
-    .collect();
+    .collect::<Vec<_>>();
+
+    for row in &mut rows {
+        apply_coverage_contract(row, contracts.get(&row.dataflow_id));
+    }
+    let present = rows
+        .iter()
+        .map(|row| row.dataflow_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for contract in contracts
+        .values()
+        .filter(|contract| !present.contains(&contract.dataflow_id))
+    {
+        let mut row = coverage_report::RawCoverageRow {
+            source_id: contract.source_id.clone(),
+            dataflow_id: contract.dataflow_id.clone(),
+            name: contract.dataflow_id.clone(),
+            source_url: contract.canonical_url.clone(),
+            series_count: 0,
+            artifact_count: 0,
+            observations_loaded: 0,
+            parse_errors: 0,
+            latest_load: None,
+            expected_status: expected_statuses.get(&contract.dataflow_id).copied(),
+            governance_status: String::new(),
+            launch_required: false,
+            freshness_hard_seconds: None,
+        };
+        apply_coverage_contract(&mut row, Some(contract));
+        rows.push(row);
+    }
+    rows.sort_by(|left, right| {
+        (&left.source_id, &left.dataflow_id).cmp(&(&right.source_id, &right.dataflow_id))
+    });
 
     Ok(coverage_report::build_report(rows))
+}
+
+fn apply_coverage_contract(
+    row: &mut coverage_report::RawCoverageRow,
+    contract: Option<&SourceRegisterDataflow>,
+) {
+    let Some(contract) = contract else {
+        row.governance_status = "unregistered".to_string();
+        return;
+    };
+    row.governance_status = source_status_label(contract.status).to_string();
+    row.launch_required = contract.status == SourceStatus::Active
+        || matches!(
+            contract.dataflow_id.as_str(),
+            APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID | "curated.oversight_strength"
+        );
+    row.freshness_hard_seconds = contract
+        .freshness_policy
+        .as_ref()
+        .map(|policy| policy.hard_after_seconds);
+}
+
+fn source_status_label(status: SourceStatus) -> &'static str {
+    match status {
+        SourceStatus::Active => "active",
+        SourceStatus::ManualPending => "manual_pending",
+        SourceStatus::VisibleUnscored => "visible_unscored",
+        SourceStatus::CoverageGap => "coverage_gap",
+        SourceStatus::LicensedFeed => "licensed_feed",
+        SourceStatus::Placeholder => "placeholder",
+        SourceStatus::Retired => "retired",
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -595,6 +706,23 @@ fn expected_coverage_statuses_by_dataflow()
     }
     for (dataflow_id, status) in catalog_coverage_statuses() {
         insert_expected_coverage_status(&mut statuses, dataflow_id, status);
+    }
+    for dataflow in load_source_register()
+        .context("load source register coverage statuses")?
+        .dataflows
+    {
+        let status = match dataflow.status {
+            SourceStatus::Active => continue,
+            SourceStatus::ManualPending => coverage_report::CoverageStatus::ManualPending,
+            SourceStatus::VisibleUnscored | SourceStatus::Retired => {
+                coverage_report::CoverageStatus::VisibleUnscored
+            }
+            SourceStatus::CoverageGap | SourceStatus::LicensedFeed => {
+                coverage_report::CoverageStatus::CoverageGap
+            }
+            SourceStatus::Placeholder => coverage_report::CoverageStatus::MissingExpected,
+        };
+        insert_expected_coverage_status(&mut statuses, dataflow.dataflow_id, status);
     }
     Ok(statuses)
 }
@@ -659,7 +787,8 @@ fn coverage_report_status_priority(status: coverage_report::CoverageStatus) -> u
         coverage_report::CoverageStatus::Loaded
         | coverage_report::CoverageStatus::Partial
         | coverage_report::CoverageStatus::Failed
-        | coverage_report::CoverageStatus::ZeroRows => 4,
+        | coverage_report::CoverageStatus::ZeroRows
+        | coverage_report::CoverageStatus::Stale => 4,
     }
 }
 
@@ -880,7 +1009,23 @@ fn catalog_label(id: &str) -> String {
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 async fn run_worker(runtime: Runtime) -> anyhow::Result<()> {
+    let recovered = au_kpis_db::recover_lost_observation_stages(&runtime.db)
+        .await
+        .context("recover lost unlogged observation staging")?;
+    runtime
+        .metrics
+        .staging_recoveries_total
+        .fetch_add(recovered, Ordering::Relaxed);
+    if recovered > 0 {
+        tracing::warn!(recovered, "reset generations after unlogged staging loss");
+    }
     let queue = ApalisPgQueue::new(runtime.db.clone());
+    let reconciled = durable_worker::reconcile_durable_jobs(&runtime, &queue)
+        .await
+        .context("reconcile durable ingestion stage jobs")?;
+    if reconciled > 0 {
+        tracing::info!(reconciled, "recreated durable ingestion stage jobs");
+    }
     let worker_id = WorkerId::new(runtime.worker_id.clone()).context("build queue worker id")?;
     let shutdown = runtime.shutdown.clone();
     let metrics = Arc::clone(&runtime.metrics);
@@ -933,7 +1078,13 @@ async fn process_one_job(
     worker_id: WorkerId,
 ) -> anyhow::Result<WorkerStep> {
     let mut leased = None;
-    for stage in [QueueStage::Discover, QueueStage::Backfill] {
+    for stage in [
+        QueueStage::Load,
+        QueueStage::Parse,
+        QueueStage::Fetch,
+        QueueStage::Discover,
+        QueueStage::Backfill,
+    ] {
         if let Some(job) = queue
             .pop(stage, worker_id.clone())
             .await
@@ -947,24 +1098,10 @@ async fn process_one_job(
         return Ok(WorkerStep::Idle);
     };
 
-    let request = match job_run_request(job.job().kind(), job.trace_parent()) {
-        Ok(request) => request,
-        Err(err) => {
-            queue
-                .nack(&job, invalid_job_nack(err))
-                .await
-                .context("nack invalid queue job")?;
-            runtime
-                .metrics
-                .jobs_failed_total
-                .fetch_add(1, Ordering::Relaxed);
-            return Ok(WorkerStep::Processed);
-        }
-    };
     let renewal_interval = lease_renewal_interval(queue.lease_timeout());
-    let worker_shutdown = runtime.shutdown.child_token();
+    let work_job = job.clone();
     let (job, result) = run_with_lease_renewal(queue, job, renewal_interval, async {
-        run_source_once(runtime, &request, worker_shutdown).await
+        durable_worker::process_job(runtime, queue, &work_job).await
     })
     .await?;
 
@@ -980,17 +1117,16 @@ async fn process_one_job(
                 discovered = stats.discovered,
                 fetched = stats.fetched,
                 parsed = stats.parsed,
-                loaded = stats.loaded.observations_loaded,
-                "queue ingestion job completed"
+                loaded = stats.loaded,
+                "durable queue stage completed"
             );
         }
         Err(err) => {
-            runtime.metrics.record_ingestion_error(&err);
-            let class = ingestion_error_class(&err);
-            queue
-                .nack(&job, Nack::new(class, err.to_string()))
-                .await
-                .context("nack queue job")?;
+            let mut nack = Nack::new(err.class(), err.to_string());
+            if let Some(retry_after) = err.retry_after() {
+                nack = nack.with_retry_after(retry_after);
+            }
+            queue.nack(&job, nack).await.context("nack queue job")?;
             runtime
                 .metrics
                 .jobs_failed_total
@@ -1041,10 +1177,12 @@ fn lease_renewal_interval(lease_timeout: Duration) -> Duration {
     std::cmp::max(lease_timeout / 2, Duration::from_secs(1))
 }
 
+#[cfg(test)]
 fn invalid_job_nack(err: anyhow::Error) -> Nack {
     Nack::new(ErrorClass::Permanent, err.to_string())
 }
 
+#[cfg(test)]
 fn ingestion_error_class(err: &au_kpis_ingestion_core::IngestionError) -> ErrorClass {
     match err {
         au_kpis_ingestion_core::IngestionError::Adapter(err) => err.class(),
@@ -1061,11 +1199,13 @@ fn ingestion_error_class(err: &au_kpis_ingestion_core::IngestionError) -> ErrorC
     }
 }
 
+#[cfg(test)]
 fn load_error_class(err: &au_kpis_loader::LoadError) -> ErrorClass {
     match err {
         au_kpis_loader::LoadError::Validation(_) => ErrorClass::Validation,
         au_kpis_loader::LoadError::Json(_) => ErrorClass::Permanent,
         au_kpis_loader::LoadError::Db(_) => ErrorClass::Transient,
+        au_kpis_loader::LoadError::Durable(err) => err.class(),
     }
 }
 
@@ -1266,7 +1406,7 @@ fn build_blob_store(mode: &Mode, config: ObjectStoreConfig) -> anyhow::Result<Bl
                 .with_virtual_hosted_style_request(false)
                 .build()
                 .context("build S3-compatible object store")?;
-            Ok(BlobStore::new(store))
+            Ok(BlobStore::new(store).with_delete_enabled(config.delete_enabled))
         }
         (None, None, None, None) => durable_object_store_required(mode),
         _ => bail!(
@@ -1379,6 +1519,7 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
                 output,
                 markdown,
                 fail_on_gaps,
+                fail_on_launch_blockers,
             }),
         ) => {
             if cli.source.is_some() || cli.dataflow.is_some() || cli.allow_zero_jobs {
@@ -1390,6 +1531,7 @@ fn resolve_mode(cli: &Cli) -> anyhow::Result<Mode> {
                 output,
                 markdown,
                 fail_on_gaps,
+                fail_on_launch_blockers,
             })
         }
         (false, None) => {
@@ -1646,13 +1788,20 @@ fn once_run_request(source: &str, dataflow: &str) -> anyhow::Result<RunRequest> 
     })
 }
 
+#[cfg(test)]
 fn job_run_request(kind: &JobKind, trace_parent: Option<&str>) -> anyhow::Result<RunRequest> {
     match kind {
-        JobKind::Discover { source_id } => {
+        JobKind::Discover {
+            source_id,
+            dataflow_id,
+        } => {
             validate_supported_source(source_id.as_str())?;
+            if let Some(dataflow_id) = dataflow_id {
+                validate_supported_dataflow_id(source_id.as_str(), dataflow_id.as_str())?;
+            }
             Ok(RunRequest {
                 source_id: source_id.clone(),
-                dataflow_id: None,
+                dataflow_id: dataflow_id.clone(),
                 trace_parent: trace_parent.map(str::to_owned),
             })
         }
@@ -1698,6 +1847,7 @@ fn validate_supported_source(source: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_supported_dataflow_id(source: &str, dataflow_id: &str) -> anyhow::Result<()> {
     if source == "abs" && dataflow_id == ABS_CPI_DATAFLOW_ID {
         return Ok(());
@@ -1941,6 +2091,7 @@ mod tests {
                 output: Some(PathBuf::from("coverage.json")),
                 markdown: Some(PathBuf::from("coverage.md")),
                 fail_on_gaps: false,
+                fail_on_launch_blockers: false,
             }
         );
     }
@@ -2587,6 +2738,91 @@ mod tests {
             request.dataflow_id.as_ref(),
             Some(&DataflowId::new("worldbank.bready").unwrap())
         );
+    }
+
+    #[test]
+    fn queue_validation_covers_the_supported_source_dataflow_matrix() {
+        let supported = [
+            ("abs", ABS_CPI_DATAFLOW_ID),
+            ("abs", ABS_BUILDING_APPROVALS_DATAFLOW_ID),
+            ("abs", ABS_BUILDING_ACTIVITY_DATAFLOW_ID),
+            ("abs", ABS_DWELLING_COMPLETION_TIMES_DATAFLOW_ID),
+            ("apra", APRA_QUARTERLY_DATAFLOW_ID),
+            ("apra", APRA_SUPER_ASSET_ALLOCATION_DATAFLOW_ID),
+            ("aemo", AEMO_DISPATCH_DATAFLOW_ID),
+            ("aemo", AEMO_GENERATION_MIX_DATAFLOW_ID),
+            ("aemo", AEMO_DISPATCHABILITY_CAPACITY_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_OXFORD_GARI_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_NAIC_ADOPTION_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_ABS_AI_RD_DATAFLOW_ID),
+            ("ai-readiness", AI_READINESS_HOME_AFFAIRS_TALENT_DATAFLOW_ID),
+            ("asx", ASX_MARKET_STATISTICS_DATAFLOW_ID),
+            ("asx", ASX_ANNOUNCEMENTS_DATAFLOW_ID),
+            ("asx", ASX_EOD_DATAFLOW_ID),
+            ("nhsac", NHSAC_HOUSING_ACCORD_DATAFLOW_ID),
+            ("pc", PC_PRODUCTIVITY_BULLETIN_DATAFLOW_ID),
+            ("worldbank", WORLDBANK_BREADY_DATAFLOW_ID),
+            ("rba", RBA_STAT_TABLES_DATAFLOW_ID),
+            ("state-budgets", STATE_BUDGETS_NSW_DATAFLOW_ID),
+            ("state-budgets", STATE_BUDGETS_VIC_DATAFLOW_ID),
+            ("state-budgets", STATE_BUDGETS_QLD_DATAFLOW_ID),
+            (
+                "state_capital",
+                STATE_CAPITAL_VIC_MAJOR_PROJECTS_DATAFLOW_ID,
+            ),
+            (
+                "state_capital",
+                STATE_CAPITAL_BUDGET_CAPITAL_PAPERS_DATAFLOW_ID,
+            ),
+            (
+                "state-planning",
+                STATE_PLANNING_NSW_DA_PROCESSING_DATAFLOW_ID,
+            ),
+            (
+                "state-planning",
+                STATE_PLANNING_VIC_PERMIT_ACTIVITY_DATAFLOW_ID,
+            ),
+            ("treasury", TREASURY_BUDGET_DATAFLOW_ID),
+        ];
+
+        for (source, dataflow_id) in supported {
+            validate_supported_dataflow_id(source, dataflow_id)
+                .expect("configured source/dataflow pair should be accepted");
+        }
+
+        let unsupported = [
+            ("abs", "abs.unsupported"),
+            ("apra", "apra.unsupported"),
+            ("aemo", "aemo.unsupported"),
+            ("ai-readiness", "ai_readiness.unsupported"),
+            ("asx", "asx.unsupported"),
+            ("nhsac", "nhsac.unsupported"),
+            ("pc", "pc.unsupported"),
+            ("worldbank", "worldbank.unsupported"),
+            ("rba", "rba.unsupported"),
+            ("state-budgets", "state_budgets.unsupported"),
+            ("state_capital", "state_capital.unsupported"),
+            ("state-planning", "state_planning.unsupported"),
+            ("treasury", "treasury.unsupported"),
+        ];
+        for (source, dataflow_id) in unsupported {
+            validate_supported_dataflow_id(source, dataflow_id)
+                .expect_err("unknown source/dataflow pair should be rejected");
+        }
+
+        validate_supported_dataflow_id("abs", AEMO_DISPATCH_DATAFLOW_ID)
+            .expect_err("a dataflow must not be accepted under a different source");
+
+        validate_once_target("nhsac", "unsupported")
+            .expect_err("NHSAC must reject an unknown dataflow slug");
+        validate_once_target("pc", "unsupported")
+            .expect_err("PC must reject an unknown dataflow slug");
+        validate_once_target("worldbank", "unsupported")
+            .expect_err("World Bank must reject an unknown dataflow slug");
+        validate_once_target("rba", "unsupported")
+            .expect_err("RBA must reject an unknown dataflow slug");
+        validate_once_target("treasury", "unsupported")
+            .expect_err("Treasury must reject an unknown dataflow slug");
     }
 
     #[tokio::test]

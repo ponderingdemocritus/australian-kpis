@@ -83,9 +83,13 @@ async fn has_continuous_aggregate_policy(pool: &PgPool, name: &str) -> bool {
     let row: (bool,) = sqlx::query_as(
         "SELECT EXISTS (
             SELECT 1
-            FROM   timescaledb_information.jobs
-            WHERE  proc_name = 'policy_refresh_continuous_aggregate'
-            AND    hypertable_name = $1
+            FROM timescaledb_information.jobs AS jobs
+            JOIN timescaledb_information.continuous_aggregates AS aggregates
+              ON aggregates.materialization_hypertable_schema = jobs.hypertable_schema
+             AND aggregates.materialization_hypertable_name = jobs.hypertable_name
+            WHERE jobs.proc_name = 'policy_refresh_continuous_aggregate'
+              AND aggregates.view_schema = 'public'
+              AND aggregates.view_name = $1
         )",
     )
     .bind(name)
@@ -292,7 +296,10 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "codes",
         "dataflows",
         "dimensions",
+        "discovered_work",
+        "ingestion_generations",
         "measures",
+        "observation_stage",
         "observations",
         "observations_latest",
         "observations_rollup_monthly",
@@ -302,6 +309,13 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "observations_rollup_weekly",
         "observations_rollup_weekly_points",
         "parse_errors",
+        "queue_schedule_occurrences",
+        "scorecard_configs",
+        "scorecard_snapshot_contributions",
+        "scorecard_snapshot_generations",
+        "scorecard_snapshots",
+        "scorecard_snapshots_as_published",
+        "scorecard_snapshots_latest",
         "series",
         "sources",
         "webhook_deliveries",
@@ -327,6 +341,13 @@ async fn migration_creates_hypertable_and_compression_policy() {
         "artifact_fetches_source_url_idx",
         "artifact_loads_artifact_fetch_idx",
         "artifact_loads_source_dataflow_idx",
+        "discovered_work_status_idx",
+        "ingestion_generations_status_idx",
+        "observations_generation_idx",
+        "queue_cron_schedules_due_idx",
+        "queue_jobs_active_dedupe_idx",
+        "scorecard_snapshot_contributions_generation_idx",
+        "scorecard_snapshots_latest_idx",
     ] {
         assert!(
             index_exists(&pool, expected).await,

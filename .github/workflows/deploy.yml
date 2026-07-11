@@ -1,0 +1,359 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  release-checks:
+    name: Release checks
+    uses: ./.github/workflows/pr.yml
+    with:
+      base_ref: main
+      merge_queue: true
+    secrets: inherit
+
+  build-images:
+    name: Build ${{ matrix.service }} once
+    needs: release-checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: api
+            dockerfile: infra/docker/au-kpis-api.Dockerfile
+          - service: web
+            dockerfile: infra/docker/au-kpis-web.Dockerfile
+          - service: pdf-extractor
+            dockerfile: infra/docker/au-kpis-pdf-extractor.Dockerfile
+          - service: ingestion
+            dockerfile: infra/docker/au-kpis-ingestion.Dockerfile
+          - service: scheduler
+            dockerfile: infra/docker/au-kpis-scheduler.Dockerfile
+          - service: webhook-worker
+            dockerfile: infra/docker/au-kpis-webhook-worker.Dockerfile
+          - service: otel-collector
+            dockerfile: infra/docker/otel-collector.Dockerfile
+          - service: migrate
+            dockerfile: infra/docker/au-kpis-migrate.Dockerfile
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish immutable image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env.IMAGE_REGISTRY }}/au-kpis-${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Record digest
+        run: |
+          mkdir -p target/digests
+          printf '%s\n' '${{ steps.build.outputs.digest }}' > 'target/digests/${{ matrix.service }}.digest'
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_REGISTRY }}/au-kpis-${{ matrix.service }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: target/${{ matrix.service }}.spdx.json
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: ${{ env.IMAGE_REGISTRY }}/au-kpis-${{ matrix.service }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: target/${{ matrix.service }}-trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign image digest with GitHub OIDC
+        run: >-
+          cosign sign --yes
+          '${{ env.IMAGE_REGISTRY }}/au-kpis-${{ matrix.service }}@${{ steps.build.outputs.digest }}'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.service }}
+          path: target/digests/${{ matrix.service }}.digest
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: supply-chain-${{ matrix.service }}
+          path: |
+            target/${{ matrix.service }}.spdx.json
+            target/${{ matrix.service }}-trivy.sarif
+          if-no-files-found: ignore
+
+  security-report:
+    name: Build release security evidence
+    needs: [release-checks, build-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: target/security-input
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: supply-chain-*
+          path: target/security-input
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@v3
+      - name: Verify scans, SBOMs, and signatures
+        env:
+          AU_KPIS_IMAGE_REGISTRY: ${{ env.IMAGE_REGISTRY }}
+          AU_KPIS_RELEASE_CHECKS_RESULT: ${{ needs.release-checks.result }}
+          AU_KPIS_SECURITY_INPUT_DIR: target/security-input
+        run: tools/release/build-security-report.sh
+      - name: Retain security evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-security-report
+          path: target/release-security-report/**
+          if-no-files-found: error
+          retention-days: 90
+
+  staging:
+    name: Migrate and deploy staging
+    needs: [build-images, security-report]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9.12.0"
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: target/digests
+          merge-multiple: true
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply staging expand migrations
+        env:
+          DDL_DATABASE_URL: ${{ secrets.DDL_DATABASE_URL }}
+        run: |
+          digest=$(cat target/digests/migrate.digest)
+          docker run --rm \
+            -e AU_KPIS_DATABASE__URL="$DDL_DATABASE_URL" \
+            '${{ env.IMAGE_REGISTRY }}/au-kpis-migrate@'"$digest"
+
+      - name: Deploy exact staging digests
+        id: deploy
+        env:
+          AU_KPIS_DIGEST_DIR: target/digests
+          AU_KPIS_IMAGE_REGISTRY: ${{ env.IMAGE_REGISTRY }}
+          RAILWAY_ENVIRONMENT: staging
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: tools/release/deploy-railway-digests.sh
+
+      - name: API, APS, BFF, and webhook smoke
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+          AU_KPIS_BASE_URL: ${{ vars.API_BASE_URL }}
+          AU_KPIS_BFF_BASE_URL: ${{ vars.WEB_BASE_URL }}
+          AU_KPIS_WEBHOOK_CANARY_URL: ${{ secrets.WEBHOOK_CANARY_URL }}
+        run: apps/bench/smoke-post-deploy.sh
+
+      - name: Monitor staging rollback signals
+        env:
+          AU_KPIS_ROUTE_BASELINES: ${{ vars.ROUTE_P95_BASELINES }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_CLOUD_INSTANCE_ID: ${{ secrets.GRAFANA_CLOUD_INSTANCE_ID }}
+          GRAFANA_CLOUD_PROMETHEUS_QUERY_URL: ${{ vars.GRAFANA_CLOUD_PROMETHEUS_QUERY_URL }}
+          RAILWAY_ENVIRONMENT: staging
+        run: tools/release/monitor-release.sh
+
+      - name: Data-quality smoke
+        env:
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+        run: |
+          mkdir -p target/release-evidence
+          digest=$(cat target/digests/scheduler.digest)
+          docker run --rm \
+            -e AU_KPIS_DATABASE__URL="$RUNTIME_DATABASE_URL" \
+            -v "$PWD/target/release-evidence:/evidence" \
+            '${{ env.IMAGE_REGISTRY }}/au-kpis-scheduler@'"$digest" \
+            data-quality --report-path /evidence/data-quality.md
+
+      - name: Active-source and manual-input launch gate
+        env:
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+        run: |
+          digest=$(cat target/digests/ingestion.digest)
+          docker run --rm \
+            -e AU_KPIS_DATABASE__URL="$RUNTIME_DATABASE_URL" \
+            -v "$PWD/target/release-evidence:/evidence" \
+            '${{ env.IMAGE_REGISTRY }}/au-kpis-ingestion@'"$digest" \
+            coverage-report \
+            --output /evidence/source-readiness.json \
+            --markdown /evidence/source-readiness.md \
+            --fail-on-launch-blockers
+
+      - name: Reconcile staging R2
+        env:
+          AU_KPIS_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+          AU_KPIS_R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AU_KPIS_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: tools/release/reconcile-r2.sh | tee target/release-evidence/r2-reconciliation.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staging-release-evidence
+          path: target/release-evidence
+          if-no-files-found: ignore
+
+      - name: Roll back staging applications
+        if: failure()
+        env:
+          RAILWAY_ENVIRONMENT: staging
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: tools/release/rollback-railway.sh
+
+  production:
+    name: Approve, migrate, and deploy production
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9.12.0"
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: target/digests
+          merge-multiple: true
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply production expand migrations
+        env:
+          DDL_DATABASE_URL: ${{ secrets.DDL_DATABASE_URL }}
+        run: |
+          digest=$(cat target/digests/migrate.digest)
+          docker run --rm \
+            -e AU_KPIS_DATABASE__URL="$DDL_DATABASE_URL" \
+            '${{ env.IMAGE_REGISTRY }}/au-kpis-migrate@'"$digest"
+
+      - name: Deploy same production digests
+        id: deploy
+        env:
+          AU_KPIS_DIGEST_DIR: target/digests
+          AU_KPIS_IMAGE_REGISTRY: ${{ env.IMAGE_REGISTRY }}
+          RAILWAY_ENVIRONMENT: production
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: tools/release/deploy-railway-digests.sh
+
+      - name: Post-deploy smoke
+        env:
+          AU_KPIS_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+          AU_KPIS_BASE_URL: ${{ vars.API_BASE_URL }}
+          AU_KPIS_BFF_BASE_URL: ${{ vars.WEB_BASE_URL }}
+          AU_KPIS_WEBHOOK_CANARY_URL: ${{ secrets.WEBHOOK_CANARY_URL }}
+        run: apps/bench/smoke-post-deploy.sh
+
+      - name: Monitor production rollback signals
+        env:
+          AU_KPIS_ROUTE_BASELINES: ${{ vars.ROUTE_P95_BASELINES }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_CLOUD_INSTANCE_ID: ${{ secrets.GRAFANA_CLOUD_INSTANCE_ID }}
+          GRAFANA_CLOUD_PROMETHEUS_QUERY_URL: ${{ vars.GRAFANA_CLOUD_PROMETHEUS_QUERY_URL }}
+          RAILWAY_ENVIRONMENT: production
+        run: tools/release/monitor-release.sh
+
+      - name: Reconcile production R2
+        env:
+          AU_KPIS_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+          AU_KPIS_R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AU_KPIS_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: tools/release/reconcile-r2.sh | tee target/release-evidence/r2-reconciliation.txt
+
+      - name: Reconfirm production source readiness
+        env:
+          RUNTIME_DATABASE_URL: ${{ secrets.RUNTIME_DATABASE_URL }}
+        run: |
+          digest=$(cat target/digests/ingestion.digest)
+          docker run --rm \
+            -e AU_KPIS_DATABASE__URL="$RUNTIME_DATABASE_URL" \
+            -v "$PWD/target/release-evidence:/evidence" \
+            '${{ env.IMAGE_REGISTRY }}/au-kpis-ingestion@'"$digest" \
+            coverage-report \
+            --output /evidence/source-readiness.json \
+            --markdown /evidence/source-readiness.md \
+            --fail-on-launch-blockers
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-release-evidence
+          path: target/release-evidence
+          if-no-files-found: ignore
+
+      - name: Roll back production applications
+        if: failure()
+        env:
+          RAILWAY_ENVIRONMENT: production
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: tools/release/rollback-railway.sh

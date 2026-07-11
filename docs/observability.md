@@ -27,6 +27,12 @@ InfluxDB database on `:8086`.
 - Grafana provisions Prometheus, Loki, Tempo, and k6 InfluxDB datasources plus the
   required dashboards.
 
+Production uses `infra/observability/otel-collector-production.yml` on two
+Railway collector replicas. The collectors scrape API, ingestion, and scheduler
+over the private network, attach the Railway environment label, and export
+metrics, logs, and traces to Grafana Cloud. API metrics require the shared
+`AU_KPIS_METRICS_BEARER_TOKEN`; Cloudflare must block public `/metrics` access.
+
 ## Dashboards
 
 - Freshness heatmap: `infra/observability/grafana/dashboards/freshness-heatmap.json`
@@ -36,6 +42,22 @@ InfluxDB database on `:8086`.
 - SLO burn rates and active page alerts: `infra/observability/grafana/dashboards/slo-burn-rates.json`
 - k6 smoke p95, failure rate, and endpoint request rate: `infra/observability/grafana/dashboards/k6-smoke.json`
 - k6 sustained and burst p95/p99, failure, rate-limit, and 5xx trends: `infra/observability/grafana/dashboards/k6-load.json`
+- Production route, DB, Redis, stream, queue, ingestion, APS, webhook, scheduler,
+  and synthetic signals: `infra/observability/grafana/dashboards/production-operations.json`
+
+## Production Provisioning
+
+`infra/observability/grafana-cloud` provisions the production dashboard, all
+page-level rules in `infra/observability/prometheus/rules/slo-burn-rates.yml`,
+and API/web HTTP synthetics every 60 seconds. Use protected Grafana service and
+Synthetic Monitoring tokens plus an approved remote Terraform backend. The
+production Prometheus datasource must receive only production telemetry; staging
+uses its own datasource and protected GitHub environment values.
+
+The release workflow calls `tools/release/monitor-release.sh` after each deploy.
+It fails the job, and therefore invokes application rollback, when eligible 5xx
+exceeds 1% for five minutes, any certified route p95 exceeds twice its baseline
+for five minutes, or no API scrape target is ready for two minutes.
 
 ## Alert Routing
 
@@ -62,3 +84,8 @@ tools/observability/chaos-drill.sh
 The script first runs `promtool test rules`, then pushes
 `au_kpis_chaos_error_ratio` through Pushgateway and verifies that
 `AuKpisChaosDrillCanaryFiring` becomes active via Prometheus `/api/v1/alerts`.
+Production certification must additionally fire and clear every page-level rule;
+`tools/observability/drill-all-alerts.sh` drives the real rule expressions through
+both states with `promtool` and retains the generated fixture and 24-alert
+inventory in `release-chaos-report`. A Grafana Cloud contact-point test confirms
+the live notification route before launch and remains provider evidence.

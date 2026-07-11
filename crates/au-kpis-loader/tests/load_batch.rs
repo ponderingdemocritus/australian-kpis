@@ -537,13 +537,12 @@ async fn descriptors_with_legacy_measureless_keys_are_rejected() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn load_batch_enqueues_webhook_deliveries_for_matching_subscriptions() {
+async fn legacy_load_batch_does_not_emit_generationless_webhooks() {
     let _guard = TEST_LOCK.lock().await;
     let db = test_db().await;
     let pool = &db.pool;
     let artifact_id = ArtifactId::of_content(b"loader webhook delivery fixture");
     seed_reference_data(pool, artifact_id).await;
-    seed_webhook_subscriptions(pool).await;
     let aus = descriptor("AUS");
     let nsw = descriptor("NSW");
 
@@ -559,32 +558,11 @@ async fn load_batch_enqueues_webhook_deliveries_for_matching_subscriptions() {
 
     assert_eq!(stats.observations_loaded, 2);
 
-    let rows = sqlx::query(
-        "SELECT dataflow_id, encode(artifact_id, 'hex') AS artifact_id_hex,
-                payload, status, attempts, max_attempts
-         FROM webhook_deliveries
-         ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .expect("fetch webhook deliveries");
-
-    assert_eq!(rows.len(), 2, "matching dataflow and wildcard subscribers");
-    for row in rows {
-        assert_eq!(row.get::<String, _>("dataflow_id"), "abs.cpi");
-        assert_eq!(
-            row.get::<String, _>("artifact_id_hex"),
-            artifact_id.to_string()
-        );
-        assert_eq!(row.get::<String, _>("status"), "pending");
-        assert_eq!(row.get::<i32, _>("attempts"), 0);
-        assert_eq!(row.get::<i32, _>("max_attempts"), 5);
-        let payload = row.get::<serde_json::Value, _>("payload");
-        assert_eq!(payload["event"], "data.updated");
-        assert_eq!(payload["dataflow_id"], "abs.cpi");
-        assert_eq!(payload["artifact_id"], artifact_id.to_string());
-        assert_eq!(payload["observations_loaded"], 2);
-    }
+    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM webhook_deliveries")
+        .fetch_one(pool)
+        .await
+        .expect("count webhook deliveries");
+    assert_eq!(deliveries, 0, "only durable generations may emit events");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -641,7 +619,6 @@ async fn staged_load_commit_promotes_observations_in_configured_chunks() {
     let pool = &db.pool;
     let artifact_id = ArtifactId::of_content(b"loader staged chunked commit fixture");
     seed_reference_data(pool, artifact_id).await;
-    seed_webhook_subscriptions(pool).await;
     seed_observation_statement_row_limit(pool, 2).await;
 
     let aus = descriptor("AUS");
@@ -677,7 +654,7 @@ async fn staged_load_commit_promotes_observations_in_configured_chunks() {
         .fetch_one(pool)
         .await
         .expect("count webhook deliveries for staged commit");
-    assert_eq!(delivery_count, 2);
+    assert_eq!(delivery_count, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -924,41 +901,6 @@ async fn default_options_split_observations_at_one_thousand_rows() {
 
     assert_eq!(stats.observations_loaded, 1_001);
     assert_eq!(stats.batches, 2);
-}
-
-async fn seed_webhook_subscriptions(pool: &PgPool) {
-    sqlx::query(
-        "INSERT INTO api_keys (id, key_hash, name, scopes, rate_limit_tier)
-         VALUES
-             ('11111111-1111-1111-1111-111111111111', 'hash-a', 'webhooks a',
-              ARRAY['subscriptions:write'], 'free'),
-             ('22222222-2222-2222-2222-222222222222', 'hash-b', 'webhooks b',
-              ARRAY['subscriptions:write'], 'free'),
-             ('33333333-3333-3333-3333-333333333333', 'hash-c', 'webhooks c',
-              ARRAY['subscriptions:write'], 'free')",
-    )
-    .execute(pool)
-    .await
-    .expect("insert api keys");
-
-    sqlx::query(
-        "INSERT INTO webhook_subscriptions (
-             id, api_key_id, target_url, dataflow_ids, signing_secret
-         )
-         VALUES
-             ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-              '11111111-1111-1111-1111-111111111111',
-              'https://example.test/cpi', ARRAY['abs.cpi'], 'secret-a-secret-a-secret-a-secret-a'),
-             ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-              '22222222-2222-2222-2222-222222222222',
-              'https://example.test/all', ARRAY[]::TEXT[], 'secret-b-secret-b-secret-b-secret-b'),
-             ('cccccccc-cccc-cccc-cccc-cccccccccccc',
-              '33333333-3333-3333-3333-333333333333',
-              'https://example.test/wpi', ARRAY['abs.wpi'], 'secret-c-secret-c-secret-c-secret-c')",
-    )
-    .execute(pool)
-    .await
-    .expect("insert webhook subscriptions");
 }
 
 async fn seed_observation_statement_row_limit(pool: &PgPool, max_rows: i32) {

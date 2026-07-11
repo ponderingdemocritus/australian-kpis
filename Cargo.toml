@@ -35,8 +35,10 @@ members = [
     "crates/adapters/state-planning",
     "crates/adapters/ai-readiness",
     "crates/bins/au-kpis-api",
+    "crates/bins/au-kpis-migrate",
     "crates/bins/au-kpis-ingestion",
     "crates/bins/au-kpis-scheduler",
+    "crates/bins/au-kpis-webhook-worker",
     "crates/bins/au-kpis-cli",
 ]
 

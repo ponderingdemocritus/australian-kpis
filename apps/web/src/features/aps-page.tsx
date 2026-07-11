@@ -7,15 +7,26 @@ import {
   ApsLoadingState,
 } from '@/features/aps-components'
 import { client } from '@/lib/api'
+import type { ApsSnapshotSummary, PublishedApsSnapshot, ScorecardConfig } from '@au-kpis/sdk'
 import { useQuery } from '@tanstack/react-query'
 
-export function ApsPage() {
+export function ApsPage({
+  initialConfig,
+  initialHistory,
+  initialSnapshot,
+}: {
+  initialConfig?: ScorecardConfig
+  initialHistory?: ApsSnapshotSummary[]
+  initialSnapshot?: PublishedApsSnapshot
+} = {}) {
   const configQuery = useQuery({
+    initialData: initialConfig,
     queryFn: () => client.scorecards.aps.config(),
     queryKey: ['aps', 'config'],
     retry: 1,
   })
   const latestQuery = useQuery({
+    initialData: initialSnapshot,
     queryFn: () => client.scorecards.aps.latest(),
     queryKey: ['aps', 'latest'],
     retry: 1,
@@ -23,6 +34,7 @@ export function ApsPage() {
   // History powers the scatter trail. It must not gate loading or error — the
   // dashboard renders as soon as config + latest resolve and the trail fills in.
   const historyQuery = useQuery({
+    initialData: initialHistory,
     queryFn: () => client.scorecards.aps.history(),
     queryKey: ['aps', 'history'],
     retry: 1,

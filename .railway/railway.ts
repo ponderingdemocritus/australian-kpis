@@ -1,123 +1,81 @@
-import {
-  bucket,
-  defineRailway,
-  github,
-  group,
-  image,
-  project,
-  redis,
-  service,
-  volume,
-} from 'railway/iac'
+import { defineRailway, empty, group, preserve, project, redis, service } from 'railway/iac'
 
-const repo = 'ponderingdemocritus/australian-kpis'
+const region = 'asia-southeast1-eqsg3a'
+const gib = 1024 * 1024 * 1024
 
 const restartPolicy = {
-  restartPolicyType: 'ON_FAILURE' as const,
-  restartPolicyMaxRetries: 10,
-  overlapSeconds: 20,
   drainingSeconds: 30,
+  overlapSeconds: 20,
+  region,
+  restartPolicyMaxRetries: 10,
+  restartPolicyType: 'ON_FAILURE' as const,
+  sleepApplication: false,
 }
 
-const rustWatchPatterns = [
-  '/Cargo.lock',
-  '/Cargo.toml',
-  '/crates/**',
-  '/infra/docker/**',
-  '/infra/migrations/**',
-  '/rust-toolchain.toml',
-]
-
-const bucketEnv = {
-  AU_KPIS_OBJECT_STORE__ENDPOINT: '${{Bucket.ENDPOINT}}',
-  AU_KPIS_OBJECT_STORE__BUCKET: '${{Bucket.BUCKET}}',
-  AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID: '${{Bucket.ACCESS_KEY_ID}}',
-  AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY: '${{Bucket.SECRET_ACCESS_KEY}}',
-  AU_KPIS_OBJECT_STORE__REGION: '${{Bucket.REGION}}',
+function deploy(replicas: number, cpu: number, memoryGiB: number, healthcheckPath?: string) {
+  return {
+    ...restartPolicy,
+    healthcheckPath,
+    healthcheckTimeout: healthcheckPath === undefined ? undefined : 300,
+    limitOverride: {
+      containers: { cpu, memoryBytes: memoryGiB * gib },
+    },
+    numReplicas: replicas,
+  }
 }
 
-const timescaleDatabaseUrl =
-  'postgresql://au_kpis:${{Timescale.POSTGRES_PASSWORD}}@${{Timescale.RAILWAY_PRIVATE_DOMAIN}}:5432/au_kpis'
+const telemetryEnv = (serviceName: string) => ({
+  AU_KPIS_TELEMETRY__LOG_FORMAT: 'json',
+  AU_KPIS_TELEMETRY__LOG_LEVEL: 'info',
+  AU_KPIS_TELEMETRY__SERVICE_NAME: serviceName,
+  OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel-collector.railway.internal:4318/v1/traces',
+})
+
+const databaseEnv = () => ({
+  AU_KPIS_DATABASE__URL: preserve(),
+})
+
+const objectStoreEnv = () => ({
+  AU_KPIS_OBJECT_STORE__ACCESS_KEY_ID: preserve(),
+  AU_KPIS_OBJECT_STORE__BUCKET: preserve(),
+  AU_KPIS_OBJECT_STORE__ENDPOINT: preserve(),
+  AU_KPIS_OBJECT_STORE__DELETE_ENABLED: 'false',
+  AU_KPIS_OBJECT_STORE__REGION: preserve(),
+  AU_KPIS_OBJECT_STORE__SECRET_ACCESS_KEY: preserve(),
+})
 
 export default defineRailway(() => {
-  const timescaleData = volume('Timescale Data', {
-    sizeMB: 10240,
-  })
+  // Redis is intentionally the only Railway stateful service. It stores
+  // disposable cache, rate-limit, and replay state only.
+  const cache = redis('Redis', { region })
 
-  const timescale = service('Timescale', {
-    source: image('timescale/timescaledb:2.17.2-pg16'),
-    env: {
-      POSTGRES_DB: 'au_kpis',
-      POSTGRES_USER: 'au_kpis',
-      POSTGRES_PASSWORD: {
-        description: 'Generated password for the TimescaleDB au_kpis user.',
-        generator: 'secret(32)',
-      },
-      PGDATA: '/var/lib/postgresql/data/pgdata',
-    },
-    volumeMounts: {
-      '/var/lib/postgresql/data': timescaleData,
-    },
-    deploy: {
-      restartPolicyType: 'ON_FAILURE',
-      restartPolicyMaxRetries: 10,
-    },
-  })
-
-  const cache = redis('Redis')
-  const artifacts = bucket('Bucket', { region: 'iad' })
-
-  const pdfExtractor = service('pdf-extractor', {
-    source: github(repo),
-    build: {
-      builder: 'DOCKERFILE',
-      dockerfilePath: 'infra/docker/au-kpis-pdf-extractor.Dockerfile',
-      watchPatterns: [
-        '/apps/pdf-extractor/**',
-        '/infra/docker/au-kpis-pdf-extractor.Dockerfile',
-        '/.railway/railway.ts',
-      ],
-    },
-    env: {
-      PORT: '8000',
-      ...bucketEnv,
-    },
-    deploy: {
-      healthcheckPath: '/health',
-      healthcheckTimeout: 300,
-      ...restartPolicy,
-    },
-  })
-
+  // Code services are source-less in IaC. deploy.yml connects an immutable
+  // signed GHCR digest, preventing repository-triggered Railway auto-deploys.
   const api = service('api', {
-    source: github(repo),
-    build: {
-      builder: 'DOCKERFILE',
-      dockerfilePath: 'infra/docker/au-kpis-api.Dockerfile',
-      watchPatterns: [
-        ...rustWatchPatterns,
-        '/infra/docker/au-kpis-api.Dockerfile',
-        '/.railway/railway.ts',
-      ],
-    },
+    source: empty(),
     env: {
-      PORT: '3000',
-      AU_KPIS_DATABASE__URL: timescaleDatabaseUrl,
+      ...databaseEnv(),
+      ...telemetryEnv('au-kpis-api'),
+      AU_KPIS_BFF_ORIGIN_ID: preserve(),
+      AU_KPIS_BFF_ORIGIN_SECRET: preserve(),
       AU_KPIS_CACHE__URL: cache.env.REDIS_URL,
-      AU_KPIS_HTTP__CORS_ALLOWED_ORIGINS: '["https://${{web.RAILWAY_PUBLIC_DOMAIN}}"]',
-      AU_KPIS_TELEMETRY__SERVICE_NAME: 'au-kpis-api',
-      AU_KPIS_TELEMETRY__LOG_FORMAT: 'json',
-      AU_KPIS_TELEMETRY__LOG_LEVEL: 'info',
+      AU_KPIS_CLOUDFLARE_ORIGIN_ID: preserve(),
+      AU_KPIS_CLOUDFLARE_ORIGIN_SECRET: preserve(),
+      AU_KPIS_CURSOR_PRIOR_SIGNING_KEY: preserve(),
+      AU_KPIS_CURSOR_PRIOR_VALID_UNTIL: preserve(),
+      AU_KPIS_CURSOR_SIGNING_KEY: preserve(),
+      AU_KPIS_HTTP__CORS_ALLOWED_ORIGINS: preserve(),
+      AU_KPIS_METRICS_BEARER_TOKEN: preserve(),
+      AU_KPIS_ORIGIN_AUTH_REQUIRED: 'true',
+      AU_KPIS_WEBHOOK_ENCRYPTION_KEY: preserve(),
+      AU_KPIS_WEBHOOK_ENCRYPTION_KEY_VERSION: preserve(),
+      PORT: '3000',
     },
-    deploy: {
-      healthcheckPath: '/v1/health',
-      healthcheckTimeout: 300,
-      ...restartPolicy,
-    },
+    deploy: deploy(2, 2, 2, '/readyz'),
   })
 
   const web = service('web', {
-    source: github(repo),
+    source: empty(),
     build: {
       builder: 'DOCKERFILE',
       dockerfilePath: 'infra/docker/au-kpis-web.Dockerfile',
@@ -137,68 +95,81 @@ export default defineRailway(() => {
     },
     env: {
       AU_KPIS_API_BASE_URL: 'http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}',
+      AU_KPIS_BFF_ORIGIN_ID: preserve(),
+      AU_KPIS_BFF_ORIGIN_SECRET: preserve(),
+      AU_KPIS_ORIGIN_AUTH_REQUIRED: 'true',
+      PORT: '3000',
     },
-    deploy: {
-      healthcheckPath: '/',
-      healthcheckTimeout: 300,
-      ...restartPolicy,
+    deploy: deploy(2, 1, 1, '/'),
+  })
+
+  const pdfExtractor = service('pdf-extractor', {
+    source: empty(),
+    env: {
+      ...objectStoreEnv(),
+      PORT: '8000',
     },
+    deploy: deploy(2, 2, 4, '/health'),
   })
 
   const ingestion = service('ingestion', {
-    source: github(repo),
-    build: {
-      builder: 'DOCKERFILE',
-      dockerfilePath: 'infra/docker/au-kpis-ingestion.Dockerfile',
-      watchPatterns: [
-        ...rustWatchPatterns,
-        '/infra/docker/au-kpis-ingestion.Dockerfile',
-        '/.railway/railway.ts',
-      ],
-    },
+    source: empty(),
     env: {
-      AU_KPIS_DATABASE__URL: timescaleDatabaseUrl,
-      AU_KPIS_PDF_BASE_URL: 'http://${{pdf-extractor.RAILWAY_PRIVATE_DOMAIN}}:8000',
-      AU_KPIS_TELEMETRY__SERVICE_NAME: 'au-kpis-ingestion',
-      AU_KPIS_TELEMETRY__LOG_FORMAT: 'json',
-      AU_KPIS_TELEMETRY__LOG_LEVEL: 'info',
-      ...bucketEnv,
+      ...databaseEnv(),
+      ...objectStoreEnv(),
+      ...telemetryEnv('au-kpis-ingestion'),
+      AU_KPIS_PDF_BASE_URL: 'http://pdf-extractor.railway.internal:8000',
+      PORT: '3000',
     },
-    deploy: {
-      healthcheckPath: '/metrics',
-      healthcheckTimeout: 300,
-      ...restartPolicy,
-    },
+    deploy: deploy(2, 2, 4, '/metrics'),
   })
 
   const scheduler = service('scheduler', {
-    source: github(repo),
-    build: {
-      builder: 'DOCKERFILE',
-      dockerfilePath: 'infra/docker/au-kpis-scheduler.Dockerfile',
-      watchPatterns: [
-        ...rustWatchPatterns,
-        '/infra/docker/au-kpis-scheduler.Dockerfile',
-        '/.railway/railway.ts',
-      ],
-    },
+    source: empty(),
     env: {
-      AU_KPIS_DATABASE__URL: timescaleDatabaseUrl,
-      AU_KPIS_TELEMETRY__SERVICE_NAME: 'au-kpis-scheduler',
-      AU_KPIS_TELEMETRY__LOG_FORMAT: 'json',
-      AU_KPIS_TELEMETRY__LOG_LEVEL: 'info',
+      ...databaseEnv(),
+      ...telemetryEnv('au-kpis-scheduler'),
+      PORT: '3000',
     },
-    deploy: {
-      healthcheckPath: '/metrics',
-      healthcheckTimeout: 300,
-      ...restartPolicy,
-    },
+    deploy: deploy(2, 0.5, 0.5, '/metrics'),
   })
 
-  const dataPlane = group('Data Plane', [timescale, timescaleData, cache, artifacts])
-  const runtime = group('Runtime', [pdfExtractor, ingestion, scheduler, api, web])
+  const webhookWorker = service('webhook-worker', {
+    source: empty(),
+    env: {
+      ...databaseEnv(),
+      ...telemetryEnv('au-kpis-webhook-worker'),
+      AU_KPIS_WEBHOOK_ENCRYPTION_KEY: preserve(),
+      AU_KPIS_WEBHOOK_ENCRYPTION_KEY_VERSION: preserve(),
+    },
+    deploy: deploy(2, 1, 1),
+  })
+
+  const otelCollector = service('otel-collector', {
+    source: empty(),
+    env: {
+      GRAFANA_CLOUD_API_KEY: preserve(),
+      AU_KPIS_METRICS_BEARER_TOKEN: preserve(),
+      GRAFANA_CLOUD_INSTANCE_ID: preserve(),
+      GRAFANA_CLOUD_OTLP_ENDPOINT: preserve(),
+      PORT: '13133',
+    },
+    deploy: deploy(2, 1, 1, '/'),
+  })
+
+  const runtime = group('Stateless Runtime', [
+    api,
+    web,
+    pdfExtractor,
+    ingestion,
+    scheduler,
+    webhookWorker,
+    otelCollector,
+  ])
+  const disposable = group('Disposable State', [cache])
 
   return project('australian-kpis', {
-    resources: [...dataPlane, ...runtime],
+    environments: ['staging', 'production'],
+    resources: [...runtime, ...disposable],
   })
 })

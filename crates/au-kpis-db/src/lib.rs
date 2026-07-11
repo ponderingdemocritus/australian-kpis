@@ -45,6 +45,18 @@ use sqlx::{migrate::Migrator, postgres::PgPoolOptions};
 use thiserror::Error;
 use tracing::instrument;
 
+mod durable_ingestion;
+
+pub use durable_ingestion::{
+    DiscoveredWorkInput, DiscoveredWorkRecord, GenerationInput, GenerationRecord,
+    GenerationStageContext, GenerationStatus, ObservationStageRow, StageDigest,
+    append_observation_stage, begin_discovered_work_fetch, begin_ingestion_parse,
+    complete_discovered_work_fetch, complete_ingestion_parse, create_ingestion_generation,
+    fail_ingestion_generation, get_discovered_work, get_ingestion_generation_context,
+    persist_discovered_work, recover_lost_observation_stages, reject_discovered_work,
+    reject_ingestion_generation, transition_ingestion_generation, work_identity_key,
+};
+
 /// Embedded migrations — applied by [`migrate`].
 ///
 /// Points at `infra/migrations` relative to this crate's `Cargo.toml`;
@@ -407,19 +419,13 @@ impl Default for ConnectOptions {
     }
 }
 
-/// Connect using [`ConnectOptions::default`] and enable the TimescaleDB
-/// extension on the target database.
+/// Connect using [`ConnectOptions::default`]. Schema and extension setup is
+/// owned by the one-shot migration process, never a runtime service.
 pub async fn connect(cfg: &DatabaseConfig) -> Result<PgPool, DbError> {
     connect_with(cfg, ConnectOptions::default()).await
 }
 
-/// Connect with caller-supplied pool options and enable the TimescaleDB
-/// extension on the target database.
-///
-/// The extension is created with `IF NOT EXISTS`, which is a no-op on
-/// managed Timescale Cloud (where it's pre-installed) and a one-shot
-/// install step in local / test environments backed by the upstream
-/// `timescale/timescaledb` image.
+/// Connect with caller-supplied pool options without issuing DDL.
 #[instrument(skip(cfg), fields(url.len = cfg.url.len()))]
 pub async fn connect_with(cfg: &DatabaseConfig, opts: ConnectOptions) -> Result<PgPool, DbError> {
     let pool = PgPoolOptions::new()
@@ -429,7 +435,6 @@ pub async fn connect_with(cfg: &DatabaseConfig, opts: ConnectOptions) -> Result<
         .connect(&cfg.url)
         .await
         .map_err(DbError::Connect)?;
-    ensure_timescale(&pool).await?;
     Ok(pool)
 }
 

@@ -1,0 +1,22 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "infra/docker/otel-collector.Dockerfile"
+watchPatterns = [
+  "/infra/docker/otel-collector.Dockerfile",
+  "/infra/observability/otel-collector-production.yml",
+  "/infra/railway/otel-collector.toml",
+]
+
+[deploy]
+region = "asia-southeast1-eqsg3a"
+numReplicas = 2
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+overlapSeconds = 20
+drainingSeconds = 30
+
+[deploy.limitOverride.containers]
+cpu = 1
+memoryBytes = 1073741824

@@ -1,0 +1,58 @@
+name: Restore Certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_requested_at:
+        description: UTC RFC3339 time the PITR restore was requested
+        required: true
+        type: string
+      restore_completed_at:
+        description: UTC RFC3339 time the restored database became ready
+        required: true
+        type: string
+      failure_time:
+        description: UTC RFC3339 simulated failure time
+        required: true
+        type: string
+      restore_target_time:
+        description: UTC RFC3339 PITR target time
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-restore:
+    runs-on: ubuntu-latest
+    environment: restore-certification
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+      - name: Verify restored Timescale and R2 state
+        env:
+          AU_KPIS_DATABASE_URL: ${{ secrets.RESTORED_DATABASE_URL }}
+          AU_KPIS_FAILURE_TIME: ${{ inputs.failure_time }}
+          AU_KPIS_R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AU_KPIS_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          AU_KPIS_RESTORE_COMPLETED_AT: ${{ inputs.restore_completed_at }}
+          AU_KPIS_RESTORE_REQUESTED_AT: ${{ inputs.restore_requested_at }}
+          AU_KPIS_RESTORE_TARGET_TIME: ${{ inputs.restore_target_time }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: tools/release/verify-restore.sh
+      - name: Surface restore report
+        if: always()
+        run: cat target/release-restore-report/summary.md >> "${GITHUB_STEP_SUMMARY}"
+      - name: Retain restore evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-restore-report
+          path: target/release-restore-report/**
+          if-no-files-found: error
+          retention-days: 90

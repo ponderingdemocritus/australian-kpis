@@ -6,6 +6,7 @@ source_id = "abs"
 dataflow_id = "abs.cpi"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://data.api.abs.gov.au/rest/dataflow/ABS/CPI?detail=allstubs"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
@@ -14,6 +15,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["ABS SDMX dataflow endpoint must expose CPI stubs."]
+fixture_reference = "crates/adapters/abs/tests/fixtures/cpi_sdmx.json"
+schedule = { cron = "15 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 10368000, hard_after_seconds = 20736000 }
+validation_policy = { range_rule = "abs_cpi", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -25,6 +31,7 @@ source_id = "abs"
 dataflow_id = "abs.building_approvals"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-approvals-australia/latest-release"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
@@ -33,6 +40,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/abs/tests/snapshots/parse__parse_streams_building_approvals_release_page.snap"
+schedule = { cron = "20 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 3888000, hard_after_seconds = 7776000 }
+validation_policy = { range_rule = "abs_building_approvals", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -44,6 +56,7 @@ source_id = "abs"
 dataflow_id = "abs.building_activity"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.abs.gov.au/statistics/industry/building-and-construction/building-activity-australia/latest-release"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
@@ -52,6 +65,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/abs/tests/snapshots/parse__parse_streams_building_activity_release_page.snap"
+schedule = { cron = "25 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 10368000, hard_after_seconds = 20736000 }
+validation_policy = { range_rule = "abs_building_activity", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -63,6 +81,7 @@ source_id = "abs"
 dataflow_id = "abs.dwelling_completion_times"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.abs.gov.au/articles/average-dwelling-completion-times"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
@@ -71,6 +90,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/abs/tests/snapshots/parse__parse_streams_dwelling_completion_times_article.snap"
+schedule = { cron = "30 1 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "abs_dwelling_completion_times", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -82,6 +106,7 @@ source_id = "rba"
 dataflow_id = "rba.statistical_tables"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.rba.gov.au/statistics/tables/"
 license = "RBA Copyright and Disclaimer Notice"
 attribution = "Source: Reserve Bank of Australia"
@@ -90,6 +115,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["RBA table URLs must resolve under /statistics/tables/csv/ or /statistics/tables/xls/."]
+fixture_reference = "crates/adapters/rba/tests/fixtures/a1_balance_sheet_weekly.xlsx"
+schedule = { cron = "35 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 60, burst = 2 }
+freshness_policy = { soft_after_seconds = 864000, hard_after_seconds = 1814400 }
+validation_policy = { range_rule = "rba_statistical_tables", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "bot_filtered"
@@ -102,6 +132,7 @@ source_id = "apra"
 dataflow_id = "apra.quarterly_statistics"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://apra.gov.au/news-and-publications/quarterly-authorised-deposit-taking-institution-statistics"
 license = "APRA publication terms"
 attribution = "Source: Australian Prudential Regulation Authority"
@@ -110,6 +141,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/apra/tests/fixtures/centralised.xlsx"
+schedule = { cron = "40 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 90, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 10368000, hard_after_seconds = 20736000 }
+validation_policy = { range_rule = "apra_quarterly_statistics", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -145,6 +181,7 @@ source_id = "aemo"
 dataflow_id = "aemo.dispatch"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
 license = "AEMO Copyright and Disclaimer Notice"
 attribution = "Source: Australian Energy Market Operator"
@@ -153,6 +190,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/aemo/tests/snapshots/parse__parses_aemo_dispatch_zip_fixture.snap"
+schedule = { cron = "*/5 * * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 30, max_requests_per_minute = 120, burst = 10 }
+freshness_policy = { soft_after_seconds = 900, hard_after_seconds = 3600 }
+validation_policy = { range_rule = "aemo_dispatch", max_series_cardinality = 1000000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "directory_listing"
@@ -164,6 +206,7 @@ source_id = "aemo"
 dataflow_id = "aemo.generation_mix"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://nemweb.com.au/Reports/Current/Next_Day_Actual_Gen/"
 license = "AEMO Copyright and Disclaimer Notice"
 attribution = "Source: Australian Energy Market Operator"
@@ -172,6 +215,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/aemo/tests/snapshots/parse__parses_aemo_generation_mix_zip_fixture.snap"
+schedule = { cron = "1-56/5 * * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 30, max_requests_per_minute = 120, burst = 10 }
+freshness_policy = { soft_after_seconds = 900, hard_after_seconds = 3600 }
+validation_policy = { range_rule = "aemo_generation_mix", max_series_cardinality = 1000000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "directory_listing"
@@ -183,6 +231,7 @@ source_id = "aemo"
 dataflow_id = "aemo.dispatchability_capacity"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
 license = "AEMO Copyright and Disclaimer Notice"
 attribution = "Source: Australian Energy Market Operator"
@@ -191,6 +240,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/aemo/tests/snapshots/parse__parses_aemo_dispatchability_capacity_zip_fixture.snap"
+schedule = { cron = "2-57/5 * * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 30, max_requests_per_minute = 120, burst = 10 }
+freshness_policy = { soft_after_seconds = 900, hard_after_seconds = 3600 }
+validation_policy = { range_rule = "aemo_dispatchability_capacity", max_series_cardinality = 1000000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "directory_listing"
@@ -202,6 +256,7 @@ source_id = "asx"
 dataflow_id = "asx.market_statistics"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.asx.com.au/about/market-statistics/historical-market-statistics"
 license = "ASX terms of use"
 attribution = "Source: ASX"
@@ -210,6 +265,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/asx/tests/snapshots/parse__parses_asx_market_statistics_fixture.snap"
+schedule = { cron = "45 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 3888000, hard_after_seconds = 7776000 }
+validation_policy = { range_rule = "asx_market_statistics", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -263,6 +323,7 @@ source_id = "nhsac"
 dataflow_id = "nhsac.housing_accord_progress"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://nhsac.gov.au/publications"
 license = "NHSAC copyright"
 attribution = "Source: National Housing Supply and Affordability Council"
@@ -271,6 +332,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/nhsac/tests/fixtures/housing_accord_progress.csv"
+schedule = { cron = "0 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "nhsac_housing_accord_progress", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -282,6 +348,7 @@ source_id = "pc"
 dataflow_id = "pc.productivity_bulletin"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.pc.gov.au/ongoing/productivity-insights"
 license = "CC-BY-4.0"
 attribution = "Source: Productivity Commission"
@@ -290,6 +357,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/pc/tests/fixtures/productivity_bulletin.csv"
+schedule = { cron = "5 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "pc_productivity_bulletin", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -330,6 +402,7 @@ source_id = "treasury"
 dataflow_id = "treasury.budget_papers"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://budget.gov.au/content/bp4/index.htm"
 license = "Australian Government budget terms"
 attribution = "Source: Australian Treasury"
@@ -338,6 +411,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/treasury/tests/snapshots/parse__bp4_agency_resourcing_2026_27.snap"
+schedule = { cron = "10 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 120, max_requests_per_minute = 20, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "treasury_budget_papers", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "budget_year"
@@ -350,6 +428,7 @@ source_id = "state-budgets"
 dataflow_id = "state_budgets.nsw_budget"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.nsw.gov.au/business-and-economy/nsw-budget"
 license = "Creative Commons Attribution 3.0 Australia Licence"
 attribution = "Source: NSW Treasury"
@@ -358,6 +437,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/state-budgets/tests/snapshots/parse__nsw_bp1_key_budget_aggregates_2025_26_current_shape.snap"
+schedule = { cron = "15 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 120, max_requests_per_minute = 20, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "state_budget_nsw", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "budget_year"
@@ -376,6 +460,7 @@ source_id = "state-budgets"
 dataflow_id = "state_budgets.vic_budget"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.budget.vic.gov.au/budget-papers"
 license = "Creative Commons Attribution 4.0 International licence"
 attribution = "© Copyright State Government of Victoria"
@@ -384,6 +469,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/state-budgets/tests/snapshots/parse__vic_bp5_statement_of_finances_2026_27.snap"
+schedule = { cron = "20 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 120, max_requests_per_minute = 20, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "state_budget_vic", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "budget_year"
@@ -396,6 +486,7 @@ source_id = "state-budgets"
 dataflow_id = "state_budgets.qld_budget"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://budget.qld.gov.au/budget-papers/"
 license = "Queensland Treasury copyright"
 attribution = "© The State of Queensland 2025 (Queensland Treasury)"
@@ -404,6 +495,11 @@ review_frequency = "weekly"
 source_scope = "Spec.md#source-adapters"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/state-budgets/tests/snapshots/parse__qld_bp2_budget_strategy_outlook_2025_26.snap"
+schedule = { cron = "25 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 120, max_requests_per_minute = 20, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "state_budget_qld", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "budget_year"
@@ -416,6 +512,7 @@ source_id = "state-planning"
 dataflow_id = "state_planning.nsw_da_processing"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.planning.nsw.gov.au/data-and-insights"
 license = "State publication terms"
 attribution = "State planning dashboard sources: NSW Planning and Victoria Planning"
@@ -424,6 +521,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/state-planning/tests/fixtures/nsw_da_processing.csv"
+schedule = { cron = "50 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 10368000, hard_after_seconds = 20736000 }
+validation_policy = { range_rule = "state_planning_nsw", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -464,6 +566,7 @@ source_id = "ai-readiness"
 dataflow_id = "oxford.gari"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://oxfordinsights.com/ai-readiness/government-ai-readiness-index-2025/"
 license = "Oxford Insights terms"
 attribution = "Source: Oxford Insights Government AI Readiness Index"
@@ -472,6 +575,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/ai-readiness/tests/fixtures/oxford_gari.csv"
+schedule = { cron = "30 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "oxford_gari", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -483,6 +591,7 @@ source_id = "ai-readiness"
 dataflow_id = "naic.ai_adoption_tracker"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.ai.gov.au/news-and-insights/reports/ai-adoption-tracker"
 license = "National AI Centre terms"
 attribution = "Source: National AI Centre"
@@ -491,6 +600,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/ai-readiness/tests/fixtures/naic_ai_adoption_tracker.csv"
+schedule = { cron = "55 1 * * *", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 10368000, hard_after_seconds = 20736000 }
+validation_policy = { range_rule = "naic_ai_adoption_tracker", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"
@@ -502,6 +616,7 @@ source_id = "ai-readiness"
 dataflow_id = "abs.ai_rd"
 status = "active"
 owner_area = "adapter"
+owner_role = "data"
 canonical_url = "https://www.abs.gov.au/media-centre/media-releases/ai-now-fastest-growing-area-business-rd"
 license = "CC-BY-4.0"
 attribution = "Source: Australian Bureau of Statistics"
@@ -510,6 +625,11 @@ review_frequency = "weekly"
 source_scope = "crates/au-kpis-scorecard/config/aps.v1.toml"
 provenance_requirements = ["Record source_id, dataflow_id, canonical URL, license, attribution, cadence, and artifact provenance for this scoped dataflow."]
 validation_requirements = ["Apply the configured source-location audit policy and parser or scorecard validation before changing this dataflow mapping."]
+fixture_reference = "crates/adapters/ai-readiness/tests/fixtures/abs_ai_rd.csv"
+schedule = { cron = "35 2 * * 1", timezone = "Australia/Sydney" }
+request_policy = { timeout_seconds = 60, max_requests_per_minute = 30, burst = 2 }
+freshness_policy = { soft_after_seconds = 34560000, hard_after_seconds = 69120000 }
+validation_policy = { range_rule = "abs_ai_rd", max_series_cardinality = 100000, allow_partial_rows = false }
 
 [dataflows.audit_policy]
 kind = "contains_any"

@@ -4,7 +4,12 @@ A unified API, SDK, and client for Australian economic data — aggregating ABS,
 
 ## Status
 
-**Pre-implementation.** The design is frozen in [`Spec.md`](./Spec.md). Work is tracked as [GitHub issues](https://github.com/ponderingdemocritus/australian-kpis/issues) under milestones M1–M5.
+**Production v1 implementation.** The repository contains the Rust workspace,
+source adapters, public API, generated SDK, Next.js client, PDF sidecar, local
+stack, and deployment configuration. The production-v1 release remains
+gate-based; the normative launch contract is in [`Spec.md`](./Spec.md) and the
+architecture decision is recorded in
+[`docs/adr/0001-production-v1-architecture.md`](./docs/adr/0001-production-v1-architecture.md).
 
 ## Stack
 
@@ -12,10 +17,11 @@ A unified API, SDK, and client for Australian economic data — aggregating ABS,
 - **SDK + client**: TypeScript (Bun, Next.js, React)
 - **PDF extraction**: Python (FastAPI, pdfplumber, camelot)
 - **DB**: Postgres 16 + TimescaleDB (managed via Timescale Cloud)
-- **Queue**: apalis (Postgres backend)
-- **Cache**: Redis
+- **Queue and orchestration**: durable Postgres schedules, jobs, and generations
+- **Cache**: disposable Railway Redis with database fallback
 - **Blob**: Cloudflare R2
-- **Deploy**: Fly.io
+- **Deploy**: Cloudflare edge to Railway Singapore stateless compute, Timescale
+  Cloud, R2, and Grafana Cloud; immutable promotion through GitHub Actions
 
 See [`Spec.md`](./Spec.md) for the full architecture, data model, testing strategy, and phased rollout.
 
@@ -33,7 +39,8 @@ docker compose -f infra/compose/docker-compose.yml up -d --build --wait
 DATABASE_URL=postgres://au_kpis:au_kpis@127.0.0.1:54320/au_kpis \
   sqlx migrate run --source infra/migrations
 
-curl http://127.0.0.1:3000/v1/health
+curl http://127.0.0.1:3000/livez
+curl http://127.0.0.1:3000/readyz
 curl http://127.0.0.1:3000/v1/openapi.json
 ```
 

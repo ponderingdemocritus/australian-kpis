@@ -1,10 +1,21 @@
 id = "aps"
 version = "aps.v1"
+digest = ""
 label = "Abundance Position Score"
 description = "National Australia scorecard combining delivery throughput and policy orientation."
 formula = "APS = 100 * T * (0.5 + 0.5 * O)"
+methodology_citation = "Australian KPIs APS v1 methodology, Spec.md derived scorecards section."
+trend_threshold = 1.0
 license = "Apache-2.0"
 attribution = "Derived scorecard configuration maintained by australian-kpis."
+
+[coverage_thresholds]
+overall_pct = 70.0
+axis_pct = 50.0
+
+[zone_thresholds]
+scarcity_max = 33.0
+mixed_max = 66.0
 
 [[indicators]]
 indicator_id = "housing.approvals"

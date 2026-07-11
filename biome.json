@@ -8,6 +8,7 @@
   "files": {
     "ignoreUnknown": true,
     "ignore": [
+      "**/.context/**",
       "**/dist/**",
       "**/build/**",
       "**/.turbo/**",
@@ -15,6 +16,7 @@
       "**/node_modules/**",
       "**/target/**",
       "**/coverage/**",
+      "openapi.json",
       "**/next-env.d.ts",
       "**/packages/sdk-generated/**"
     ]

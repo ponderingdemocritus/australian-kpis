@@ -14,7 +14,12 @@ on:
           - all
           - sustained
           - burst
+          - full-load-baseline
           - full-load
+      baseline_run_id:
+        description: Successful full-load-baseline workflow run ID (required for full-load)
+        required: false
+        type: string
       pr_number:
         description: Optional PR number for a comparison comment
         required: false
@@ -50,9 +55,14 @@ jobs:
         with:
           k6-version: "0.54.0"
 
+      - name: Set up Rust for scale certification
+        if: env.REQUESTED_SCENARIO == 'full-load' || env.REQUESTED_SCENARIO == 'full-load-baseline'
+        uses: ./.github/actions/setup-rust
+
       - name: Configure staging target
         env:
           AU_KPIS_STAGING_BASE_URL: ${{ vars.AU_KPIS_STAGING_BASE_URL }}
+          AU_KPIS_SCALE_BASE_URL: ${{ vars.AU_KPIS_SCALE_BASE_URL }}
           K6_INFLUXDB_ADDR: ${{ vars.K6_INFLUXDB_ADDR }}
         run: |
           set -euo pipefail
@@ -64,11 +74,29 @@ jobs:
             echo "K6_INFLUXDB_ADDR repository variable is required for historical k6 load trends." >&2
             exit 1
           fi
-          echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
+          if [[ "${REQUESTED_SCENARIO}" == full-load* ]]; then
+            if [ -z "${AU_KPIS_SCALE_BASE_URL:-}" ]; then
+              echo "AU_KPIS_SCALE_BASE_URL is required for scale certification." >&2
+              exit 1
+            fi
+            echo "AU_KPIS_BASE_URL=${AU_KPIS_SCALE_BASE_URL}" >> "$GITHUB_ENV"
+          else
+            echo "AU_KPIS_BASE_URL=${AU_KPIS_STAGING_BASE_URL}" >> "$GITHUB_ENV"
+          fi
           echo "K6_OUT=influxdb=${K6_INFLUXDB_ADDR}" >> "$GITHUB_ENV"
 
       - name: Prepare k6 output directory
-        run: mkdir -p target/k6
+        run: mkdir -p target/k6 target/release-scale-report
+
+      - name: Verify deterministic scale dataset
+        if: env.REQUESTED_SCENARIO == 'full-load' || env.REQUESTED_SCENARIO == 'full-load-baseline'
+        env:
+          AU_KPIS_DATABASE_URL: ${{ secrets.AU_KPIS_SCALE_DATABASE_URL }}
+        run: |
+          cargo run --locked -p au-kpis-testing --bin au-kpis-scale-seed -- \
+            --confirm-certification-database \
+            --verify-only \
+            --manifest target/release-scale-report/seed-manifest.json
 
       - name: Run sustained load
         id: sustained
@@ -98,19 +126,92 @@ jobs:
             --tag github_run_id="${GITHUB_RUN_ID}" \
             apps/bench/burst.js
 
-      - name: Run full observation load
+      - name: Run full production-v1 workload
         id: full_load
-        if: env.REQUESTED_SCENARIO == 'full-load'
+        if: env.REQUESTED_SCENARIO == 'full-load' || env.REQUESTED_SCENARIO == 'full-load-baseline'
         continue-on-error: true
         env:
           AU_KPIS_API_KEY: ${{ secrets.AU_KPIS_SMOKE_API_KEY }}
         run: |
           set -euo pipefail
           k6 run --out "${K6_OUT}" \
-            --summary-export target/k6/full-load-summary.json \
+            --summary-export target/release-scale-report/full-load-summary.json \
             --tag environment=staging \
             --tag github_run_id="${GITHUB_RUN_ID}" \
             apps/bench/full-load.js
+
+      - name: Verify baseline ran with ingestion paused
+        if: env.REQUESTED_SCENARIO == 'full-load-baseline'
+        env:
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_CLOUD_INSTANCE_ID: ${{ secrets.GRAFANA_CLOUD_INSTANCE_ID }}
+          GRAFANA_CLOUD_PROMETHEUS_QUERY_URL: ${{ vars.GRAFANA_CLOUD_PROMETHEUS_QUERY_URL }}
+        run: |
+          set -euo pipefail
+          query='sum(increase(au_kpis_ingestion_jobs_completed_total{environment="staging"}[29m]))'
+          result="$(curl --fail --silent --show-error --max-time 30 \
+            --user "${GRAFANA_CLOUD_INSTANCE_ID}:${GRAFANA_CLOUD_API_KEY}" \
+            --get --data-urlencode "query=${query}" \
+            "${GRAFANA_CLOUD_PROMETHEUS_QUERY_URL%/}/api/v1/query")"
+          jq -e '.status == "success" and ([.data.result[].value[1] | tonumber] | add // 0) == 0' \
+            <<<"${result}" >/dev/null
+          jq -n '{status: "passed", ingestion_jobs_completed_during_baseline: 0}' \
+            > target/release-scale-report/baseline-ingestion.json
+
+      - name: Download paused-ingestion baseline
+        if: env.REQUESTED_SCENARIO == 'full-load'
+        env:
+          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "${BASELINE_RUN_ID}" || {
+            echo "baseline_run_id is required for full-load certification" >&2
+            exit 1
+          }
+          mkdir -p target/release-scale-report/baseline
+          gh run download "${BASELINE_RUN_ID}" \
+            --name release-scale-baseline \
+            --dir target/release-scale-report/baseline
+
+      - name: Run offline Parquet time and heap gates
+        if: env.REQUESTED_SCENARIO == 'full-load'
+        run: |
+          set -euo pipefail
+          cargo test --locked -p au-kpis-api-http --release \
+            --test parquet_scale -- --ignored --nocapture \
+            2>&1 | tee target/release-scale-report/parquet-scale.log
+          cargo test --locked -p au-kpis-api-http --release --features dhat-heap \
+            --test parquet_memory -- --ignored --nocapture \
+            2>&1 | tee target/release-scale-report/parquet-memory.log
+
+      - name: Build production scale report
+        id: scale_report
+        if: env.REQUESTED_SCENARIO == 'full-load'
+        env:
+          AU_KPIS_DB_CPU_QUERY: ${{ vars.AU_KPIS_SCALE_DB_CPU_QUERY }}
+          GRAFANA_CLOUD_API_KEY: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_CLOUD_INSTANCE_ID: ${{ secrets.GRAFANA_CLOUD_INSTANCE_ID }}
+          GRAFANA_CLOUD_PROMETHEUS_QUERY_URL: ${{ vars.GRAFANA_CLOUD_PROMETHEUS_QUERY_URL }}
+        run: tools/release/build-scale-report.sh
+
+      - name: Upload paused-ingestion scale baseline
+        if: always() && env.REQUESTED_SCENARIO == 'full-load-baseline'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-scale-baseline
+          path: target/release-scale-report/**
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload production scale evidence
+        if: always() && env.REQUESTED_SCENARIO == 'full-load'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-scale-report
+          path: target/release-scale-report/**
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Download latest nightly baseline
         if: github.event_name == 'pull_request' || github.event.inputs.pr_number != ''

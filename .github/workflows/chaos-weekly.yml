@@ -24,7 +24,7 @@ env:
   SCCACHE_GHA_ENABLED: "true"
   SCCACHE_CACHE_SIZE: 2G
   CHAOS_ENVIRONMENT: staging
-  CHAOS_RESULTS_DIR: target/chaos
+  CHAOS_RESULTS_DIR: target/release-chaos-report
 
 jobs:
   staging-chaos:
@@ -51,6 +51,12 @@ jobs:
           fi
           tests/chaos/run.sh "${args[@]}"
 
+      - name: Fire and clear every page-level alert
+        id: alerts
+        continue-on-error: true
+        if: github.event.inputs.scenario == ''
+        run: tools/observability/drill-all-alerts.sh "${CHAOS_RESULTS_DIR}/alerts"
+
       - name: Surface chaos results
         if: always()
         run: |
@@ -65,13 +71,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chaos-results
-          path: target/chaos/**
+          name: release-chaos-report
+          path: target/release-chaos-report/**
           if-no-files-found: warn
           retention-days: 30
 
       - name: Enforce chaos invariants
-        if: steps.chaos.outcome == 'failure'
+        if: steps.chaos.outcome == 'failure' || steps.alerts.outcome == 'failure'
         run: |
           echo "Chaos suite failed; review the chaos-results artifact and job summary." >&2
           exit 1

@@ -57,6 +57,11 @@ impl ObservationsQueryPlan {
         super::requires_cache_fingerprint(&self.query)
     }
 
+    /// Whether this request consumes one of the four long-stream slots.
+    pub(crate) fn is_bulk(&self) -> bool {
+        self.query.format != super::ResponseFormat::Json || self.query.limit > super::DEFAULT_LIMIT
+    }
+
     /// Consume the plan and return the parsed query used by existing renderers.
     pub(crate) fn into_query(self) -> super::ParsedObservationsQuery {
         self.query

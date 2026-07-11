@@ -1,16 +1,24 @@
 import type {
+  ApsSnapshotSummary,
+  CreateSubscriptionRequest,
+  CreateSubscriptionResponse,
   DataflowCodelistResponse,
   DataflowDetailResponse,
   DataflowsResponse,
   HealthResponse,
   ListDataflowsParams,
+  ListSubscriptionsResponse,
   ObservationsResponse,
   ObservationsRow,
+  PublishedApsSnapshot,
+  RotateSubscriptionSecretResponse,
   ScorecardConfig,
-  ScorecardSnapshot,
   SearchCatalogParams,
   SearchResponse,
   SeriesLookupResponse,
+  SourceCatalogEntry,
+  SourcesResponse,
+  SubscriptionDetails,
 } from '@au-kpis/sdk-generated/client'
 
 const DEFAULT_BASE_URL = 'https://api.au-kpis.example'
@@ -62,9 +70,15 @@ export type ObservationLatestParams = {
 }
 
 export type ScorecardHistoryParams = {
+  limit?: number
   since?: string
   until?: string
+  view?: 'as_published' | 'latest'
 }
+
+export type ScorecardConfigParams = { version?: string }
+
+export type ScorecardLatestParams = { view?: 'as_published' | 'latest' }
 
 export type AuKpisClient = {
   dataflows: {
@@ -85,10 +99,23 @@ export type AuKpisClient = {
   }
   scorecards: {
     aps: {
-      config: () => Promise<ScorecardConfig>
-      history: (params?: ScorecardHistoryParams) => Promise<ScorecardSnapshot[]>
-      latest: () => Promise<ScorecardSnapshot>
+      config: (params?: ScorecardConfigParams) => Promise<ScorecardConfig>
+      get: (id: string) => Promise<PublishedApsSnapshot>
+      history: (params?: ScorecardHistoryParams) => Promise<ApsSnapshotSummary[]>
+      latest: (params?: ScorecardLatestParams) => Promise<PublishedApsSnapshot>
     }
+  }
+  sources: {
+    get: (id: string) => Promise<SourceCatalogEntry>
+    list: () => Promise<SourcesResponse>
+  }
+  subscriptions: {
+    create: (request: CreateSubscriptionRequest) => Promise<CreateSubscriptionResponse>
+    get: (id: string) => Promise<SubscriptionDetails>
+    list: () => Promise<ListSubscriptionsResponse>
+    revoke: (id: string) => Promise<void>
+    rotateSecret: (id: string) => Promise<RotateSubscriptionSecretResponse>
+    verify: (id: string) => Promise<SubscriptionDetails>
   }
 }
 
@@ -124,9 +151,15 @@ type SchemaName =
   | 'ObservationsResponse'
   | 'SearchResponse'
   | 'ScorecardConfig'
-  | 'ScorecardSnapshot'
-  | 'ScorecardSnapshotList'
+  | 'ApsSnapshotSummaryList'
+  | 'PublishedApsSnapshot'
   | 'SeriesLookupResponse'
+  | 'SourceCatalogEntry'
+  | 'SourcesResponse'
+  | 'SubscriptionDetails'
+  | 'ListSubscriptionsResponse'
+  | 'CreateSubscriptionResponse'
+  | 'RotateSubscriptionSecretResponse'
 
 type SchemaModule = typeof import('@au-kpis/sdk-generated/zod')
 
@@ -211,23 +244,78 @@ export function createClient(options: CreateClientOptions = {}): AuKpisClient {
     },
     scorecards: {
       aps: {
-        config: () =>
+        config: (params) =>
           requestJson<ScorecardConfig>(context, {
             path: '/v1/scorecards/aps/config',
+            query: params,
             schema: 'ScorecardConfig',
           }),
+        get: (id) =>
+          requestJson<PublishedApsSnapshot>(context, {
+            path: `/v1/scorecards/aps/snapshots/${encodePathSegment(id)}`,
+            schema: 'PublishedApsSnapshot',
+          }),
         history: (params) =>
-          requestJson<ScorecardSnapshot[]>(context, {
+          requestJson<ApsSnapshotSummary[]>(context, {
             path: '/v1/scorecards/aps/history',
             query: params,
-            schema: 'ScorecardSnapshotList',
+            schema: 'ApsSnapshotSummaryList',
           }),
-        latest: () =>
-          requestJson<ScorecardSnapshot>(context, {
+        latest: (params) =>
+          requestJson<PublishedApsSnapshot>(context, {
             path: '/v1/scorecards/aps/latest',
-            schema: 'ScorecardSnapshot',
+            query: params,
+            schema: 'PublishedApsSnapshot',
           }),
       },
+    },
+    sources: {
+      get: (id) =>
+        requestJson<SourceCatalogEntry>(context, {
+          path: `/v1/sources/${encodePathSegment(id)}`,
+          schema: 'SourceCatalogEntry',
+        }),
+      list: () =>
+        requestJson<SourcesResponse>(context, {
+          path: '/v1/sources',
+          schema: 'SourcesResponse',
+        }),
+    },
+    subscriptions: {
+      create: (request) =>
+        requestJson<CreateSubscriptionResponse>(context, {
+          body: request,
+          method: 'POST',
+          path: '/v1/subscriptions',
+          schema: 'CreateSubscriptionResponse',
+        }),
+      get: (id) =>
+        requestJson<SubscriptionDetails>(context, {
+          path: `/v1/subscriptions/${encodePathSegment(id)}`,
+          schema: 'SubscriptionDetails',
+        }),
+      list: () =>
+        requestJson<ListSubscriptionsResponse>(context, {
+          path: '/v1/subscriptions',
+          schema: 'ListSubscriptionsResponse',
+        }),
+      revoke: (id) =>
+        requestJson<void>(context, {
+          method: 'DELETE',
+          path: `/v1/subscriptions/${encodePathSegment(id)}`,
+        }),
+      rotateSecret: (id) =>
+        requestJson<RotateSubscriptionSecretResponse>(context, {
+          method: 'POST',
+          path: `/v1/subscriptions/${encodePathSegment(id)}/rotate-secret`,
+          schema: 'RotateSubscriptionSecretResponse',
+        }),
+      verify: (id) =>
+        requestJson<SubscriptionDetails>(context, {
+          method: 'POST',
+          path: `/v1/subscriptions/${encodePathSegment(id)}/verify`,
+          schema: 'SubscriptionDetails',
+        }),
     },
   }
 }
@@ -241,6 +329,8 @@ type RequestContext = {
 }
 
 type RequestSpec = {
+  body?: unknown
+  method?: 'DELETE' | 'GET' | 'POST'
   path: string
   query?: Record<string, string | number | string[] | undefined>
   schema?: SchemaName
@@ -249,35 +339,41 @@ type RequestSpec = {
 async function requestJson<T>(context: RequestContext, spec: RequestSpec): Promise<T> {
   const url = buildUrl(context.baseUrl, spec.path, spec.query)
   const headers = new Headers({ accept: 'application/json' })
+  const method = spec.method ?? 'GET'
+  const requestBody = spec.body === undefined ? undefined : JSON.stringify(spec.body)
+  if (requestBody !== undefined) {
+    headers.set('content-type', 'application/json')
+  }
 
   if (context.apiKey !== undefined && context.apiKey.length > 0) {
     headers.set('x-api-key', context.apiKey)
   }
 
   let lastNetworkError: unknown
-  for (let attempt = 1; attempt <= context.retry.maxAttempts; attempt += 1) {
+  const maxAttempts = method === 'GET' ? context.retry.maxAttempts : 1
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const response = await context.fetchImpl(url, { headers, method: 'GET' })
-      const body = [204, 205, 304].includes(response.status) ? '' : await response.text()
+      const response = await context.fetchImpl(url, { body: requestBody, headers, method })
+      const responseBody = [204, 205, 304].includes(response.status) ? '' : await response.text()
 
       if (response.ok) {
-        const data = (body.length > 0 ? JSON.parse(body) : {}) as unknown
+        const data = (responseBody.length > 0 ? JSON.parse(responseBody) : {}) as unknown
         return validateResponse<T>(context, spec.schema, data)
       }
 
-      if (attempt < context.retry.maxAttempts && shouldRetry(response.status)) {
+      if (attempt < maxAttempts && shouldRetry(response.status)) {
         await context.retry.sleep(retryDelayMs(response, context.retry, attempt))
         continue
       }
 
-      throw new ApiRequestError(response.status, response.statusText, body)
+      throw new ApiRequestError(response.status, response.statusText, responseBody)
     } catch (error) {
       if (error instanceof ApiRequestError || error instanceof ApiValidationError) {
         throw error
       }
 
       lastNetworkError = error
-      if (attempt < context.retry.maxAttempts) {
+      if (attempt < maxAttempts) {
         await context.retry.sleep(fallbackDelayMs(context.retry, attempt))
       }
     }

@@ -6,11 +6,77 @@
  * OpenAPI spec version: 0.1.0
  */
 /**
+ * Numeric APS value only when coverage gates pass.
+ */
+export type ApsSnapshotSummaryScore = number | null;
+
+/**
+ * Prior snapshot revision superseded by this correction.
+ */
+export type ApsSnapshotSummarySupersedesSnapshotId = string | null;
+
+export type ApsSnapshotSummaryZone = null | ScoreZone;
+
+/**
+ * Compact APS point returned by history endpoints.
+ */
+export interface ApsSnapshotSummary {
+  /** End of the represented Sydney calendar day, expressed in UTC. */
+  as_of: string;
+  /** Overall confidence label. */
+  confidence: Confidence;
+  /** Missing-input lower and upper APS bounds. */
+  confidence_band: ConfidenceBand;
+  /** SHA-256 digest of the canonical config JSON. */
+  config_digest: string;
+  /** Immutable config version. */
+  config_version: string;
+  /** Overall usable scored weight percentage. */
+  coverage_pct: number;
+  /** Stable snapshot revision identity. */
+  id: string;
+  /** Coverage-gated publication state. */
+  publication_state: PublicationState;
+  /** Immutable database publication time. */
+  published_at: string;
+  /**
+   * Zero-based correction revision.
+   * @minimum 0
+   */
+  revision: number;
+  /** Numeric APS value only when coverage gates pass. */
+  score?: ApsSnapshotSummaryScore;
+  /** Scorecard id. */
+  scorecard_id: string;
+  /** Sydney calendar date represented by this publication. */
+  snapshot_date: string;
+  /** Axis-level values and coverage. */
+  sub_indexes: SubIndexScore[];
+  /** Prior snapshot revision superseded by this correction. */
+  supersedes_snapshot_id?: ApsSnapshotSummarySupersedesSnapshotId;
+  /** Movement against the nearest comparable numeric snapshot. */
+  trend: Trend;
+  zone?: ApsSnapshotSummaryZone;
+}
+
+/**
  * Lowercase hex-encoded SHA-256 digest (64 chars).
  * @minLength 64
  * @maxLength 64
  */
 export type ArtifactId = string;
+
+/**
+ * Scorecard axis used by APS v1.
+ */
+export type Axis = typeof Axis[keyof typeof Axis];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Axis = {
+  throughput: 'throughput',
+  orientation: 'orientation',
+} as const;
 
 export type CodeDescription = string | null;
 
@@ -52,6 +118,69 @@ export interface Codelist {
 export type CodelistId = string;
 
 /**
+ * Component-level score inside a sub-index.
+ */
+export interface ComponentScore {
+  /** Component name. */
+  component: string;
+  /** Weight-aware coverage percentage. */
+  coverage_pct: number;
+  /** Component score in the axis scale. */
+  score: number;
+  /** Weight represented by this component. */
+  weight: number;
+}
+
+/**
+ * Confidence label exposed for configs, contributions, and snapshots.
+ */
+export type Confidence = typeof Confidence[keyof typeof Confidence];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Confidence = {
+  high: 'high',
+  medium: 'medium',
+  low: 'low',
+} as const;
+
+/**
+ * Lower and upper score bounds.
+ */
+export interface ConfidenceBand {
+  /** Best-case score. */
+  high: number;
+  /** Worst-case score. */
+  low: number;
+}
+
+/**
+ * Contribution coverage state.
+ */
+export type CoverageStatus = typeof CoverageStatus[keyof typeof CoverageStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const CoverageStatus = {
+  resolved: 'resolved',
+  stale: 'stale',
+  missing_expected: 'missing_expected',
+  coverage_gap: 'coverage_gap',
+  manual_pending: 'manual_pending',
+  visible_unscored: 'visible_unscored',
+} as const;
+
+/**
+ * Coverage gates required for a numeric APS publication.
+ */
+export interface CoverageThresholds {
+  /** Minimum usable scored weight percentage on each axis. */
+  axis_pct: number;
+  /** Minimum overall usable scored weight percentage. */
+  overall_pct: number;
+}
+
+/**
  * Request body for `POST /v1/subscriptions`.
  */
 export interface CreateSubscriptionRequest {
@@ -65,6 +194,8 @@ export interface CreateSubscriptionRequest {
  * Response body for `POST /v1/subscriptions`.
  */
 export interface CreateSubscriptionResponse {
+  /** HMAC signing secret shown exactly once. */
+  signing_secret: string;
   /** Created subscription. */
   subscription: SubscriptionDetails;
 }
@@ -138,6 +269,25 @@ export interface DataflowsResponse {
   dataflows: Dataflow[];
 }
 
+/**
+ * Probe latency in whole milliseconds when a probe was attempted.
+ * @minimum 0
+ */
+export type DependencyHealthLatencyMs = number | null;
+
+/**
+ * One dependency status in the production readiness response.
+ */
+export interface DependencyHealth {
+  /**
+   * Probe latency in whole milliseconds when a probe was attempted.
+   * @minimum 0
+   */
+  latency_ms?: DependencyHealthLatencyMs;
+  /** `up`, `down`, or `degraded`. */
+  status: string;
+}
+
 export type DimensionDescription = string | null;
 
 /**
@@ -164,6 +314,18 @@ stable across codebases (see `Spec.md § Data model`).
 export type DimensionId = string;
 
 /**
+ * Direction used to normalize raw indicator values.
+ */
+export type Direction = typeof Direction[keyof typeof Direction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Direction = {
+  higher_is_better: 'higher_is_better',
+  lower_is_better: 'lower_is_better',
+} as const;
+
+/**
  * Cadence at which a dataflow publishes new observations. Informational —
 used by the scheduler to pick discovery intervals and by the SLO alerting
 rule `dataflow-no-new-observations`.
@@ -182,6 +344,18 @@ export const Frequency = {
 } as const;
 
 /**
+ * Dependency collection in the production readiness response.
+ */
+export interface HealthDependencies {
+  /** Timescale/Postgres and schema state. */
+  database: DependencyHealth;
+  /** Disposable Redis cache/rate-limit state. */
+  redis: DependencyHealth;
+  /** OTLP exporter configuration state. */
+  telemetry: DependencyHealth;
+}
+
+/**
  * Health endpoint response.
  */
 export interface HealthResponse {
@@ -190,246 +364,158 @@ export interface HealthResponse {
 }
 
 /**
- * Scorecard axis used by APS v1.
+ * Revision view used by APS history reads.
  */
-export type Axis = typeof Axis[keyof typeof Axis];
+export type HistoryView = typeof HistoryView[keyof typeof HistoryView];
+
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Axis = {
-  throughput: 'throughput',
-  orientation: 'orientation',
+export const HistoryView = {
+  as_published: 'as_published',
+  latest: 'latest',
 } as const;
 
 /**
- * Direction used to normalize raw indicator values.
+ * Exact dimension selector for the intended APS series.
  */
-export type Direction = typeof Direction[keyof typeof Direction];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Direction = {
-  higher_is_better: 'higher_is_better',
-  lower_is_better: 'lower_is_better',
-} as const;
-
-/**
- * Confidence label exposed for configs, contributions, and snapshots.
- */
-export type Confidence = typeof Confidence[keyof typeof Confidence];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Confidence = {
-  high: 'high',
-  medium: 'medium',
-  low: 'low',
-} as const;
-
-/**
- * Contribution coverage state.
- */
-export type CoverageStatus = typeof CoverageStatus[keyof typeof CoverageStatus];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const CoverageStatus = {
-  resolved: 'resolved',
-  stale: 'stale',
-  missing_expected: 'missing_expected',
-  coverage_gap: 'coverage_gap',
-  manual_pending: 'manual_pending',
-  visible_unscored: 'visible_unscored',
-} as const;
-
-/**
- * APS score zone.
- */
-export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const ScoreZone = {
-  red: 'red',
-  yellow: 'yellow',
-  green: 'green',
-} as const;
-
-/**
- * Trend arrow comparing the latest score to a prior comparable snapshot.
- */
-export type Trend = typeof Trend[keyof typeof Trend];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const Trend = {
-  up: 'up',
-  down: 'down',
-  flat: 'flat',
-  unavailable: 'unavailable',
-} as const;
-
-/**
- * Linear normalization references for one indicator.
- */
-export interface Normalization {
-  /** Best reference value for this indicator. */
-  best: number;
-  /** Worst reference value for this indicator. */
-  worst: number;
-}
-
-export type ProvenanceNotes = string | null;
-
-export type ProvenanceRetrievedAt = string | null;
-
-export type ProvenanceReviewedAt = string | null;
-
-export type ProvenanceReviewedBy = string | null;
-
-/**
- * Source and licensing metadata for a scorecard input.
- */
-export interface Provenance {
-  /** Attribution text shown in API/UI responses. */
-  attribution: string;
-  /** License identifier or source-specific license note. */
-  license: string;
-  /** Optional source or review notes. */
-  notes?: ProvenanceNotes;
-  /** Optional retrieval date for curated/manual inputs. */
-  retrieved_at?: ProvenanceRetrievedAt;
-  /** Optional review date for curated/manual inputs. */
-  reviewed_at?: ProvenanceReviewedAt;
-  /** Optional reviewer identifier for curated/manual inputs. */
-  reviewed_by?: ProvenanceReviewedBy;
-  /** Canonical source URL for this input. */
-  source_url: string;
-}
-
 export type IndicatorConfigDimensionSelector = {[key: string]: string};
 
 /**
  * Static config for one APS indicator.
  */
 export interface IndicatorConfig {
+  /** APS axis. */
   axis: Axis;
+  /** Expected update cadence. */
   cadence: string;
+  /** Display grouping within the axis. */
   component: string;
+  /** Confidence for this input. */
   confidence: Confidence;
+  /** Default configured coverage status. */
   coverage_status: CoverageStatus;
+  /** User-facing indicator description. */
   description: string;
+  /** Exact dimension selector for the intended APS series. */
   dimension_selector?: IndicatorConfigDimensionSelector;
+  /** Direction-aware normalization rule. */
   direction: Direction;
+  /** User-facing indicator label. */
   display_label: string;
+  /**
+   * Age in seconds after which the value is excluded from scoring.
+   * @minimum 0
+   */
+  hard_after_seconds?: number;
+  /** Stable indicator id. */
   indicator_id: string;
+  /** Source measure id. */
   measure_id: string;
+  /** Normalization references. */
   normalization: Normalization;
+  /** Source and licensing metadata. */
   provenance: Provenance;
+  /**
+   * Age in seconds after which the value remains usable but becomes stale.
+   * @minimum 0
+   */
+  soft_after_seconds?: number;
+  /** Canonical source dataflow id. */
   source_dataflow_id: string;
+  /** Display unit. */
   unit: string;
+  /** Scored weight within the axis. Visible-unscored inputs may use zero. */
   weight: number;
 }
 
 /**
- * APS config metadata and indicator list.
+ * Dimension selector used for this input.
  */
-export interface ScorecardConfig {
-  attribution: string;
-  description: string;
-  formula: string;
-  id: string;
-  indicators: IndicatorConfig[];
-  label: string;
-  license: string;
-  version: string;
-}
-
-/**
- * Lower and upper score bounds.
- */
-export interface ConfidenceBand {
-  /** Best-case score. */
-  high: number;
-  /** Worst-case score. */
-  low: number;
-}
-
-/**
- * Component-level score inside a sub-index.
- */
-export interface ComponentScore {
-  component: string;
-  coverage_pct: number;
-  score: number;
-  weight: number;
-}
-
-/**
- * Axis-level sub-index score.
- */
-export interface SubIndexScore {
-  axis: Axis;
-  components: ComponentScore[];
-  confidence_band: ConfidenceBand;
-  coverage_pct: number;
-  score: number;
-  weight: number;
-}
-
 export type IndicatorContributionDimensions = {[key: string]: string};
 
+/**
+ * Ingestion generation that published the resolved observation.
+ */
+export type IndicatorContributionIngestionGenerationId = string | null;
+
+/**
+ * Latest resolved period, when available.
+ */
 export type IndicatorContributionLatestPeriod = string | null;
 
+/**
+ * Normalized value in the axis scale, when scored.
+ */
 export type IndicatorContributionNormalizedValue = number | null;
 
+/**
+ * Optional notes.
+ */
 export type IndicatorContributionNotes = string | null;
 
+/**
+ * Raw observation value, when resolved.
+ */
 export type IndicatorContributionRawValue = number | null;
 
+/**
+ * Resolved series key, when available.
+ */
 export type IndicatorContributionSeriesKey = string | null;
 
+/**
+ * Resolved source artifact id, when available.
+ */
 export type IndicatorContributionSourceArtifactId = string | null;
 
 /**
  * Contribution row for one indicator.
  */
 export interface IndicatorContribution {
+  /** Attribution metadata. */
   attribution: string;
+  /** APS axis. */
   axis: Axis;
+  /** Component name. */
   component: string;
+  /** Contribution confidence. */
   confidence: Confidence;
+  /** Coverage status. */
   coverage_status: CoverageStatus;
+  /** Dimension selector used for this input. */
   dimensions: IndicatorContributionDimensions;
+  /** Normalization direction. */
   direction: Direction;
+  /** Indicator id. */
   indicator_id: string;
+  /** Ingestion generation that published the resolved observation. */
+  ingestion_generation_id?: IndicatorContributionIngestionGenerationId;
+  /** Indicator label. */
   label: string;
+  /** Latest resolved period, when available. */
   latest_period?: IndicatorContributionLatestPeriod;
+  /** License metadata. */
   license: string;
+  /** Source measure id. */
   measure_id: string;
+  /** Normalized value in the axis scale, when scored. */
   normalized_value?: IndicatorContributionNormalizedValue;
+  /** Optional notes. */
   notes?: IndicatorContributionNotes;
+  /** Raw observation value, when resolved. */
   raw_value?: IndicatorContributionRawValue;
+  /** Resolved series key, when available. */
   series_key?: IndicatorContributionSeriesKey;
+  /** Resolved source artifact id, when available. */
   source_artifact_id?: IndicatorContributionSourceArtifactId;
+  /** Source dataflow id. */
   source_dataflow_id: string;
+  /** Source URL. */
   source_url: string;
+  /** Display unit. */
   unit: string;
+  /** Configured weight. */
   weight: number;
-}
-
-export type ScorecardSnapshotLatestPeriod = string | null;
-
-/**
- * Full APS snapshot produced by the pure scorer.
- */
-export interface ScorecardSnapshot {
-  as_of: string;
-  confidence: Confidence;
-  confidence_band: ConfidenceBand;
-  config_version: string;
-  contributions: IndicatorContribution[];
-  coverage_pct: number;
-  latest_period?: ScorecardSnapshotLatestPeriod;
-  score: number;
-  scorecard_id: string;
-  sub_indexes: SubIndexScore[];
-  trend: Trend;
-  zone: ScoreZone;
 }
 
 /**
@@ -447,9 +533,27 @@ export type LicenseOneOf = {
 export type License = 'CC-BY-4.0' | 'CC-BY-ND-4.0' | 'CC-BY-SA-4.0' | 'public-domain' | LicenseOneOf;
 
 /**
+ * Collection response for subscriptions owned by one API key.
+ */
+export interface ListSubscriptionsResponse {
+  /** Subscriptions owned by the authenticated key. */
+  subscriptions: SubscriptionDetails[];
+}
+
+/**
  * Identifier for a measure (e.g. `unemployment_rate`).
  */
 export type MeasureId = string;
+
+/**
+ * Linear normalization references for one indicator.
+ */
+export interface Normalization {
+  /** Best reference value for this indicator. */
+  best: number;
+  /** Worst reference value for this indicator. */
+  worst: number;
+}
 
 /**
  * Free-form attributes attached to this observation (e.g. SDMX `OBS_STATUS`
@@ -620,6 +724,271 @@ export interface ProblemDetails {
 }
 
 /**
+ * Optional source or review notes.
+ */
+export type ProvenanceNotes = string | null;
+
+/**
+ * Optional retrieval date for curated/manual inputs.
+ */
+export type ProvenanceRetrievedAt = string | null;
+
+/**
+ * Optional review date for curated/manual inputs.
+ */
+export type ProvenanceReviewedAt = string | null;
+
+/**
+ * Optional reviewer identifier for curated/manual inputs.
+ */
+export type ProvenanceReviewedBy = string | null;
+
+/**
+ * Source and licensing metadata for a scorecard input.
+ */
+export interface Provenance {
+  /** Attribution text shown in API/UI responses. */
+  attribution: string;
+  /** License identifier or source-specific license note. */
+  license: string;
+  /** Optional source or review notes. */
+  notes?: ProvenanceNotes;
+  /** Optional retrieval date for curated/manual inputs. */
+  retrieved_at?: ProvenanceRetrievedAt;
+  /** Optional review date for curated/manual inputs. */
+  reviewed_at?: ProvenanceReviewedAt;
+  /** Optional reviewer identifier for curated/manual inputs. */
+  reviewed_by?: ProvenanceReviewedBy;
+  /** Canonical source URL for this input. */
+  source_url: string;
+}
+
+/**
+ * Snapshot publication result after applying coverage gates.
+ */
+export type PublicationState = typeof PublicationState[keyof typeof PublicationState];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const PublicationState = {
+  published: 'published',
+  insufficient_coverage: 'insufficient_coverage',
+} as const;
+
+/**
+ * Numeric APS value only when coverage gates pass.
+ */
+export type PublishedApsSnapshotScore = number | null;
+
+/**
+ * Prior snapshot revision superseded by this correction.
+ */
+export type PublishedApsSnapshotSupersedesSnapshotId = string | null;
+
+export type PublishedApsSnapshotZone = null | ScoreZone;
+
+/**
+ * Immutable APS API snapshot persisted as one publication revision.
+ */
+export interface PublishedApsSnapshot {
+  /** End of the represented Sydney calendar day, expressed in UTC. */
+  as_of: string;
+  /** Overall confidence label. */
+  confidence: Confidence;
+  /** Missing-input lower and upper APS bounds. */
+  confidence_band: ConfidenceBand;
+  /** SHA-256 digest of the canonical config JSON. */
+  config_digest: string;
+  /** Immutable config version. */
+  config_version: string;
+  /** Full contribution and provenance detail. */
+  contributions: IndicatorContribution[];
+  /** Overall usable scored weight percentage. */
+  coverage_pct: number;
+  /** Stable snapshot revision identity. */
+  id: string;
+  /** Coverage-gated publication state. */
+  publication_state: PublicationState;
+  /** Immutable database publication time. */
+  published_at: string;
+  /**
+   * Zero-based correction revision.
+   * @minimum 0
+   */
+  revision: number;
+  /** Numeric APS value only when coverage gates pass. */
+  score?: PublishedApsSnapshotScore;
+  /** Scorecard id. */
+  scorecard_id: string;
+  /** Sydney calendar date represented by this publication. */
+  snapshot_date: string;
+  /** Axis-level values and coverage. */
+  sub_indexes: SubIndexScore[];
+  /** Prior snapshot revision superseded by this correction. */
+  supersedes_snapshot_id?: PublishedApsSnapshotSupersedesSnapshotId;
+  /** Movement against the nearest comparable numeric snapshot. */
+  trend: Trend;
+  zone?: PublishedApsSnapshotZone;
+}
+
+/**
+ * One-time secret returned by a rotation command.
+ */
+export interface RotateSubscriptionSecretResponse {
+  /** New signing secret shown exactly once. */
+  signing_secret: string;
+  /** Updated subscription. */
+  subscription: SubscriptionDetails;
+}
+
+export type RuntimeHealthResponseDependencies = null | HealthDependencies;
+
+/**
+ * Production liveness/readiness response.
+ */
+export interface RuntimeHealthResponse {
+  dependencies?: RuntimeHealthResponseDependencies;
+  /** `live`, `ready`, `degraded`, or `not_ready`. */
+  status: string;
+  /** Immutable build version or git SHA. */
+  version: string;
+}
+
+/**
+ * APS score zone.
+ */
+export type ScoreZone = typeof ScoreZone[keyof typeof ScoreZone];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ScoreZone = {
+  scarcity: 'scarcity',
+  mixed: 'mixed',
+  abundance: 'abundance',
+} as const;
+
+/**
+ * APS config metadata and indicator list.
+ */
+export interface ScorecardConfig {
+  /** Attribution note for the derived scorecard config. */
+  attribution: string;
+  /** Numeric publication coverage gates. */
+  coverage_thresholds: CoverageThresholds;
+  /** User-facing description. */
+  description: string;
+  /** SHA-256 digest of the canonical config with this field empty. */
+  digest?: string;
+  /** Formula metadata. */
+  formula: string;
+  /** Scorecard id. */
+  id: string;
+  /** Indicator definitions. */
+  indicators: IndicatorConfig[];
+  /** User-facing label. */
+  label: string;
+  /** License note for the derived scorecard config. */
+  license: string;
+  /** Public methodology citation. */
+  methodology_citation: string;
+  /** Absolute movement required for an up/down trend. */
+  trend_threshold: number;
+  /** Versioned config id. */
+  version: string;
+  /** Rounded-score zone thresholds. */
+  zone_thresholds: ZoneThresholds;
+}
+
+/**
+ * Config version; omitted selects the current version.
+ */
+export type ScorecardConfigQueryVersion = string | null;
+
+/**
+ * Query string selecting an immutable APS config version.
+ */
+export interface ScorecardConfigQuery {
+  /** Config version; omitted selects the current version. */
+  version?: ScorecardConfigQueryVersion;
+}
+
+/**
+ * Maximum points returned, from 1 through 1,000.
+ * @minimum 0
+ */
+export type ScorecardHistoryQueryLimit = number | null;
+
+/**
+ * Inclusive lower snapshot date in `YYYY-MM-DD` form.
+ */
+export type ScorecardHistoryQuerySince = string | null;
+
+/**
+ * Inclusive upper snapshot date in `YYYY-MM-DD` form.
+ */
+export type ScorecardHistoryQueryUntil = string | null;
+
+/**
+ * Query string for APS history snapshots.
+ */
+export interface ScorecardHistoryQuery {
+  /**
+   * Maximum points returned, from 1 through 1,000.
+   * @minimum 0
+   */
+  limit?: ScorecardHistoryQueryLimit;
+  /** Inclusive lower snapshot date in `YYYY-MM-DD` form. */
+  since?: ScorecardHistoryQuerySince;
+  /** Inclusive upper snapshot date in `YYYY-MM-DD` form. */
+  until?: ScorecardHistoryQueryUntil;
+  /** Revision view, defaulting to original as-published values. */
+  view?: HistoryView;
+}
+
+/**
+ * Query string for the latest APS snapshot.
+ */
+export interface ScorecardLatestQuery {
+  /** Revision view, defaulting to original as-published values. */
+  view?: HistoryView;
+}
+
+/**
+ * Latest period represented by resolved inputs.
+ */
+export type ScorecardSnapshotLatestPeriod = string | null;
+
+/**
+ * Full APS snapshot produced by the pure scorer.
+ */
+export interface ScorecardSnapshot {
+  /** Snapshot timestamp or date chosen by the caller. */
+  as_of: string;
+  /** Snapshot confidence label. */
+  confidence: Confidence;
+  /** Worst/best APS confidence band. */
+  confidence_band: ConfidenceBand;
+  /** Config version used for the score. */
+  config_version: string;
+  /** Indicator-level contribution rows. */
+  contributions: IndicatorContribution[];
+  /** Weight-aware coverage percentage. */
+  coverage_pct: number;
+  /** Latest period represented by resolved inputs. */
+  latest_period?: ScorecardSnapshotLatestPeriod;
+  /** APS score in `0..100`. */
+  score: number;
+  /** Scorecard id. */
+  scorecard_id: string;
+  /** Axis-level scores. */
+  sub_indexes: SubIndexScore[];
+  /** Trend relative to prior comparable score. */
+  trend: Trend;
+  /** Score zone. */
+  zone: ScoreZone;
+}
+
+/**
  * Maximum number of catalog results to return.
  * @minimum 0
  */
@@ -699,7 +1068,8 @@ export type SeriesLastObserved = string | null;
 
 /**
  * One time series within a dataflow. `dimensions` is the sorted bag of
-`(key, value)` pairs that, together with `dataflow_id`, seeds `series_key`.
+`(key, value)` pairs that, together with `dataflow_id` and `measure_id`,
+seeds `series_key`.
  */
 export interface Series {
   /** Whether the upstream source still publishes this series. Inactive
@@ -757,9 +1127,160 @@ export interface SeriesRevisionMetadata {
 }
 
 /**
+ * Repository-relative representative fixture or reviewed snapshot.
+ */
+export type SourceCatalogDataflowFixtureReference = string | null;
+
+export type SourceCatalogDataflowFreshnessPolicy = null | SourceFreshnessPolicy;
+
+/**
+ * Accountable production role, when assigned.
+ */
+export type SourceCatalogDataflowOwnerRole = string | null;
+
+export type SourceCatalogDataflowRequestPolicy = null | SourceRequestPolicy;
+
+export type SourceCatalogDataflowSchedule = null | SourceSchedule;
+
+export type SourceCatalogDataflowValidationPolicy = null | SourceValidationPolicy;
+
+/**
+ * Governed source-dataflow metadata.
+ */
+export interface SourceCatalogDataflow {
+  /** Required attribution. */
+  attribution: string;
+  /** Expected source cadence. */
+  cadence: string;
+  /** Coverage state exposed to catalog consumers. */
+  coverage_state: string;
+  /** Stable dataflow id. */
+  dataflow_id: string;
+  /** Repository-relative representative fixture or reviewed snapshot. */
+  fixture_reference?: SourceCatalogDataflowFixtureReference;
+  freshness_policy?: SourceCatalogDataflowFreshnessPolicy;
+  /** Source licence or terms identifier. */
+  license: string;
+  /** Owning implementation area. */
+  owner_area: string;
+  /** Accountable production role, when assigned. */
+  owner_role?: SourceCatalogDataflowOwnerRole;
+  request_policy?: SourceCatalogDataflowRequestPolicy;
+  schedule?: SourceCatalogDataflowSchedule;
+  /** Canonical source and citation URL. */
+  source_url: string;
+  /** Source-register governance status. */
+  status: string;
+  validation_policy?: SourceCatalogDataflowValidationPolicy;
+}
+
+/**
+ * One source and its governed dataflows.
+ */
+export interface SourceCatalogEntry {
+  /** Dataflows governed for this source. */
+  dataflows: SourceCatalogDataflow[];
+  /** Stable source id. */
+  source_id: string;
+}
+
+/**
+ * Public source freshness policy.
+ */
+export interface SourceFreshnessPolicy {
+  /**
+   * Age in seconds after which data is hard-expired.
+   * @minimum 0
+   */
+  hard_after_seconds: number;
+  /**
+   * Age in seconds after which data is soft-stale.
+   * @minimum 0
+   */
+  soft_after_seconds: number;
+}
+
+/**
  * Identifier for an upstream data source (e.g. `abs`, `rba`, `apra`).
  */
 export type SourceId = string;
+
+/**
+ * Public upstream request policy.
+ */
+export interface SourceRequestPolicy {
+  /**
+   * Maximum short request burst.
+   * @minimum 0
+   */
+  burst: number;
+  /**
+   * Maximum steady-state requests per minute.
+   * @minimum 0
+   */
+  max_requests_per_minute: number;
+  /**
+   * Per-request timeout in seconds.
+   * @minimum 0
+   */
+  timeout_seconds: number;
+}
+
+/**
+ * Public source discovery schedule.
+ */
+export interface SourceSchedule {
+  /** Five-field cron expression. */
+  cron: string;
+  /** IANA timezone name. */
+  timezone: string;
+}
+
+/**
+ * Public source validation policy.
+ */
+export interface SourceValidationPolicy {
+  /** Whether partial rows may publish. */
+  allow_partial_rows: boolean;
+  /**
+   * Maximum series cardinality for one generation.
+   * @minimum 0
+   */
+  max_series_cardinality: number;
+  /** Named adapter range rule. */
+  range_rule: string;
+}
+
+/**
+ * Response envelope for `GET /v1/sources`.
+ */
+export interface SourcesResponse {
+  /** Governed sources ordered by source id. */
+  sources: SourceCatalogEntry[];
+}
+
+/**
+ * Axis-level sub-index score.
+ */
+export interface SubIndexScore {
+  /** Axis name. */
+  axis: Axis;
+  /** Component scores for this axis. */
+  components: ComponentScore[];
+  /** Axis confidence band in the axis scale. */
+  confidence_band: ConfidenceBand;
+  /** Weight-aware coverage percentage. */
+  coverage_pct: number;
+  /** Axis score (`0..1` for throughput, `-1..1` for orientation). */
+  score: number;
+  /** Expected scored weight for this axis. */
+  weight: number;
+}
+
+/**
+ * UTC endpoint verification time.
+ */
+export type SubscriptionDetailsVerifiedAt = string | null;
 
 /**
  * Created webhook subscription details.
@@ -771,12 +1292,14 @@ export interface SubscriptionDetails {
   dataflow_ids: DataflowId[];
   /** Stable subscription id. */
   id: string;
-  /** HMAC signing secret shown once at creation. */
-  signing_secret: string;
   /** Current subscription status. */
   status: string;
+  /** UTC last-update timestamp. */
+  updated_at: string;
   /** Delivery target URL. */
   url: string;
+  /** UTC endpoint verification time. */
+  verified_at?: SubscriptionDetailsVerifiedAt;
 }
 
 /**
@@ -788,12 +1311,37 @@ export type TimePrecision = typeof TimePrecision[keyof typeof TimePrecision];
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const TimePrecision = {
+  minute: 'minute',
   day: 'day',
   week: 'week',
   month: 'month',
   quarter: 'quarter',
   year: 'year',
 } as const;
+
+/**
+ * Trend arrow comparing the latest score to a prior comparable snapshot.
+ */
+export type Trend = typeof Trend[keyof typeof Trend];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const Trend = {
+  up: 'up',
+  down: 'down',
+  flat: 'flat',
+  unavailable: 'unavailable',
+} as const;
+
+/**
+ * Inclusive upper bounds for the first two APS zones.
+ */
+export interface ZoneThresholds {
+  /** Maximum mixed score. */
+  mixed_max: number;
+  /** Maximum scarcity score. */
+  scarcity_max: number;
+}
 
 export type ListDataflowsParams = {
 /**
@@ -850,14 +1398,42 @@ format?: string;
  */
 cursor?: string;
 /**
- * Page size, maximum 10000.
+ * Page size. JSON/CSV are capped at 10000 rows; Parquet bulk exports are capped at 1000000 rows.
  * @minimum 0
- * @maximum 10000
+ * @maximum 1000000
  */
 limit?: number;
 };
 
 export type Openapi200 = { [key: string]: unknown };
+
+export type GetApsScorecardConfigParams = {
+/**
+ * Config version; omitted selects the current version.
+ */
+version?: string;
+};
+
+export type ListApsScorecardHistoryParams = {
+/**
+ * Inclusive lower snapshot date in `YYYY-MM-DD` form.
+ */
+since?: string;
+/**
+ * Inclusive upper snapshot date in `YYYY-MM-DD` form.
+ */
+until?: string;
+/**
+ * Revision view, defaulting to original as-published values.
+ */
+view?: HistoryView;
+/**
+ * Maximum points returned, from 1 through 1,000.
+ * @minimum 1
+ * @maximum 1000
+ */
+limit?: number;
+};
 
 export type SearchCatalogParams = {
 /**
@@ -872,6 +1448,97 @@ q: string;
  */
 limit?: number;
 };
+
+/**
+ * @summary `GET /livez`.
+ */
+export type livenessResponse200 = {
+  data: RuntimeHealthResponse
+  status: 200
+}
+
+export type livenessResponseSuccess = (livenessResponse200) & {
+  headers: Headers;
+};
+;
+
+export type livenessResponse = (livenessResponseSuccess)
+
+export const getLivenessUrl = () => {
+
+
+
+
+  return `/livez`
+}
+
+export const liveness = async ( options?: RequestInit): Promise<livenessResponse> => {
+
+  const res = await fetch(getLivenessUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: livenessResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as livenessResponse
+}
+
+
+
+/**
+ * @summary `GET /readyz`.
+ */
+export type readinessResponse200 = {
+  data: RuntimeHealthResponse
+  status: 200
+}
+
+export type readinessResponse503 = {
+  data: RuntimeHealthResponse
+  status: 503
+}
+
+export type readinessResponseSuccess = (readinessResponse200) & {
+  headers: Headers;
+};
+export type readinessResponseError = (readinessResponse503) & {
+  headers: Headers;
+};
+
+export type readinessResponse = (readinessResponseSuccess | readinessResponseError)
+
+export const getReadinessUrl = () => {
+
+
+
+
+  return `/readyz`
+}
+
+export const readiness = async ( options?: RequestInit): Promise<readinessResponse> => {
+
+  const res = await fetch(getReadinessUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: readinessResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as readinessResponse
+}
+
+
 
 /**
  * @summary `GET /v1/dataflows`.
@@ -1062,15 +1729,15 @@ export type healthResponse200 = {
   status: 200
 }
 
-export type healthResponse408 = {
+export type healthResponse504 = {
   data: ProblemDetails
-  status: 408
+  status: 504
 }
 
 export type healthResponseSuccess = (healthResponse200) & {
   headers: Headers;
 };
-export type healthResponseError = (healthResponse408) & {
+export type healthResponseError = (healthResponse504) & {
   headers: Headers;
 };
 
@@ -1131,9 +1798,9 @@ export type listObservationsResponse404 = {
   status: 404
 }
 
-export type listObservationsResponse408 = {
+export type listObservationsResponse429 = {
   data: ProblemDetails
-  status: 408
+  status: 429
 }
 
 export type listObservationsResponse500 = {
@@ -1141,10 +1808,20 @@ export type listObservationsResponse500 = {
   status: 500
 }
 
+export type listObservationsResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type listObservationsResponse504 = {
+  data: ProblemDetails
+  status: 504
+}
+
 export type listObservationsResponseSuccess = (listObservationsResponse200ApplicationJson | listObservationsResponse200TextCsv) & {
   headers: Headers;
 };
-export type listObservationsResponseError = (listObservationsResponse304 | listObservationsResponse400 | listObservationsResponse404 | listObservationsResponse408 | listObservationsResponse500) & {
+export type listObservationsResponseError = (listObservationsResponse304 | listObservationsResponse400 | listObservationsResponse404 | listObservationsResponse429 | listObservationsResponse500 | listObservationsResponse503 | listObservationsResponse504) & {
   headers: Headers;
 };
 
@@ -1200,20 +1877,20 @@ export type openapiResponse200 = {
   status: 200
 }
 
-export type openapiResponse408 = {
-  data: ProblemDetails
-  status: 408
-}
-
 export type openapiResponse500 = {
   data: ProblemDetails
   status: 500
 }
 
+export type openapiResponse504 = {
+  data: ProblemDetails
+  status: 504
+}
+
 export type openapiResponseSuccess = (openapiResponse200) & {
   headers: Headers;
 };
-export type openapiResponseError = (openapiResponse408 | openapiResponse500) & {
+export type openapiResponseError = (openapiResponse500 | openapiResponse504) & {
   headers: Headers;
 };
 
@@ -1242,6 +1919,261 @@ export const openapi = async ( options?: RequestInit): Promise<openapiResponse> 
 
   const data: openapiResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as openapiResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/config`.
+ */
+export type getApsScorecardConfigResponse200 = {
+  data: ScorecardConfig
+  status: 200
+}
+
+export type getApsScorecardConfigResponse304 = {
+  data: void
+  status: 304
+}
+
+export type getApsScorecardConfigResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type getApsScorecardConfigResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getApsScorecardConfigResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type getApsScorecardConfigResponseSuccess = (getApsScorecardConfigResponse200) & {
+  headers: Headers;
+};
+export type getApsScorecardConfigResponseError = (getApsScorecardConfigResponse304 | getApsScorecardConfigResponse400 | getApsScorecardConfigResponse404 | getApsScorecardConfigResponse500) & {
+  headers: Headers;
+};
+
+export type getApsScorecardConfigResponse = (getApsScorecardConfigResponseSuccess | getApsScorecardConfigResponseError)
+
+export const getGetApsScorecardConfigUrl = (params?: GetApsScorecardConfigParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/v1/scorecards/aps/config?${stringifiedParams}` : `/v1/scorecards/aps/config`
+}
+
+export const getApsScorecardConfig = async (params?: GetApsScorecardConfigParams, options?: RequestInit): Promise<getApsScorecardConfigResponse> => {
+
+  const res = await fetch(getGetApsScorecardConfigUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getApsScorecardConfigResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getApsScorecardConfigResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/history`.
+ */
+export type listApsScorecardHistoryResponse200 = {
+  data: ApsSnapshotSummary[]
+  status: 200
+}
+
+export type listApsScorecardHistoryResponse304 = {
+  data: void
+  status: 304
+}
+
+export type listApsScorecardHistoryResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type listApsScorecardHistoryResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type listApsScorecardHistoryResponseSuccess = (listApsScorecardHistoryResponse200) & {
+  headers: Headers;
+};
+export type listApsScorecardHistoryResponseError = (listApsScorecardHistoryResponse304 | listApsScorecardHistoryResponse400 | listApsScorecardHistoryResponse500) & {
+  headers: Headers;
+};
+
+export type listApsScorecardHistoryResponse = (listApsScorecardHistoryResponseSuccess | listApsScorecardHistoryResponseError)
+
+export const getListApsScorecardHistoryUrl = (params?: ListApsScorecardHistoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/v1/scorecards/aps/history?${stringifiedParams}` : `/v1/scorecards/aps/history`
+}
+
+export const listApsScorecardHistory = async (params?: ListApsScorecardHistoryParams, options?: RequestInit): Promise<listApsScorecardHistoryResponse> => {
+
+  const res = await fetch(getListApsScorecardHistoryUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listApsScorecardHistoryResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listApsScorecardHistoryResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/latest`.
+ */
+export type getApsScorecardLatestResponse200 = {
+  data: PublishedApsSnapshot
+  status: 200
+}
+
+export type getApsScorecardLatestResponse304 = {
+  data: void
+  status: 304
+}
+
+export type getApsScorecardLatestResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type getApsScorecardLatestResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getApsScorecardLatestResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type getApsScorecardLatestResponseSuccess = (getApsScorecardLatestResponse200) & {
+  headers: Headers;
+};
+export type getApsScorecardLatestResponseError = (getApsScorecardLatestResponse304 | getApsScorecardLatestResponse400 | getApsScorecardLatestResponse404 | getApsScorecardLatestResponse500) & {
+  headers: Headers;
+};
+
+export type getApsScorecardLatestResponse = (getApsScorecardLatestResponseSuccess | getApsScorecardLatestResponseError)
+
+export const getGetApsScorecardLatestUrl = () => {
+
+
+
+
+  return `/v1/scorecards/aps/latest`
+}
+
+export const getApsScorecardLatest = async ( options?: RequestInit): Promise<getApsScorecardLatestResponse> => {
+
+  const res = await fetch(getGetApsScorecardLatestUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getApsScorecardLatestResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getApsScorecardLatestResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/scorecards/aps/snapshots/{id}`.
+ */
+export type getApsScorecardSnapshotResponse200 = {
+  data: PublishedApsSnapshot
+  status: 200
+}
+
+export type getApsScorecardSnapshotResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type getApsScorecardSnapshotResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getApsScorecardSnapshotResponseSuccess = (getApsScorecardSnapshotResponse200) & {
+  headers: Headers;
+};
+export type getApsScorecardSnapshotResponseError = (getApsScorecardSnapshotResponse400 | getApsScorecardSnapshotResponse404) & {
+  headers: Headers;
+};
+
+export type getApsScorecardSnapshotResponse = (getApsScorecardSnapshotResponseSuccess | getApsScorecardSnapshotResponseError)
+
+export const getGetApsScorecardSnapshotUrl = (id: string,) => {
+
+
+
+
+  return `/v1/scorecards/aps/snapshots/${id}`
+}
+
+export const getApsScorecardSnapshot = async (id: string, options?: RequestInit): Promise<getApsScorecardSnapshotResponse> => {
+
+  const res = await fetch(getGetApsScorecardSnapshotUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getApsScorecardSnapshotResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getApsScorecardSnapshotResponse
 }
 
 
@@ -1369,11 +2301,173 @@ export const getSeries = async (dataflow: string,
 
 
 /**
+ * @summary `GET /v1/sources`.
+ */
+export type listSourcesResponse200 = {
+  data: SourcesResponse
+  status: 200
+}
+
+export type listSourcesResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type listSourcesResponseSuccess = (listSourcesResponse200) & {
+  headers: Headers;
+};
+export type listSourcesResponseError = (listSourcesResponse500) & {
+  headers: Headers;
+};
+
+export type listSourcesResponse = (listSourcesResponseSuccess | listSourcesResponseError)
+
+export const getListSourcesUrl = () => {
+
+
+
+
+  return `/v1/sources`
+}
+
+export const listSources = async ( options?: RequestInit): Promise<listSourcesResponse> => {
+
+  const res = await fetch(getListSourcesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listSourcesResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listSourcesResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/sources/{source_id}`.
+ */
+export type getSourceResponse200 = {
+  data: SourceCatalogEntry
+  status: 200
+}
+
+export type getSourceResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getSourceResponse500 = {
+  data: ProblemDetails
+  status: 500
+}
+
+export type getSourceResponseSuccess = (getSourceResponse200) & {
+  headers: Headers;
+};
+export type getSourceResponseError = (getSourceResponse404 | getSourceResponse500) & {
+  headers: Headers;
+};
+
+export type getSourceResponse = (getSourceResponseSuccess | getSourceResponseError)
+
+export const getGetSourceUrl = (sourceId: string,) => {
+
+
+
+
+  return `/v1/sources/${sourceId}`
+}
+
+export const getSource = async (sourceId: string, options?: RequestInit): Promise<getSourceResponse> => {
+
+  const res = await fetch(getGetSourceUrl(sourceId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getSourceResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getSourceResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/subscriptions`.
+ */
+export type listSubscriptionsResponse200 = {
+  data: ListSubscriptionsResponse
+  status: 200
+}
+
+export type listSubscriptionsResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type listSubscriptionsResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type listSubscriptionsResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type listSubscriptionsResponseSuccess = (listSubscriptionsResponse200) & {
+  headers: Headers;
+};
+export type listSubscriptionsResponseError = (listSubscriptionsResponse401 | listSubscriptionsResponse403 | listSubscriptionsResponse503) & {
+  headers: Headers;
+};
+
+export type listSubscriptionsResponse = (listSubscriptionsResponseSuccess | listSubscriptionsResponseError)
+
+export const getListSubscriptionsUrl = () => {
+
+
+
+
+  return `/v1/subscriptions`
+}
+
+export const listSubscriptions = async ( options?: RequestInit): Promise<listSubscriptionsResponse> => {
+
+  const res = await fetch(getListSubscriptionsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listSubscriptionsResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listSubscriptionsResponse
+}
+
+
+
+/**
  * @summary `POST /v1/subscriptions`.
  */
-export type createSubscriptionResponse201 = {
+export type createSubscriptionResponse202 = {
   data: CreateSubscriptionResponse
-  status: 201
+  status: 202
 }
 
 export type createSubscriptionResponse400 = {
@@ -1386,15 +2480,25 @@ export type createSubscriptionResponse401 = {
   status: 401
 }
 
+export type createSubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
 export type createSubscriptionResponse500 = {
   data: ProblemDetails
   status: 500
 }
 
-export type createSubscriptionResponseSuccess = (createSubscriptionResponse201) & {
+export type createSubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type createSubscriptionResponseSuccess = (createSubscriptionResponse202) & {
   headers: Headers;
 };
-export type createSubscriptionResponseError = (createSubscriptionResponse400 | createSubscriptionResponse401 | createSubscriptionResponse500) & {
+export type createSubscriptionResponseError = (createSubscriptionResponse400 | createSubscriptionResponse401 | createSubscriptionResponse403 | createSubscriptionResponse500 | createSubscriptionResponse503) & {
   headers: Headers;
 };
 
@@ -1424,4 +2528,280 @@ export const createSubscription = async (createSubscriptionRequest: CreateSubscr
 
   const data: createSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as createSubscriptionResponse
+}
+
+
+
+/**
+ * @summary `GET /v1/subscriptions/{id}`.
+ */
+export type getSubscriptionResponse200 = {
+  data: SubscriptionDetails
+  status: 200
+}
+
+export type getSubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type getSubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type getSubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type getSubscriptionResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type getSubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type getSubscriptionResponseSuccess = (getSubscriptionResponse200) & {
+  headers: Headers;
+};
+export type getSubscriptionResponseError = (getSubscriptionResponse400 | getSubscriptionResponse401 | getSubscriptionResponse403 | getSubscriptionResponse404 | getSubscriptionResponse503) & {
+  headers: Headers;
+};
+
+export type getSubscriptionResponse = (getSubscriptionResponseSuccess | getSubscriptionResponseError)
+
+export const getGetSubscriptionUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}`
+}
+
+export const getSubscription = async (id: string, options?: RequestInit): Promise<getSubscriptionResponse> => {
+
+  const res = await fetch(getGetSubscriptionUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getSubscriptionResponse
+}
+
+
+
+/**
+ * @summary `DELETE /v1/subscriptions/{id}`.
+ */
+export type revokeSubscriptionResponse204 = {
+  data: void
+  status: 204
+}
+
+export type revokeSubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type revokeSubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type revokeSubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type revokeSubscriptionResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type revokeSubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type revokeSubscriptionResponseSuccess = (revokeSubscriptionResponse204) & {
+  headers: Headers;
+};
+export type revokeSubscriptionResponseError = (revokeSubscriptionResponse400 | revokeSubscriptionResponse401 | revokeSubscriptionResponse403 | revokeSubscriptionResponse404 | revokeSubscriptionResponse503) & {
+  headers: Headers;
+};
+
+export type revokeSubscriptionResponse = (revokeSubscriptionResponseSuccess | revokeSubscriptionResponseError)
+
+export const getRevokeSubscriptionUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}`
+}
+
+export const revokeSubscription = async (id: string, options?: RequestInit): Promise<revokeSubscriptionResponse> => {
+
+  const res = await fetch(getRevokeSubscriptionUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: revokeSubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as revokeSubscriptionResponse
+}
+
+
+
+/**
+ * @summary `POST /v1/subscriptions/{id}/rotate-secret`.
+ */
+export type rotateSubscriptionSecretResponse200 = {
+  data: RotateSubscriptionSecretResponse
+  status: 200
+}
+
+export type rotateSubscriptionSecretResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type rotateSubscriptionSecretResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type rotateSubscriptionSecretResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type rotateSubscriptionSecretResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type rotateSubscriptionSecretResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type rotateSubscriptionSecretResponseSuccess = (rotateSubscriptionSecretResponse200) & {
+  headers: Headers;
+};
+export type rotateSubscriptionSecretResponseError = (rotateSubscriptionSecretResponse400 | rotateSubscriptionSecretResponse401 | rotateSubscriptionSecretResponse403 | rotateSubscriptionSecretResponse404 | rotateSubscriptionSecretResponse503) & {
+  headers: Headers;
+};
+
+export type rotateSubscriptionSecretResponse = (rotateSubscriptionSecretResponseSuccess | rotateSubscriptionSecretResponseError)
+
+export const getRotateSubscriptionSecretUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}/rotate-secret`
+}
+
+export const rotateSubscriptionSecret = async (id: string, options?: RequestInit): Promise<rotateSubscriptionSecretResponse> => {
+
+  const res = await fetch(getRotateSubscriptionSecretUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: rotateSubscriptionSecretResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as rotateSubscriptionSecretResponse
+}
+
+
+
+/**
+ * @summary `POST /v1/subscriptions/{id}/verify`.
+ */
+export type verifySubscriptionResponse200 = {
+  data: SubscriptionDetails
+  status: 200
+}
+
+export type verifySubscriptionResponse400 = {
+  data: ProblemDetails
+  status: 400
+}
+
+export type verifySubscriptionResponse401 = {
+  data: ProblemDetails
+  status: 401
+}
+
+export type verifySubscriptionResponse403 = {
+  data: ProblemDetails
+  status: 403
+}
+
+export type verifySubscriptionResponse404 = {
+  data: ProblemDetails
+  status: 404
+}
+
+export type verifySubscriptionResponse503 = {
+  data: ProblemDetails
+  status: 503
+}
+
+export type verifySubscriptionResponseSuccess = (verifySubscriptionResponse200) & {
+  headers: Headers;
+};
+export type verifySubscriptionResponseError = (verifySubscriptionResponse400 | verifySubscriptionResponse401 | verifySubscriptionResponse403 | verifySubscriptionResponse404 | verifySubscriptionResponse503) & {
+  headers: Headers;
+};
+
+export type verifySubscriptionResponse = (verifySubscriptionResponseSuccess | verifySubscriptionResponseError)
+
+export const getVerifySubscriptionUrl = (id: string,) => {
+
+
+
+
+  return `/v1/subscriptions/${id}/verify`
+}
+
+export const verifySubscription = async (id: string, options?: RequestInit): Promise<verifySubscriptionResponse> => {
+
+  const res = await fetch(getVerifySubscriptionUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+)
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: verifySubscriptionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as verifySubscriptionResponse
 }

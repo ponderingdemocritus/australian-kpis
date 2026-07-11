@@ -13,11 +13,13 @@ au-kpis-config = { workspace = true }
 au-kpis-db = { workspace = true }
 au-kpis-domain = { workspace = true }
 au-kpis-queue = { workspace = true }
+au-kpis-scorecard = { workspace = true }
 au-kpis-source-register = { workspace = true }
 au-kpis-telemetry = { workspace = true }
 # Reuse the API/ingestion HTTP stack for the Prometheus metrics endpoint.
 axum = "0.7"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono-tz = "0.10.4"
 # CLI parsing is binary-local; no workspace helper handles scheduler flags.
 clap = { version = "4", features = ["derive", "env"] }
 # PagerDuty Events v2 is an outbound JSON API; reqwest is already used elsewhere
@@ -54,7 +56,6 @@ au-kpis-adapter-treasury = { path = "../../adapters/treasury" }
 au-kpis-adapter-worldbank = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-db = { workspace = true }
-au-kpis-scorecard = { workspace = true }
 au-kpis-source-register = { workspace = true }
 au-kpis-testing = { workspace = true }
 sqlx = { version = "0.8", default-features = false, features = [

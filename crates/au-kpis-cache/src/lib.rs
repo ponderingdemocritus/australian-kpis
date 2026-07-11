@@ -72,6 +72,7 @@ redis.call('PEXPIRE', key, ttl_ms)
 return {allowed, math.floor(tokens_scaled / scale), retry_after_ms}
 "#;
 const REDIS_POOL_SIZE: usize = 16;
+const REDIS_COMMAND_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Token-bucket refill parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +131,10 @@ pub enum CacheError {
     #[error("redis: {0}")]
     Redis(#[from] fred::error::RedisError),
 
+    /// Redis did not complete a command within the production budget.
+    #[error("redis command timed out after 50 ms")]
+    Timeout,
+
     /// JSON serialization or deserialization failure.
     #[error(transparent)]
     Core(#[from] CoreError),
@@ -142,7 +147,7 @@ pub enum CacheError {
 impl Classify for CacheError {
     fn class(&self) -> ErrorClass {
         match self {
-            CacheError::Redis(_) => ErrorClass::Transient,
+            CacheError::Redis(_) | CacheError::Timeout => ErrorClass::Transient,
             CacheError::Core(err) => err.class(),
             CacheError::Validation(_) => ErrorClass::Validation,
         }
@@ -160,6 +165,15 @@ pub trait CacheBackend: Debug + Send + Sync {
 
     /// Delete a key, returning `true` when a value existed.
     async fn delete(&self, key: &str) -> Result<bool, CacheError>;
+
+    /// Atomically create a key with a TTL only when it does not exist.
+    async fn claim_once(&self, key: &str, ttl: Duration) -> Result<bool, CacheError> {
+        if self.get(key).await?.is_some() {
+            return Ok(false);
+        }
+        self.set(key, "1".to_string(), ttl).await?;
+        Ok(true)
+    }
 
     /// Consume tokens from a bucket, atomically.
     async fn take_token_bucket(
@@ -194,6 +208,21 @@ impl CacheBackend for FredBackend {
     async fn delete(&self, key: &str) -> Result<bool, CacheError> {
         let deleted: i64 = self.pool.del(key).await?;
         Ok(deleted > 0)
+    }
+
+    async fn claim_once(&self, key: &str, ttl: Duration) -> Result<bool, CacheError> {
+        let ttl_ms = duration_millis_i64(ttl)?;
+        let result: Option<String> = self
+            .pool
+            .set(
+                key,
+                "1",
+                Some(Expiration::PX(ttl_ms)),
+                Some(SetOptions::NX),
+                false,
+            )
+            .await?;
+        Ok(result.is_some())
     }
 
     async fn take_token_bucket(
@@ -278,8 +307,7 @@ impl CacheClient {
     where
         T: DeserializeOwned,
     {
-        self.backend
-            .get(key)
+        cache_command(self.backend.get(key))
             .await?
             .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
             .transpose()
@@ -299,13 +327,30 @@ impl CacheClient {
         }
 
         let payload = serde_json::to_string(value).map_err(CoreError::from)?;
-        self.backend.set(key, payload, ttl).await
+        cache_command(self.backend.set(key, payload, ttl)).await
     }
 
     /// Delete a cached value.
     #[instrument(skip(self), fields(cache.key = key))]
     pub async fn delete(&self, key: &str) -> Result<bool, CacheError> {
-        self.backend.delete(key).await
+        cache_command(self.backend.delete(key)).await
+    }
+
+    /// Probe Redis/cache availability without mutating durable or caller-visible state.
+    pub async fn health_check(&self) -> Result<(), CacheError> {
+        cache_command(self.backend.get("__au_kpis_health__"))
+            .await
+            .map(|_| ())
+    }
+
+    /// Claim a short-lived replay key, returning false when it already exists.
+    pub async fn claim_once(&self, key: &str, ttl: Duration) -> Result<bool, CacheError> {
+        if ttl.is_zero() {
+            return Err(CacheError::Validation(
+                "replay claim TTL must be greater than zero".into(),
+            ));
+        }
+        cache_command(self.backend.claim_once(key, ttl)).await
     }
 
     /// Atomically take tokens from a bucket keyed in Redis.
@@ -320,10 +365,20 @@ impl CacheClient {
         requested: u32,
     ) -> Result<RateLimitDecision, CacheError> {
         validate_request_size(config.capacity(), requested)?;
-        self.backend
-            .take_token_bucket(key, config, requested, unix_time_millis()?)
-            .await
+        cache_command(
+            self.backend
+                .take_token_bucket(key, config, requested, unix_time_millis()?),
+        )
+        .await
     }
+}
+
+async fn cache_command<T>(
+    command: impl std::future::Future<Output = Result<T, CacheError>>,
+) -> Result<T, CacheError> {
+    tokio::time::timeout(REDIS_COMMAND_TIMEOUT, command)
+        .await
+        .map_err(|_| CacheError::Timeout)?
 }
 
 fn validate_bucket_args(
@@ -429,6 +484,16 @@ mod tests {
                 .is_some())
         }
 
+        async fn claim_once(&self, key: &str, _ttl: Duration) -> Result<bool, CacheError> {
+            let mut values = self.values.lock().expect("values lock");
+            if values.contains_key(key) {
+                Ok(false)
+            } else {
+                values.insert(key.to_owned(), "1".to_string());
+                Ok(true)
+            }
+        }
+
         async fn take_token_bucket(
             &self,
             _key: &str,
@@ -503,6 +568,23 @@ mod tests {
                 remaining: 0,
                 retry_after: Duration::from_millis(250),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_claim_is_single_use() {
+        let client = CacheClient::from_backend(MockBackend::default());
+        assert!(
+            client
+                .claim_once("origin:request", Duration::from_secs(60))
+                .await
+                .expect("first claim")
+        );
+        assert!(
+            !client
+                .claim_once("origin:request", Duration::from_secs(60))
+                .await
+                .expect("duplicate claim")
         );
     }
 

@@ -3,6 +3,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context, anyhow};
+use au_kpis_source_register::{SourceStatus, load_source_register};
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use serde::Serialize;
@@ -182,7 +183,37 @@ pub fn default_data_quality_rules() -> &'static [DataQualityRule] {
     &DEFAULT_RULES
 }
 
-const DEFAULT_RULES: [DataQualityRule; 12] = [
+/// Data-quality rules that gate the 20 active dataflows and two manual blockers.
+pub fn launch_data_quality_rules() -> anyhow::Result<Vec<DataQualityRule>> {
+    let launch_ids = load_source_register()?
+        .dataflows
+        .into_iter()
+        .filter(|dataflow| {
+            dataflow.status == SourceStatus::Active
+                || matches!(
+                    dataflow.dataflow_id.as_str(),
+                    "apra.super_asset_allocation" | "curated.oversight_strength"
+                )
+        })
+        .map(|dataflow| dataflow.dataflow_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let rules = DEFAULT_RULES
+        .iter()
+        .copied()
+        .filter(|rule| launch_ids.contains(rule.dataflow_id))
+        .collect::<Vec<_>>();
+    if rules.len() != launch_ids.len() {
+        let covered = rules
+            .iter()
+            .map(|rule| rule.dataflow_id.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let missing = launch_ids.difference(&covered).collect::<Vec<_>>();
+        anyhow::bail!("launch dataflows missing data-quality rules: {missing:?}");
+    }
+    Ok(rules)
+}
+
+const DEFAULT_RULES: [DataQualityRule; 25] = [
     DataQualityRule {
         dataflow_id: "abs.cpi",
         min_value: 0.0,
@@ -214,6 +245,16 @@ const DEFAULT_RULES: [DataQualityRule; 12] = [
         z_score_sigma: 5.0,
     },
     DataQualityRule {
+        dataflow_id: "apra.super_asset_allocation",
+        min_value: 0.0,
+        max_value: 1_000_000_000_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 240 * MINUTES_PER_DAY,
+        max_daily_revisions: 5_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
         dataflow_id: "aemo.dispatch",
         min_value: -10_000.0,
         max_value: 100_000.0,
@@ -222,6 +263,126 @@ const DEFAULT_RULES: [DataQualityRule; 12] = [
         max_recency_lag_minutes: 15,
         max_daily_revisions: 100_000,
         z_score_sigma: 8.0,
+    },
+    DataQualityRule {
+        dataflow_id: "abs.building_approvals",
+        min_value: 0.0,
+        max_value: 1_000_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 90 * MINUTES_PER_DAY,
+        max_daily_revisions: 5_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "abs.building_activity",
+        min_value: 0.0,
+        max_value: 1_000_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 240 * MINUTES_PER_DAY,
+        max_daily_revisions: 5_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "abs.dwelling_completion_times",
+        min_value: 0.0,
+        max_value: 10_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 800 * MINUTES_PER_DAY,
+        max_daily_revisions: 5_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "aemo.generation_mix",
+        min_value: -10_000.0,
+        max_value: 100_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.90,
+        max_recency_lag_minutes: 60,
+        max_daily_revisions: 100_000,
+        z_score_sigma: 8.0,
+    },
+    DataQualityRule {
+        dataflow_id: "aemo.dispatchability_capacity",
+        min_value: 0.0,
+        max_value: 100_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.90,
+        max_recency_lag_minutes: 60,
+        max_daily_revisions: 100_000,
+        z_score_sigma: 8.0,
+    },
+    DataQualityRule {
+        dataflow_id: "asx.market_statistics",
+        min_value: -1_000_000_000_000_000.0,
+        max_value: 1_000_000_000_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 90 * MINUTES_PER_DAY,
+        max_daily_revisions: 5_000,
+        z_score_sigma: 8.0,
+    },
+    DataQualityRule {
+        dataflow_id: "nhsac.housing_accord_progress",
+        min_value: 0.0,
+        max_value: 100_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 800 * MINUTES_PER_DAY,
+        max_daily_revisions: 2_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "pc.productivity_bulletin",
+        min_value: -1_000_000.0,
+        max_value: 1_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 800 * MINUTES_PER_DAY,
+        max_daily_revisions: 2_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "state_planning.nsw_da_processing",
+        min_value: 0.0,
+        max_value: 1_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.50,
+        max_recency_lag_minutes: 240 * MINUTES_PER_DAY,
+        max_daily_revisions: 2_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "oxford.gari",
+        min_value: 0.0,
+        max_value: 100.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.75,
+        max_recency_lag_minutes: 800 * MINUTES_PER_DAY,
+        max_daily_revisions: 2_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "naic.ai_adoption_tracker",
+        min_value: 0.0,
+        max_value: 100.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.75,
+        max_recency_lag_minutes: 240 * MINUTES_PER_DAY,
+        max_daily_revisions: 2_000,
+        z_score_sigma: 5.0,
+    },
+    DataQualityRule {
+        dataflow_id: "abs.ai_rd",
+        min_value: 0.0,
+        max_value: 1_000_000_000_000.0,
+        min_active_series: 1,
+        latest_period_cardinality_floor: 0.75,
+        max_recency_lag_minutes: 800 * MINUTES_PER_DAY,
+        max_daily_revisions: 2_000,
+        z_score_sigma: 5.0,
     },
     DataQualityRule {
         dataflow_id: "treasury.budget_papers",

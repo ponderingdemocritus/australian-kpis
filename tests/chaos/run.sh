@@ -5,11 +5,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT}/tests/chaos/lib.sh"
 
 SCENARIOS=(
-  kill-ingestion-mid-load
-  sever-db-connection
-  fill-queue-capacity
-  source-5xx-circuit-breaker
-  vacuum-heavy-writes
+  redis-loss
+  process-kill
+  db-disconnect
+  upstream-429
+  parser-panic
+  malformed-artifacts
+  object-corruption
+  scheduler-failover
+  slow-clients
 )
 
 REQUESTED_SCENARIOS=()

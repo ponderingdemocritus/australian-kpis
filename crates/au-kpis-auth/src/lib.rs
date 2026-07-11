@@ -3,7 +3,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs, missing_debug_implementations)]
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use argon2::{
     Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
@@ -24,6 +27,8 @@ use uuid::Uuid;
 const API_KEY_PREFIX: &str = "auk_live_";
 const API_KEY_SECRET_BYTES: usize = 32;
 const API_KEY_CACHE_TTL: Duration = Duration::from_secs(60);
+const ARGON2_VERIFY_CONCURRENCY: usize = 32;
+static ARGON2_VERIFY_ADMISSION: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 /// Request body for creating an API key through an admin-only flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +89,9 @@ pub enum AuthError {
     /// Cache access failed.
     #[error(transparent)]
     Cache(#[from] CacheError),
+    /// A bounded password-verification task could not complete.
+    #[error("password verification worker failed: {0}")]
+    VerificationWorker(String),
 }
 
 impl Classify for AuthError {
@@ -91,7 +99,9 @@ impl Classify for AuthError {
         match self {
             AuthError::InvalidApiKey | AuthError::Validation(_) => ErrorClass::Validation,
             AuthError::PasswordHash(_) => ErrorClass::Permanent,
-            AuthError::Db(_) | AuthError::Cache(_) => ErrorClass::Transient,
+            AuthError::Db(_) | AuthError::Cache(_) | AuthError::VerificationWorker(_) => {
+                ErrorClass::Transient
+            }
         }
     }
 }
@@ -153,15 +163,19 @@ impl ApiKeyManager {
         tracing::Span::current().record("api_key.id", parsed.id.to_string());
 
         let cache_key = cache_key(parsed.id);
-        if let Some(cached) = self.cache.get_json::<CachedApiKey>(&cache_key).await? {
-            return verify_cached_key(plaintext_key, cached);
+        match self.cache.get_json::<CachedApiKey>(&cache_key).await {
+            Ok(Some(cached)) => return verify_cached_key(plaintext_key, cached),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, "API key cache unavailable; verifying against Postgres");
+            }
         }
 
         let Some(stored) = fetch_active_key(&self.db, parsed.id).await? else {
             return Err(AuthError::InvalidApiKey);
         };
 
-        verify_argon2_hash(plaintext_key, &stored.key_hash)?;
+        verify_argon2_hash_bounded(plaintext_key, &stored.key_hash).await?;
         let verified = VerifiedApiKey {
             id: stored.id,
             name: stored.name,
@@ -169,9 +183,13 @@ impl ApiKeyManager {
             rate_limit_tier: stored.rate_limit_tier,
         };
         let cached = CachedApiKey::from_verified(plaintext_key, &verified);
-        self.cache
+        if let Err(error) = self
+            .cache
             .set_json(&cache_key, &cached, API_KEY_CACHE_TTL)
-            .await?;
+            .await
+        {
+            tracing::warn!(%error, "API key cache unavailable after Postgres verification");
+        }
 
         sqlx::query("UPDATE api_keys SET last_used_at = now() WHERE id = $1")
             .bind(stored.id)
@@ -287,6 +305,24 @@ fn verify_argon2_hash(plaintext_key: &str, key_hash: &str) -> Result<(), AuthErr
     Argon2::default()
         .verify_password(plaintext_key.as_bytes(), &parsed_hash)
         .map_err(|_| AuthError::InvalidApiKey)
+}
+
+async fn verify_argon2_hash_bounded(plaintext_key: &str, key_hash: &str) -> Result<(), AuthError> {
+    let semaphore = ARGON2_VERIFY_ADMISSION
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(ARGON2_VERIFY_CONCURRENCY)))
+        .clone();
+    let permit = semaphore
+        .acquire_owned()
+        .await
+        .map_err(|error| AuthError::VerificationWorker(error.to_string()))?;
+    let plaintext_key = plaintext_key.to_owned();
+    let key_hash = key_hash.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_argon2_hash(&plaintext_key, &key_hash)
+    })
+    .await
+    .map_err(|error| AuthError::VerificationWorker(error.to_string()))?
 }
 
 fn key_fingerprint(plaintext_key: &str) -> String {

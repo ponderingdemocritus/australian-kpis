@@ -11,6 +11,7 @@ description = "axum routes + handlers (library)."
 dhat-heap = ["dep:dhat"]
 
 [dependencies]
+aes-gcm = "0.10" # AES-256-GCM encrypted webhook signing secrets
 arrow-array = "58.3.0" # build RecordBatch values for streamed Parquet responses
 arrow-schema = "58.3.0" # define the Arrow schema exported by the Parquet endpoint
 async-stream = "0.3" # stream JSON/CSV chunks from sqlx without buffering result pages
@@ -19,6 +20,7 @@ au-kpis-cache = { workspace = true }
 au-kpis-config = { workspace = true }
 au-kpis-domain = { workspace = true }
 au-kpis-scorecard = { workspace = true }
+au-kpis-source-register = { workspace = true }
 au-kpis-telemetry = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
 base64 = "0.22" # opaque cursor encoding; std has no base64 codec
@@ -26,10 +28,12 @@ chrono = { version = "0.4", default-features = false, features = ["std", "serde"
 dhat = { version = "0.3", optional = true }
 futures = "0.3" # TryStreamExt over sqlx row streams
 http = "1"
+httpdate = "1" # parse webhook Retry-After HTTP-date values
 hmac = "0.12" # HMAC-SHA256 signatures for webhook deliveries
 hex = "0.4" # lowercase signature encoding for webhook headers
 parquet = { version = "58.3.0", default-features = false, features = ["arrow", "async", "zstd"] } # encode streamed Parquet responses with zstd and without unused codecs
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] } # outbound webhook delivery client
+rand = "0.8" # webhook secrets, nonces, challenges, and full-jitter backoff
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10" # HMAC-SHA256 digest implementation

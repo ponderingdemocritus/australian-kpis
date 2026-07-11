@@ -504,7 +504,12 @@ jobs:
           set -euo pipefail
           git fetch --depth=1 origin "${BASE_REF}"
           git show "origin/${BASE_REF}:openapi.json" > target/openapi/base-openapi.json
-          oasdiff breaking target/openapi/base-openapi.json target/openapi/openapi.json
+          # Production v1 is unreleased. This exact reviewed set is permitted
+          # by the production-v1 release contract and must be removed at freeze.
+          oasdiff breaking \
+            --err-ignore tools/ci/openapi-production-v1-prefreeze.err-ignore \
+            target/openapi/base-openapi.json \
+            target/openapi/openapi.json
 
   supply-chain:
     name: Supply Chain and Secrets
@@ -753,6 +758,7 @@ jobs:
 
       - name: Capture benchmark baselines
         env:
+          AU_KPIS_CURSOR_SIGNING_KEY: ci-benchmark-cursor-signing-key-not-for-production
           BASE_REF: ${{ inputs.base_ref || github.base_ref || 'main' }}
         run: |
           set -euo pipefail
